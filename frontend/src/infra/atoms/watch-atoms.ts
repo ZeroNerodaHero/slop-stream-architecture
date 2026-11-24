@@ -3,20 +3,19 @@ import { atom } from 'jotai';
 import { api, type GroupBadge, messageOf, type WatchGrant } from '@/infra/api';
 import { askLatest, type ChatLine, takeHistoryFrom, warmChat } from '@/infra/atoms/chat-atoms';
 import { presenceChanged, presencesAtom } from '@/infra/atoms/presence-atoms';
-import { type Welcome, welcomeOf } from '@/infra/atoms/welcome-atoms';
-import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
+import { pipAtom, socialsAtom, watchNameAtom, watchPhaseAtom, type WatchPhase, watchWelcomeAtom } from '@/infra/atoms/watch-state';
+import { welcomeOf } from '@/infra/atoms/welcome-atoms';
+import { eventsEverOpened, eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
 import { onPrefetch, prefetch, PREFETCH_TTL_MS, takePrefetched } from '@/infra/prefetch';
 import { connectRelay, isVideoLayer, type Layer, type RelayReply, relayUrl, type Scene, sceneOf, SCREEN_SLOTS, type SlotInfo, slotsOf, viewersOf } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
-import { cleanSocials, EMPTY_SOCIALS, type Socials } from '@/infra/socials';
+import { cleanSocials, EMPTY_SOCIALS } from '@/infra/socials';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import { watchBeat } from '@/infra/watch-beat';
 import { perfBegin, perfMark } from '@/infra/watch-perf';
 import type { Tone } from '@/shared-components/StatusLine';
-
-export type WatchPhase = 'loading' | 'waiting' | 'connecting' | 'connected' | 'watching' | 'reconnecting' | 'failed' | 'bad-name';
 
 const RETRY_FIRST_MS = 3000;
 const RETRY_MAX_MS = 60_000;
@@ -25,9 +24,7 @@ const RETRY_PHASES: readonly WatchPhase[] = ['failed'];
 const SOUND_PHASES: readonly WatchPhase[] = ['watching', 'reconnecting'];
 const VIDEO_SLOTS = 1 + SCREEN_SLOTS;
 
-export const watchNameAtom = atom('');
 export const watchRenamedToAtom = atom<string | null>(null);
-export const watchPhaseAtom = atom<WatchPhase>('loading');
 export const watchMessageAtom = atom('loading');
 export const NOT_LIVE_MESSAGE = 'not live yet';
 export const bioAtom = atom('');
@@ -36,9 +33,7 @@ export const oauthVerifiedAtom = atom(false);
 export const avatarAtom = atom<number | null>(null);
 export const offlineAtom = atom<number | null>(null);
 export const offlineNoteAtom = atom('');
-export const watchWelcomeAtom = atom<Welcome | null>(null);
 export const followersAtom = atom<number | null>(null);
-export const socialsAtom = atom<Socials>(EMPTY_SOCIALS);
 export const joinedAtom = atom<string | null>(null);
 export const watchBadgeAtom = atom<GroupBadge | null>(null);
 export const canModerateAtom = atom(false);
@@ -89,7 +84,6 @@ export function slotLabel(slot: SlotInfo): string {
 export const volumeAtom = atom(1);
 export const dialAtom = atom((get) => (get(mutedAtom) ? 0 : get(volumeAtom)));
 export const needsTapAtom = atom(false);
-export const pipAtom = atom(false);
 
 export const canRetryAtom = atom((get) => RETRY_PHASES.includes(get(watchPhaseAtom)));
 export const canHearAtom = atom((get) => SOUND_PHASES.includes(get(watchPhaseAtom)));
@@ -287,7 +281,7 @@ export function streamerLive(name: string) {
   void start(name);
 }
 
-let linkWasOpen = false;
+let linkWasOpen = eventsEverOpened();
 onEvents((event) => {
   if (event.type === 'live') streamerLive(event.name);
   else if (event.type === 'presence') {
@@ -432,7 +426,7 @@ function handshake(name: string, warm: Warm): Shake {
       if (played) setPhase('watching', 'watching');
       else setPhase('connected', 'connected, waiting for video');
     } else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
-    else if (state === 'failed') fail('connection failed. udp blocked?', myPc);
+    else if (state === 'failed') fail('connection failed', myPc);
   };
   const onMessage = (msg: RelayReply) => {
     if (pc !== myPc) return;
@@ -527,7 +521,7 @@ async function settle(shake: Shake) {
   startWatchStats();
 
   connectTimer = setTimeout(() => {
-    if (pc === myPc && myPc.connectionState !== 'connected') fail('no video. udp blocked?', myPc);
+    if (pc === myPc && myPc.connectionState !== 'connected') fail('no video', myPc);
   }, NO_VIDEO_AFTER_MS);
 }
 

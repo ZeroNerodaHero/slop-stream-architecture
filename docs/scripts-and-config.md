@@ -13,6 +13,9 @@ bring the stream lab up on this machine, or redeploy part of it.
                                 what the github action pushed. nothing is compiled here
   ./scripts/deploy.sh --pull            git pull, then the images for the tree just pulled
   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy, voice): get its image, swap it
+  ./scripts/deploy.sh stats             apply STATS_* from .env: caddy and the agent are recreated, the
+                                monitor (compose project monitor) is brought up to date. the only
+                                command that touches the monitor (https://stats.nodentity.xyz, docs/metrics.md)
   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
                                 a box without a registry). goes with --pull and services
@@ -118,7 +121,7 @@ what the four images (pages, api, video, dummy) are built from, as git pathspecs
 
 ## `frontend/Caddyfile`
 
-- `auto_https off`: there are no hostnames in the file, so nothing to get certs for. the cert is ours (`/certs/cert.pem`, `/certs/key.pem`).
+- `auto_https off`: no acme, nothing to get certs for. the cert is ours (`/certs/cert.pem`, `/certs/key.pem`); the one block with a hostname, `stats.nodentity.xyz`, names it by hand.
 - `protocols h1 h2`: compose publishes 443/tcp only, so http/3 is not advertised.
 - `trusted_proxies static ...` is cloudflare's ranges, from cloudflare.com/ips-v4 and /ips-v6; refresh it when they change. only a request from one of them gets its `CF-Connecting-IP` trusted as the client ip; a direct request cannot spoof it, the header is ignored. `trusted_proxies_strict` reads the header right to left, stopping at the first ip that is not a trusted proxy.
 - the `(real_ip)` snippet overwrites `X-Forwarded-For` with the client ip caddy resolved. without it caddy keeps a trusted proxy's own `X-Forwarded-For` and appends, so a visitor could prepend a fake first entry, and `api/src/ratelimit.rs` and `auth.rs` read the first one. every `reverse_proxy` imports it.
@@ -128,6 +131,7 @@ routes on `:443`:
 
 | path | goes to | notes |
 |---|---|---|
+| `/api/metrics` | `agent:4300` | this box's host and container numbers (`api/src/agent.rs`, `docs/metrics.md`). an exact path, before `/api/*`. the agent answers 404 without an `OPS_TOKEN` on the box and 401 without the right bearer token |
 | `/api/streams` | `home:4100` | the home list, served by the home container from its table (`api/src/home.rs`). an exact path: `/api/streams/<name>/...` stays the api's. caddy puts the longer path matcher first |
 | `/api/*` | `api:4000` | json api, path kept: `/api/x` -> `api:4000/api/x` |
 | `/ws` | `video:7880` | video setup websocket. `reverse_proxy` does the upgrade on its own |
@@ -140,44 +144,46 @@ routes on `:443`:
 | `/`, `/groups`, `/groups/*`, `/live`, `/login`, `/signup` | `/srv/index.html` | always the shell. `Cache-Control: public, max-age=0, s-maxage=60, must-revalidate`: the browser asks every time, cloudflare may answer for a minute (docs/cloudflare-cache-rules.md, "Cache HTML shell"), and `deploy.sh` purges it on every publish |
 | everything else | the file, or `/srv/index.html` | `Cache-Control: no-cache`, so a deploy never leaves someone running old js against a new api. `/oauth`, `/admin`, `/explore*`, unknown paths (the spa's 404) and real files like `/favicon.ico` stay here |
 
+the `https://stats.nodentity.xyz` block (`docs/metrics.md`):
+
+- the same self-signed cert as `:443`, named by hand (`tls /certs/cert.pem /certs/key.pem`): with `auto_https off` a host block would otherwise have none. cloudflare's "full" mode accepts it.
+- `header` sets `Cache-Control: private, no-store` (and noindex, `DENY` framing, `nosniff`, `no-referrer`) before anything else runs, so the 401s and 503s carry it too. the proxy drops the monitor's own `Cache-Control` (`header_down -Cache-Control`) so there is one.
+- `@public` (`STATS_PUBLIC` exactly `true`) comes first and proxies to the monitor with no `basic_auth`. the `header` above still applies.
+- `@off` is an `expression` on the runtime env: `STATS_BASIC_AUTH_USER` or `STATS_BASIC_AUTH_HASH` empty or `statsoff` answers 503 and proxies nothing. compose passes `statsoff` for a blank key, because `basic_auth` reads the two at parse time (`{$VAR:statsoff}`), caddy only uses that default for an unset variable, and an empty user or hash would stop caddy loading the file, the main site with it. `statsoff` is also valid base64, which caddy wants of any hash at load.
+- everything else goes through `basic_auth` to `stats:3002`: the monitor, from its own compose project, on the network `stream_stats` with the alias `stats`. only caddy and the monitor are on it.
+
+`monitor/Caddyfile` is the same block for the monitor's own caddy (`monitor-caddy`, profile `tls`): the same headers, `@public`, `@off` and `basic_auth`, to `monitor:3002`, with `tls {$STATS_TLS:internal}` (caddy's own ca, which cloudflare's "full" accepts, or an acme email), `auto_https disable_redirects` (only 443 is published), `skip_install_trust`, and cloudflare's ranges as trusted proxies so the monitor's rate limit sees `CF-Connecting-IP`.
+
 `handle_errors`:
 
 - `/watch/*` with a 502, 503 or 504 (the api is down: `./scripts/deploy.sh api`, a crash) serves the plain `index.html` from the volume instead of a bare 502, so the spa boots and keeps checking on its own. that one fetch has no preview tags; a bot that unfurls right then gets the generic card. every other route keeps its error.
 - a missing `/assets/*` file (a tab on an old build asking for a chunk the new publish removed) is a `no-store` 404, so the next publish or a rollback is asked again. with the catch-all's fallback instead, that tab would cache `index.html` as immutable for a year.
 
-## the monitor box (`monitor/`)
+## the monitor (`monitor/`)
 
-a different box from the ones it watches: a dead box cannot say so itself. our own code, the api binary run as `api monitor` (`api/src/monitor.rs`): one container, one json file for its memory, one page built into the binary. no database, no redis, nothing pulled from anyone. see `docs/debugging.md`, "the monitor box".
+its own compose project, `monitor`, on test-machine beside the app or on a box of its own. app deploys never stop, restart or recreate it; only `./scripts/deploy.sh stats` does (`docs/metrics.md`, "the monitor and app deploys"). our own code, the api binary run as `api monitor` (`api/src/monitor.rs`): one container, one json file for its memory, one page built into the binary. see `docs/debugging.md`, "the monitor box".
 
-it asks every box's `/api/health` every 15s, pulls its `/api/errors` every minute, remembers up/down, restarts and new builds, posts down/up to a webhook, and serves the page on this box's loopback `:3002`.
+it asks every box's `/api/health` every 15s, pulls its `/api/errors` every minute and its agent's `/api/metrics` every 15s, remembers up/down, restarts and new builds, posts down/up to a webhook, and serves the page on the box's loopback `:3002`.
 
-it builds the rust image, so it needs 2 GB of ram, or 1 GB plus swap:
-
-```
-curl -fsSL https://get.docker.com | sudo sh
-git clone <repo> && cd slop-stream-architecture/monitor
-cp .env.example .env                                   # TARGETS, OPS_TOKENS, ALERT_WEBHOOK
-BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
-```
-
-update: `git pull && BUILD=$(git rev-parse --short HEAD) docker compose up -d --build`. the memory is in the volume, so a rebuild keeps the history.
-
-the page is on loopback only; nothing is published to the internet. from your laptop: `ssh -L 3002:127.0.0.1:3002 root@<monitor ip>`, then open http://localhost:3002. peek with `docker compose logs -f monitor` (every down and up is a warn line there too) or `docker compose exec monitor cat /data/monitor.json`.
-
-- `MONITOR_IMAGE` is `stream-api:latest` when built on the monitor box. `test.sh` runs the monitor beside a stack and sets it to the image that stack's api was started from (the registry's name and tag, or a local build), so the monitor under test is that checkout's.
-- the container's healthcheck looks at the monitor's port; the image's own check looks at the api port.
+- `monitor/docker-compose.yml`: `monitor` (`container_name` from `MONITOR_CONTAINER`, default `monitor`; `restart: unless-stopped`; `read_only`, every capability dropped, `no-new-privileges`; the volume `monitor-data`; a healthcheck on its own `/health`, since the image's looks at the api port) and `caddy` under the profile `tls` (`monitor-caddy`, `STATS_HTTPS_PORT`, default 443, published). the env takes the `STATS_*` names and falls back to the monitor's older `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK`.
+- `monitor/beside-app.yml`, on test-machine only: the image the app's api runs (`IMAGES`, `TAG`), `TARGETS` defaulting to `<ENV_NAME>=https://frontend`, and the external network `stream_stats` with the alias `stats`. `deploy.sh stats` runs `docker compose -p monitor --env-file .env -f monitor/docker-compose.yml -f monitor/beside-app.yml`, adding `--profile tls` when `STATS_HTTPS_PORT` is set.
+- on its own box: `cd monitor`, `cp .env.example .env`, `docker compose --profile tls pull && docker compose --profile tls up -d --no-build`. `docker compose logs -f monitor` (every down and up is a warn line) or `docker compose exec monitor cat /data/monitor.json` to peek.
+- `test.sh` runs the monitor's compose file as a throwaway project beside a stack and sets `MONITOR_IMAGE` to the image that stack's api was started from, so the monitor under test is that checkout's.
 
 ### `monitor/.env.example`
 
 | variable | what it is |
 |---|---|
-| `TARGETS` | the boxes to watch: `name=url`, comma separated. the name is what the page and the alerts call it |
-| `OPS_TOKENS` | each box's `OPS_TOKEN` (the one in its own `.env`), so the page can show its error reports. optional: a box without one still gets watched, just without that table |
-| `ALERT_WEBHOOK` | where down and up go: a url that takes json `{"content": "..."}` (a discord webhook does; so does anything that reads `"text"`). empty means nowhere; the page and the log still show them |
-| `CHECK_EVERY_SECS`, `ERRORS_EVERY_SECS` | how often, in seconds, health and errors are checked |
-| `DOWN_AFTER` | how many failed rounds in a row make "down" |
+| `STATS_TARGETS` | the boxes to watch: `name=url`, comma separated. the name is what the page and the alerts call it |
+| `STATS_TOKENS` | each box's `OPS_TOKEN` (the one in its own `.env`), `name=token`, for its error reports and agent numbers. a box without one is still watched, without those |
+| `STATS_ALERT_WEBHOOK` | where down and up go: a url that takes json `{"content": "..."}` (a discord webhook does; so does anything that reads `"text"`). empty means nowhere; the page and the log still show them |
+| `STATS_HOST`, `STATS_TLS`, `STATS_HTTPS_PORT` | the site's name (`stats.nodentity.xyz`), `internal` or an acme email for its cert, the port its caddy publishes (443) |
+| `STATS_BASIC_AUTH_USER`, `STATS_BASIC_AUTH_HASH`, `STATS_PUBLIC` | the same as in the root `.env`: a password, or `true` for none. neither: 503 |
+| `MONITOR_IMAGE` | the api image to run, `ghcr.io/<owner>/stream-api:<tag>`; `stream-api:latest` for one built here with `--build` |
 | `MONITOR_PORT` | the page, on this box's loopback. reach it over `ssh -L` |
-| `CARGO_BUILD_JOBS` | how many cores the rust build may use. 1 is safe on a small box |
+| `CHECK_EVERY_SECS`, `ERRORS_EVERY_SECS`, `METRICS_EVERY_SECS` | how often, in seconds, health, errors and each box's agent numbers are checked |
+| `DOWN_AFTER` | how many failed rounds in a row make "down" |
+| `CARGO_BUILD_JOBS` | how many cores the rust build may use with `--build`. 1 is safe on a small box |
 
 ## `docs/tech-docs/style.css`
 
@@ -195,18 +201,29 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `IMAGES`<br>`TAG` | (empty)<br>(empty) | where ./scripts/deploy.sh gets the images. empty IMAGES: the registry the git remote implies (github.com/<you>/… → ghcr.io/<you>/), where the github action pushes them on every push to main. set it for another registry. TAG is what the last deploy ran (a commit, or a release like v12: the action tags every image with its v<n>); deploy.sh writes it. `./scripts/deploy.sh --build` compiles the images here instead and ignores both. |
 | `ENV_NAME` | (empty) | what this box is called in /api/health and in every stored error. empty: deploy.sh fills in this machine's hostname. use prod, dev, ... if you prefer.  see docs/debugging.md |
 | `ADMIN_NAMES` | (empty) | who may read /api/errors and open /admin: account names, comma separated. empty = nobody. each name needs an account on this box (sign up, or ./scripts/deploy.sh passwd <name>), else the api drops it at boot |
-| `OPS_TOKEN` | (empty) | a machine's key for /api/errors (Authorization: Bearer ...). empty = off.  make one: openssl rand -hex 32 16 characters at least: a shorter one is ignored, with a warn line in the api log |
+| `OPS_TOKEN` | (empty) | a machine's key for /api/errors and the agent's /api/metrics (Authorization: Bearer ...). empty = off.  make one: openssl rand -hex 32 16 characters at least: a shorter one is ignored, with a warn line in the api log |
 | `PUBLIC_URL`<br>`GOOGLE_CLIENT_ID`<br>`GOOGLE_CLIENT_SECRET`<br>`DISCORD_CLIENT_ID`<br>`DISCORD_CLIENT_SECRET` | (empty)<br>(empty)<br>(empty)<br>(empty)<br>(empty) | log in with google, discord (docs/accounts.md). empty = that provider is off, no button. PUBLIC_URL is the https origin people type, no trailing slash. each provider's console needs the redirect uri {PUBLIC_URL}/api/oauth/<google\|discord>/callback, exactly (https://nodentity.xyz/api/oauth/google/callback, .../discord/callback). google refuses a bare ip and plain http (except localhost): this needs a real domain + cert. |
 | `TURNSTILE_ENABLED`<br>`TURNSTILE_SITE_KEY`<br>`TURNSTILE_SECRET` | `false`<br>(empty)<br>(empty) | cloudflare turnstile, a human check on signup and login (docs/cloudflare-turnstile.md). on only with TURNSTILE_ENABLED=true and both keys; the flag on with a key missing logs an error and stays off. the site key is public (the pages draw the widget with it); the secret never leaves the api. |
 | `CF_PURGE_TOKEN`<br>`CF_ZONE_ID` | (empty)<br>(empty) | cloudflare in front (docs/cloudflare-cache-rules.md): a takedown of a public picture or video purges its url (under PUBLIC_URL) from the edge. the token's only permission: Zone > Cache Purge, on this zone alone. either empty = no purge (the edge keeps it until its max-age runs out). `scripts/deploy.sh` reads the same two (and PUBLIC_URL) from .env to purge the html after publishing the pages; unset = skipped |
-| `DUMMY_STREAMS`<br>`DUMMY_PASSWORD` | `0`<br>(empty) | fake streams for styling and debugging: gifs bouncing around, named dummy-mango, dummy-pixel, ... set a count and any password, then: ./scripts/deploy.sh dummy the password is what lets the dummy box publish dummy-* names. nobody else can. |
+| `DUMMY_STREAMS`<br>`DUMMY_PASSWORD` | `0`<br>(empty) | fake streams for styling and debugging: gifs bouncing around, named dummy-mango, dummy-pixel, ... set a count and any password, then: ./scripts/deploy.sh dummy the password is what lets the dummy box publish dummy-* names. nobody else can. the box sends it to the api as the `X-Dummy-Password` header (the api still takes `?password=` too), and every name it writes is flagged `is_test` (docs/test-streamers.md). |
 | `DUMMY_NAMES` | (empty) | optional: your own names instead, comma separated |
+| `DUMMY_CHAT`<br>`DUMMY_CHAT_INTERVAL_MS` | (empty)<br>(empty) | the dummy streams talk in their own chat: each stream says a line about once a second, and a pretend viewer one about every 30s. `0`, `off` or `false` turns it off (the streams still run). the interval is in ms, default 1000, clamped to 250..60000. not in `.env.example`; docker-compose.yml passes both, empty means the defaults. docs/video-source.md |
 | `S3_ENDPOINT`<br>`S3_BUCKET`<br>`S3_REGION`<br>`S3_ACCESS_KEY`<br>`S3_SECRET_KEY` | `off`<br>`stream`<br>`us-east-1`<br>(empty)<br>(empty) | where objects go. off (the default): the s3 container in docker-compose (seaweedfs), bucket "stream", no aws bill. set a url to use a real bucket instead, and then the key, the secret and the bucket name. the container still runs either way; a url only changes where the api sends.   https://s3.us-east-1.amazonaws.com   https://<account>.r2.cloudflarestorage.com |
 | `S3_PATH_STYLE` | (empty) | empty: path-style, except amazonaws.com which wants virtual-hosted. 1 or 0 forces it. the container always uses path-style, and this line does not apply to it. |
 | `MODERATION_ENABLED`<br>`OPENAI_API_KEY` | `false`<br>(empty) |  |
 | `CHAT_PERSIST` | (empty) | keep chat lines in postgres, so a room can be scrolled past the last 500, searched, and jumped to. empty or 0: redis only (the last 500, gone a week after the last line). 1 turns it on. the chat process reads this. the api process does not. |
 | `GROUPS_PER_OWNER` | (empty) | how many groups one login may own: the ones it made plus the ones it was named owner of. empty: 2. at most 8, the groups a login may be in (its own included); more is read as 8. the pages offer create under it, and the api refuses at it. see docs/groups.md |
+| `STATS_BASIC_AUTH_USER`<br>`STATS_BASIC_AUTH_HASH` | (empty)<br>(empty) | https://stats.nodentity.xyz, the monitor page behind caddy's basic auth (docs/metrics.md). the hash from `docker compose exec frontend caddy hash-password`, in single quotes: `STATS_BASIC_AUTH_HASH='$2a$14$...'`. either empty: the site answers 503 and `deploy.sh stats` leaves the monitor as it is. `deploy.sh` refuses a user with other than letters, digits and `. _ @ -`, and a hash that is not a quoted bcrypt hash, before it changes anything |
+| `STATS_PUBLIC` | (empty) | `true`: https://stats.nodentity.xyz with no password (docs/metrics.md). the page and its read-only `/api/monitor*` only; the monitor leaves the pages' error reports out, the agent's `/api/metrics` keeps its token. anything else: the two values above decide, and blank is a 503 |
+| `STATS_TARGETS`<br>`STATS_TOKENS`<br>`STATS_ALERT_WEBHOOK` | (empty)<br>(empty)<br>(empty) | what the stats monitor watches: `name=url` pairs, comma separated (empty: this box alone, `<ENV_NAME>=https://frontend`); `name=token` for a box whose `OPS_TOKEN` differs from this one's; where down and up are posted. the monitor's `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK` under other names |
+| `STATS_HTTPS_PORT` | (empty) | a port (8443): `deploy.sh stats` also runs the monitor's own caddy on it, so the page answers while the app's caddy restarts, once a cloudflare origin rule sends `stats.nodentity.xyz` there (docs/metrics.md). empty: the app's caddy only |
 | `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
+
+not in `.env.example`; `docker-compose.yml` passes it to the api, home and chat containers, unset means off:
+
+| variable | default | what it is |
+|---|---|---|
+| `HIDE_TEST_STREAMERS` | (empty) | `1` or `true`: the test streamers (`is_test`, the dummy box's names) are left out of every list, 404 on their profile, watch grant and `/watch` page, and refused go-live. empty or anything else: off, and every answer is as before. read once at boot by the api, by `api home` and by `api chat` (a test stream's faster chat tier is off with it). docs/test-streamers.md |
 
 ## `docker-compose.yml`
 
@@ -261,7 +278,8 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 - one ffmpeg per fake stream, like video above: ~30 threads each on a many-core box (the lavfi source's pool grows with the cores). raise it before DUMMY_STREAMS goes past ~15 (at `pids_limit: 512`)
 - the dummies get the cpu last: a cgroup weight of 128 against everyone else's default 1024, so when the box is busy video, the api and the rest win and the fake streams stutter instead. inside the container ffmpeg also runs at nice 19, but nice only ranks processes within one cgroup; this is the lever between containers. it costs nothing on an idle box (at `cpu_shares: 128`)
 - optional: your own names, comma separated. default: dummy-mango, dummy-pixel, ... (at `DUMMY_NAMES: ${DUMMY_NAMES:-}`)
-- pretend viewers talk in each dummy room. leave empty to turn that off. (at `CHAT_WS_URL: ws://chat:4100`)
+- the dummy streams' chatter: on unless DUMMY_CHAT is 0, off or false; a line every DUMMY_CHAT_INTERVAL_MS (default 1000). empty means the defaults (at `DUMMY_CHAT: ${DUMMY_CHAT:-}`)
+- each dummy stream and a pretend viewer talk in its room. leave empty (or DUMMY_CHAT=off) to turn that off. (at `CHAT_WS_URL: ws://chat:4100`)
 - the voice sfu for the servers' voice channels: same image as video, run as `video voice` (video/src/voice.rs). a page brings a grant from the api, we redeem it with VOICE_SECRET (the api's own) for the person and the room, and tell the api who is in. off by default: the profile keeps a plain `up -d` and deploy.sh from creating it. turn it on with a VOICE_SECRET in .env, udp 7883 open in the firewall (docs/voice.md), then docker compose --profile voice up -d voice until then /voice is a 502 and the api answers voice joins with a 503. (at `image: ${IMAGES:-}stream-video:${TAG:-latest}`)
 - no ffmpeg here, only webrtc. the same cap as video (at `pids_limit: 256`)
 - off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
@@ -270,6 +288,11 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 - the image's own check looks at video's port; this one looks at ours (at `healthcheck:`)
 - all the voice packets, one port. host port must equal container port. (at `- "7883:7883/udp"`)
 - 7881 (the voice websocket) stays inside. browsers reach it through the frontend, at /voice (at `volumes:`)
+
+- `agent`: the api image as `api agent`, on every box, no profile. root (`user: "0:0"`) for the docker socket and the host's `/proc`, both read-only, with `read_only`, every capability dropped, `no-new-privileges` and 64 pids. `/proc` is bind-mounted at `/host/proc` rather than `pid: host`, which would let it signal host processes. the named volume `agent-disk` at `/disk` is there for its `statvfs`: a volume lives on docker's own filesystem, so its size is that disk's, on any host. no port; caddy reaches it at `agent:4300`. `TIMINGS_FROM` names the api processes whose endpoint timings it pulls each sample, at `<service>:9300/timings` on the default network (`docs/metrics.md`, "endpoint and call timings") (at `agent:`)
+- `api`, `chat`, `events`, `home` each also listen on `:9300` (`TIMINGS_PORT`) for the agent's `GET /timings`: unpublished, not in the Caddyfile
+- the network `stats` (`stream_stats`): caddy's, and the monitor's from its own compose project (`monitor/beside-app.yml`). the monitor is not a service here, so no `up`, `down` or `restart` of the app reaches it; `down` leaves this network while the monitor is on it (at `networks:`)
+- caddy gets `STATS_BASIC_AUTH_USER` and `STATS_BASIC_AUTH_HASH` with `statsoff` for a blank value (see the Caddyfile's stats block), and `STATS_PUBLIC`; the monitor gets `STATS_PUBLIC` as `PUBLIC` (at `STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}`)
 
 ## `Cargo.toml`
 

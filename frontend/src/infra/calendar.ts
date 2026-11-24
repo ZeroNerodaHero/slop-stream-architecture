@@ -162,7 +162,7 @@ export function detailOf(b: Block, now: Date): string {
     `${fmtTime(b.start)} – ${b.live ? 'now' : fmtTime(end)}`,
     fmtDur(lengthOf(b, now))
   ];
-  if (b.uncertain) parts.push('ended by the sweeper, so the end is the last heartbeat');
+  if (b.uncertain) parts.push('stream ended');
   if (b.live) parts.push('live');
   return parts.join(' · ');
 }

@@ -1,7 +1,7 @@
 import { RiTimeLine, RiUserLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
@@ -10,7 +10,6 @@ import { api, mayMakeGroup, messageOf, type LiveStream, type Person, type Recent
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
 import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
-import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
 import { Face as PersonFace } from '@/shared-components/Face';
@@ -21,11 +20,10 @@ import { Button, buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
-import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { usePeek } from '@/shared-components/peek';
 import { PersonRow, Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -50,9 +48,11 @@ const SECTION_COUNT = 'text-textSecondary';
 const CARD = 'border border-primaryStroke bg-backgroundSecondary';
 const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
 
+const PersonCard = lazy(() => import('@/shared-components/PersonCard').then((m) => ({ default: m.PersonCard })));
+
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
-function Thumb({ name, first }: { name: string; first: boolean }) {
+function Thumb({ name, eager }: { name: string; eager: boolean }) {
   const [src, setSrc] = useState(() => stills.src(name, []));
   const [missing, setMissing] = useState(false);
   const wait = useRef<number | null>(null);
@@ -70,9 +70,9 @@ function Thumb({ name, first }: { name: string; first: boolean }) {
       alt=""
       draggable={false}
       data-thumb={name}
-      loading={first ? 'eager' : 'lazy'}
-      fetchPriority={first ? 'high' : 'auto'}
-      decoding={first ? 'auto' : 'async'}
+      loading={eager ? 'eager' : 'lazy'}
+      fetchPriority={eager ? 'high' : 'auto'}
+      decoding={eager ? 'auto' : 'async'}
       className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {
         if (wait.current !== null) return;
@@ -139,12 +139,12 @@ function Card({
   onEnter,
   onLeave,
   idPrefix = '',
-  first = false
+  eager = false
 }: {
   stream: LiveStream;
   now: number;
   featured: boolean;
-  first?: boolean;
+  eager?: boolean;
   playing: boolean;
   onEnter: (pointer: string) => void;
   onLeave: () => void;
@@ -169,13 +169,13 @@ function Card({
                 name={stream.name}
                 version={stream.avatar}
                 src={stills.src(stream.name, thumbs)}
-                loading={first ? 'eager' : 'lazy'}
-                fetchPriority={first ? 'high' : 'auto'}
+                loading={eager ? 'eager' : 'lazy'}
+                fetchPriority={eager ? 'high' : 'auto'}
               />
             ) : (
               <>
                 {stream.avatar !== null && <BlurredPicture name={stream.name} version={stream.avatar} />}
-                <Thumb name={stream.name} first={first} />
+                <Thumb name={stream.name} eager={eager} />
               </>
             )}
             {playing && <PreviewVideo name={stream.name} />}
@@ -196,18 +196,13 @@ function Card({
             <h2 className="flex min-w-0 items-center text-base font-semibold leading-5">
               <span className="truncate">{stream.name}</span>
               {stream.verified && (
-                <Tooltip content="has an account: this really is them">
+                <Tooltip content="verified">
                   <span role="img" aria-label="has an account" className="ml-1.5 shrink-0 text-increase">
                     ✓
                   </span>
                 </Tooltip>
               )}
               {stream.badge && <Badge group={stream.badge} className="ml-1.5 shrink-0" />}
-              {isDummyName(stream.name) && (
-                <span className="shrink-0">
-                  <TestBadge />
-                </span>
-              )}
             </h2>
             {stream.bio && <p className="mt-0.5 line-clamp-2 text-sm leading-snug text-textSecondary [overflow-wrap:anywhere]">{stream.bio}</p>}
           </div>
@@ -404,7 +399,11 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
         </div>
       </div>
       <FollowButton id={`recent-follow-${p.name}`} name={p.name} compact className="relative z-10 shrink-0 self-center" />
-      {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} follow hold={peek.hold} />}
+      {peek.at && (
+        <Suspense fallback={null}>
+          <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} follow hold={peek.hold} />
+        </Suspense>
+      )}
     </article>
   );
 }
@@ -581,7 +580,7 @@ export function HomePage() {
         {!error && !streams && <StreamsSkeleton />}
         {list?.length === 0 && (
           <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
-            <p className="text-textSecondary">nobody is live. you could be.</p>
+            <p className="text-textSecondary">nobody is live</p>
             <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
               go live
             </Link>
@@ -590,8 +589,8 @@ export function HomePage() {
         <div id="list" className={cn(!list?.length && 'hidden')}>
           {featured.length > 0 && (
             <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
-              {featured.map((stream, i) => (
-                <Card key={stream.name} stream={stream} now={now} featured first={i === 0} playing onEnter={() => undefined} onLeave={() => undefined} />
+              {featured.map((stream) => (
+                <Card key={stream.name} stream={stream} now={now} featured eager playing onEnter={() => undefined} onLeave={() => undefined} />
               ))}
             </div>
           )}

@@ -1,4 +1,5 @@
 mod about_page;
+mod agent;
 mod analytics;
 mod auth;
 mod cf_purge;
@@ -30,6 +31,8 @@ mod reactions;
 mod release;
 mod s3;
 mod socket;
+mod test_streamers;
+mod timings;
 mod turnstile;
 mod voice;
 
@@ -53,7 +56,9 @@ use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use sqlx::ConnectOptions;
+use test_streamers::DummySecret;
 use tokio::time::sleep;
 
 const LIVE_TTL_SECS: i64 = 90;
@@ -70,11 +75,12 @@ type RecentCache = Arc<Mutex<Option<(Instant, Value)>>>;
 pub(crate) struct AppState {
     pub(crate) db: PgPool,
     pub(crate) debug: Option<PgPool>,
-    pub(crate) redis: ConnectionManager,
+    pub(crate) redis: timings::Redis,
     pub(crate) http: reqwest::Client,
     video_url: String,
     pub(crate) dummy_prefix: String,
-    dummy_password: Option<String>,
+    pub(crate) dummy_password: Option<String>,
+    pub(crate) hide_test: bool,
     pub(crate) env_name: String,
     build: String,
     started: Instant,
@@ -211,10 +217,10 @@ pub(crate) struct PasswordQuery {
 
 pub(crate) async fn may_write(s: &AppState, name: &str, me: Option<&str>, password: Option<&str>) -> Result<(), ApiError> {
     if name.starts_with(&s.dummy_prefix) {
-        let allowed = matches!((&s.dummy_password, password), (Some(p), Some(given)) if p == given);
-        if !allowed {
+        if !test_streamers::secret_ok(s.dummy_password.as_deref(), password) {
             return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
         }
+        test_streamers::mark(&s.db, name).await?;
         return Ok(());
     }
     auth::may_act_as(&s.db, name, me).await
@@ -231,10 +237,7 @@ fn nx_ex() -> SetOptions {
 }
 
 pub(crate) async fn video_live(s: &AppState) -> Option<HashSet<String>> {
-    let res = s
-        .http
-        .get(format!("{}/live", s.video_url))
-        .send()
+    let res = timings::call("video", "GET", "/live", s.http.get(format!("{}/live", s.video_url)))
         .await
         .map_err(|e| log::warn!("video unreachable: {e}"))
         .ok()?;
@@ -257,9 +260,7 @@ pub(crate) async fn live_set(s: &AppState) -> Result<Arc<HashSet<String>>, ApiEr
 }
 
 pub(crate) async fn video_viewers(http: &reqwest::Client, video_url: &str) -> Option<HashMap<String, usize>> {
-    let res = http
-        .get(format!("{video_url}/viewers"))
-        .send()
+    let res = timings::call("video", "GET", "/viewers", http.get(format!("{video_url}/viewers")))
         .await
         .map_err(|e| log::warn!("video unreachable: {e}"))
         .ok()?;
@@ -277,9 +278,7 @@ pub(crate) async fn is_live(s: &AppState, name: &str) -> Result<bool, ApiError> 
 }
 
 pub(crate) async fn thumb_exists(s: &AppState, name: &str) -> bool {
-    s.http
-        .head(format!("{}/thumb/{name}.jpg", s.video_url))
-        .send()
+    timings::call("video", "HEAD", "/thumb/{name}.jpg", s.http.head(format!("{}/thumb/{name}.jpg", s.video_url)))
         .await
         .is_ok_and(|res| res.status().is_success())
 }
@@ -385,7 +384,7 @@ struct VideoHealth {
 }
 
 async fn video_health(s: &AppState) -> Option<VideoHealth> {
-    let res = s.http.get(format!("{}/health", s.video_url)).send().await.ok()?.error_for_status().ok()?;
+    let res = timings::call("video", "GET", "/health", s.http.get(format!("{}/health", s.video_url))).await.ok()?.error_for_status().ok()?;
     Some(res.json().await.unwrap_or_default())
 }
 
@@ -445,12 +444,11 @@ async fn put_streamer(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<BioBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let bio = clean_bio(&body.bio)?;
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
@@ -476,6 +474,9 @@ async fn last_live(db: &PgPool, name: &str) -> Result<Option<DateTime<Utc>>, sql
 }
 
 async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
+    if test_streamers::hidden(&s.db, s.hide_test, &name).await? {
+        return Err(test_streamers::not_found());
+    }
     let p = profile::load_profile(&s.db, &name).await?;
     let presence = presence::presence(&s, &name).await?;
     let thumbs = profile::thumb_ids(&s.db, std::slice::from_ref(&name)).await?.remove(&name).unwrap_or_default();
@@ -578,10 +579,12 @@ async fn go_live(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
 ) -> ApiResult {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
+    if test_streamers::hidden(&s.db, s.hide_test, &name).await? {
+        return Err(test_streamers::refused());
+    }
 
     let key = live_key(&name);
     let mut r = s.redis.clone();
@@ -786,6 +789,9 @@ async fn stop(
 
 async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
     let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
+    if test_streamers::hidden(&s.db, s.hide_test, &name).await? {
+        return Err(test_streamers::not_found());
+    }
     let live = is_live(&s, &name).await?;
     let p = profile::load_profile(&s.db, &name).await?;
     let verified = live && session_verified(&s.db, &name).await?;
@@ -837,6 +843,7 @@ fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), ratelimit::api))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such route") })
         .layer(axum::middleware::map_response(media::no_store_by_default))
+        .layer(axum::middleware::from_fn(timings::http))
         .with_state(state)
 }
 
@@ -844,8 +851,10 @@ async fn connect_postgres(url: &str) -> PgPool {
     let options = PgPoolOptions::new()
         .max_connections(8)
         .acquire_timeout(Duration::from_secs(5));
+    let connect: PgConnectOptions = url.parse().expect("bad DATABASE_URL");
+    let connect = connect.log_statements(log::LevelFilter::Info);
     loop {
-        match options.clone().connect(url).await {
+        match options.clone().connect_with(connect.clone()).await {
             Ok(pool) => return pool,
             Err(e) => log::warn!("postgres not ready: {e}"),
         }
@@ -853,14 +862,14 @@ async fn connect_postgres(url: &str) -> PgPool {
     }
 }
 
-pub(crate) async fn connect_redis(url: &str) -> ConnectionManager {
+pub(crate) async fn connect_redis(url: &str) -> timings::Redis {
     let client = redis::Client::open(url).expect("bad REDIS_URL");
     let config = ConnectionManagerConfig::new()
         .set_connection_timeout(Some(Duration::from_secs(5)))
         .set_response_timeout(Some(Duration::from_secs(5)));
     loop {
         match ConnectionManager::new_with_config(client.clone(), config.clone()).await {
-            Ok(con) => return con,
+            Ok(con) => return timings::Redis::new(con),
             Err(e) => log::warn!("redis not ready: {e}"),
         }
         sleep(Duration::from_secs(2)).await;
@@ -880,10 +889,15 @@ pub(crate) async fn wait_for_signal() {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    timings::init_logging();
 
     if env::args().nth(1).as_deref() == Some("monitor") {
         monitor::run().await.expect("monitor");
+        return;
+    }
+
+    if env::args().nth(1).as_deref() == Some("agent") {
+        agent::run().await.expect("agent");
         return;
     }
 
@@ -927,6 +941,7 @@ async fn main() {
 
     schema::ensure(&db).await.expect("schema");
     moderate::warn_if_keyless();
+    cf_purge::warn_if_off();
 
     if env::args().nth(1).as_deref() == Some("passwd") {
         let name = env::args().nth(2).unwrap_or_default();
@@ -1002,6 +1017,7 @@ async fn main() {
         video_url,
         dummy_prefix: env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into()),
         dummy_password: env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty()),
+        hide_test: test_streamers::hide_from_env(),
         env_name,
         build,
         started: Instant::now(),
@@ -1019,6 +1035,7 @@ async fn main() {
         .await
         .expect("bind");
     log::info!("api on 0.0.0.0:{port}");
+    timings::serve();
     tokio::spawn(sweep_sessions(state.clone()));
     tokio::spawn(voice::sweep(state.clone()));
     tokio::spawn(analytics::sampler(state.clone()));

@@ -4,8 +4,8 @@ use std::io::Cursor;
 use std::sync::OnceLock;
 
 use axum::body::Bytes;
-use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection, QueryRejection};
-use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
+use axum::extract::{DefaultBodyLimit, Path, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, put};
@@ -27,7 +27,8 @@ use crate::chat::clean_text;
 use crate::presence::{self, Presence};
 use crate::moderate::{self, UploadKind};
 use crate::s3;
-use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
+use crate::test_streamers::DummySecret;
+use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiError, ApiResult, AppState, Name};
 
 const MAX_AVATAR_BYTES: usize = 256 * 1024;
 const MAX_OFFLINE_BYTES: usize = 1024 * 1024;
@@ -279,12 +280,11 @@ async fn put_avatar(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
     let body = tokio::task::spawn_blocking(move || shrink_avatar(&body))
         .await
@@ -310,10 +310,9 @@ async fn delete_avatar(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
 ) -> Result<StatusCode, ApiError> {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let version: Option<i64> = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1")
         .bind(&name)
         .fetch_optional(&s.db)
@@ -418,12 +417,11 @@ async fn put_thumb(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
     let row = ensure_row(&s.db, &name).await?;
     let looked = look(&s, &me, row, &headers, UploadKind::Thumb, "image/jpeg", None, &body).await?;
@@ -476,14 +474,13 @@ async fn delete_thumb(
     State(s): State<AppState>,
     Path((raw, id)): Path<(String, i64)>,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
 ) -> Result<StatusCode, ApiError> {
-    let Query(q) = q?;
     let name = checked_name(&raw)?;
     if id <= 0 {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     }
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stream_thumbs WHERE name = $1 AND id = $2)")
         .bind(&name)
         .bind(id)
@@ -628,12 +625,11 @@ async fn put_asset(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let (body, kind) = asset_body(body)?;
     moderate::refuse_animated(&body)?;
     let row = ensure_row(&s.db, &name).await?;
@@ -689,14 +685,13 @@ async fn delete_asset(
     State(s): State<AppState>,
     Path((raw, id)): Path<(String, i64)>,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
 ) -> Result<StatusCode, ApiError> {
-    let Query(q) = q?;
     let name = checked_name(&raw)?;
     if id <= 0 {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     }
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM stream_assets WHERE name = $1 AND id = $2")
         .bind(&name)
         .bind(id)
@@ -755,12 +750,11 @@ async fn put_offline(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let body = jpeg_body(body, MAX_OFFLINE_BYTES, offline_too_big)?;
     let id = ensure_row(&s.db, &name).await?;
     look(&s, &me, id, &headers, UploadKind::Offline, "image/jpeg", Some(&offline_key(id)), &body).await?;
@@ -782,10 +776,9 @@ async fn delete_offline(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
 ) -> Result<StatusCode, ApiError> {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     if let Some(id) = row_id(&s.db, &name).await? {
         if let Err(e) = s3::delete(&s.s3, &offline_key(id)).await {
             return Err(offline_failed(&name, "could not remove the picture", e));
@@ -811,12 +804,11 @@ async fn put_offline_note(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<NoteBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let note: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, offline_note) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET offline_note = EXCLUDED.offline_note, updated_at = now()
@@ -844,12 +836,11 @@ async fn put_about(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<AboutBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let about: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, about) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET about = EXCLUDED.about, updated_at = now()
@@ -881,12 +872,11 @@ async fn put_welcome(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<WelcomeBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let (on, welcome): (bool, String) = sqlx::query_as(
         "INSERT INTO streamers (name, welcome_on, welcome) VALUES ($1, $2, $3)
          ON CONFLICT (name) DO UPDATE SET welcome_on = EXCLUDED.welcome_on, welcome = EXCLUDED.welcome, updated_at = now()
@@ -1092,12 +1082,11 @@ async fn put_socials(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<SocialsBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let socials = clean_socials(body)?;
     sqlx::query(
         "INSERT INTO streamers (name, socials) VALUES ($1, $2)
@@ -1290,6 +1279,9 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
     }
     if let Ok(Some(to)) = auth::renamed_to(&s.db, &name).await {
         return (StatusCode::FOUND, [(header::LOCATION, format!("/watch/{to}")), (header::CACHE_CONTROL, "no-cache".to_owned())]).into_response();
+    }
+    if matches!(crate::test_streamers::hidden(&s.db, s.hide_test, &name).await, Ok(true)) {
+        return page(StatusCode::NOT_FOUND, shell);
     }
     let (profile, live) = match (load_profile(&s.db, &name).await, is_live(&s, &name).await) {
         (Ok(profile), Ok(live)) => (profile, live),

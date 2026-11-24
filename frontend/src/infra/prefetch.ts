@@ -35,13 +35,24 @@ export function onPrefetch(kind: PrefetchRoute['kind'], prefetcher: (name: strin
   prefetchers.set(kind, prefetcher);
 }
 
+function isHere(route: PrefetchRoute): boolean {
+  const here = prefetchRouteOf(location.pathname);
+  return here !== null && here.kind === route.kind && here.name === route.name;
+}
+
 export function prefetchRoute(path: string): void {
   const route = prefetchRouteOf(path);
-  if (!route) return;
-  const here = prefetchRouteOf(location.pathname);
-  if (here && here.kind === route.kind && here.name === route.name) return;
+  if (!route || isHere(route)) return;
   pageLoaders[route.kind]().catch(() => undefined);
-  prefetchers.get(route.kind)?.(route.name);
+  const prefetcher = prefetchers.get(route.kind);
+  if (prefetcher) prefetcher(route.name);
+  else
+    prefetcherLoaders[route.kind]().then(
+      () => {
+        if (!isHere(route)) prefetchers.get(route.kind)?.(route.name);
+      },
+      () => undefined
+    );
 }
 
 export const loadServerPage = () => import('@/app/explore/ServerRoom');
@@ -49,6 +60,11 @@ export const loadHomePage = () => import('@/app/home/HomePage');
 export const loadWatchPage = () => import('@/app/watch/WatchPage');
 
 const pageLoaders: Record<PrefetchRoute['kind'], () => Promise<unknown>> = { home: loadHomePage, watch: loadWatchPage, group: loadServerPage };
+const prefetcherLoaders: Record<PrefetchRoute['kind'], () => Promise<unknown>> = {
+  home: () => import('@/infra/atoms/home-atoms'),
+  watch: () => import('@/infra/atoms/watch-atoms'),
+  group: () => import('@/infra/atoms/room-atoms')
+};
 
 export function loadFirstPage(): Promise<unknown> | null {
   const route = prefetchRouteOf(location.pathname);

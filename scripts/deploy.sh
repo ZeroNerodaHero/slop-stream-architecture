@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+MONITOR_RULE="app deploys never stop, restart or recreate the monitor: it is its own compose project (monitor/), and only ./scripts/deploy.sh stats touches it (docs/debugging.md)"
+
 ENV_FILE=".env"
 DEPLOYED_FILE=".deployed"
 HEALTH_PATH="/api/health"
@@ -785,8 +787,8 @@ redeploy_service() {
   build_one "$1"
   if [ "$1" = api ]; then
     "${DOCKER[@]}" compose up -d --no-deps --no-recreate s3
-    say "swapping the api, chat, events and home containers"
-    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events home
+    say "swapping the api, chat, events, home and agent containers"
+    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events home agent
   else
     say "swapping the $1 container"
     "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} "$1"
@@ -837,6 +839,119 @@ up_voice() {
   "${DOCKER[@]}" compose --profile voice up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} voice
 }
 
+STATS_HOST="stats.nodentity.xyz"
+
+env_file_raw() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '\r'
+}
+
+stats_public() { [ "$(env_file_value STATS_PUBLIC)" = "true" ]; }
+
+stats_on() { stats_public || { [ -n "$(env_file_value STATS_BASIC_AUTH_USER)" ] && [ -n "$(env_file_value STATS_BASIC_AUTH_HASH)" ]; }; }
+
+check_stats_env() {
+  local user hash raw re
+  user="$(env_file_value STATS_BASIC_AUTH_USER)"
+  hash="$(env_file_value STATS_BASIC_AUTH_HASH)"
+  raw="$(env_file_raw STATS_BASIC_AUTH_HASH)"
+  case "$(env_file_value STATS_PUBLIC)" in
+    true)
+      warn "STATS_PUBLIC=true in $ENV_FILE: https://$STATS_HOST is public, no password. the agent's /api/metrics keeps its token; error reports are left off the page"
+      [ -z "$user$hash" ] || note "STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are ignored while STATS_PUBLIC=true"
+      return 0 ;;
+    ""|false) ;;
+    *) warn "STATS_PUBLIC=$(env_file_value STATS_PUBLIC) in $ENV_FILE: only true makes https://$STATS_HOST public. going by the password settings" ;;
+  esac
+  if [ -z "$user" ] && [ -z "$hash" ]; then
+    note "https://$STATS_HOST is off: no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH (or STATS_PUBLIC=true) in $ENV_FILE, so it answers 503 (docs/metrics.md)"
+    return 0
+  fi
+  if [ -z "$user" ] || [ -z "$hash" ]; then
+    warn "only one of STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH is set in $ENV_FILE. https://$STATS_HOST stays off (503) until both are"
+    return 0
+  fi
+  [[ "$(env_file_raw STATS_BASIC_AUTH_USER)" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] \
+    || die "STATS_BASIC_AUTH_USER in $ENV_FILE: 1 to 64 of letters, digits and . _ @ -, no quotes. nothing was changed"
+  re="^'[\$]2[aby][\$][0-9]{2}[\$][./A-Za-z0-9]{53}'\$"
+  if ! [[ "$raw" =~ $re ]]; then
+    die "STATS_BASIC_AUTH_HASH in $ENV_FILE must be a bcrypt hash in single quotes, like
+    STATS_BASIC_AUTH_HASH='\$2a\$14\$...'
+  without the quotes docker compose reads each \$ as a variable and caddy gets a broken hash.
+  make one:  ${DOCKER[*]} compose exec frontend caddy hash-password   (docs/metrics.md). nothing was changed"
+  fi
+}
+
+MONITOR_PROJECT="monitor"
+MONITOR_CONTAINER="monitor"
+APP_STATS_NETWORK="stream_stats"
+
+monitor_compose() {
+  local -a profile=()
+  [ -z "$(env_file_value STATS_HTTPS_PORT)" ] || profile=(--profile tls)
+  "${DOCKER[@]}" compose -p "$MONITOR_PROJECT" --env-file "$ENV_FILE" -f monitor/docker-compose.yml -f monitor/beside-app.yml ${profile[@]+"${profile[@]}"} "$@"
+}
+
+monitor_line() {
+  local started
+  started="$("${DOCKER[@]}" inspect -f '{{.State.Status}} since {{.State.StartedAt}}' "$MONITOR_CONTAINER" 2>/dev/null || true)"
+  if [ -n "$started" ]; then echo "$MONITOR_CONTAINER $started, compose project $MONITOR_PROJECT. left alone by app deploys; ./scripts/deploy.sh stats deploys it"; return 0; fi
+  started="$("${DOCKER[@]}" inspect -f '{{.State.Status}} since {{.State.StartedAt}}' stats 2>/dev/null || true)"
+  if [ -n "$started" ]; then echo "the old stats container, $started, left alone. ./scripts/deploy.sh stats moves it into its own compose project ($MONITOR_PROJECT), once, keeping its history"
+  else echo "not running here. ./scripts/deploy.sh stats starts it (its own compose project, $MONITOR_PROJECT)"; fi
+}
+
+move_old_stats() {
+  local project
+  project="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' stats 2>/dev/null || true)"
+  [ "$project" = stream ] || return 0
+  say "moving the monitor out of the app's compose project, once: the old stats container stops (writing its history), the history goes to the monitor's own volume"
+  "${DOCKER[@]}" stop -t 30 stats >/dev/null
+  monitor_compose create --no-build monitor
+  if "${DOCKER[@]}" volume inspect stream_stats-data >/dev/null 2>&1; then
+    "${DOCKER[@]}" run --rm --network none --user 0:0 --entrypoint bash \
+      -v stream_stats-data:/from:ro -v "${MONITOR_PROJECT}_monitor-data:/to" "$(image_name api)" \
+      -c '[ -e /to/monitor.json ] || { cp -a /from/. /to/ && chown --reference=/from /to; }' \
+      && note "history copied from stream_stats-data, which stays as it was (docker volume rm stream_stats-data once the page looks right)" \
+      || warn "could not copy the old history from stream_stats-data; the monitor starts with none. the old volume is untouched"
+  fi
+  "${DOCKER[@]}" rm stats >/dev/null
+}
+
+wait_monitor() {
+  local status health n=0
+  while :; do
+    read -r status health _ <<< "$(container_state "$MONITOR_CONTAINER")"
+    if [ "$status" = running ] && [ "$health" = healthy ]; then note "$MONITOR_CONTAINER: running, healthy"; return 0; fi
+    if [ "$n" -ge 30 ]; then
+      monitor_compose logs --no-log-prefix --tail 30 monitor 2>/dev/null || true
+      die "the monitor is $status / $health after 60s. above: its last 30 log lines. the app was not touched"
+    fi
+    sleep 2; n=$((n + 1))
+  done
+}
+
+deploy_monitor() {
+  if ! stats_on; then
+    note "stats is off (no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH, and no STATS_PUBLIC=true, in $ENV_FILE), so the monitor is not started or changed"
+    return 0
+  fi
+  "${DOCKER[@]}" network inspect "$APP_STATS_NETWORK" >/dev/null 2>&1 \
+    || die "no docker network $APP_STATS_NETWORK, which caddy reaches the monitor over: the app stack has never been up on this box. ./scripts/deploy.sh first"
+  move_old_stats
+  local port; port="$(env_file_value STATS_HTTPS_PORT)"
+  say "deploying the monitor, compose project $MONITOR_PROJECT (https://$STATS_HOST, $(if stats_public; then echo "public"; else echo "behind the password"; fi)$([ -z "$port" ] || echo "; its own caddy on port $port"))"
+  monitor_compose up -d --no-build
+  wait_monitor
+  [ -z "$port" ] || note "https://$STATS_HOST:$port answers without the app's caddy. cloudflare reaches it with an origin rule for $STATS_HOST to port $port, and the firewall needs tcp $port open (docs/metrics.md)"
+}
+
+redeploy_stats() {
+  say "applying the stats settings from $ENV_FILE: caddy (recreated when its password or STATS_PUBLIC changed) and the agent"
+  "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} frontend agent
+  sync_caddy
+}
+
 redeploy_targets() {
   local t voice=0
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
@@ -845,6 +960,7 @@ redeploy_targets() {
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
       voice) ! voice_on || build_one video ;;
+      stats) build_one api; redeploy_stats; deploy_monitor ;;
       caddy) say "Caddyfile changed, bringing caddy up to it"; sync_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
@@ -858,11 +974,12 @@ swapped_containers() {
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
       frontend) out="$out frontend" ;;
-      api) out="$out api chat events home" ;;
+      api) out="$out api chat events home agent" ;;
       video) out="$out video" ;;
       dummy) out="$out dummy video api" ;;
+      stats) out="$out frontend agent" ;;
       caddy) out="$out frontend" ;;
-      compose) out="$out frontend api chat events home database redis video dummy s3" ;;
+      compose) out="$out frontend api chat events home database redis video dummy s3 agent" ;;
     esac
     case "$t" in video|voice|compose) ! voice_on || out="$out voice" ;; esac
   done
@@ -951,6 +1068,7 @@ changed_services() {
       frontend/Caddyfile) echo caddy ;;
       frontend/*) echo frontend ;;
       docker-compose.yml) echo compose ;;
+      monitor/*) echo monitor ;;
     esac
   done | sort -u
 }
@@ -973,15 +1091,19 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy|voice ...]
+${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy|voice|stats ...]
        ./scripts/deploy.sh passwd <name>
        ./scripts/deploy.sh prune
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
   ${B}frontend api video dummy voice${N}
-                            just these: get (or build) their image, swap their containers (chat, events and
-                            home move with api), then check them: running and healthy, or exit non-zero
+                            just these: get (or build) their image, swap their containers (chat, events,
+                            home and agent move with api), then check them: running and healthy, or exit non-zero
+  ${B}stats${N}                     the monitor's deploy, and the only one that touches it: apply STATS_* from .env to caddy
+                            (recreated when its password or STATS_PUBLIC changed; open websockets drop, browsers
+                            reconnect) and the agent, then bring the monitor (compose project monitor) to the api
+                            image. https://stats.nodentity.xyz (docs/metrics.md)
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
 
 ${B}where the images come from${N}
@@ -1019,6 +1141,12 @@ ${B}notes${N}
   voice = the voice channels: the video image under the compose profile voice, media on udp 7883. on only
   with VOICE_SECRET in .env (docs/voice.md); without it voice is skipped. whenever video is redeployed (a
   full deploy, video, a changed docker-compose.yml) voice is brought to the same image, which drops every voice call.
+  stats = https://stats.nodentity.xyz, the monitor page behind caddy's basic auth: the api image as its own compose
+  project, monitor (monitor/docker-compose.yml + monitor/beside-app.yml). on only with STATS_BASIC_AUTH_USER and
+  STATS_BASIC_AUTH_HASH in .env, or with STATS_PUBLIC=true (no password: the page and /api/monitor are public,
+  /api/metrics keeps its token); without them the site answers 503. the agent (the box's own numbers,
+  /api/metrics) runs on every box.
+  $MONITOR_RULE.
   new knobs from .env.example are appended to .env with their defaults on every run
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
   a full deploy restarts video when the images moved since the last one (a commit that
@@ -1038,7 +1166,7 @@ parse_args() {
     if [ "$want_tag" = 1 ]; then
       want_tag=0
       case "$a" in
-        -*|frontend|api|video|dummy|voice|pages|chat|events|home|passwd|prune) ;;
+        -*|frontend|api|video|dummy|voice|stats|pages|chat|events|home|agent|passwd|prune) ;;
         *) if ! is_ipv4 "$a" && [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then TAG="$a"; continue; fi ;;
       esac
     fi
@@ -1051,12 +1179,12 @@ parse_args() {
       --build) BUILD_MODE=1 ;;
       passwd) want_name=1 ;;
       prune) PRUNE_ONLY=1 ;;
-      frontend|api|video|dummy|voice) TARGETS+=("$a") ;;
+      frontend|api|video|dummy|voice|stats) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
-      chat|events|home) TARGETS+=("api") ;;
+      chat|events|home|agent) TARGETS+=("api") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
-        else die "don't know what '$a' is. services are: frontend api video dummy voice. see ./scripts/deploy.sh --help"
+        else die "don't know what '$a' is. services are: frontend api video dummy voice stats. see ./scripts/deploy.sh --help"
         fi ;;
     esac
   done
@@ -1196,9 +1324,11 @@ show_result() {
 
   Watch logs:   ${DOCKER[*]} compose logs -f video api
   Health:       https://${PUBLIC_IP}/api/health     errors from the pages: https://${PUBLIC_IP}/admin  (ADMIN_NAMES in .env)
+  Stats:        $(if stats_public; then echo "https://$STATS_HOST   PUBLIC, no password (STATS_PUBLIC=true in .env)"; elif stats_on; then echo "https://$STATS_HOST   (user $(env_file_value STATS_BASIC_AUTH_USER); STATS_BASIC_AUTH_* in .env)"; else echo "off: https://$STATS_HOST answers 503 until STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are in .env (docs/metrics.md)"; fi)
   Env name:     ${ENV_NAME:-unnamed}       (ENV_NAME in .env; in every health answer and stored error)   release: ${RELEASE:-none}   build: ${BUILD:-dev}
   Accounts:     optional, https://${PUBLIC_IP}/signup     forgot one: ./scripts/deploy.sh passwd <name>
-  Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database)
+  Monitor:      $(monitor_line)
+  Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database; the monitor keeps running and reports the box down)
   Change ip:    ./scripts/deploy.sh 1.2.3.4
   Update:       ./scripts/deploy.sh --pull               (or: ./scripts/deploy.sh api)
 EOF
@@ -1222,6 +1352,7 @@ full_deploy() {
   open_firewall
   write_env
   pick_env_name
+  check_stats_env
   if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
   compose_up
   purge_html_cache
@@ -1245,6 +1376,7 @@ partial_deploy() {
   ensure_swap
   pick_build_jobs
   refresh_env
+  check_stats_env
   if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
   say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "building, BUILD=$BUILD"))"
   redeploy_targets
@@ -1256,6 +1388,7 @@ partial_deploy() {
   post_deploy_prune "$ok"
   say "containers"
   "${DOCKER[@]}" compose ps || true
+  note "monitor: $(monitor_line)"
   if [ "$ok" -eq 1 ]; then record_deployed; record_release; note "done. https://${PUBLIC_IP}/   (release ${RELEASE:-none}, build $BUILD)"; fi
   [ "$ok" -eq 1 ]
 }
@@ -1313,6 +1446,9 @@ main() {
       fi
       local changed svc
       changed="$(changed_services "$OLD_HEAD" "$NEW_HEAD")"
+      if grep -qx -e monitor -e api <<< "$changed"; then
+        note "the monitor keeps its image and config through this: ./scripts/deploy.sh stats moves it, when you choose"
+      fi
       for svc in frontend api video dummy caddy compose; do
         if grep -qx "$svc" <<< "$changed"; then TARGETS+=("$svc"); fi
       done

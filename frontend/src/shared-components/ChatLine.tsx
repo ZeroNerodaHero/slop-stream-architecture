@@ -518,18 +518,18 @@ export function ChatLineShape({
   }
   const named = crowd && !mine && first;
   return p(
-    cn('flex gap-2 leading-snug', bucket && 'mt-2 first:mt-0'),
+    cn('flex gap-2 leading-tight', bucket && 'mt-1 first:mt-0'),
     <>
-      {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-2.5" />}
+      {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-[5px]" />}
       <span className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
         <span
           data-bubble
           className={cn(
-            'relative flex max-w-[85%] flex-col border px-2.5 py-1.5 [overflow-wrap:anywhere]',
+            'relative flex max-w-[85%] flex-col border px-2.5 py-[3px] [overflow-wrap:anywhere]',
             mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
           )}
         >
-          {named ? <span className="mb-0.5 flex min-w-0 items-baseline text-sm">{who}</span> : <span className="sr-only">{mine ? 'you' : name}: </span>}
+          {named ? <span className="flex min-w-0 items-baseline text-sm leading-4">{who}</span> : <span className="sr-only">{mine ? 'you' : name}: </span>}
           {quote}
           {words}
           {pictures}

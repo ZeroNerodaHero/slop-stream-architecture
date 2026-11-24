@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::{Account, Me};
 use crate::presence;
+use crate::test_streamers::shown_sql;
 use crate::{ApiError, ApiResult, AppState};
 
 pub(crate) const KEEP: i64 = 30;
@@ -121,7 +122,7 @@ async fn clip(db: &PgPool, users: &[Uuid]) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-async fn tell(redis: &ConnectionManager, kind: Kind, actor: &Actor, made: &Made) {
+async fn tell(redis: &Redis, kind: Kind, actor: &Actor, made: &Made) {
     if made.to.is_empty() {
         return;
     }
@@ -271,13 +272,13 @@ pub(crate) fn room_of(server: &str, channel: &str) -> String {
     format!("{server}/{channel}")
 }
 
-pub(crate) async fn channel_line(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) {
+pub(crate) async fn channel_line(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) {
     if let Err(e) = chat_rows(db, redis, server, channel, actor, text, admins).await {
         log::warn!("notify: a line in {}: {}", room_of(server, channel), e.message());
     }
 }
 
-async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) -> Result<(), ApiError> {
+async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) -> Result<(), ApiError> {
     let Some(actor) = actor_by_id(db, actor).await? else { return Ok(()) };
     let room = room_of(server, channel);
     let words: String = text.chars().take(TEXT_CHARS).collect();
@@ -344,22 +345,28 @@ pub(crate) async fn channel_read(db: &PgPool, reader: Uuid, room: &str) -> Resul
 
 type ItemRow = (i64, String, String, bool, Option<i64>, i64, bool, String, Option<i64>, Uuid, Option<String>);
 
+async fn item_rows(db: &PgPool, me: Uuid, hide: bool) -> Result<Vec<ItemRow>, sqlx::Error> {
+    sqlx::query_as(concat!(
+        "SELECT n.id, n.kind, a.name, a.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM a.avatar_at))::bigint,
+                (EXTRACT(EPOCH FROM n.at) * 1000)::bigint, n.read_at IS NOT NULL, n.text, n.session, a.id, n.room
+         FROM notifications n JOIN streamers a ON a.id = n.actor_id
+         WHERE n.user_id = $1 AND ",
+        shown_sql!("a", "$3"),
+        " ORDER BY n.id DESC
+         LIMIT $2",
+    ))
+    .bind(me)
+    .bind(KEEP)
+    .bind(hide)
+    .fetch_all(db)
+    .await
+}
+
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let doc: Option<Value> = sqlx::query_scalar("SELECT notify FROM streamers WHERE id = $1").bind(me.id).fetch_optional(&s.db).await?;
     let settings = doc.as_ref().map(Settings::from_doc).unwrap_or_default();
-    let rows: Vec<ItemRow> = sqlx::query_as(
-        "SELECT n.id, n.kind, a.name, a.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM a.avatar_at))::bigint,
-                (EXTRACT(EPOCH FROM n.at) * 1000)::bigint, n.read_at IS NOT NULL, n.text, n.session, a.id, n.room
-         FROM notifications n JOIN streamers a ON a.id = n.actor_id
-         WHERE n.user_id = $1
-         ORDER BY n.id DESC
-         LIMIT $2",
-    )
-    .bind(me.id)
-    .bind(KEEP)
-    .fetch_all(&s.db)
-    .await?;
+    let rows = item_rows(&s.db, me.id, s.hide_test).await?;
     let mut servers: Vec<String> = rows.iter().filter_map(|r| r.10.as_deref()?.split_once('/').map(|(server, _)| server.to_owned())).collect();
     servers.sort();
     servers.dedup();
@@ -476,6 +483,28 @@ mod tests {
     #[test]
     fn a_dismiss_is_a_write() {
         assert_eq!(crate::ratelimit::api_rule(&axum::http::Method::DELETE, "/api/notifications/{id}"), crate::ratelimit::WRITE);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_test_streamers_row_in_the_inbox_is_hidden_only_when_asked() {
+        use crate::auth::tests::{row, test_db};
+        let pool = test_db().await;
+        let run = std::process::id();
+        let owner = row(&pool, &format!("owner6-{run}"), Some("owner-hash")).await;
+        let human = row(&pool, &format!("actor6-{run}"), Some("actor-hash")).await;
+        let dummy = format!("dummy-n{run}");
+        crate::test_streamers::mark(&pool, &dummy).await.unwrap();
+        let dummy_id: Uuid = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1").bind(&dummy).fetch_one(&pool).await.unwrap();
+        for actor in [human, dummy_id] {
+            sqlx::query("INSERT INTO notifications (user_id, kind, actor_id, session) VALUES ($1, 'live', $2, 1)").bind(owner).bind(actor).execute(&pool).await.unwrap();
+        }
+        let names = |rows: Vec<ItemRow>| rows.into_iter().map(|r| r.2).collect::<Vec<_>>();
+        let shown = names(item_rows(&pool, owner, false).await.unwrap());
+        assert!(shown.contains(&dummy) && shown.contains(&format!("actor6-{run}")), "{shown:?}");
+        let hidden = names(item_rows(&pool, owner, true).await.unwrap());
+        assert_eq!(hidden, vec![format!("actor6-{run}")]);
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![owner, human, dummy_id]).execute(&pool).await.unwrap();
     }
 
     #[tokio::test]

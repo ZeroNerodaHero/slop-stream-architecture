@@ -58,7 +58,7 @@ import {
   type Channel,
   CHANNEL_CAP,
   type ChannelKind,
-  groupImage,
+  groupBanner,
   type GroupMember,
   type GroupRole,
   type GroupTimeout,
@@ -118,7 +118,8 @@ import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
-import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { PersonCard } from '@/shared-components/PersonCard';
+import { usePeek } from '@/shared-components/peek';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
@@ -1063,7 +1064,7 @@ export function ServerPage() {
 
   const words = groupWords(room);
   const color = room.color || '#5865f2';
-  const bannerSrc = groupImage(server, 'banner', room.banner);
+  const banner = groupBanner(server, room.banner, 'wide');
   const mine = room.mine;
   const noChannel = !found;
   const power = room.owner || POWERS.some((item) => room.perms[item.key]);
@@ -1080,7 +1081,7 @@ export function ServerPage() {
     <>
       <div className={cn('relative mb-16', TOP_VIEW)}>
         <div id="group-banner" className="group/banner relative h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
-          {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
+          {banner && <img src={banner.src} srcSet={banner.srcSet} sizes="max(100vw, 36rem)" alt="" className="h-full w-full object-cover" />}
           {canPicture && (
             <PicturePick
               id="group-banner-pick"
@@ -2312,7 +2313,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
 
 function PicturesSection({ server, room, run }: ManageProps) {
   const color = room.color || '#5865f2';
-  const bannerSrc = groupImage(server, 'banner', room.banner);
+  const banner = groupBanner(server, room.banner, 'wide');
 
   async function pick(file: File, kind: 'icon' | 'banner') {
     const jpeg = await cropPicture(file, kind === 'icon' ? GROUP_ICON : GROUP_BANNER);
@@ -2338,7 +2339,7 @@ function PicturesSection({ server, room, run }: ManageProps) {
       <div className="flex min-w-48 flex-1 flex-col gap-2">
         <h3 className={SECTION_TITLE}>group banner</h3>
         <div id="manage-banner" className="group/banner relative h-24 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
-          {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
+          {banner && <img src={banner.src} srcSet={banner.srcSet} sizes="max(100vw, 24rem)" alt="" className="h-full w-full object-cover" />}
           <PicturePick
             id="manage-banner-pick"
             label={room.banner === null ? 'add a banner' : 'change banner'}

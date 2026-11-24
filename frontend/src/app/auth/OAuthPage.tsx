@@ -6,7 +6,7 @@ import { api, messageOf, type OAuthProvider } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
-import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { cleanName, isValidName } from '@/infra/names';
 import { providerLabel, takeReturn } from '@/infra/oauth';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -101,7 +101,7 @@ function PickName() {
   }, []);
 
   const wanted = cleanName(name);
-  const ready = !busy && !gone && isValidName(wanted) && !isDummyName(wanted) && human.ready;
+  const ready = !busy && !gone && isValidName(wanted) && human.ready;
 
   async function submit(e: FormEvent) {
     e.preventDefault();

@@ -25,11 +25,12 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { FACE_COLUMN_W, FollowingSkeleton, INSET, MIN_GAP, RAIL_FACE, TOP_EXTRA_PX } from '@/shared-components/FriendsSkeleton';
 import { GroupMark } from '@/shared-components/GroupMark';
-import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { PersonCard } from '@/shared-components/PersonCard';
+import { usePeek } from '@/shared-components/peek';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
-import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { StreamStill } from '@/shared-components/StreamStill';
 import { INPUT } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -38,15 +39,7 @@ import { cn } from '@/utils/cn';
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
-const FACES_GUESS = 4;
-
-const INSET: Record<PanelSide, string> = {
-  left: 'pl-[calc(0.75rem-1px)] pr-2 max-md:pl-[calc(1.25rem-1px)]',
-  right: 'pr-[calc(0.75rem-1px)] pl-2 max-md:pr-[calc(1.25rem-1px)]'
-};
 const COLUMN = 'px-[calc(0.75rem-1px)] max-md:px-[calc(1.25rem-1px)]';
-export const RAIL_FACE = 'h-8 w-8 text-sm max-md:h-10 max-md:w-10 max-md:text-lg';
-const FACE_COLUMN_W = 'w-[calc(2rem+2px)] max-md:w-[calc(2.5rem+2px)]';
 
 const FACE_REM = 2;
 const MOBILE_FACE_REM = 2.5;
@@ -56,8 +49,6 @@ const ROW_TAP = 'max-md:py-px';
 const ROW_H = 'relative h-[calc(2rem+2px)] max-md:h-[calc(2.5rem+4px)]';
 const HEAD_PX = 16;
 const LINE_PX = 1;
-const MIN_GAP = 4;
-const TOP_EXTRA_PX = 4;
 
 interface Sizes {
   face: number;
@@ -598,20 +589,6 @@ function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
         );
       })}
     </ul>
-  );
-}
-
-function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
-  const mirrored = side === 'right';
-  return (
-    <Skeleton id="friends-loading" className="flex flex-col gap-2">
-      {Array.from({ length: FACES_GUESS }, (_, i) => (
-        <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
-          <Bone className={cn('h-[calc(2rem+2px)] shrink-0 max-md:h-11', FACE_COLUMN_W)} />
-          {open && <Bone className="h-3.5 w-24" />}
-        </div>
-      ))}
-    </Skeleton>
   );
 }
 

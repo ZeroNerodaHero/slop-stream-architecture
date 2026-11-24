@@ -422,7 +422,7 @@ async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
     let claimed: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO streamers (name, password_hash) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET password_hash = EXCLUDED.password_hash
-         WHERE streamers.password_hash IS NULL
+         WHERE streamers.password_hash IS NULL AND NOT streamers.is_test
          RETURNING id",
     )
     .bind(&name)
@@ -643,7 +643,7 @@ async fn change_name(
         .await?;
     rename_wait(last.flatten(), own_hold.is_some(), Utc::now())?;
     let taken: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1 AND password_hash IS NOT NULL)
+        "SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1 AND (password_hash IS NOT NULL OR is_test))
              OR EXISTS (SELECT 1 FROM held_names WHERE name = $1 AND user_id <> $2)",
     )
     .bind(&new)

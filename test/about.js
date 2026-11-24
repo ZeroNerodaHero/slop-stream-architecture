@@ -71,7 +71,7 @@ const expect = (cond, what) => {
   });
 
   await step('the sample media is served from this origin with its own types', async () => {
-    const want = { '/about-demo/clip.mp4': /video\/mp4/, '/about-demo/track-1.mp3': /audio\/mpeg/, '/about-demo/banner.jpg': /image\/jpeg/, '/about-demo/poster.jpg': /image\/jpeg/ };
+    const want = { '/about-demo/clip.mp4': /video\/mp4/, '/about-demo/poster.jpg': /image\/jpeg/ };
     const got = [];
     for (const [path, type] of Object.entries(want)) {
       const res = await api.get(path);

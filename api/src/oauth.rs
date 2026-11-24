@@ -538,7 +538,7 @@ pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, p
     let id: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO streamers (name, password_hash) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET password_hash = EXCLUDED.password_hash
-         WHERE streamers.password_hash IS NULL
+         WHERE streamers.password_hash IS NULL AND NOT streamers.is_test
          RETURNING id",
     )
     .bind(name)

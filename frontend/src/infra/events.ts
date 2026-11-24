@@ -21,10 +21,15 @@ export const eventsTransportAtom = atom<'worker' | 'tab' | 'none'>('none');
 
 export type EventsListener = (event: ServerFrame | { type: 'link'; phase: LinkPhase }) => void;
 const listeners = new Set<EventsListener>();
+let everOpen = false;
 
 export function onEvents(listener: EventsListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+export function eventsEverOpened(): boolean {
+  return everOpen;
 }
 
 interface Link {
@@ -56,6 +61,7 @@ function nickForHello(): string | null {
 function setPhase(phase: LinkPhase) {
   if (store.get(eventsPhaseAtom) === phase) return;
   store.set(eventsPhaseAtom, phase);
+  if (phase === 'open') everOpen = true;
   if (phase !== 'open') presenceLost();
   for (const l of listeners) l({ type: 'link', phase });
 }

@@ -65,7 +65,7 @@ a full restart runbook (single services, a hard dev wipe, health, logs, a remote
 - `video/` — webrtc sfu and the dummy streams
 - `frontend/` — the pages
 - `scripts/` — deploy, ship, test, seed, models
-- `monitor/` — a second compose file that watches boxes
+- `monitor/` — the monitor's own compose project, which watches every box; app deploys never restart it
 - `docs/` — the human docs
 - `.github/workflows/images.yml` — builds the four images on every push to `main` that touches them
 

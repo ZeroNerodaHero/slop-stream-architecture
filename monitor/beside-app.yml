@@ -1,0 +1,14 @@
+services:
+  monitor:
+    image: ${IMAGES:-}stream-api:${TAG:-latest}
+    environment:
+      TARGETS: ${STATS_TARGETS:-${ENV_NAME:-local}=https://frontend}
+    networks:
+      default:
+      app:
+        aliases: [stats]
+
+networks:
+  app:
+    name: stream_stats
+    external: true

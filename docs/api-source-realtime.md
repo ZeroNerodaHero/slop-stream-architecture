@@ -11,7 +11,7 @@ different container, and the two share only the plumbing in socket.rs. See docs/
 A socket says hello as a name (the cookie's login, else the nick lowercased when nobody
 owns that name, else nobody) and from then on the name is *here*: a member of the sorted
 set `seen:<name>` scored by the time this socket last refreshed it, which it does on its own
-30s ping. The first socket in and the last one out of a name are atomic EVALs that also put
+20s ping. The first socket in and the last one out of a name are atomic EVALs that also put
 a `seen` fact on the `events` stream. A socket may `watch` names: it is told their word
 (`presence`) when it changes, and `live` / `ended` as they happen. Every socket watches its
 own name without asking: `me` carries the word and the choice.
@@ -65,7 +65,12 @@ KEYS: seen:<name>, events. ARGV: socket id, now ms, name, window ms, ttl secs, m
 
 `const LAST_OUT`: The mirror: remove mine, trim the stale, and say `seen 0` if nobody is left.
 
-`struct IpSlot`: One address's place among `per_ip`, given back when the socket ends (or never upgrades).
+`Seat`: a socket's place in the registry. Made the moment it is inserted; dropping it removes the socket
+from every index and, unless the process is restarting (`going`), queues its `LAST_OUT` on `leaves`, which
+one task (`unmark`) runs. A handler that panics or is aborted is unseated like one that returned.
+
+`const OUT_QUEUE`: frames waiting for one socket (1024). A socket that falls this far behind is not
+buffered further: it is closed with 1013 `behind` and the page reconnects and asks for its whole set again.
 
 `pub`: Every open socket of this process, and two indexes over them: which sockets are a name,
 which sockets watch it. Behind one lock; nothing in here waits on the network.

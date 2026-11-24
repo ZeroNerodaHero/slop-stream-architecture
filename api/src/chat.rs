@@ -1,21 +1,21 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::body::Bytes;
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRef, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use redis::streams::{StreamId, StreamMaxlen, StreamRangeReply, StreamReadOptions, StreamReadReply};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use uuid::Uuid;
 
@@ -23,7 +23,7 @@ use crate::auth::{client_ip, is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
 use crate::history;
 use crate::reactions::{self, Reaction};
-use crate::socket::{first_text, frame_of, id_parts, send, send_frame, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::socket::{first_text, frame_of, id_parts, locked, ping, send, send_frame, Beat, Heartbeat, IpSlot, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
@@ -34,22 +34,26 @@ const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
 const ANON_TIER: Tier = Tier { burst: 2.0, window: Duration::from_secs(60) };
 const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
 const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
+const TEST_OWNER_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(3) };
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 const SLOW_DOWN: &str = "slow down";
 const MAX_SOCKETS_PER_IP: usize = 8;
+const MAX_CHAT_SOCKETS_PER_IP: usize = 32;
 const EVERY_CHANNEL: &str = "*";
 const FILL_LIMIT: usize = 100;
 
 #[derive(Clone)]
 pub(crate) struct ChatState {
     pub(crate) db: PgPool,
-    pub(crate) redis: ConnectionManager,
+    pub(crate) redis: Redis,
     client: redis::Client,
-    rooms: Arc<Mutex<HashMap<String, Room>>>,
+    rooms: Rooms,
+    sockets: IpSlots,
     limiter: Arc<Limiter>,
     reacts: Arc<Limiter>,
     shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
+    hide_test: bool,
     pub(crate) persist: bool,
     admins: Vec<Uuid>,
 }
@@ -70,10 +74,85 @@ impl FromRef<ChatState> for PgPool {
     }
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct Rooms(Arc<std::sync::Mutex<HashMap<String, Room>>>);
+
 struct Room {
     tx: broadcast::Sender<Event>,
-    count: usize,
-    per_ip: HashMap<String, usize>,
+    subs: HashMap<u64, Arc<str>>,
+}
+
+static NEXT_SUB: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) struct Lease {
+    rooms: Rooms,
+    name: Arc<str>,
+    id: u64,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.rooms.release(&self.name, self.id);
+    }
+}
+
+pub(crate) struct Joined {
+    rx: broadcast::Receiver<Event>,
+    lease: Lease,
+}
+
+impl Room {
+    fn viewers(&self) -> usize {
+        self.subs.len()
+    }
+
+    fn from_ip(&self, ip: &str) -> usize {
+        self.subs.values().filter(|held| held.as_ref() == ip).count()
+    }
+}
+
+impl Rooms {
+    pub(crate) fn is_empty(&self) -> bool {
+        locked(&self.0).is_empty()
+    }
+
+    fn has(&self, name: &str) -> bool {
+        locked(&self.0).contains_key(name)
+    }
+
+    pub(crate) fn viewers(&self, name: &str) -> usize {
+        locked(&self.0).get(name).map_or(0, Room::viewers)
+    }
+
+    fn enter(&self, name: &str, ip: &str, open: impl FnOnce(broadcast::Sender<Event>)) -> Option<Joined> {
+        let mut rooms = locked(&self.0);
+        let fresh = !rooms.contains_key(name);
+        let room = rooms.entry(name.to_owned()).or_insert_with(|| Room { tx: broadcast::channel(256).0, subs: HashMap::new() });
+        if room.from_ip(ip) >= MAX_SOCKETS_PER_IP {
+            return None;
+        }
+        let id = NEXT_SUB.fetch_add(1, Ordering::Relaxed);
+        room.subs.insert(id, ip.into());
+        let rx = room.tx.subscribe();
+        if fresh {
+            open(room.tx.clone());
+        }
+        let _ = room.tx.send(Event::count(room.viewers()));
+        Some(Joined { rx, lease: Lease { rooms: self.clone(), name: name.into(), id } })
+    }
+
+    fn release(&self, name: &str, id: u64) {
+        let mut rooms = locked(&self.0);
+        let Some(room) = rooms.get_mut(name) else { return };
+        if room.subs.remove(&id).is_none() {
+            return;
+        }
+        if room.subs.is_empty() {
+            rooms.remove(name);
+        } else {
+            let _ = room.tx.send(Event::count(room.viewers()));
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -290,11 +369,13 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         db,
         redis,
         client,
-        rooms: Arc::new(Mutex::new(HashMap::new())),
+        rooms: Rooms::default(),
+        sockets: IpSlots::new(MAX_CHAT_SOCKETS_PER_IP),
         limiter: Arc::new(Limiter::new()),
         reacts: Arc::new(Limiter::for_reactions()),
         shutdown,
         dummy_prefix,
+        hide_test: crate::test_streamers::hide_from_env(),
         persist,
         admins,
     };
@@ -303,6 +384,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("chat on {addr}");
+    crate::timings::serve();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
@@ -311,7 +393,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         })
         .await?;
     let deadline = Instant::now() + DRAIN_LIMIT;
-    while !rooms.lock().await.is_empty() && Instant::now() < deadline {
+    while !rooms.is_empty() && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
@@ -325,28 +407,57 @@ fn router(state: ChatState, limits: crate::ratelimit::ByIp) -> Router {
         .merge(history::routes())
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .layer(axum::middleware::map_response(crate::media::no_store_by_default))
+        .layer(axum::middleware::from_fn(crate::timings::http))
         .with_state(state)
 }
 
-async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+pub(crate) fn socket_slot(slots: &IpSlots, headers: &HeaderMap) -> Result<Option<IpSlot>, Response> {
+    match crate::ratelimit::forwarded_ip(headers) {
+        Some(ip) => match slots.take(ip) {
+            Some(slot) => Ok(Some(slot)),
+            None => Err(crate::ratelimit::too_many(30, "too many chat sockets from here")),
+        },
+        None => Ok(None),
+    }
+}
+
+async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let slot = match socket_slot(&s.sockets, &headers) {
+        Ok(slot) => slot,
+        Err(refused) => return refused,
+    };
     let ip = client_ip(&headers);
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| handle(s, name, None, ip, headers, socket))
+        .on_upgrade(move |socket| async move {
+            let _slot = slot;
+            handle(s, name, None, ip, headers, socket).await
+        })
+        .into_response()
 }
 
 async fn ws_channel(State(s): State<ChatState>, Path((server, channel)): Path<(String, String)>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let slot = match socket_slot(&s.sockets, &headers) {
+        Ok(slot) => slot,
+        Err(refused) => return refused,
+    };
     let upgrade = upgrade.max_message_size(MAX_FRAME_BYTES).max_frame_size(MAX_FRAME_BYTES);
     let ip = client_ip(&headers);
     if channel == EVERY_CHANNEL {
         return match server_of(&s.db, &server).await {
-            Ok(server) => upgrade.on_upgrade(move |socket| handle_server(s, server, ip, headers, socket)),
+            Ok(server) => upgrade.on_upgrade(move |socket| async move {
+                let _slot = slot;
+                handle_server(s, server, ip, headers, socket).await
+            }),
             Err(err) => refuse(upgrade, err),
         };
     }
     match crate::groups::channel_room(&s.db, &server, &channel).await {
-        Ok((server, room)) => upgrade.on_upgrade(move |socket| handle(s, room, Some(server), ip, headers, socket)),
+        Ok((server, room)) => upgrade.on_upgrade(move |socket| async move {
+            let _slot = slot;
+            handle(s, room, Some(server), ip, headers, socket).await
+        }),
         Err(err) => refuse(upgrade, err),
     }
 }
@@ -580,12 +691,11 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         }
     }
 
-    let Some(mut rx) = s.join(&name, &ip).await else {
+    let Some(Joined { mut rx, lease: _lease }) = s.join(&name, &ip).await else {
         let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
         return;
     };
     if send(&mut socket, &Out::Ready { reader }).await.is_err() {
-        s.leave(&name, &ip).await;
         return;
     }
     let mut last_seen = (0, 0);
@@ -604,7 +714,6 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
             }
         }
         if failed {
-            s.leave(&name, &ip).await;
             return;
         }
     }
@@ -615,11 +724,9 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     };
     log::info!("{name}: {} joined", shown(&who));
 
-    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
-    let mut last_heard = Instant::now();
-    let mut ping = tokio::time::interval(PING_EVERY);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ping.tick().await;
+    let test_room = test_room_of(&s, &name, server.as_deref()).await;
+    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
+    let mut beat = Heartbeat::standard();
     let mut shutdown = s.shutdown.clone();
     loop {
         tokio::select! {
@@ -639,12 +746,12 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
-            _ = ping.tick() => {
-                if last_heard.elapsed() > IDLE_LIMIT {
+            b = beat.next() => {
+                if b == Beat::Silent {
                     log::info!("{name}: {} went silent, dropping", shown(&who));
                     break;
                 }
-                if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Bytes::new()))).await, Ok(Ok(()))) { break; }
+                if !ping(&mut socket).await { break; }
             }
             _ = shutdown.changed() => {
                 let goodbye = Message::Close(Some(CloseFrame { code: 1001, reason: "chat restarting".into() }));
@@ -652,7 +759,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 break;
             }
             incoming = socket.recv() => {
-                last_heard = Instant::now();
+                beat.heard();
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text.to_string(),
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
@@ -669,7 +776,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                         continue;
                     }
                     Ok(In::React { id, emoji, on, .. }) => {
-                        let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
+                        let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip, test_room), (&id, &emoji, on)).await;
                         if let Err((error, wait)) = reacted {
                             let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
@@ -693,7 +800,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     match identify(&s, &name, &headers, &hello).await {
                         Ok(w) => {
                             who = Some(w);
-                            speaker = Speaker::of(who.as_ref(), &hello, &ip);
+                            speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
                             log::info!("{name}: the reader is {}", shown(&who));
                         }
                         Err(Unknown::Refused(why)) => {
@@ -719,7 +826,6 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         }
     }
 
-    s.leave(&name, &ip).await;
     log::info!("{name}: {} left", shown(&who));
 }
 
@@ -768,13 +874,32 @@ impl Bucket {
 enum Speaker {
     Account(Uuid),
     Streamer(String),
+    TestOwner(String),
     Nick(String, String),
 }
 
+fn is_test_room(prefix: &str, hide: bool, room: &str, is_test: bool) -> bool {
+    !hide && is_test && !prefix.is_empty() && room.starts_with(prefix)
+}
+
+async fn test_room_of(s: &ChatState, room: &str, server: Option<&str>) -> bool {
+    if server.is_some() || !is_test_room(&s.dummy_prefix, s.hide_test, room, true) {
+        return false;
+    }
+    match sqlx::query_scalar::<_, bool>("SELECT is_test FROM streamers WHERE name = $1").bind(room).fetch_optional(&s.db).await {
+        Ok(is_test) => is_test_room(&s.dummy_prefix, s.hide_test, room, is_test.unwrap_or(false)),
+        Err(e) => {
+            log::warn!("{room}: cannot read whether it is a test stream: {e}");
+            false
+        }
+    }
+}
+
 impl Speaker {
-    fn of(who: Option<&Who>, hello: &Hello, ip: &str) -> Speaker {
+    fn of(who: Option<&Who>, hello: &Hello, ip: &str, test_room: bool) -> Speaker {
         match who {
             Some(Who { user_id: Some(id), .. }) => Speaker::Account(*id),
+            Some(w) if w.streamer && test_room => Speaker::TestOwner(w.from.clone()),
             Some(w) if w.streamer => Speaker::Streamer(w.from.clone()),
             Some(w) => Speaker::Nick(ip.to_owned(), w.from.to_lowercase()),
             None => Speaker::Nick(ip.to_owned(), hello.nick.as_deref().map(clean_nick).unwrap_or_default().to_lowercase()),
@@ -784,6 +909,7 @@ impl Speaker {
     fn tier(&self) -> Tier {
         match self {
             Speaker::Account(_) | Speaker::Streamer(_) => LOGIN_TIER,
+            Speaker::TestOwner(_) => TEST_OWNER_TIER,
             Speaker::Nick(..) => ANON_TIER,
         }
     }
@@ -1080,7 +1206,7 @@ async fn stream_refusal(s: &ChatState, room: &str, w: &Who) -> Option<Refused> {
     }
 }
 
-pub(crate) async fn remove_line(db: &PgPool, r: &mut ConnectionManager, room: &str, id: &str) -> Result<(), crate::ApiError> {
+pub(crate) async fn remove_line(db: &PgPool, r: &mut Redis, room: &str, id: &str) -> Result<(), crate::ApiError> {
     let _: i64 = r.xdel(room_key(room), &[id]).await?;
     sqlx::query("DELETE FROM chat_lines WHERE room = $1 AND id = $2").bind(room).bind(id).execute(db).await?;
     sqlx::query("DELETE FROM chat_reactions WHERE room = $1 AND line_id = $2").bind(room).bind(id).execute(db).await?;
@@ -1113,7 +1239,7 @@ async fn on_react(
     server: Option<&str>,
     who: &mut Option<Who>,
     speaker: &mut Speaker,
-    (headers, hello, ip): (&HeaderMap, &Hello, &str),
+    (headers, hello, ip, test_room): (&HeaderMap, &Hello, &str, bool),
     (id, emoji, on): (&str, &str, bool),
 ) -> Result<(), (&'static str, Option<u64>)> {
     if !is_stream_id(id) {
@@ -1127,7 +1253,7 @@ async fn on_react(
     }
     if who.is_none() {
         if let Ok(w) = identify(s, at, headers, hello).await {
-            *speaker = Speaker::of(Some(&w), hello, ip);
+            *speaker = Speaker::of(Some(&w), hello, ip, test_room);
             *who = Some(w);
         }
     }
@@ -1221,11 +1347,12 @@ fn notify_members(s: &ChatState, server: &str, room: &str, actor: Uuid, text: &s
 
 type Tagged = (Arc<str>, Result<Event, u64>);
 
-async fn follow(s: &ChatState, server: &str, channel: &str, ip: &str, tx: &mpsc::UnboundedSender<Tagged>, joined: &mut Vec<Arc<str>>) -> bool {
+async fn follow(s: &ChatState, server: &str, channel: &str, ip: &str, tx: &mpsc::UnboundedSender<Tagged>, joined: &mut Vec<Arc<str>>, leases: &mut Vec<Lease>) -> bool {
     if joined.iter().any(|c| c.as_ref() == channel) {
         return true;
     }
-    let Some(mut rx) = s.join(&format!("{server}/{channel}"), ip).await else { return false };
+    let Some(Joined { mut rx, lease }) = s.join(&format!("{server}/{channel}"), ip).await else { return false };
+    leases.push(lease);
     let channel: Arc<str> = channel.into();
     joined.push(channel.clone());
     let tx = tx.clone();
@@ -1304,23 +1431,19 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     };
     let (tx, mut rx) = mpsc::unbounded_channel::<Tagged>();
     let mut joined: Vec<Arc<str>> = Vec::new();
+    let mut leases: Vec<Lease> = Vec::new();
     for channel in &channels {
-        if !follow(&s, &server, channel, &ip, &tx, &mut joined).await {
+        if !follow(&s, &server, channel, &ip, &tx, &mut joined, &mut leases).await {
             let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
-            for channel in &joined {
-                s.leave(&format!("{server}/{channel}"), &ip).await;
-            }
             return;
         }
     }
     log::info!("{name}: {} joined, {} channels", shown(&who), joined.len());
 
     let mut last_seen: HashMap<Arc<str>, (u64, u64)> = HashMap::new();
-    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
-    let mut last_heard = Instant::now();
-    let mut ping = tokio::time::interval(PING_EVERY);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ping.tick().await;
+    let test_room = false;
+    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
+    let mut beat = Heartbeat::standard();
     let mut shutdown = s.shutdown.clone();
     loop {
         tokio::select! {
@@ -1346,12 +1469,12 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 }
                 None => break,
             },
-            _ = ping.tick() => {
-                if last_heard.elapsed() > IDLE_LIMIT {
+            b = beat.next() => {
+                if b == Beat::Silent {
                     log::info!("{name}: {} went silent, dropping", shown(&who));
                     break;
                 }
-                if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Bytes::new()))).await, Ok(Ok(()))) { break; }
+                if !ping(&mut socket).await { break; }
             }
             _ = shutdown.changed() => {
                 let goodbye = Message::Close(Some(CloseFrame { code: 1001, reason: "chat restarting".into() }));
@@ -1359,7 +1482,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 break;
             }
             incoming = socket.recv() => {
-                last_heard = Instant::now();
+                beat.heard();
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text.to_string(),
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
@@ -1394,7 +1517,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         let user = who.as_ref().and_then(|w| w.user_id);
                         let seen = crate::groups::channel_names(&server, &channel).is_ok()
                             && crate::groups::may_see_text(&s.db, &server, &channel, user, s.is_admin(who.as_ref())).await.unwrap_or(false);
-                        if seen && !follow(&s, &server, &channel, &ip, &tx, &mut joined).await {
+                        if seen && !follow(&s, &server, &channel, &ip, &tx, &mut joined, &mut leases).await {
                             let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
                         }
                     }
@@ -1404,7 +1527,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             continue;
                         };
                         let room = format!("{server}/{channel}");
-                        let reacted = on_react(&s, &name, &room, Some(&server), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
+                        let reacted = on_react(&s, &name, &room, Some(&server), &mut who, &mut speaker, (&headers, &hello, &ip, test_room), (&id, &emoji, on)).await;
                         if let Err((error, wait)) = reacted {
                             let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
@@ -1430,7 +1553,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             match identify(&s, &name, &headers, &hello).await {
                                 Ok(w) => {
                                     who = Some(w);
-                                    speaker = Speaker::of(who.as_ref(), &hello, &ip);
+                                    speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
                                     log::info!("{name}: the reader is {}", shown(&who));
                                 }
                                 Err(Unknown::Refused(why)) => {
@@ -1460,9 +1583,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
         }
     }
 
-    for channel in &joined {
-        s.leave(&format!("{server}/{channel}"), &ip).await;
-    }
     log::info!("{name}: {} left", shown(&who));
 }
 
@@ -1494,50 +1614,16 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
 }
 
 impl ChatState {
-    async fn join(&self, name: &str, ip: &str) -> Option<broadcast::Receiver<Event>> {
-        if let Some(room) = self.rooms.lock().await.get_mut(name) {
-            return room.subscribe(ip);
-        }
-        let start = last_id(&mut self.redis.clone(), &room_key(name)).await;
-        let react_start = last_id(&mut self.redis.clone(), &react_key(name)).await;
-        let mut rooms = self.rooms.lock().await;
-        let room = rooms.entry(name.to_owned()).or_insert_with(|| {
-            let (tx, _) = broadcast::channel(256);
-            tokio::spawn(reader(self.client.clone(), name.to_owned(), start, react_start, tx.clone()));
-            Room { tx, count: 0, per_ip: HashMap::new() }
-        });
-        room.subscribe(ip)
-    }
-
-    async fn leave(&self, name: &str, ip: &str) {
-        let mut rooms = self.rooms.lock().await;
-        let Some(room) = rooms.get_mut(name) else { return };
-        room.count = room.count.saturating_sub(1);
-        if let Some(mine) = room.per_ip.get_mut(ip) {
-            *mine = mine.saturating_sub(1);
-            if *mine == 0 {
-                room.per_ip.remove(ip);
-            }
-        }
-        if room.count == 0 {
-            rooms.remove(name);
+    async fn join(&self, name: &str, ip: &str) -> Option<Joined> {
+        let (start, react_start) = if self.rooms.has(name) {
+            (None, None)
         } else {
-            let _ = room.tx.send(Event::count(room.count));
-        }
-    }
-}
-
-impl Room {
-    fn subscribe(&mut self, ip: &str) -> Option<broadcast::Receiver<Event>> {
-        let mine = self.per_ip.entry(ip.to_owned()).or_insert(0);
-        if *mine >= MAX_SOCKETS_PER_IP {
-            return None;
-        }
-        *mine += 1;
-        self.count += 1;
-        let rx = self.tx.subscribe();
-        let _ = self.tx.send(Event::count(self.count));
-        Some(rx)
+            (last_id(&mut self.redis.clone(), &room_key(name)).await, last_id(&mut self.redis.clone(), &react_key(name)).await)
+        };
+        let client = self.client.clone();
+        self.rooms.enter(name, ip, |tx| {
+            tokio::spawn(reader(client, name.to_owned(), start, react_start, tx));
+        })
     }
 }
 
@@ -1873,6 +1959,134 @@ mod tests {
         }
     }
 
+    fn counts(rx: &mut broadcast::Receiver<Event>) -> Vec<usize> {
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::Count(n, _) = event {
+                seen.push(n);
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn a_room_counts_the_live_set_and_is_gone_when_its_last_lease_drops() {
+        let rooms = Rooms::default();
+        let mut opened = 0;
+        let a = rooms.enter("cats", "1.1.1.1", |_| opened += 1).unwrap();
+        let b = rooms.enter("cats", "2.2.2.2", |_| opened += 1).unwrap();
+        assert_eq!(opened, 1, "one reader per room");
+        assert_eq!(rooms.viewers("cats"), 2);
+        let Joined { rx: mut watching, lease: kept } = a;
+        assert_eq!(counts(&mut watching), vec![1, 2]);
+        drop(b);
+        assert_eq!(rooms.viewers("cats"), 1);
+        assert_eq!(counts(&mut watching), vec![1]);
+        drop(kept);
+        assert!(rooms.is_empty());
+        assert_eq!(rooms.viewers("cats"), 0);
+    }
+
+    #[test]
+    fn a_leave_that_never_comes_is_still_a_leave() {
+        let rooms = Rooms::default();
+        {
+            let _forgot = rooms.enter("cats", "1.1.1.1", |_| {}).unwrap();
+        }
+        assert!(rooms.is_empty(), "no explicit leave: the lease is the leave");
+        let lease = rooms.enter("cats", "1.1.1.1", |_| {}).unwrap().lease;
+        rooms.release("cats", lease.id);
+        assert!(rooms.is_empty());
+        let other = rooms.enter("cats", "1.1.1.1", |_| {}).unwrap();
+        drop(lease);
+        assert_eq!(rooms.viewers("cats"), 1, "a second release of one id takes nothing from somebody else");
+        drop(other);
+        assert!(rooms.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_handler_that_panics_or_is_killed_mid_join_leaves_nothing_behind() {
+        let rooms = Rooms::default();
+        let mine = rooms.clone();
+        let panicked = tokio::spawn(async move {
+            let _joined = mine.enter("cats", "1.1.1.1", |_| {}).unwrap();
+            tokio::task::yield_now().await;
+            panic!("a handler fell over after the join");
+        })
+        .await;
+        assert!(panicked.is_err());
+        assert!(rooms.is_empty(), "a panic gives the room back");
+
+        let mine = rooms.clone();
+        let (joined, mut told) = tokio::sync::oneshot::channel();
+        let killed = tokio::spawn(async move {
+            let _joined = mine.enter("cats", "1.1.1.1", |_| {}).unwrap();
+            let _ = joined.send(());
+            std::future::pending::<()>().await;
+        });
+        (&mut told).await.unwrap();
+        assert_eq!(rooms.viewers("cats"), 1);
+        killed.abort();
+        assert!(killed.await.unwrap_err().is_cancelled());
+        assert!(rooms.is_empty(), "an aborted task gives the room back");
+    }
+
+    #[test]
+    fn flapping_a_thousand_times_ends_where_it_started() {
+        let rooms = Rooms::default();
+        let stays = rooms.enter("cats", "9.9.9.9", |_| {}).unwrap();
+        let mut opened = 0;
+        for n in 0..1000 {
+            let ip = format!("1.1.1.{}", n % 7);
+            let a = rooms.enter("cats", &ip, |_| opened += 1).unwrap();
+            let b = rooms.enter("dogs", &ip, |_| opened += 1).unwrap();
+            assert_eq!(rooms.viewers("cats"), 2);
+            if n % 2 == 0 {
+                drop(a);
+                drop(b);
+            } else {
+                drop(b);
+                drop(a);
+            }
+        }
+        assert_eq!(opened, 1000, "dogs is opened and closed each time, cats never again");
+        assert_eq!(rooms.viewers("cats"), 1);
+        assert_eq!(rooms.viewers("dogs"), 0);
+        let Joined { rx: mut watching, lease } = stays;
+        let seen = counts(&mut watching);
+        assert!(seen.iter().all(|n| *n == 1 || *n == 2), "every count is the size of the set at the time");
+        drop(lease);
+        assert!(rooms.is_empty());
+    }
+
+    #[test]
+    fn one_address_holds_at_most_its_tabs_in_a_room_counted_from_the_set() {
+        let rooms = Rooms::default();
+        let held: Vec<Joined> = (0..MAX_SOCKETS_PER_IP).map(|_| rooms.enter("cats", "1.1.1.1", |_| {}).unwrap()).collect();
+        assert!(rooms.enter("cats", "1.1.1.1", |_| {}).is_none());
+        assert!(rooms.enter("dogs", "1.1.1.1", |_| {}).is_some_and(|j| j.lease.id > 0));
+        let other = rooms.enter("cats", "2.2.2.2", |_| {}).unwrap();
+        drop(held);
+        assert_eq!(rooms.viewers("cats"), 1);
+        assert!(rooms.enter("cats", "1.1.1.1", |_| {}).is_some());
+        drop(other);
+        assert!(rooms.is_empty());
+    }
+
+    #[test]
+    fn an_address_holds_at_most_its_chat_sockets() {
+        let slots = IpSlots::new(MAX_CHAT_SOCKETS_PER_IP);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
+        let held: Vec<Option<IpSlot>> = (0..MAX_CHAT_SOCKETS_PER_IP).map(|_| socket_slot(&slots, &headers).ok().flatten()).collect();
+        assert!(held.iter().all(Option::is_some));
+        let refused = socket_slot(&slots, &headers).err().expect("one past the cap is refused");
+        assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(matches!(socket_slot(&slots, &HeaderMap::new()), Ok(None)), "inside the network nothing is capped");
+        drop(held);
+        assert_eq!(slots.held("1.2.3.4"), 0);
+    }
+
     #[test]
     fn a_since_id_is_a_stream_id() {
         assert!(is_stream_id("1729000000000-0"));
@@ -1959,7 +2173,7 @@ mod tests {
         let alice = Speaker::Nick("1.2.3.4".into(), "alice".into());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
-        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None, since: None }, "1.2.3.4"), "room", now).is_err());
+        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None, since: None }, "1.2.3.4", false), "room", now).is_err());
         assert!(limiter.take_at(&alice, "other", now).is_ok());
         assert!(limiter.take_at(&Speaker::Nick("1.2.3.4".into(), "bob".into()), "room", now).is_ok());
         let bob = Speaker::Account(Uuid::nil());
@@ -1993,18 +2207,49 @@ mod tests {
         let hello = Hello { nick: Some(" Bob ".into()), session: None, token: None, bot: None, since: None };
         let id = Uuid::nil();
         let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
-        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4"), Speaker::Account(id));
+        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4", false), Speaker::Account(id));
         let streamer = Who { from: "room".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
-        assert_eq!(Speaker::of(Some(&streamer), &hello, "1.2.3.4"), Speaker::Streamer("room".into()));
+        assert_eq!(Speaker::of(Some(&streamer), &hello, "1.2.3.4", false), Speaker::Streamer("room".into()));
         let own = Who { from: "room".into(), streamer: true, verified: true, groups: Vec::new(), user_id: Some(id) };
-        assert_eq!(Speaker::of(Some(&own), &hello, "1.2.3.4"), Speaker::Account(id));
+        assert_eq!(Speaker::of(Some(&own), &hello, "1.2.3.4", false), Speaker::Account(id));
         let nick = Who { from: "Bob".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
-        assert_eq!(Speaker::of(Some(&nick), &hello, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), "bob".into()));
-        assert_eq!(Speaker::of(None, &hello, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), "bob".into()));
-        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None, since: None }, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), String::new()));
+        assert_eq!(Speaker::of(Some(&nick), &hello, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), "bob".into()));
+        assert_eq!(Speaker::of(None, &hello, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), "bob".into()));
+        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None, since: None }, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), String::new()));
         assert_eq!(Speaker::Account(id).tier(), LOGIN_TIER);
         assert_eq!(Speaker::Streamer("room".into()).tier(), LOGIN_TIER);
         assert_eq!(Speaker::Nick("1.2.3.4".into(), "bob".into()).tier(), ANON_TIER);
+    }
+
+    #[test]
+    fn only_a_test_streams_own_session_chats_fast() {
+        let hello = Hello { nick: Some("pixelfan".into()), session: Some(1), token: Some(2), bot: Some(true), since: None };
+        let id = Uuid::nil();
+        let owner = Who { from: "dummy-mango".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
+        let guest = Who { from: "pixelfan".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
+        let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
+        let room = is_test_room("dummy-", false, "dummy-mango", true);
+        assert!(room);
+        assert_eq!(Speaker::of(Some(&owner), &hello, "1.2.3.4", room).tier(), TEST_OWNER_TIER);
+        assert_eq!(Speaker::of(Some(&owner), &hello, "1.2.3.4", is_test_room("dummy-", false, "dummy-mango", false)).tier(), LOGIN_TIER);
+        assert_eq!(Speaker::of(Some(&guest), &hello, "1.2.3.4", room).tier(), ANON_TIER);
+        assert_eq!(Speaker::of(None, &hello, "1.2.3.4", room).tier(), ANON_TIER);
+        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4", room).tier(), LOGIN_TIER);
+        assert_eq!(Speaker::of(Some(&owner), &hello, "1.2.3.4", is_test_room("dummy-", true, "dummy-mango", true)).tier(), LOGIN_TIER);
+        assert!(!is_test_room("dummy-", false, "billy", true));
+        assert!(!is_test_room("", false, "dummy-mango", true));
+    }
+
+    #[test]
+    fn a_test_owner_has_three_lines_then_one_a_second() {
+        let now = Instant::now();
+        let mut b = Bucket::new(TEST_OWNER_TIER, now);
+        for _ in 0..3 {
+            assert!(b.take(TEST_OWNER_TIER, now).is_ok());
+        }
+        assert!(about(b.take(TEST_OWNER_TIER, now).unwrap_err(), 1.0));
+        assert!(b.take(TEST_OWNER_TIER, now + Duration::from_millis(1001)).is_ok());
+        assert!(b.take(TEST_OWNER_TIER, now + Duration::from_millis(1001)).is_err());
     }
 
     #[test]
@@ -2299,7 +2544,7 @@ mod tests {
 
     struct Rig {
         pool: PgPool,
-        redis: ConnectionManager,
+        redis: Redis,
         addr: SocketAddr,
         _stop: watch::Sender<bool>,
     }
@@ -2313,11 +2558,13 @@ mod tests {
             db: pool.clone(),
             redis: redis.clone(),
             client: redis::Client::open(url.as_str()).unwrap(),
-            rooms: Arc::new(Mutex::new(HashMap::new())),
+            rooms: Rooms::default(),
+            sockets: IpSlots::new(MAX_CHAT_SOCKETS_PER_IP),
             limiter: Arc::new(Limiter::new()),
             reacts: Arc::new(Limiter::for_reactions()),
             shutdown,
             dummy_prefix: "dummy-".into(),
+            hide_test: false,
             persist: false,
             admins: Vec::new(),
         };
@@ -2329,7 +2576,7 @@ mod tests {
         Rig { pool, redis, addr, _stop: stop }
     }
 
-    async fn say_in(redis: &ConnectionManager, room: &str, fields: &[(&str, &str)]) -> String {
+    async fn say_in(redis: &Redis, room: &str, fields: &[(&str, &str)]) -> String {
         let id: String = redis.clone().xadd(room_key(room), "*", fields).await.unwrap();
         id
     }

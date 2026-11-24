@@ -10,12 +10,15 @@ import { compactCount } from '@/utils/count';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { Tooltip } from '@/shared-components/Tooltip';
 
+const MARK = { xs: 'h-3.5 w-3.5 text-[9px] leading-none', sm: 'h-4 w-4 text-[10px] leading-none', md: 'h-6 w-6 text-xs leading-none' };
+const PILL = { xs: 'text-[10px] leading-[14px]', sm: undefined, md: 'px-1.5 leading-6' };
+
 interface BadgeProps {
   group: GroupBadge;
   src?: string | null;
   card?: boolean;
   preview?: boolean;
-  size?: 'sm' | 'md';
+  size?: 'xs' | 'sm' | 'md';
   id?: string;
   className?: string;
 }
@@ -34,8 +37,8 @@ export function Badge({ group: carried, src, card, preview, size = 'sm', id, cla
       aria-label={card ? `group ${group.name}` : undefined}
       className={cn('inline-flex items-center align-middle', card && 'cursor-default', className)}
     >
-      <GroupMark name={group.name} color={group.color} icon={icon} src={src} className={size === 'md' ? 'h-6 w-6 text-xs leading-none' : 'h-4 w-4 text-[10px] leading-none'} />
-      <Pill group={group} className={size === 'md' ? 'px-1.5 leading-6' : undefined} />
+      <GroupMark name={group.name} color={group.color} icon={icon} src={src} className={MARK[size]} />
+      <Pill group={group} className={PILL[size]} />
     </span>
   );
   if (!card) return pill;

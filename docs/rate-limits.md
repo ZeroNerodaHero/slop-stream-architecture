@@ -7,8 +7,11 @@ it the answer is `429` with `Retry-After` (seconds) and `{"error": "...", "retry
   Caddy saw (`X-Forwarded-For`). The handlers' own older limits (signup, login, DMs, follows,
   people search, chat images, chat videos, error reports) still apply on top.
 - **Not counted.** Requests with no `X-Forwarded-For` (they came from inside the compose
-  network: video's publisher calls, the tests run inside, the dummy box) and reserved-name
-  requests carrying the dummy password.
+  network: video's publisher calls, the tests run inside, the dummy box), and a request
+  carrying the dummy password (`X-Dummy-Password`, or the older `?password=`) on a
+  `/api/streamers/{name}...` or `/api/streams/{name}/...` route whose name starts with
+  `DUMMY_PREFIX`. The password on any other route is counted like anyone's
+  (`test-streamers.md`).
 - **New names.** A write to `/api/streamers/{name}/...` (or go-live) on a name the caller has not
   written this hour counts toward 20 distinct names per hour per account/IP: this is what
   stops a logged-out script from creating unlimited names and filling the bucket with uploads.
@@ -83,7 +86,7 @@ load, per action), not a measurement.
 | ✅ | `POST /api/errors` | Page error reports | 60 / IP + global cap | same **+ 120 / IP** | IP | 10 min; 1 min | low (on page errors) |
 | ✅ | `GET /api/errors` | Read error reports | admin / ops token only | **600** | account / IP | 1 min | rare (admin) |
 | ✅ | `GET /api/streams` (home service) | Live list for the home page | none | **300 / IP** | IP | 1 min | high (every home load) |
-| ✅ | `GET /chat/{name}`, `GET /chat/{server}/{channel}` (WebSocket) | Open a chat room socket | 8 sockets / IP / room; lines: 2/60 s anon, 3/10 s logged in; reactions (login only): 10 at once, then 1/s | same **+ 60 opens / IP** | IP | 1 min | medium (per watch/room page) |
+| ✅ | `GET /chat/{name}`, `GET /chat/{server}/{channel}` (WebSocket) | Open a chat room socket | 8 sockets / IP / room; lines: 2/60 s anon, 3/10 s logged in, 3 at once then 1/s for a test stream's own grant in its own room (the dummy box, `chat.md`); reactions (login only): 10 at once, then 1/s | same **+ 60 opens / IP** | IP | 1 min | medium (per watch/room page) |
 | ✅ | `GET /chat/{name}/before`, `/by/{speaker}`, `/around/{id}` (+ `{server}/{channel}` forms) | Chat history | none | **300 / IP** | IP | 1 min | medium (scrollback) |
 | ✅ | `GET /chat/{name}/search`, `/chat/{server}/{channel}/search` | Search chat history | none | **60 / IP** | IP | 1 min | low |
 | ✅ | `GET /events` (WebSocket) | Presence & push socket | none | **60 opens / IP** and **20 open at once / IP** | IP | 1 min | medium (one per browser, reconnects) |

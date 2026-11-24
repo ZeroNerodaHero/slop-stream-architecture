@@ -122,7 +122,7 @@ changed:
 
 | | route | now |
 |---|---|---|
-| POST | `/api/streams/:name/go-live` | 403 `that name has an account. log in as it` when claimed and the cookie is not its owner. free names: like before. the dummy `?password=` path is untouched |
+| POST | `/api/streams/:name/go-live` | 403 `that name has an account. log in as it` when claimed and the cookie is not its owner. free names: like before. the dummy password path (`?password=` or `X-Dummy-Password`) is untouched |
 | PUT | `/api/streamers/:name` | the same 403, and the same `reserved name` 403 as go-live for a `dummy-` name without `?password=` (the picture's PUT and DELETE too: a reserved name is never claimed, so without the gate it would be anyone's) |
 | GET | `/api/streams`, POST `.../watch` | carry `verified` |
 | ws | `/chat/:name` | the cookie names you; `hello` needs no nick then. an anonymous nick that is a claimed name gets `that name has an account. log in as it, or pick another` and the socket closes; a `dummy-` nick `that nick belongs to the fake streams. pick another`, the same way. lines carry `verified` |

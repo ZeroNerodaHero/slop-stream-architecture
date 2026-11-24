@@ -18,12 +18,55 @@ http:// {
 	redir https://{host}{uri}
 }
 
+https://stats.nodentity.xyz {
+	tls /certs/cert.pem /certs/key.pem
+	log
+	encode zstd gzip
+
+	header {
+		Cache-Control "private, no-store"
+		X-Robots-Tag "noindex, nofollow"
+		X-Frame-Options DENY
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+
+	@public expression `{env.STATS_PUBLIC} == "true"`
+	handle @public {
+		reverse_proxy stats:3002 {
+			import real_ip
+			header_down -Cache-Control
+		}
+	}
+
+	@off expression `{env.STATS_BASIC_AUTH_USER} in ["", "statsoff"] || {env.STATS_BASIC_AUTH_HASH} in ["", "statsoff"]`
+	handle @off {
+		respond "stats is off: STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are not set on this box, and STATS_PUBLIC is not true" 503
+	}
+
+	handle {
+		basic_auth {
+			{$STATS_BASIC_AUTH_USER:statsoff} {$STATS_BASIC_AUTH_HASH:statsoff}
+		}
+		reverse_proxy stats:3002 {
+			import real_ip
+			header_down -Cache-Control
+		}
+	}
+}
+
 :443 {
 	tls /certs/cert.pem /certs/key.pem
 	log
 
 	handle /api/streams {
 		reverse_proxy home:4100 {
+			import real_ip
+		}
+	}
+
+	handle /api/metrics {
+		reverse_proxy agent:4300 {
 			import real_ip
 		}
 	}
