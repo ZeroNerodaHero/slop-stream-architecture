@@ -307,7 +307,7 @@ function glb(json) {
   });
 
   await step('the picker names a few other sites that have models to download, each a link that opens in a tab of its own and is asked for nothing until it is clicked', async () => {
-    const places = await pub.$$eval('#model-places a', (els) => els.map((a) => ({ name: a.textContent.trim(), href: a.href, target: a.target, rel: a.rel })));
+    const places = await pub.$$eval('#model-places a', (els) => els.map((a) => ({ name: a.getAttribute('aria-label'), href: a.href, target: a.target, rel: a.rel })));
     expect(places.length >= 3, `the picker lists ${places.length} places`);
     for (const place of places) {
       const safe = /^https:\/\//.test(place.href) && place.target === '_blank' && /\bnoopener\b/.test(place.rel) && /\bnoreferrer\b/.test(place.rel);

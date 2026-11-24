@@ -1,3 +1,5 @@
+export type ModelFormat = '.vrm' | '.glb' | '.fbx';
+
 export interface KeptModel {
   id: number;
   name: string;
@@ -5,7 +7,16 @@ export interface KeptModel {
   bytes: number;
   added: number;
   thumb: Blob | null;
+  format: ModelFormat;
 }
+
+export type Keeping = { kept: KeptModel } | { failed: string };
+
+export const formatOf = (name: string): ModelFormat => {
+  const ext = /\.[^.]+$/.exec(name.toLowerCase())?.[0];
+  return ext === '.glb' || ext === '.fbx' ? ext : '.vrm';
+};
+const withFormat = (row: Omit<KeptModel, 'format'> & { format?: ModelFormat }): KeptModel => ({ ...row, format: row.format ?? '.vrm' });
 
 export interface KeptDemo {
   id: string;
@@ -56,14 +67,18 @@ const finished = (tx: IDBTransaction): Promise<void> =>
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('indexeddb gave up'));
   });
 
+async function useDb<T>(work: (db: IDBDatabase) => Promise<T>): Promise<T> {
+  const db = await open();
+  try {
+    return await work(db);
+  } finally {
+    db.close();
+  }
+}
+
 async function withDb<T>(otherwise: T, work: (db: IDBDatabase) => Promise<T>): Promise<T> {
   try {
-    const db = await open();
-    try {
-      return await work(db);
-    } finally {
-      db.close();
-    }
+    return await useDb(work);
   } catch {
     return otherwise;
   }
@@ -72,12 +87,20 @@ async function withDb<T>(otherwise: T, work: (db: IDBDatabase) => Promise<T>): P
 export function listKept(): Promise<KeptModel[]> {
   return withDb<KeptModel[]>([], async (db) => {
     const rows = await answer(db.transaction(META, 'readonly').objectStore(META).getAll() as IDBRequest<KeptModel[]>);
-    return rows.sort((a, b) => b.added - a.added);
+    return rows.map(withFormat).sort((a, b) => b.added - a.added);
   });
 }
 
-export function keepModel(file: Blob, about: { name: string; author: string }, thumb: Blob | null): Promise<KeptModel | null> {
-  return withDb<KeptModel | null>(null, async (db) => {
+export async function keepModel(file: Blob, about: { name: string; author: string; format: ModelFormat }, thumb: Blob | null): Promise<Keeping> {
+  try {
+    return { kept: await putModel(file, about, thumb) };
+  } catch (err) {
+    return { failed: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function putModel(file: Blob, about: { name: string; author: string; format: ModelFormat }, thumb: Blob | null): Promise<KeptModel> {
+  return useDb(async (db) => {
     const tx = db.transaction([META, FILES], 'readwrite');
     const meta = tx.objectStore(META);
     const files = tx.objectStore(FILES);
@@ -89,7 +112,7 @@ export function keepModel(file: Blob, about: { name: string; author: string }, t
       meta.delete(row.id);
       files.delete(row.id);
     }
-    const row: Omit<KeptModel, 'id'> = { name: about.name, author: about.author, bytes: file.size, added: Date.now(), thumb };
+    const row: Omit<KeptModel, 'id'> = { name: about.name, author: about.author, bytes: file.size, added: Date.now(), thumb, format: about.format };
     const id = Number(await answer(meta.add(row)));
     files.put(file, id);
     await done;

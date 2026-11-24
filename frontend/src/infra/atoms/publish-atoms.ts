@@ -10,7 +10,19 @@ import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
 import { type FaceLines, type FaceMarks, type FaceState, type LoadStep, type ModelSession, type ModelStats, type RigInfo, startModel } from '@/infra/face';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { readModel } from '@/infra/model-file';
-import { forgetKept, keepDemo, keepForGood, keepModel, type KeptModel, keptDemoFile, keptFile, listKept, listKeptDemos, pruneKeptDemos } from '@/infra/model-store';
+import {
+  forgetKept,
+  formatOf,
+  keepDemo,
+  keepForGood,
+  keepModel,
+  type KeptModel,
+  keptDemoFile,
+  keptFile,
+  listKept,
+  listKeptDemos,
+  pruneKeptDemos
+} from '@/infra/model-store';
 import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
@@ -760,19 +772,27 @@ export function pickKeptModel(model: KeptModel): Promise<boolean> {
   return pickModel(choice, async () => ({ choice, file: await modelFile(choice) }));
 }
 
-export function pickModelFile(picked: File): Promise<boolean> {
+const UNSAVED_MODEL = "couldn't save it, it'll only last this session";
+
+export async function pickModelFile(picked: File): Promise<{ on: boolean; saved: boolean }> {
   const named = picked.name.replace(/\.[^.]+$/, '') || 'model';
-  return pickModel({ kind: 'kept', id: -1, name: named }, async () => {
+  let saved = true;
+  const on = await pickModel({ kind: 'kept', id: -1, name: named }, async () => {
     const file = await picked.arrayBuffer();
     const info = readModel(file);
     const name = info.name || named;
-    const kept = await keepModel(picked, { name, author: info.author }, info.thumbnail ? await smallThumb(info.thumbnail) : null);
-    if (kept) {
+    const keeping = await keepModel(picked, { name, author: info.author, format: formatOf(picked.name) }, info.thumbnail ? await smallThumb(info.thumbnail) : null);
+    if ('kept' in keeping) {
       store.set(keptModelsAtom, await listKept());
       void keepForGood();
+    } else {
+      saved = false;
+      console.warn('model not saved:', keeping.failed);
     }
-    return { choice: { kind: 'kept', id: kept?.id ?? -1, name }, file };
+    return { choice: { kind: 'kept', id: 'kept' in keeping ? keeping.kept.id : -1, name }, file };
   });
+  if (on && !saved) store.set(modelStatusAtom, UNSAVED_MODEL);
+  return { on, saved };
 }
 
 export async function forgetKeptModel(id: number): Promise<void> {

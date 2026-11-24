@@ -1,4 +1,4 @@
-import { RiCloseLine } from '@remixicon/react';
+import { RiAddLine, RiBox3Line, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type MouseEvent, type PointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef } from 'react';
 
@@ -17,7 +17,7 @@ import {
   pickKeptModel,
   pickModelFile
 } from '@/infra/atoms/publish-atoms';
-import type { KeptModel } from '@/infra/model-store';
+import { type KeptModel, MAX_KEPT } from '@/infra/model-store';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, loadFraction, loadWords, loadWordsShort } from '@/shared-components/live/ModelLoading';
 import { KeptPicture, LetterTile } from '@/shared-components/live/ModelPicture';
@@ -27,21 +27,52 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
+const SECTION_COUNT = 'ml-2 text-xs font-semibold tracking-normal text-textSecondary';
+const GRID = 'm-0 mt-2 grid list-none grid-cols-2 gap-3 p-0 sm:grid-cols-4';
 const mb = (bytes: number) => `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} mb`;
 
-const PLACES: readonly { id: string; name: string; href: string; file: string; about: string }[] = [
-  { id: 'vroid-hub', name: 'vroid hub', href: 'https://hub.vroid.com/en', file: '.vrm', about: 'characters made in vroid studio. each says who may wear it' },
-  { id: 'booth', name: 'booth', href: 'https://booth.pm/en', file: '.vrm', about: 'a market of avatars, many of them free' },
-  { id: 'open-source-avatars', name: 'open source avatars', href: 'https://www.opensourceavatars.com/', file: '.vrm', about: 'over 300, most of them free for any use' },
-  { id: 'sketchfab', name: 'sketchfab', href: 'https://sketchfab.com/', file: '.glb', about: 'characters under creative commons licences. download one as glb' },
+const PLACES: readonly { id: string; name: string; href: string; file: string; about: string; icon: string }[] = [
+  {
+    id: 'vroid-hub',
+    name: 'vroid hub',
+    href: 'https://hub.vroid.com/en',
+    file: '.vrm',
+    about: 'characters made in vroid studio. each says who may wear it',
+    icon: '/model-sites/vroid-hub.png'
+  },
+  { id: 'booth', name: 'booth', href: 'https://booth.pm/en', file: '.vrm', about: 'a market of avatars, many of them free', icon: '/model-sites/booth.png' },
+  {
+    id: 'open-source-avatars',
+    name: 'open source avatars',
+    href: 'https://www.opensourceavatars.com/',
+    file: '.vrm',
+    about: 'over 300, most of them free for any use',
+    icon: '/model-sites/osa.png'
+  },
+  {
+    id: 'sketchfab',
+    name: 'sketchfab',
+    href: 'https://sketchfab.com/',
+    file: '.glb',
+    about: 'characters under creative commons licences. download one as glb',
+    icon: '/model-sites/sketchfab.png'
+  },
   {
     id: 'mixamo',
     name: 'mixamo',
     href: 'https://www.mixamo.com/',
     file: '.fbx',
-    about: 'free characters with a skeleton. most have no face to move, so only the head turns'
+    about: 'free characters with a skeleton. most have no face to move, so only the head turns',
+    icon: '/model-sites/mixamo.png'
   },
-  { id: 'vroid-studio', name: 'vroid studio', href: 'https://vroid.com/en/studio', file: '.vrm', about: 'free, to make one of your own' }
+  {
+    id: 'vroid-studio',
+    name: 'vroid studio',
+    href: 'https://vroid.com/en/studio',
+    file: '.vrm',
+    about: 'free, to make one of your own',
+    icon: '/model-sites/vroid-studio.png'
+  }
 ];
 
 interface CardProps {
@@ -90,6 +121,44 @@ function Card({ id, name, detail, picture, on, load, disabled, onPick }: CardPro
 
 const demoDetail = (model: DemoModel, kept: boolean) => [model.author, model.licence, kept ? 'downloaded' : mb(model.bytes)].filter(Boolean).join(' · ');
 const keptDetail = (model: KeptModel) => [model.author, mb(model.bytes)].filter(Boolean).join(' · ');
+
+function NoPicture({ format }: { format: string }) {
+  return (
+    <i className="relative flex h-full w-full items-center justify-center bg-backgroundTertiary not-italic text-textTertiary">
+      <RiBox3Line aria-hidden size={36} />
+      <small className="absolute left-1.5 top-1.5 border border-primaryStroke bg-backgroundSecondary px-1.5 py-0.5 text-xs font-semibold text-textSecondary">
+        {format}
+      </small>
+    </i>
+  );
+}
+
+function AddTile({ disabled, full, onPick }: { disabled: boolean; full: boolean; onPick: () => void }) {
+  return (
+    <Tooltip content={full ? 'forgets the oldest' : null}>
+      <button
+        id="model-file-pick"
+        type="button"
+        disabled={disabled}
+        onClick={onPick}
+        className="relative flex w-full min-w-0 flex-col border border-dashed border-secondaryStroke text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:border-secondaryStroke"
+      >
+        <span aria-hidden className="block aspect-square w-full" />
+        <span aria-hidden className="invisible block px-2 py-1.5">
+          <span className="block text-sm">{'\u00a0'}</span>
+          <span className="block text-xs">{'\u00a0'}</span>
+        </span>
+        <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+          <span aria-hidden className="flex h-7 w-7 items-center justify-center border border-primaryStroke text-primaryBlue">
+            <RiAddLine size={16} />
+          </span>
+          <span className="text-sm font-semibold text-textSecondary">add model</span>
+          <span className="text-xs text-textTertiary">.vrm · .glb · .fbx</span>
+        </span>
+      </button>
+    </Tooltip>
+  );
+}
 
 export function ModelDialog({ onClose }: { onClose: () => void }) {
   const demos = useAtomValue(demoModelsAtom);
@@ -144,7 +213,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           <h2 id="model-dialog-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
             pick a model
           </h2>
-          <p className="mt-2 text-sm text-textSecondary">it wears your face: your camera reads it here, in this browser, and only the model is sent.</p>
+          <p className="mt-2 text-sm text-textSecondary">it wears your face. only the model is sent.</p>
         </div>
         <Tooltip content="close" at="left">
           <button id="model-dialog-close" type="button" aria-label="close" onClick={onClose} className={cn(ICON_BUTTON, 'absolute right-0 top-0', SHEET_CLOSE)}>
@@ -155,14 +224,14 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
         <section aria-labelledby="model-demos-title">
           <h3 id="model-demos-title" className={SECTION_TITLE}>
             demo models
+            <span className={SECTION_COUNT}>{demos.length}</span>
           </h3>
-          {demos.length > 0 && <p className="mt-1 text-sm text-textTertiary">the site's own. one is downloaded the first time it is worn, then kept in this browser.</p>}
           {demos.length === 0 ? (
             <p id="model-demos-none" className="mt-2 text-sm text-textTertiary">
               none on this server yet. a file of your own works the same.
             </p>
           ) : (
-            <ul id="model-demos" className="m-0 mt-2 grid list-none grid-cols-2 gap-3 p-0 sm:grid-cols-4">
+            <ul id="model-demos" className={GRID}>
               {demos.map((model) => (
                 <li key={model.id} data-kept={keptDemos.get(model.id) === model.v} className="min-w-0">
                   <Card
@@ -190,38 +259,43 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
         <section aria-labelledby="model-kept-title">
           <h3 id="model-kept-title" className={SECTION_TITLE}>
             yours
+            <span className={SECTION_COUNT}>
+              {kept.length}
+              <span className="text-textTertiary">/{MAX_KEPT}</span>
+            </span>
           </h3>
-          <p className="mt-1 text-sm text-textTertiary">a .vrm, .glb or .fbx from your computer. it is kept in this browser for next time and goes nowhere else.</p>
-          {kept.length > 0 && (
-            <ul id="model-kept" className="m-0 mt-2 grid list-none grid-cols-2 gap-3 p-0 sm:grid-cols-4">
-              {kept.map((model) => (
-                <li key={model.id} className="group/kept relative min-w-0">
-                  <Card
-                    id={`model-kept-${model.id}`}
-                    name={model.name}
-                    detail={keptDetail(model)}
-                    picture={model.thumb ? <KeptPicture picture={model.thumb} /> : <LetterTile name={model.name} />}
-                    on={on?.kind === 'kept' && on.id === model.id}
-                    load={load?.choice.kind === 'kept' && load.choice.id === model.id ? load : null}
+          <ul id="model-kept" className={GRID}>
+            {kept.map((model) => (
+              <li key={model.id} className="group/kept relative min-w-0">
+                <Card
+                  id={`model-kept-${model.id}`}
+                  name={model.name}
+                  detail={keptDetail(model)}
+                  picture={model.thumb ? <KeptPicture picture={model.thumb} /> : <NoPicture format={model.format} />}
+                  on={on?.kind === 'kept' && on.id === model.id}
+                  load={load?.choice.kind === 'kept' && load.choice.id === model.id ? load : null}
+                  disabled={loading}
+                  onPick={() => pick(pickKeptModel(model))}
+                />
+                <Tooltip content="forget this model">
+                  <button
+                    id={`model-forget-${model.id}`}
+                    type="button"
+                    aria-label={`forget ${model.name}`}
                     disabled={loading}
-                    onPick={() => pick(pickKeptModel(model))}
-                  />
-                  <Tooltip content="forget this model">
-                    <button
-                      id={`model-forget-${model.id}`}
-                      type="button"
-                      aria-label={`forget ${model.name}`}
-                      disabled={loading}
-                      onClick={() => void forgetKeptModel(model.id)}
-                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/kept:opacity-100 disabled:opacity-0"
-                    >
-                      <RiCloseLine aria-hidden size={12} />
-                    </button>
-                  </Tooltip>
-                </li>
-              ))}
-            </ul>
-          )}
+                    onClick={() => void forgetKeptModel(model.id)}
+                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/kept:opacity-100 disabled:opacity-0"
+                  >
+                    <RiCloseLine aria-hidden size={12} />
+                  </button>
+                </Tooltip>
+              </li>
+            ))}
+            <li className="min-w-0">
+              <AddTile disabled={loading} full={kept.length >= MAX_KEPT} onPick={() => fileRef.current?.click()} />
+            </li>
+          </ul>
+          {kept.length === 0 && <p className="mt-2 text-sm text-textTertiary">a .vrm, .glb or .fbx from your computer.</p>}
           <input
             ref={fileRef}
             id="model-file"
@@ -231,32 +305,34 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
             onChange={(e) => {
               const file = e.target.files?.[0];
               e.target.value = '';
-              if (file) pick(pickModelFile(file));
+              if (file) pick(pickModelFile(file).then((picked) => picked.on && picked.saved));
             }}
           />
-          <button
-            id="model-file-pick"
-            type="button"
-            disabled={loading}
-            className="mt-3 text-sm font-semibold text-primaryBlue disabled:opacity-40"
-            onClick={() => fileRef.current?.click()}
-          >
-            pick a model file
-          </button>
         </section>
 
         <section aria-labelledby="model-places-title">
-          <h3 id="model-places-title" className={SECTION_TITLE}>
-            where to find one
-          </h3>
-          <p className="mt-1 text-sm text-textTertiary">other sites with models to download. each opens in a new tab.</p>
-          <ul id="model-places" className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0 text-sm">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 id="model-places-title" className={SECTION_TITLE}>
+              where to find one
+            </h3>
+            <p className="text-xs text-textTertiary">opens in a new tab</p>
+          </div>
+          <ul id="model-places" className="m-0 mt-2 grid list-none grid-cols-3 gap-2 p-0 md:grid-cols-6">
             {PLACES.map((place) => (
-              <li key={place.id} className="min-w-0 text-textTertiary">
-                <ExternalLink id={`model-place-${place.id}`} href={place.href} className="font-semibold text-primaryBlue hover:underline">
-                  {place.name}
-                </ExternalLink>
-                {` · ${place.file} · ${place.about}`}
+              <li key={place.id} className="min-w-0">
+                <Tooltip content={`${place.name} · ${place.file} · ${place.about}`} className="max-w-xs whitespace-normal">
+                  <ExternalLink
+                    id={`model-place-${place.id}`}
+                    href={place.href}
+                    aria-label={place.name}
+                    className={cn(
+                      'flex h-12 items-center justify-center border border-primaryStroke bg-background transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none',
+                      place.id === 'vroid-studio' && 'border-dashed'
+                    )}
+                  >
+                    <img src={place.icon} alt="" draggable={false} className="block h-7 w-7" />
+                  </ExternalLink>
+                </Tooltip>
               </li>
             ))}
           </ul>
