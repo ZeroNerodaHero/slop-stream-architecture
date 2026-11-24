@@ -1642,7 +1642,8 @@
     resizeTimer = setTimeout(() => { for (const c of charts) draw(c); const v = views[sel.tab]; if (v) timingRender(v); }, 100);
   });
   tick();
-  setInterval(tick, 5000);
+  setInterval(() => { if (!document.hidden) tick(); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 })();
 </script>
 </body>
