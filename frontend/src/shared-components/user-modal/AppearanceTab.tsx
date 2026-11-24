@@ -1,7 +1,7 @@
 import { useAtomValue } from 'jotai';
 
 import { customFrom, paletteAtom, setCustomColor, setTextSize, setTheme, TEXT_SIZES, type TextSize, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
-import { contrast, hex, type Palette, PRESET_NAMES, PRESETS, type TokenName, TOKENS } from '@/infra/theme';
+import { contrast, hex, type Palette, PRESET_LABELS, PRESET_NAMES, PRESETS, type TokenName, TOKENS } from '@/infra/theme';
 import { Button } from '@/shared-components/Button';
 import { FIELDSET, Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -78,21 +78,21 @@ export function AppearanceTab() {
     <div className="divide-y divide-primaryStroke">
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>theme</legend>
-        <div role="presentation" className="mt-2 grid grid-cols-6 gap-2 md:grid-cols-5 md:gap-3">
-          {PRESET_NAMES.map((name, i) => (
-            <div key={name} className={cn('grid min-w-0 md:col-span-1', i < 3 ? 'col-span-2' : 'col-span-3')}>
+        <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">
+          {PRESET_NAMES.map((name) => (
+            <div key={name} className="grid min-w-0">
               <OptionCard
                 id={`theme-${name}`}
                 name="theme"
                 checked={theme.kind === 'preset' && theme.name === name}
                 onChange={() => setTheme({ kind: 'preset', name })}
                 picture={<Swatch palette={PRESETS[name]} />}
-                label={name}
+                label={PRESET_LABELS[name] ?? name}
                 compact
               />
             </div>
           ))}
-          <div className="col-span-3 grid min-w-0 md:col-span-1">
+          <div className="grid min-w-0">
             <OptionCard
               id="theme-custom"
               name="theme"
