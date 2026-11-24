@@ -576,12 +576,22 @@ export function RoomLines({
             }
             face={<SpeakerFace line={line} room={room} />}
             words={
-              line.text ? (
-                <span className="whitespace-pre-wrap">
-                  <LinkedText text={line.text} />
-                </span>
+              line.text || line.pending === 'failed' ? (
+                <>
+                  {line.text && (
+                    <span className="whitespace-pre-wrap">
+                      <LinkedText text={line.text} />
+                    </span>
+                  )}
+                  {line.pending === 'failed' && (
+                    <span data-not-sent className="ml-1.5 text-xs text-decrease">
+                      not sent
+                    </span>
+                  )}
+                </>
               ) : null
             }
+            pending={line.pending}
             pictures={
               <>
                 <ChatImages ids={line.images} />
@@ -589,18 +599,20 @@ export function RoomLines({
                 <ChatEmbeds text={line.text} />
               </>
             }
-            mark={lineMark?.(line)}
+            mark={line.pending ? undefined : lineMark?.(line)}
             actions={
-              <LineActions
-                onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
-                reactions={line.reactions ?? []}
-                me={me}
-                reactOff={reacts && !me ? 'log in to react' : undefined}
-                onReply={replies ? () => room.setReply(line) : undefined}
-                extra={lineActions?.(line)}
-                text={line.text}
-                menu={lineMenu?.(line)}
-              />
+              line.pending ? undefined : (
+                <LineActions
+                  onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
+                  reactions={line.reactions ?? []}
+                  me={me}
+                  reactOff={reacts && !me ? 'log in to react' : undefined}
+                  onReply={replies ? () => room.setReply(line) : undefined}
+                  extra={lineActions?.(line)}
+                  text={line.text}
+                  menu={lineMenu?.(line)}
+                />
+              )
             }
             reactions={
               <ReactionChips
@@ -621,9 +633,10 @@ export function RoomLines({
               )
             }
             flash={flash === line.id}
-            side={lineSide?.(line)}
+            side={line.pending ? undefined : lineSide?.(line)}
             attrs={{
               'data-id': line.id,
+              'data-pending': line.pending,
               'data-reply-to': line.reply?.id,
               'data-streamer': line.streamer || undefined,
               'data-verified': line.verified || undefined,
