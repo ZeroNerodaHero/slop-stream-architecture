@@ -721,7 +721,7 @@ up from it in the bottom half.
 
 ## `frontend/src/shared-components/PersonRow.tsx`
 
-`export function Who`: A name, its ✓ when it has an account, the verified mark when the account has a provider linked, the test badge for a fake stream.
+`export function Who`: A name, its ✓ when it has an account, the verified mark when the account has a provider linked.
 
 `export function Word`: The square and the word, the colours of docs/status.md. `square={false}`: the word alone, where the face beside it already carries the square.
 
@@ -939,10 +939,6 @@ down is a scroll and is left alone. The page under it does not scroll (globals.c
 `data-drawer-open`). The safe areas are the panel's padding: the top, the foot and the outer
 side. Drawn into the body, over the page's sticky row, the friend chat and the players (z-50,
 later in the document); a tooltip is over it (z-[60]).
-
-## `frontend/src/shared-components/TestBadge.tsx`
-
-`export function TestBadge`: Marks a dummy stream: generated for styling and debugging, not a person.
 
 ## `frontend/src/shared-components/Tooltip.tsx`
 

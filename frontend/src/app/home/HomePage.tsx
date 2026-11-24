@@ -10,7 +10,6 @@ import { api, mayMakeGroup, messageOf, type LiveStream, type Person, type Recent
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
 import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
-import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
 import { Face as PersonFace } from '@/shared-components/Face';
@@ -25,7 +24,6 @@ import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PersonRow, Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -203,11 +201,6 @@ function Card({
                 </Tooltip>
               )}
               {stream.badge && <Badge group={stream.badge} className="ml-1.5 shrink-0" />}
-              {isDummyName(stream.name) && (
-                <span className="shrink-0">
-                  <TestBadge />
-                </span>
-              )}
             </h2>
             {stream.bio && <p className="mt-0.5 line-clamp-2 text-sm leading-snug text-textSecondary [overflow-wrap:anywhere]">{stream.bio}</p>}
           </div>

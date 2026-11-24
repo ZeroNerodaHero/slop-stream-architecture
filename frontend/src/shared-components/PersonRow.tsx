@@ -2,11 +2,9 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
-import { isDummyName } from '@/infra/names';
 import { Face } from '@/shared-components/Face';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
-import { TestBadge } from '@/shared-components/TestBadge';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -22,7 +20,6 @@ export function Who({ name, verified, oauthVerified, className }: { name: string
         </Tooltip>
       )}
       {verified && oauthVerified && <OAuthMark />}
-      {isDummyName(name) && <TestBadge />}
     </span>
   );
 }

@@ -44,7 +44,7 @@ import {
 } from '@/infra/atoms/profile-atoms';
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { api, groupWords } from '@/infra/api';
-import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { cleanName, isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
@@ -73,7 +73,7 @@ function Rename({ me }: { me: string }) {
 
   const wanted = cleanName(next);
   const again = held.includes(wanted) ? null : wait;
-  const ready = !busy && !again && isValidName(wanted) && !isDummyName(wanted) && wanted !== me && (!hasPassword || password.length >= 8);
+  const ready = !busy && !again && isValidName(wanted) && wanted !== me && (!hasPassword || password.length >= 8);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -196,7 +196,7 @@ export function ProfileTab() {
 
   const left = MAX_BIO_CHARS - chars(bio.trim());
   const noteLeft = MAX_OFFLINE_NOTE_CHARS - chars(offlineNote.trim());
-  const named = isValidName(name) && !isDummyName(name);
+  const named = isValidName(name);
 
   function commitNick() {
     if (store.get(nickAtom) !== nickAtFocus.current) identityChanged('nick');
