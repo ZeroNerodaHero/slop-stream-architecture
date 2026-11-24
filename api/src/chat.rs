@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use redis::streams::{StreamId, StreamMaxlen, StreamRangeReply, StreamReadOptions, StreamReadReply};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ const FILL_LIMIT: usize = 100;
 #[derive(Clone)]
 pub(crate) struct ChatState {
     pub(crate) db: PgPool,
-    pub(crate) redis: ConnectionManager,
+    pub(crate) redis: Redis,
     client: redis::Client,
     rooms: Rooms,
     sockets: IpSlots,
@@ -364,10 +364,12 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         .merge(history::routes())
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .layer(axum::middleware::map_response(crate::media::no_store_by_default))
+        .layer(axum::middleware::from_fn(crate::timings::http))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("chat on {addr}");
+    crate::timings::serve();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
@@ -1144,7 +1146,7 @@ async fn stream_refusal(s: &ChatState, room: &str, w: &Who) -> Option<Refused> {
     }
 }
 
-pub(crate) async fn remove_line(db: &PgPool, r: &mut ConnectionManager, room: &str, id: &str) -> Result<(), crate::ApiError> {
+pub(crate) async fn remove_line(db: &PgPool, r: &mut Redis, room: &str, id: &str) -> Result<(), crate::ApiError> {
     let _: i64 = r.xdel(room_key(room), &[id]).await?;
     sqlx::query("DELETE FROM chat_lines WHERE room = $1 AND id = $2").bind(room).bind(id).execute(db).await?;
     sqlx::query("DELETE FROM chat_reactions WHERE room = $1 AND line_id = $2").bind(room).bind(id).execute(db).await?;

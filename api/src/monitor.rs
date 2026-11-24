@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use crate::agent::{round, Container, Sample};
+use crate::timings;
 
 const PAGE: &str = include_str!("monitor.html");
 const STORE_FILE: &str = "monitor.json";
@@ -126,6 +127,7 @@ struct History {
     status: Option<String>,
     checked_at: Option<DateTime<Utc>>,
     agent: Option<Value>,
+    timings: timings::History,
 }
 
 fn host_values(s: &Sample) -> Vec<Option<f64>> {
@@ -192,10 +194,12 @@ fn fold(tier: &mut VecDeque<Point>, width: i64, keep: usize, t: i64, h: &[Option
 }
 
 impl History {
-    fn add(&mut self, s: Sample) {
+    fn add(&mut self, mut s: Sample) {
         if self.latest.as_ref().is_some_and(|l| l.at >= s.at) {
             return;
         }
+        let rows = std::mem::take(&mut s.timings);
+        self.timings.add(s.at.timestamp(), &rows);
         self.tiers.resize_with(TIERS.len(), VecDeque::new);
         let h: Vec<Option<f64>> = host_values(&s).into_iter().map(|v| v.map(compact)).collect();
         let c: BTreeMap<String, Vec<Option<f64>>> = s
@@ -699,6 +703,68 @@ async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Respons
     Json(out).into_response()
 }
 
+#[derive(Deserialize)]
+struct TimingQuery {
+    target: Option<String>,
+    key: Option<String>,
+    range: Option<String>,
+}
+
+fn timing_tier(range: &Option<String>) -> Result<(usize, &'static str), Response> {
+    let range = range.as_deref().unwrap_or("1h");
+    timings::TIERS
+        .iter()
+        .position(|(name, _, _)| *name == range)
+        .map(|i| (i, timings::TIERS[i].0))
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, Json(json!({ "error": "range: 1h, 24h or 7d" }))).into_response())
+}
+
+async fn timing_table(State(app): State<App>, Query(q): Query<TimingQuery>) -> Response {
+    let (tier, range) = match timing_tier(&q.range) {
+        Ok(t) => t,
+        Err(res) => return res,
+    };
+    let now = Utc::now().timestamp();
+    let m = app.metrics.lock().await;
+    let mut rows = vec![];
+    let mut dropped = serde_json::Map::new();
+    for t in app.cfg.targets.iter().filter(|t| q.target.as_ref().is_none_or(|want| *want == t.name)) {
+        if let Some(h) = m.get(&t.name) {
+            rows.extend(h.timings.table(tier, now, &t.name));
+            if h.timings.dropped() > 0 {
+                dropped.insert(t.name.clone(), json!(h.timings.dropped()));
+            }
+        }
+    }
+    Json(json!({
+        "range": range,
+        "bucket_secs": timings::TIERS[tier].1,
+        "now": Utc::now(),
+        "targets": app.cfg.targets.iter().map(|t| &t.name).collect::<Vec<_>>(),
+        "dropped": dropped,
+        "rows": rows,
+    }))
+    .into_response()
+}
+
+async fn timing_series(State(app): State<App>, Query(q): Query<TimingQuery>) -> Response {
+    let (tier, range) = match timing_tier(&q.range) {
+        Ok(t) => t,
+        Err(res) => return res,
+    };
+    let m = app.metrics.lock().await;
+    let found = q.target.as_ref().and_then(|t| m.get(t)).zip(q.key.as_ref()).and_then(|(h, key)| h.timings.detail(key, tier));
+    match found {
+        Some(mut v) => {
+            v["target"] = json!(q.target);
+            v["range"] = json!(range);
+            v["now"] = json!(Utc::now());
+            Json(v).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box or line" }))).into_response(),
+    }
+}
+
 fn view(t: &TargetState, public: bool) -> Value {
     let (errors, errors_status) = if public {
         (Vec::new(), Some(format!("{} stored, hidden: this page is public (STATS_PUBLIC), and a report names the visitor's ip and login", t.errors.len())))
@@ -811,6 +877,8 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/health", get(monitor_health))
         .route("/api/monitor", get(state))
         .route("/api/monitor/metrics", get(series))
+        .route("/api/monitor/timings", get(timing_table))
+        .route("/api/monitor/timings/series", get(timing_series))
         .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
         .layer(axum::middleware::map_response(crate::agent::no_store))
         .with_state(app.clone());

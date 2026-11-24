@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use redis::streams::{StreamId, StreamReadOptions, StreamReadReply};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -92,7 +92,7 @@ return 1
 #[derive(Clone)]
 pub(crate) struct Gateway {
     db: PgPool,
-    redis: ConnectionManager,
+    redis: Redis,
     client: redis::Client,
     shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
@@ -290,10 +290,12 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(routes(gateway))
-        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip));
+        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
+        .layer(axum::middleware::from_fn(crate::timings::http));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("events on {addr}");
+    crate::timings::serve();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
@@ -309,7 +311,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
 }
 
 impl Gateway {
-    pub(crate) fn new(db: PgPool, redis: ConnectionManager, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String, admins: Vec<Uuid>) -> Self {
+    pub(crate) fn new(db: PgPool, redis: Redis, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String, admins: Vec<Uuid>) -> Self {
         let host = std::env::var("HOSTNAME").ok().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "events".into());
         let (leaves, left) = mpsc::unbounded_channel();
         let g = Gateway {

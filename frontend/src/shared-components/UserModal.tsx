@@ -23,20 +23,11 @@ import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
-import { AdvancedTab } from '@/shared-components/user-modal/AdvancedTab';
-import { AppearanceTab } from '@/shared-components/user-modal/AppearanceTab';
-import { ChatTab } from '@/shared-components/user-modal/ChatTab';
-import { GroupsTab } from '@/shared-components/user-modal/GroupsTab';
-import { NotificationsTab } from '@/shared-components/user-modal/NotificationsTab';
-import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
-import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
-import { SidebarTab } from '@/shared-components/user-modal/SidebarTab';
-import { StatsTab } from '@/shared-components/user-modal/StatsTab';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { TAB_OFF, TAB_ON } from '@/utils/tabs';
 
-const VoiceTab = lazy(() => import('@/shared-components/user-modal/VoiceTab').then((m) => ({ default: m.VoiceTab })));
+const TabBody = lazy(() => import('@/shared-components/user-modal/TabBody').then((m) => ({ default: m.TabBody })));
 
 const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> = {
   profile: { label: 'profile', group: 'you', icon: <RiUserLine aria-hidden size={18} /> },
@@ -295,20 +286,9 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
           <h2 id={`panel-${tab}-title`} className="mb-4 border-l-4 border-primaryBlue pl-3 pr-12 text-lg font-semibold leading-tight">
             {TABS[tab].label}
           </h2>
-          {tab === 'profile' && <ProfileTab />}
-          {tab === 'stats' && <StatsTab />}
-          {tab === 'groups' && <GroupsTab />}
-          {tab === 'security' && <SecurityTab />}
-          {tab === 'notifications' && <NotificationsTab />}
-          {tab === 'appearance' && <AppearanceTab />}
-          {tab === 'chat' && <ChatTab />}
-          {tab === 'voice' && (
-            <Suspense fallback={null}>
-              <VoiceTab />
-            </Suspense>
-          )}
-          {tab === 'sidebar' && <SidebarTab />}
-          {tab === 'advanced' && <AdvancedTab />}
+          <Suspense fallback={null}>
+            <TabBody tab={tab} />
+          </Suspense>
         </div>
       </div>
     </div>

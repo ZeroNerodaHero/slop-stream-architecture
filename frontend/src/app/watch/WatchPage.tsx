@@ -27,7 +27,6 @@ import {
   sceneTileAtom,
   slotLabel,
   slotStreamAtom,
-  socialsAtom,
   startPip,
   tilesAtom,
   watchLayersAtom,
@@ -39,13 +38,11 @@ import {
   watchBadgeAtom,
   watchStatsAtom,
   watchMessageAtom,
-  watchNameAtom,
-  watchPhaseAtom,
   watchRenamedToAtom,
   watchToneAtom,
-  watchViewersAtom,
-  watchWelcomeAtom
+  watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
+import { socialsAtom, watchNameAtom, watchPhaseAtom, watchWelcomeAtom } from '@/infra/atoms/watch-state';
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, presenceOfAtom } from '@/infra/atoms/presence-atoms';
@@ -256,7 +253,7 @@ export function WatchPage() {
       )}
       {badge && <Badge id="watch-badge" group={badge} card className="shrink-0" />}
       {verified && (
-        <Tooltip content="has an account: this really is them">
+        <Tooltip content="verified">
           <span role="img" aria-label="has an account" className="shrink-0 text-increase">
             ✓
           </span>
@@ -406,7 +403,7 @@ export function WatchPage() {
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatTab && !chatOpen)), mobile && strip.overlay)}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile || chatTab ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} {...homePress} onClick={toCorner}>
+              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'pic in pic'} disabled={cornerTaken} {...homePress} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
             </div>

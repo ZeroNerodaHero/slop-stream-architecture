@@ -7,7 +7,8 @@ import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
-import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
+import { endWatch } from '@/infra/atoms/watch-atoms';
+import { pipAtom } from '@/infra/atoms/watch-state';
 import {
   type FaceLines,
   type FaceMarks,
@@ -995,7 +996,7 @@ function sendHeartbeat() {
 function onConnection(state: RTCPeerConnectionState) {
   if (state === 'connected') setPhase('live', 'live');
   else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
-  else if (state === 'failed') stopLive('connection failed. udp blocked?', 'failed');
+  else if (state === 'failed') stopLive('connection failed', 'failed');
 }
 
 async function pickDisplay(): Promise<MediaStream | null> {

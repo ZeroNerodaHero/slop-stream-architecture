@@ -47,11 +47,6 @@ const HEIGHT: Record<Kind, number> = { text: 120, image: 180, video: 200, audio:
 const WIRE: Record<Kind, PageWire['type']> = { text: 'text', image: 'image', video: 'video', audio: 'sound' };
 const ACCEPT: Record<Exclude<Kind, 'text'>, string> = { image: 'image/*', video: 'video/mp4,video/webm', audio: 'audio/*' };
 const NEW = 'new';
-const STARTER = "what you stream, when you're on, what to ask about. this is yours to rewrite.";
-const SAMPLE_FILES: { kind: Exclude<Kind, 'text'>; path: string }[] = [
-  { kind: 'image', path: '/about-demo/banner.jpg' },
-  { kind: 'audio', path: '/about-demo/track-1.mp3' }
-];
 
 const ADD = 'text-sm font-semibold text-primaryBlue disabled:opacity-40';
 const LABEL = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
@@ -92,17 +87,6 @@ function fmtClock(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
   const s = Math.floor(seconds);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function paragraphs(text: string): string {
-  return text
-    .split('\n')
-    .map((line) => (line.trim() ? `<p>${escapeHtml(line)}</p>` : '<p><br></p>'))
-    .join('');
 }
 
 function kindOf(type: PageWire['type']): Kind | null {
@@ -173,7 +157,7 @@ function richNode(node: Node, key: string): ReactNode {
       <ExternalLink
         key={key}
         href={el.getAttribute('href') ?? ''}
-        from="the streamer put this link on their page, not this site."
+        from="external link"
         className="text-primaryBlue hover:underline"
       >
         {kids}
@@ -733,32 +717,6 @@ export function About({ name, edit = false, id }: AboutProps) {
     persistRef.current(kept);
   };
 
-  const startSample = async () => {
-    const words = makeCell('text', { html: paragraphs(STARTER) });
-    setEditing(true);
-    touch(() => [{ key: uid(), cells: [words] }]);
-    setStatus('making the sample');
-    uploads.current += 1;
-    try {
-      await saving.current;
-      const cells = await Promise.all(
-        SAMPLE_FILES.map(async ({ kind, path }) => {
-          const res = await fetch(path);
-          if (!res.ok) throw new Error(`${path}: ${res.status}`);
-          const saved = await api.saveAboutFile(name, WIRE[kind] as 'image' | 'video' | 'sound', await res.blob());
-          return makeCell(kind, { id: saved.id, src: saved.src, cols: COLS / SAMPLE_FILES.length });
-        })
-      );
-      dirty.current = true;
-      setRows((list) => [...list, { key: uid(), cells }]);
-    } catch (err: unknown) {
-      setStatus(`the sample's media did not load: ${err instanceof Error ? err.message : 'unknown'}`);
-    } finally {
-      uploads.current -= 1;
-      if (uploads.current === 0 && dirty.current) setRows((list) => [...list]);
-    }
-  };
-
   if (failed) {
     return (
       <p id={box} data-failed className="text-textSecondary">
@@ -788,25 +746,17 @@ export function About({ name, edit = false, id }: AboutProps) {
       <div id={box} className={cn(DASHED, 'flex h-40 flex-col items-center justify-center gap-2')}>
         <RiPencilLine size={28} aria-hidden className="text-textTertiary" />
         <span className="text-textSecondary">nothing here yet</span>
-        <span className="flex items-center gap-2.5">
-          <button id="about-sample" type="button" className={ADD} onClick={() => void startSample()}>
-            start from a sample
-          </button>
-          <span aria-hidden className="text-sm text-textTertiary">
-            ·
-          </span>
-          <button
-            id="about-blank"
-            type="button"
-            className={ADD}
-            onClick={() => {
-              setEditing(true);
-              setMenu(NEW);
-            }}
-          >
-            start blank
-          </button>
-        </span>
+        <button
+          id="about-blank"
+          type="button"
+          className={ADD}
+          onClick={() => {
+            setEditing(true);
+            setMenu(NEW);
+          }}
+        >
+          start blank
+        </button>
       </div>
     );
   }
