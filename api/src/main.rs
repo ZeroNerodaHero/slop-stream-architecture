@@ -30,6 +30,7 @@ mod reactions;
 mod release;
 mod s3;
 mod socket;
+mod test_streamers;
 mod turnstile;
 mod voice;
 
@@ -54,6 +55,7 @@ use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use test_streamers::DummySecret;
 use tokio::time::sleep;
 
 const LIVE_TTL_SECS: i64 = 90;
@@ -74,7 +76,8 @@ pub(crate) struct AppState {
     pub(crate) http: reqwest::Client,
     video_url: String,
     pub(crate) dummy_prefix: String,
-    dummy_password: Option<String>,
+    pub(crate) dummy_password: Option<String>,
+    pub(crate) hide_test: bool,
     pub(crate) env_name: String,
     build: String,
     started: Instant,
@@ -211,10 +214,10 @@ pub(crate) struct PasswordQuery {
 
 pub(crate) async fn may_write(s: &AppState, name: &str, me: Option<&str>, password: Option<&str>) -> Result<(), ApiError> {
     if name.starts_with(&s.dummy_prefix) {
-        let allowed = matches!((&s.dummy_password, password), (Some(p), Some(given)) if p == given);
-        if !allowed {
+        if !test_streamers::secret_ok(s.dummy_password.as_deref(), password) {
             return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
         }
+        test_streamers::mark(&s.db, name).await?;
         return Ok(());
     }
     auth::may_act_as(&s.db, name, me).await
@@ -445,12 +448,11 @@ async fn put_streamer(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<BioBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     let bio = clean_bio(&body.bio)?;
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
@@ -476,6 +478,9 @@ async fn last_live(db: &PgPool, name: &str) -> Result<Option<DateTime<Utc>>, sql
 }
 
 async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
+    if test_streamers::hidden(&s.db, s.hide_test, &name).await? {
+        return Err(test_streamers::not_found());
+    }
     let p = profile::load_profile(&s.db, &name).await?;
     let presence = presence::presence(&s, &name).await?;
     let thumbs = profile::thumb_ids(&s.db, std::slice::from_ref(&name)).await?.remove(&name).unwrap_or_default();
@@ -578,10 +583,12 @@ async fn go_live(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
 ) -> ApiResult {
-    let Query(q) = q?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
+    if test_streamers::hidden(&s.db, s.hide_test, &name).await? {
+        return Err(test_streamers::refused());
+    }
 
     let key = live_key(&name);
     let mut r = s.redis.clone();
@@ -786,6 +793,9 @@ async fn stop(
 
 async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
     let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
+    if test_streamers::hidden(&s.db, s.hide_test, &name).await? {
+        return Err(test_streamers::not_found());
+    }
     let live = is_live(&s, &name).await?;
     let p = profile::load_profile(&s.db, &name).await?;
     let verified = live && session_verified(&s.db, &name).await?;
@@ -1002,6 +1012,7 @@ async fn main() {
         video_url,
         dummy_prefix: env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into()),
         dummy_password: env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty()),
+        hide_test: test_streamers::hide_from_env(),
         env_name,
         build,
         started: Instant::now(),

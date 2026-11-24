@@ -30,6 +30,9 @@ const COLORS: [&str; 8] = [
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const FPS: u32 = 15;
 const RETRY: Duration = Duration::from_secs(5);
+const REFUSED_RETRY: Duration = Duration::from_secs(60);
+const SECRET_HEADER: &str = "X-Dummy-Password";
+const AVATAR_SIDE: u32 = 256;
 const GIF_FRAMES: u32 = 20 * FPS;
 
 const GIFS_PER_STREAM: usize = 3;
@@ -42,6 +45,7 @@ const CLOCK: &str = r"%{pts\:gmtime\:0\:%H\\\:%M\\\:%S}";
 #[derive(Clone)]
 struct Config {
     names: Vec<String>,
+    prefix: String,
     password: Option<String>,
     video_ws_url: String,
     api_url: Option<String>,
@@ -72,6 +76,29 @@ const LINES: [&str; 14] = [
     "that was close to the corner",
     "gg",
 ];
+
+const ABOUT_OPENERS: [&str; 4] = [
+    "this is a fake stream. nobody is behind it: a test box plays it so the site has something live to style and debug against.",
+    "not a real person. this stream is a test the site runs on itself, for styling and debugging.",
+    "a fake test stream. the picture is a few gifs bouncing on a dark backdrop, made by a machine, not by anyone streaming.",
+    "you found one of the site's test streams. it is fake, it runs all day, and no one is watching the chat from the other side.",
+];
+const ABOUT_MIDDLES: [&str; 3] = [
+    "the gifs bounce off the edges, the clock in the corner keeps time, and a tone plays so the sound has something to carry.",
+    "the chat lines here come from a script too. they are there so the panel has words to wrap.",
+    "it goes live by itself, ends by itself, and starts again a few seconds later.",
+];
+
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "api go-live refused: {}", self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 #[derive(Deserialize)]
 struct Grant {
@@ -132,6 +159,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let cfg = Config {
         names,
+        prefix,
         password,
         video_ws_url: std::env::var("VIDEO_WS_URL").unwrap_or_else(|_| "ws://video:7880/ws".into()),
         api_url: std::env::var("API_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
@@ -162,11 +190,18 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(400 * i as u64)).await;
             loop {
-                match publish_once(i, &name, &cfg, &http).await {
-                    Ok(()) => log::info!("{name}: ended, starting again in {}s", RETRY.as_secs()),
-                    Err(e) => log::warn!("{name}: {e:#}. retrying in {}s", RETRY.as_secs()),
-                }
-                tokio::time::sleep(RETRY).await;
+                let wait = match publish_once(i, &name, &cfg, &http).await {
+                    Ok(()) => {
+                        log::info!("{name}: ended, starting again in {}s", RETRY.as_secs());
+                        RETRY
+                    }
+                    Err(e) => {
+                        let wait = if e.is::<Refused>() { REFUSED_RETRY } else { RETRY };
+                        log::warn!("{name}: {e:#}. retrying in {}s", wait.as_secs());
+                        wait
+                    }
+                };
+                tokio::time::sleep(wait).await;
             }
         });
     }
@@ -188,30 +223,17 @@ async fn wait_for_signal() -> anyhow::Result<()> {
 async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client) -> anyhow::Result<()> {
     let mut owner: Option<Grant> = None;
     if let Some(api) = &cfg.api_url {
-        let has_bio = match http.get(format!("{api}/api/streamers/{name}")).send().await {
-            Ok(res) => res
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|v| v.get("bio")?.as_str().map(|b| !b.trim().is_empty()))
-                .unwrap_or(false),
-            Err(_) => false,
-        };
-        if !has_bio {
-            let bio = format!("fake stream {} for styling and debugging. gifs bounce around. not a real person.", i + 1);
-            let _ = http
-                .put(format!("{api}/api/streamers/{name}"))
-                .query(&[("password", cfg.password.as_deref().unwrap_or(""))])
-                .json(&serde_json::json!({ "bio": bio }))
-                .send()
-                .await;
-        }
+        let secret = cfg.password.as_deref().unwrap_or("");
+        dress(i, name, cfg, http, api, secret).await;
         let res = http
             .post(format!("{api}/api/streams/{name}/go-live"))
-            .query(&[("password", cfg.password.as_deref().unwrap_or(""))])
+            .header(SECRET_HEADER, secret)
             .send()
             .await
             .context("api go-live")?;
+        if res.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(Refused(format!("{} {}", res.status(), res.text().await.unwrap_or_default())).into());
+        }
         if !res.status().is_success() {
             return Err(anyhow!("api go-live: {} {}", res.status(), res.text().await.unwrap_or_default()));
         }
@@ -243,6 +265,103 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
             .await;
     }
     result
+}
+
+async fn dress(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, api: &str, secret: &str) {
+    let profile: Option<serde_json::Value> = match http.get(format!("{api}/api/streamers/{name}")).send().await {
+        Ok(res) if res.status().is_success() => res.json().await.ok(),
+        _ => None,
+    };
+    let has_bio = profile.as_ref().and_then(|v| v.get("bio")?.as_str().map(|b| !b.trim().is_empty())).unwrap_or(false);
+    if !has_bio {
+        let bio = format!("fake stream {} for styling and debugging. gifs bounce around. not a real person.", i + 1);
+        let _ = http
+            .put(format!("{api}/api/streamers/{name}"))
+            .header(SECRET_HEADER, secret)
+            .json(&serde_json::json!({ "bio": bio }))
+            .send()
+            .await;
+    }
+    if profile.as_ref().is_some_and(|v| v.get("avatar").is_some_and(serde_json::Value::is_null)) {
+        if let Err(e) = put_avatar(i, name, cfg, http, api, secret).await {
+            log::warn!("{name}: avatar: {e:#}");
+        }
+    }
+    match about_page_empty(http, api, name).await {
+        Ok(true) => {
+            if let Err(e) = put_about_page(i, name, http, api, secret).await {
+                log::warn!("{name}: about page: {e:#}");
+            }
+        }
+        Ok(false) => {}
+        Err(e) => log::warn!("{name}: about page: {e:#}"),
+    }
+}
+
+fn about_html(i: usize, name: &str) -> String {
+    let opener = ABOUT_OPENERS[i % ABOUT_OPENERS.len()];
+    let middle = ABOUT_MIDDLES[(i / ABOUT_OPENERS.len() + i) % ABOUT_MIDDLES.len()];
+    format!("<p>{opener}</p><p>{middle}</p><p>{name} is test stream {}. if you are looking for a real person, try another stream.</p>", i + 1)
+}
+
+async fn about_page_empty(http: &reqwest::Client, api: &str, name: &str) -> anyhow::Result<bool> {
+    let res = http.get(format!("{api}/api/streamers/{name}/about-page")).send().await?.error_for_status()?;
+    let page: serde_json::Value = res.json().await?;
+    Ok(page.get("blocks").and_then(serde_json::Value::as_array).is_none_or(Vec::is_empty))
+}
+
+async fn put_about_page(i: usize, name: &str, http: &reqwest::Client, api: &str, secret: &str) -> anyhow::Result<()> {
+    let page = serde_json::json!({
+        "blocks": [{ "type": "text", "x": 24, "y": 24, "z": 1, "w": 520, "h": 220, "html": about_html(i, name) }]
+    });
+    let res = http.put(format!("{api}/api/streamers/{name}/about-page")).header(SECRET_HEADER, secret).json(&page).send().await?;
+    if !res.status().is_success() {
+        return Err(anyhow!("{} {}", res.status(), res.text().await.unwrap_or_default()));
+    }
+    log::info!("{name}: about page written");
+    Ok(())
+}
+
+fn avatar_letter(name: &str, prefix: &str) -> char {
+    let word = name.strip_prefix(prefix).filter(|w| !w.is_empty()).unwrap_or(name);
+    word.chars().find(char::is_ascii_alphanumeric).map_or('x', |c| c.to_ascii_uppercase())
+}
+
+async fn avatar_jpeg(i: usize, name: &str, cfg: &Config) -> anyhow::Result<Vec<u8>> {
+    let filter = format!(
+        "drawtext=fontfile={font}:text='{letter}':fontcolor=white:fontsize=150:x=(w-text_w)/2:y=(h-text_h)/2,format=yuvj420p",
+        font = cfg.font,
+        letter = avatar_letter(name, &cfg.prefix)
+    );
+    let out = Command::new("nice")
+        .args(["-n", "19", "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(["-f", "lavfi", "-i", &format!("color=c={}:s={AVATAR_SIDE}x{AVATAR_SIDE}", COLORS[i % COLORS.len()])])
+        .args(["-vf", &filter, "-frames:v", "1", "-q:v", "3", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1"])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .context("start ffmpeg")?;
+    if !out.status.success() || !out.stdout.starts_with(&[0xff, 0xd8]) {
+        return Err(anyhow!("ffmpeg made no jpeg ({}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(out.stdout)
+}
+
+async fn put_avatar(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, api: &str, secret: &str) -> anyhow::Result<()> {
+    let jpeg = avatar_jpeg(i, name, cfg).await?;
+    let res = http
+        .put(format!("{api}/api/streamers/{name}/avatar"))
+        .header(SECRET_HEADER, secret)
+        .header(reqwest::header::CONTENT_TYPE, "image/jpeg")
+        .body(jpeg)
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        return Err(anyhow!("{} {}", res.status(), res.text().await.unwrap_or_default()));
+    }
+    log::info!("{name}: avatar written");
+    Ok(())
 }
 
 async fn stream(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owner: Option<&Grant>) -> anyhow::Result<()> {
@@ -478,4 +597,29 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
     cmd.spawn().context("start ffmpeg")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_avatar_letter_is_the_words_first() {
+        assert_eq!(avatar_letter("dummy-mango", "dummy-"), 'M');
+        assert_eq!(avatar_letter("dummy-_zephyr2", "dummy-"), 'Z');
+        assert_eq!(avatar_letter("tester", "dummy-"), 'T');
+        assert_eq!(avatar_letter("dummy-", "dummy-"), 'D');
+        assert_eq!(avatar_letter("__", "dummy-"), 'x');
+    }
+
+    #[test]
+    fn the_about_page_says_it_is_fake_and_varies() {
+        let pages: Vec<String> = (0..6).map(|i| about_html(i, "dummy-mango")).collect();
+        for page in &pages {
+            assert!(page.contains("fake") || page.contains("not a real person"), "{page}");
+            assert!(page.starts_with("<p>") && page.ends_with("</p>"));
+        }
+        let distinct: std::collections::HashSet<&String> = pages.iter().collect();
+        assert_eq!(distinct.len(), pages.len());
+    }
 }

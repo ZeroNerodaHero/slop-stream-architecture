@@ -7,8 +7,11 @@ it the answer is `429` with `Retry-After` (seconds) and `{"error": "...", "retry
   Caddy saw (`X-Forwarded-For`). The handlers' own older limits (signup, login, DMs, follows,
   people search, chat images, chat videos, error reports) still apply on top.
 - **Not counted.** Requests with no `X-Forwarded-For` (they came from inside the compose
-  network: video's publisher calls, the tests run inside, the dummy box) and reserved-name
-  requests carrying the dummy password.
+  network: video's publisher calls, the tests run inside, the dummy box), and a request
+  carrying the dummy password (`X-Dummy-Password`, or the older `?password=`) on a
+  `/api/streamers/{name}...` or `/api/streams/{name}/...` route whose name starts with
+  `DUMMY_PREFIX`. The password on any other route is counted like anyone's
+  (`test-streamers.md`).
 - **New names.** A write to `/api/streamers/{name}/...` (or go-live) on a name the caller has not
   written this hour counts toward 20 distinct names per hour per account/IP: this is what
   stops a logged-out script from creating unlimited names and filling the bucket with uploads.

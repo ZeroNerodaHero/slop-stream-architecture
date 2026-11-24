@@ -11,7 +11,12 @@ the stream's name on top, a clock at the bottom, plus a quiet tone. ffmpeg
 draws and encodes (VP8 + Opus) to RTP on localhost; we forward those packets
 into the video server the way a browser would: go-live at the api, then the
 same websocket and offer/answer with the session and token it got, plus the
-dummy password.
+dummy password. Every api call carries the password as the `X-Dummy-Password`
+header. Before each go-live it writes, when missing, the bio, an avatar (a
+256x256 jpeg its ffmpeg draws: the stream's colour and the name's first letter)
+and an about page saying it is a fake test stream; a failure there is a warn
+line and the stream goes on. A go-live refused with a 403 waits 60s before the
+next try (docs/test-streamers.md).
 
 Env: DUMMY_STREAMS (how many, 0 = idle), DUMMY_PASSWORD (must match the
 server), DUMMY_NAMES (optional comma list), VIDEO_WS_URL, API_URL, DUMMY_FONT,

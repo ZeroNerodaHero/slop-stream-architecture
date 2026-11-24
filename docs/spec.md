@@ -212,6 +212,8 @@ Hostnames on the compose network are the service names: `frontend`, `api`, `chat
 
 JSON. The browser calls these on the frontend origin. The frontend container forwards `/api` to `http://api:4000`.
 
+`[?password=]` below is the dummy password for a name under `DUMMY_PREFIX`; the `X-Dummy-Password` header carries the same and wins when both are sent. A write it lets through marks the row `is_test` (`test-streamers.md`). With `HIDE_TEST_STREAMERS` on, a test streamer is 404 `no such streamer` on `GET /api/streamers/:name`, the watch grant and `/watch/:name`, 403 `test streamers are hidden here` on go-live, and left out of every list (`test-streamers.md` has the table).
+
 | method | path | behavior |
 |---|---|---|
 | PUT | `/api/streamers/:name[?password=]` | body `{ "bio" }`: the status, one line about them (cleaned like a chat line, no control or invisible characters, runs of whitespace become one space, empty clears it; 400 `status: 200 characters at most` past that). upsert. does not start a stream. 403 `that name has an account. log in as it` when the name is claimed and the cookie is not its owner; 403 `reserved name` for a `dummy-` name without the dummy password (the same gate as go-live: a reserved name can never be claimed, so it is nobody's to write) |

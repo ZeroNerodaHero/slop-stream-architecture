@@ -11,7 +11,7 @@ use axum::Json;
 use redis::aio::ConnectionManager;
 use serde_json::json;
 
-use crate::{auth, AppState};
+use crate::{auth, test_streamers, AppState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Key {
@@ -225,10 +225,9 @@ pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next)
     let method = req.method().clone();
     let rule = api_rule(&method, &path);
 
-    if let (Some(given), Some(want)) = (query_password(req.uri().query()), s.dummy_password.as_deref()) {
-        if given == want {
-            return next.run(req).await;
-        }
+    let given = test_streamers::given_secret(req.headers(), query_password(req.uri().query()));
+    if test_streamers::skips_limits(&s.dummy_prefix, s.dummy_password.as_deref(), &path, &path_name(req.uri().path()), given.as_deref()) {
+        return next.run(req).await;
     }
 
     let mut account = None;
@@ -451,6 +450,29 @@ mod tests {
         assert_eq!(query_password(Some("session=1&password=s%40cret+x")).as_deref(), Some("s@cret x"));
         assert_eq!(query_password(Some("session=1&token=2")), None);
         assert_eq!(query_password(None), None);
+    }
+
+    #[test]
+    fn the_secret_skips_the_limits_only_on_a_dummy_names_own_routes() {
+        let skip = |matched: &str, path: &str, given: Option<&str>| {
+            test_streamers::skips_limits("dummy-", Some("s3cret"), matched, &path_name(path), given)
+        };
+        assert!(skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", Some("s3cret")));
+        assert!(skip("/api/streamers/{name}", "/api/streamers/Dummy-Mango", Some("s3cret")));
+        assert!(skip("/api/streamers/{name}/avatar", "/api/streamers/dummy-mango/avatar", Some("s3cret")));
+        assert!(!skip("/api/streams/{name}/go-live", "/api/streams/billy/go-live", Some("s3cret")));
+        assert!(!skip("/api/streamers/{name}/avatar", "/api/streamers/billy/avatar", Some("s3cret")));
+        assert!(!skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", Some("nope")));
+        assert!(!skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", None));
+        assert!(!skip("/api/login", "/api/login", Some("s3cret")));
+        assert!(!skip("/api/groups/{group}/join", "/api/groups/dummy-mango/join", Some("s3cret")));
+        assert!(!skip("/api/dm/{name}", "/api/dm/dummy-mango", Some("s3cret")));
+        let mut h = HeaderMap::new();
+        h.insert("x-dummy-password", HeaderValue::from_static("s3cret"));
+        let given = test_streamers::given_secret(&h, query_password(Some("session=1")));
+        assert!(skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", given.as_deref()));
+        let given = test_streamers::given_secret(&HeaderMap::new(), query_password(Some("password=s3cret")));
+        assert!(skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", given.as_deref()));
     }
 
     #[test]
