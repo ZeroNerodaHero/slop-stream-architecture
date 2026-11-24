@@ -1,6 +1,6 @@
 # frontend/src/app and the other frontend/src files
 
-the header comment of each file in `frontend/src/app` and the loose files in `frontend/src` (`main.tsx`, `router.tsx`, `build.d.ts`, `utils/`), and the doc comment of each export, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a file was written for at the time of the move, so check a detail against the code before trusting it. `app/explore/ServerRoom.tsx` was left out of that sweep (#180 touches it) and still carries its own.
+the header comment of each file in `frontend/src/app` and the loose files in `frontend/src` (`main.tsx`, `router.tsx`, `build.d.ts`, `utils/`), and the doc comment of each export, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a file was written for at the time of the move, so check a detail against the code before trusting it.
 
 ## `frontend/src/app/CrashPage.tsx`
 
@@ -158,3 +158,22 @@ does not age the way `ago` does. The socials tab says when an account was made w
 focus along the tabs and open the one landed on, Home and End go to the ends. The tablist's
 `onKeyDown`. The watch page's tabs and the profile popup's; the user modal's do the same
 from its own list of tabs.
+
+## `frontend/src/app/explore/ServerRoom.tsx`
+
+`export function ServerPage`: A group as a server: `/groups/<server>` and `/groups/<server>/<channel>`, one page, keyed
+on the server by the router so a change of channel is a change of what is shown and nothing
+more. The room (the group, its channels, who is live, the roster and the bans this login may
+see) is asked once when the page arrives, with the last lines of every channel, and then the
+events socket keeps it: every change arrives as a `group` frame and lands in place
+(room-atoms). The chat is one socket for the whole server; the channel list swaps what the
+panel shows. The banner and the picture sit over the channel list and a chat that reads as
+a room, not as the stream's panel. Whoever is live is a tile under the channels, on the
+left (`LiveFace`, at most FACES playing); with every camera off the column is the channels alone.
+
+The page is two views, and snaps between them: the room, the height of the window under the
+title row (ROOM_HEIGHT), which is where the page lands when it opens, and the top, the
+banner, the picture, the name and the line about it, a scroll up away. The window is the
+page's scroller, so the snap type goes on <html> while the page is up; each view is a
+`snap-start` area (TOP_VIEW, `#group-room`; stacked, each block of the room). The landing is done once, on the first thing
+with the room's shape (the skeleton, or the room itself), so the room arrives in place.

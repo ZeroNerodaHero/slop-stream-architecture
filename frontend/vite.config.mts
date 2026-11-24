@@ -4,11 +4,6 @@ import { extname, join, normalize, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
-// SHOW_DOCS=1 in the repo's .env (or the shell): the human docs, docs/tech-docs/*.html, at
-// /tech-docs on this dev server. plain files, no build step: the tech-docs skill
-// (.cursor/skills/tech-docs) writes them. a saved page reloads only the tabs showing that page
-// (the vite client's full-reload matches on an .html path), so an app tab is never bounced by
-// a docs edit. `npm run dev` only: caddy never serves these, and the docker build never sees them.
 const techDocs = (dir: string): Plugin => ({
   name: 'tech-docs',
   configureServer(server) {
@@ -22,7 +17,6 @@ const techDocs = (dir: string): Plugin => ({
 
     server.middlewares.use('/tech-docs', (req, res, next) => {
       if (req.method !== 'GET') return next();
-      // connect strips the mount path; the bare /tech-docs needs its slash so the pages' relative links hold
       if ((req.originalUrl || '').split('?')[0] === '/tech-docs') {
         res.writeHead(302, { location: '/tech-docs/' });
         return res.end();
@@ -35,11 +29,9 @@ const techDocs = (dir: string): Plugin => ({
       }
       res.writeHead(200, { 'content-type': types[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
       if (extname(file) !== '.html') return res.end(readFileSync(file));
-      // the vite client, for the reload below. the pages themselves carry no script
       res.end(readFileSync(file, 'utf8').replace('</head>', '<script type="module" src="/@vite/client"></script></head>'));
     });
 
-    // a page saved: that page's tabs reload. the stylesheet (or anything else) saved: every page's
     server.watcher.add(dir);
     server.watcher.on('all', (_event, changed) => {
       if (!changed.startsWith(dir + sep)) return;
@@ -49,13 +41,6 @@ const techDocs = (dir: string): Plugin => ({
   }
 });
 
-// `npm run dev` serves the pages from here and forwards /api and /ws to a running
-// backend. Which one, in order:
-//   1. BACKEND in the shell or in frontend/.env      e.g. BACKEND=https://192.81.135.162
-//   2. https://<PUBLIC_IP> from the repo's .env        the docker stack on this machine
-//   3. https://127.0.0.1
-// The backend's cert is self-signed, so `secure: false`. Video packets go straight to
-// the backend's ip:7882 the same way they would from its own pages.
 export default defineConfig(({ mode }) => {
   const here = fileURLToPath(new URL('.', import.meta.url));
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -67,7 +52,6 @@ export default defineConfig(({ mode }) => {
   const docsDir = join(repoRoot, 'docs', 'tech-docs');
   console.log(showDocs ? `  tech docs: http://localhost:42069/tech-docs   (SHOW_DOCS=0 in ../.env to hide)` : `  tech docs: off   (SHOW_DOCS=1 in ../.env to serve docs/tech-docs at /tech-docs)`);
 
-  // A dead backend would be a bare 502. Say what is wrong and how to fix it instead.
   const explain = (proxy: { on: (event: 'error', handler: (err: Error, req: unknown, res: unknown) => void) => void }) => {
     proxy.on('error', (err, _req, res) => {
       const message =
@@ -86,15 +70,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), showDocs && techDocs(docsDir)],
     define: {
-      // the commit the pages were built from. deploy.sh sets BUILD; `npm run dev` is "dev".
-      // every error report (src/infra/report.ts) carries it.
       __BUILD__: JSON.stringify(process.env.BUILD || 'dev')
     },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) }
     },
     server: {
-      // an odd port on purpose: 3000 is usually taken by something else
       port: 42069,
       proxy: {
         '/api': { target: backend, changeOrigin: true, secure: false, configure: explain },
@@ -102,14 +83,11 @@ export default defineConfig(({ mode }) => {
         '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
         '/chat': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
         '/events': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
-        // the voice channels' socket: caddy sends it on to the voice server (docs/voice.md)
         '^/voice$': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
       }
     },
     build: {
       outDir: 'dist',
-      // maps next to the assets (served like the rest of /assets, the source is public anyway),
-      // without a sourceMappingURL comment. a minified stack in an error report maps back by hand.
       sourcemap: 'hidden'
     }
   };

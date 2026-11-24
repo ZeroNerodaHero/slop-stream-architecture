@@ -3,17 +3,6 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <!--
-      the theme and the size this browser keeps, before first paint: the css variables the
-      appearance setting derived (src/infra/atoms/settings-atoms.ts writes them under
-      settings.themeVars) and the root font size as a percentage (settings.textSize; 100 is the
-      browser's own and sets nothing), applied inline on <html> so a light or custom theme does
-      not flash dark, nor a smaller page large, while the bundle loads.
-      vite keeps a classic inline script as it is, and the api's /watch document leaves it in
-      place (api/src/profile.rs looks for the title, the end of the head and #root only, none of
-      them in here). nor may this comment spell the end-of-head tag out: vite's build injects the
-      bundle before the first one it finds, and would put it inside the comment.
-    -->
     <script>
       try {
         var style = document.documentElement.style;
@@ -22,22 +11,10 @@
           for (var name in kept.vars) style.setProperty(name, kept.vars[name]);
           if (kept.scheme) style.setProperty('color-scheme', kept.scheme);
         }
-        // the sizes the appearance tab offers, less 100: TEXT_SIZES in src/infra/atoms/settings-atoms.ts, which
-        // reads anything else as 100, so a size painted here is the one the bundle keeps (change the two lists together)
         var size = JSON.parse(localStorage.getItem('settings.textSize') || 'null');
         if ([80, 90, 110, 125].indexOf(size) !== -1) style.setProperty('font-size', size + '%');
       } catch (e) {}
     </script>
-    <!--
-      a stream's page opened straight (a shared link, a reload): what the page asks first, sent
-      now, while the bundle is still downloading (~1s on a cold load, docs/debugging.md "Watch
-      startup timings"). the grant, and the peer with its offer and the video socket, the same as
-      a press warms (watch-atoms.ts `makeWarm`), sending nothing. `start` in watch-atoms.ts takes
-      them as window.__bootWatch, once; past WARM_MAX_MS it closes them and asks itself, and one
-      nobody took is closed after 10s (video's own handshake timeout). the name
-      rule is names.ts NAME_RE after cleanName, the 4 video sections are VIDEO_SLOTS (1 + relay.ts
-      SCREEN_SLOTS), the path is api.ts `watch`: change them together.
-    -->
     <script>
       try {
         var watchPath = /^\/watch\/([^/]+)\/?$/.exec(location.pathname);
@@ -61,7 +38,6 @@
             boot.wsAt = performance.now();
           });
           window.__bootWatch = boot;
-          // never taken (the bundle failed, the page is not the watch page after all): closed
           setTimeout(function () {
             if (window.__bootWatch !== boot) return;
             delete window.__bootWatch;
@@ -72,7 +48,6 @@
       } catch (e) {}
     </script>
     <title>streams</title>
-    <!-- the site icon. ?v= so a browser that kept the old one asks again after a change: bump it with the files -->
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=2" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=2" />
@@ -80,18 +55,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <!--
-      the profile card the api puts inside #root when it serves /watch/<name>
-      (api/src/profile.rs), so the page shows the name, picture, the word and the
-      status line before react boots. react replaces it when it renders. a <template>
-      draws nothing, so the pages caddy serves straight from this file are unaffected.
-      {{...}} are the api's placeholders. the markup mirrors PageFrame + WatchPage;
-      tailwind scans this file, so the classes here exist in the css. {{banner}} is a
-      style, not markup: the offline picture as a background on the player's box while
-      they are not live, and an api older than it leaves words the browser ignores.
-      {{bio}} is the status line under the name, as markup (a span the api makes, so a
-      name with none leaves nothing), like {{avatar}} and {{verified}}.
-    -->
     <template id="watch-shell">
       <main class="mx-auto max-w-[1360px] px-5 pb-16 pt-6">
         <header class="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-primaryStroke pb-4">

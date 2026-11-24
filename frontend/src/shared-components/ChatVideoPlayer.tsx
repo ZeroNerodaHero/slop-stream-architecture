@@ -5,18 +5,9 @@ import { Button } from '@/shared-components/Button';
 import { MEDIA_SIZED } from '@/infra/keyboard';
 import { cn } from '@/utils/cn';
 
-/**
- * The video on a line (docs/chat.md "videos"): the browser's own player, its poster the frame the
- * sender's page grabbed, no bytes asked for until a press on play (`preload="none"`), never
- * playing on its own. As tall as a picture is at most, five lines (`max-h-[7.5rem]`), or the
- * pins list's `small` row. Every chat draws it: a stream's, a group channel's, a direct message.
- * One an admin took down (its poster goes with it) says "removed" instead; one this viewer may not
- * see says so.
- */
 export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; small?: boolean }) {
   const [gone, setGone] = useState<MediaGone | null>(null);
   const [sensitive, setSensitive] = useState<boolean | null>(null);
-  // the poster is asked for at once, the video only on play: a poster that will not load is the word on the video too
   useEffect(() => {
     let live = true;
     const probe = new Image();
