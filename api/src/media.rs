@@ -76,6 +76,10 @@ pub(crate) fn purge_paths(kind: Kind, id: Uuid) -> Vec<String> {
     vec![base.clone(), format!("{base}?show=1")]
 }
 
+pub(crate) fn is_canonical_path(kind: Kind, id: Uuid, path: &str) -> bool {
+    path == format!("/api/{}/{}", kind.route(), id.hyphenated())
+}
+
 pub(crate) fn purge(kind: Kind, id: Uuid) {
     crate::cf_purge::purge(purge_paths(kind, id));
 }
@@ -193,10 +197,11 @@ pub(crate) struct CacheFacts {
     pub(crate) in_group: bool,
     pub(crate) adult_context: bool,
     pub(crate) extra_query: bool,
+    pub(crate) canonical_path: bool,
 }
 
 pub(crate) fn chat_media_cache(f: CacheFacts) -> &'static str {
-    let private = !f.access_public || f.uploader || f.site_admin || f.nsfw || f.graphic || f.shown || f.in_group || f.adult_context || f.extra_query;
+    let private = !f.access_public || !f.canonical_path || f.uploader || f.site_admin || f.nsfw || f.graphic || f.shown || f.in_group || f.adult_context || f.extra_query;
     if private {
         PRIVATE_CACHE
     } else {
@@ -245,14 +250,14 @@ mod tests {
         headers(&mut h, CacheFacts::default());
         assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(h[header::CACHE_CONTROL], PRIVATE_CACHE);
-        headers(&mut h, CacheFacts { access_public: true, ..CacheFacts::default() });
+        headers(&mut h, CacheFacts { access_public: true, canonical_path: true, ..CacheFacts::default() });
         assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(h[header::CACHE_CONTROL], CHAT_MEDIA_CACHE);
     }
 
     #[test]
     fn only_plain_public_chat_media_is_shared() {
-        let public = CacheFacts { access_public: true, ..CacheFacts::default() };
+        let public = CacheFacts { access_public: true, canonical_path: true, ..CacheFacts::default() };
         let cases = [
             ("plain public", public, CHAT_MEDIA_CACHE),
             ("uploader", CacheFacts { uploader: true, ..public }, PRIVATE_CACHE),
@@ -265,6 +270,7 @@ mod tests {
             ("in a group", CacheFacts { in_group: true, ..public }, PRIVATE_CACHE),
             ("adult group", CacheFacts { adult_context: true, ..public }, PRIVATE_CACHE),
             ("a query", CacheFacts { extra_query: true, ..public }, PRIVATE_CACHE),
+            ("another spelling of the id", CacheFacts { canonical_path: false, ..public }, PRIVATE_CACHE),
         ];
         for (case, facts, want) in cases {
             assert_eq!(chat_media_cache(facts), want, "{case}");
@@ -284,6 +290,34 @@ mod tests {
             purge_paths(Kind::Video, id),
             vec![format!("/api/chat-videos/{id}"), format!("/api/chat-videos/{id}?show=1")]
         );
+    }
+
+    #[test]
+    fn only_the_lowercase_hyphenated_path_is_canonical() {
+        let id = Uuid::parse_str("6f9619ff-8b86-d011-b42d-00c04fc964ff").unwrap();
+        let upper = id.hyphenated().to_string().to_uppercase();
+        for kind in [Kind::Image, Kind::Video] {
+            let base = format!("/api/{}", kind.route());
+            let other = format!("/api/{}", if kind == Kind::Image { "chat-videos" } else { "chat-images" });
+            let cases = [
+                ("canonical", format!("{base}/{id}"), true),
+                ("uppercase", format!("{base}/{upper}"), false),
+                ("simple", format!("{base}/{}", id.simple()), false),
+                ("braced", format!("{base}/{}", id.braced()), false),
+                ("urn", format!("{base}/{}", id.urn()), false),
+                ("percent-encoded", format!("{base}/{}", id.to_string().replace('-', "%2D")), false),
+                ("percent-encoded letter", format!("{base}/%36{}", &id.to_string()[1..]), false),
+                ("trailing slash", format!("{base}/{id}/"), false),
+                ("leading space", format!("{base}/ {id}"), false),
+                ("trailing space", format!("{base}/{id} "), false),
+                ("encoded spaces", format!("{base}/%20{id}%20"), false),
+                ("other kind", format!("{other}/{id}"), false),
+                ("nested", format!("/x{base}/{id}"), false),
+            ];
+            for (case, path, want) in cases {
+                assert_eq!(is_canonical_path(kind, id, &path), want, "{kind:?} {case}: {path}");
+            }
+        }
     }
 
     async fn upload(pool: &PgPool, kind: Kind, by: Uuid) -> Uuid {

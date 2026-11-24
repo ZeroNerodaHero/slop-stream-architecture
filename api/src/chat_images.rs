@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
+use axum::extract::{DefaultBodyLimit, OriginalUri, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -98,7 +98,7 @@ pub(crate) async fn shown_facts(db: &sqlx::PgPool, id: Uuid) -> Result<Option<Sh
     .await
 }
 
-async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, RawQuery(raw): RawQuery, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
+async fn show(State(s): State<AppState>, Me(me): Me, OriginalUri(uri): OriginalUri, Path(id): Path<String>, RawQuery(raw): RawQuery, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     };
@@ -143,6 +143,7 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, Raw
             in_group,
             adult_context: adult_now.unwrap_or(false),
             extra_query: raw.is_some(),
+            canonical_path: media::is_canonical_path(Kind::Image, id, uri.path()),
         },
     );
     Ok((out, bytes).into_response())
@@ -164,6 +165,12 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
 
 pub(crate) async fn remove(s: &AppState, me: &crate::auth::Account, id: Uuid, mime: &str) -> Result<(), ApiError> {
     let posted: Option<String> = sqlx::query_scalar("SELECT posted_kind FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?.flatten();
+    let videos: Vec<(Uuid, String, Option<String>)> =
+        sqlx::query_as("SELECT id, mime, posted_kind FROM chat_videos WHERE poster = $1").bind(id).fetch_all(&s.db).await?;
+    for (video, video_mime, video_posted) in videos {
+        crate::chat_videos::remove_without_poster(s, me, video, &video_mime, video_posted.as_deref()).await?;
+        log::info!("{}: took down chat video {video} with its poster {id}", me.name);
+    }
     if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
         log::warn!("{}: take down chat picture {id}: {e}", me.name);
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not delete the picture"));
