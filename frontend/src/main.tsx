@@ -5,11 +5,12 @@ import { RouterProvider } from 'react-router-dom';
 import { applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
 import { startEvents } from '@/infra/events';
 import { installMobileKeyboard } from '@/infra/keyboard';
-import { installPrefetch } from '@/infra/prefetch';
+import { installPrefetch, loadFirstPage } from '@/infra/prefetch';
 import { queryClient } from '@/infra/query-client';
 import { installReporting, report } from '@/infra/report';
 import { router } from '@/router';
 
+import '@/infra/atoms/home-atoms';
 import '@/app/globals.css';
 
 const root = document.getElementById('root');
@@ -38,8 +39,13 @@ function crashedOutsideRoutes(error: unknown, info: { componentStack?: string })
   report('crash', error, { componentStack: info.componentStack });
 }
 
-createRoot(root, { onUncaughtError: crashedOutsideRoutes }).render(
-  <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} onError={crashedInRoute} />
-  </QueryClientProvider>
-);
+const render = () =>
+  createRoot(root, { onUncaughtError: crashedOutsideRoutes }).render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} onError={crashedInRoute} />
+    </QueryClientProvider>
+  );
+
+const firstPage = loadFirstPage();
+if (firstPage) firstPage.then(render, render);
+else render();

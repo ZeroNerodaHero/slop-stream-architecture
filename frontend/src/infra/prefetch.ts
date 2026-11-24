@@ -40,11 +40,20 @@ export function prefetchRoute(path: string): void {
   if (!route) return;
   const here = prefetchRouteOf(location.pathname);
   if (here && here.kind === route.kind && here.name === route.name) return;
-  if (route.kind === 'group') loadServerPage().catch(() => undefined);
+  pageLoaders[route.kind]().catch(() => undefined);
   prefetchers.get(route.kind)?.(route.name);
 }
 
 export const loadServerPage = () => import('@/app/explore/ServerRoom');
+export const loadHomePage = () => import('@/app/home/HomePage');
+export const loadWatchPage = () => import('@/app/watch/WatchPage');
+
+const pageLoaders: Record<PrefetchRoute['kind'], () => Promise<unknown>> = { home: loadHomePage, watch: loadWatchPage, group: loadServerPage };
+
+export function loadFirstPage(): Promise<unknown> | null {
+  const route = prefetchRouteOf(location.pathname);
+  return route ? pageLoaders[route.kind]() : null;
+}
 
 interface Entry {
   answer: Promise<unknown>;

@@ -41,6 +41,99 @@ const techDocs = (dir: string): Plugin => ({
   }
 });
 
+const remixIcons = (): Plugin => {
+  const prefix = 'remixicon:';
+  const barrel = /import\s*\{([^}]*)\}\s*from\s*['"]@remixicon\/react['"];?/g;
+  let icons: Map<string, string> | null = null;
+  const iconSource = (name: string) => {
+    if (!icons) {
+      const file = fileURLToPath(new URL('./node_modules/@remixicon/react/index.mjs', import.meta.url));
+      const source = readFileSync(file, 'utf8');
+      const react = /^\s*(?:\/\*[\s\S]*?\*\/\s*)?import\s+(\w+)\s+from\s*"react";/.exec(source);
+      const tail = source.lastIndexOf('export{');
+      if (!react || tail < 0) throw new Error('@remixicon/react changed shape: no react import or export list');
+      const starts = [...source.matchAll(/(?<=[\s,;])([\w$]+)=\(\{color:C="currentColor"/g)].map((m) => ({ local: m[1]!, at: m.index }));
+      const bodies = new Map<string, string>();
+      starts.forEach((start, i) => {
+        const end = i + 1 < starts.length ? starts[i + 1]!.at - 1 : source.lastIndexOf(';', tail);
+        bodies.set(start.local, source.slice(start.at, end).replace(/^[\w$]+=/, ''));
+      });
+      icons = new Map();
+      for (const pair of source.slice(tail + 'export{'.length, source.lastIndexOf('}')).split(',')) {
+        const [local, exported] = pair.split(' as ').map((s) => s.trim());
+        const body = local && bodies.get(local);
+        if (exported && body) icons.set(exported, `import ${react[1]} from "react";\nconst icon=${body};\nexport default icon;\n`);
+      }
+    }
+    const code = icons.get(name);
+    if (!code) throw new Error(`no remix icon named ${name}`);
+    return code;
+  };
+  return {
+    name: 'remix-icons-per-module',
+    enforce: 'pre',
+    resolveId(id) {
+      return id.startsWith(prefix) ? `\0${id}` : null;
+    },
+    load(id) {
+      return id.startsWith(`\0${prefix}`) ? iconSource(id.slice(prefix.length + 1)) : null;
+    },
+    transform(code, id) {
+      if (id.includes('node_modules') || !/\.[jt]sx?$/.test(id.split('?')[0]!) || !code.includes('@remixicon/react')) return null;
+      const next = code.replace(barrel, (_whole, names: string) =>
+        names
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part && !part.startsWith('type '))
+          .map((part) => {
+            const [imported, local] = part.split(/\s+as\s+/);
+            return `import ${local ?? imported} from '${prefix}${imported}';`;
+          })
+          .join('\n')
+      );
+      return next === code ? null : { code: next, map: null };
+    }
+  };
+};
+
+const preloadFirstPage = (pages: { path: string; module: string }[]): Plugin => {
+  let base = '/';
+  return {
+    name: 'preload-first-page',
+    apply: 'build',
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml: {
+      order: 'post',
+      handler(_html, ctx) {
+        const bundle = ctx.bundle;
+        if (!bundle) return;
+        const chunks = Object.values(bundle).filter((out) => out.type === 'chunk');
+        const files = (module: string) => {
+          const start = chunks.find((chunk) => chunk.facadeModuleId?.endsWith(module));
+          if (!start) throw new Error(`no chunk for ${module}`);
+          const seen = new Set<string>();
+          const walk = (fileName: string) => {
+            const chunk = chunks.find((c) => c.fileName === fileName);
+            if (!chunk || chunk.isEntry || seen.has(fileName)) return;
+            seen.add(fileName);
+            chunk.imports.forEach(walk);
+          };
+          walk(start.fileName);
+          return [...seen].map((file) => base + file);
+        };
+        const routes = pages.map((page) => [page.path, files(page.module)]);
+        const code =
+          `(function(){var r=${JSON.stringify(routes)},p=location.pathname;` +
+          `for(var i=0;i<r.length;i++)if(new RegExp(r[i][0]).test(p)){r[i][1].forEach(function(h){` +
+          `var l=document.createElement('link');l.rel='modulepreload';l.crossOrigin='';l.href=h;document.head.appendChild(l)});break}})()`;
+        return [{ tag: 'script', children: code, injectTo: 'head' }];
+      }
+    }
+  };
+};
+
 export default defineConfig(({ mode }) => {
   const here = fileURLToPath(new URL('.', import.meta.url));
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -68,7 +161,15 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [react(), showDocs && techDocs(docsDir)],
+    plugins: [
+      remixIcons(),
+      react(),
+      preloadFirstPage([
+        { path: '^/$', module: '/src/app/home/HomePage.tsx' },
+        { path: '^/watch/[^/]+/?$', module: '/src/app/watch/WatchPage.tsx' }
+      ]),
+      showDocs && techDocs(docsDir)
+    ],
     define: {
       __BUILD__: JSON.stringify(process.env.BUILD || 'dev')
     },

@@ -4,10 +4,8 @@ import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-d
 
 import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
-import { HomePage } from '@/app/home/HomePage';
-import { WatchPage } from '@/app/watch/WatchPage';
 import { panelSideAtom } from '@/infra/atoms/settings-atoms';
-import { loadServerPage } from '@/infra/prefetch';
+import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
 import { AuthDialog } from '@/shared-components/AuthDialog';
 import { CropDialog } from '@/shared-components/CropDialog';
 import { FriendChat } from '@/shared-components/FriendChat';
@@ -52,6 +50,8 @@ function ExploreRedirect() {
   return <Navigate to={to} replace />;
 }
 
+const HomePage = lazy(() => loadHomePage().then((m) => ({ default: m.HomePage })));
+const WatchPage = lazy(() => loadWatchPage().then((m) => ({ default: m.WatchPage })));
 const ExplorePage = lazy(() => import('@/app/explore/ExplorePage').then((m) => ({ default: m.ExplorePage })));
 const ServerPage = lazy(() => loadServerPage().then((m) => ({ default: m.ServerPage })));
 const LivePage = lazy(() => import('@/app/live/LivePage').then((m) => ({ default: m.LivePage })));
