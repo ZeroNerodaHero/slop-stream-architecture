@@ -617,8 +617,8 @@ export const api = {
   explore: () => request<Explore>('GET', '/api/explore'),
   createChannel: (server: string, name: string, about = '', kind: ChannelKind = 'text') =>
     request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name, about, kind }),
-  joinVoice: (server: string, channel: string) =>
-    request<VoiceGrant>('POST', `/api/groups/${encodeURIComponent(server)}/voice/${encodeURIComponent(channel)}/join`, undefined, { report: false }),
+  joinVoice: (server: string, channel: string, tab: string) =>
+    request<VoiceGrant>('POST', `/api/groups/${encodeURIComponent(server)}/voice/${encodeURIComponent(channel)}/join`, { tab }, { report: false }),
   setChannelOrder: (server: string, order: string[]) => request<{ order: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels`, { order }),
   editChannel: (server: string, channel: string, edit: { name?: string; about?: string }) =>
     request<Channel>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`, edit),

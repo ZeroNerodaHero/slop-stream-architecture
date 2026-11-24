@@ -43,28 +43,6 @@
 //!   {"state":{"mute":true,"deaf":false}}
 //! for the others' tiles, the seats frame's `mute` and `deaf`. those are the page's own word:
 //! they carry nothing about what is sent.
-//!
-//! the socket gets a ping every 30s (PING_EVERY), so nothing between forgets an idle call, and a
-//! page that sent nothing back for 90s is gone, as is one that does not take a frame within 10s.
-//! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat. a
-//! peer that fails is said first, as an error frame: one that never connected is "no audio
-//! path" (nothing came over udp: the port is shut somewhere between, 7883 not open in the
-//! cloud firewall), one that did is "voice lost its connection".
-//! at most 4 voice peers per address, and /ws is rate limited per address like the stream's.
-//!
-//! a moderator's word comes from the api, inside the compose network only: `POST /internal/voice`
-//!   {"action":"mute"|"unmute"|"disconnect","user_id":"<uuid>","server":"<name>"}
-//! with X-Voice-Secret, never through caddy (which sends `/voice` alone here, and always sets
-//! X-Forwarded-For: such a request is a 404). mute stops carrying that person's mic to anyone
-//! (their packets are dropped here, so they cannot lift it from the page), unmute carries it
-//! again, disconnect ends their socket with {"error":"disconnected"}. a redeem says `muted` for
-//! someone muted before they came. → {"seats": n}, how many seats it touched.
-//!
-//! who is in voice lives in the api (docs/voice.md), and we keep it current: `attached`
-//! once a granted person has their answer, `left` when their seat frees, and every 15s one
-//! `beat` naming everyone granted we have seated. a box that dies says nothing, and the api's
-//! sweep drops its people within a minute. a call that fails is a warning in the log; nobody is
-//! dropped for it. neither the secret nor a grant is ever logged.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -122,6 +100,7 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(10);
 const API_TIMEOUT: Duration = Duration::from_millis(1500);
 /// how often everyone seated is told to the api, a third of its sweep's 45s
 const BEAT_EVERY: Duration = Duration::from_secs(15);
+const ATTACH_RETRY: [Duration; 3] = [Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4)];
 /// a ping on the socket this often, as the api's chat and events (api/src/socket.rs): a call's
 /// socket can say nothing for an hour, and a nat or a proxy between forgets an idle connection.
 /// one that sent nothing back (pong, text, anything) for IDLE_LIMIT is gone
@@ -161,6 +140,8 @@ struct Redeemed {
     /// a moderator muted them before they came (the api's `voicemuted:<server>`)
     #[serde(default)]
     muted: bool,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 impl Api {
@@ -200,12 +181,38 @@ impl Api {
         Ok(who)
     }
 
-    /// a presence call (`attached`, `left`, `beat`): a failure is only a warning
     async fn tell(&self, path: &str, body: serde_json::Value) {
         match self.post(path, &body).await {
             Ok(res) if res.status().is_success() => {}
             Ok(res) => log::warn!("voice: api answered {} to {path}", res.status()),
             Err(()) => {}
+        }
+    }
+
+    async fn beat(&self, peers: Vec<serde_json::Value>) -> Vec<(String, String)> {
+        #[derive(Deserialize)]
+        struct Missing {
+            user_id: String,
+            server: String,
+        }
+        #[derive(Deserialize)]
+        struct Beat {
+            #[serde(default)]
+            missing: Vec<Missing>,
+        }
+        match self.post("/api/voice/beat", &serde_json::json!({ "peers": peers })).await {
+            Ok(res) if res.status().is_success() => match res.json::<Beat>().await {
+                Ok(beat) => beat.missing.into_iter().map(|m| (m.user_id, m.server)).collect(),
+                Err(e) => {
+                    log::warn!("voice: beat reply: {}", e.without_url());
+                    Vec::new()
+                }
+            },
+            Ok(res) => {
+                log::warn!("voice: api answered {} to /api/voice/beat", res.status());
+                Vec::new()
+            }
+            Err(()) => Vec::new(),
         }
     }
 }
@@ -216,17 +223,60 @@ struct Presence {
     user_id: String,
     server: String,
     channel: String,
+    gone: AtomicBool,
+    bye: Notify,
+    refused: AtomicBool,
+    turn: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Presence {
-    async fn attached(self: Arc<Self>, seat: usize) {
-        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": self.channel, "seat": seat });
-        self.api.tell("/api/voice/attached", body).await;
+    fn new(api: Api, user_id: String, server: String, channel: String) -> Self {
+        Presence { api, user_id, server, channel, gone: AtomicBool::new(false), bye: Notify::new(), refused: AtomicBool::new(false), turn: Default::default() }
     }
 
-    async fn left(&self) {
-        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server });
-        self.api.tell("/api/voice/left", body).await;
+    async fn attached(self: Arc<Self>, seat: usize, since: Option<tokio::time::Instant>) {
+        let mut last = self.turn.lock().await;
+        if since.is_some_and(|since| last.is_some_and(|at| at >= since)) {
+            return;
+        }
+        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": self.channel, "seat": seat });
+        let mut waits = ATTACH_RETRY.iter();
+        loop {
+            if self.gone.load(Ordering::SeqCst) || self.refused.load(Ordering::SeqCst) {
+                return;
+            }
+            match self.api.post("/api/voice/attached", &body).await {
+                Ok(res) if res.status().is_success() => {
+                    *last = Some(tokio::time::Instant::now());
+                    return;
+                }
+                Ok(res) if res.status().is_client_error() => {
+                    log::warn!("voice: api answered {} to attached, not trying again", res.status());
+                    self.refused.store(true, Ordering::SeqCst);
+                    return;
+                }
+                Ok(res) => log::warn!("voice: api answered {} to attached", res.status()),
+                Err(()) => {}
+            }
+            let Some(&wait) = waits.next() else {
+                log::warn!("voice: attached failed {} times; a beat that misses them tries again", ATTACH_RETRY.len() + 1);
+                return;
+            };
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = self.bye.notified() => return,
+            }
+        }
+    }
+
+    async fn left(&self, voice: &Voice) {
+        self.gone.store(true, Ordering::SeqCst);
+        self.bye.notify_one();
+        let _turn = self.turn.lock().await;
+        if !voice.sits_in(&self.user_id, &self.server) {
+            let body = serde_json::json!({ "user_id": self.user_id, "server": self.server });
+            self.api.tell("/api/voice/left", body).await;
+        }
     }
 }
 
@@ -249,6 +299,8 @@ struct Sitter {
     user: String,
     /// the api's user id for a granted person, None for a dev-open join
     uid: Option<String>,
+    tab: Option<String>,
+    presence: Option<Arc<Presence>>,
     /// tells two people in the same seat apart, one after the other
     id: u64,
     mic: Arc<TrackLocalStaticRTP>,
@@ -256,6 +308,7 @@ struct Sitter {
     muted: Arc<AtomicBool>,
     /// a moderator's disconnect: their socket ends when this is told
     kick: Arc<Notify>,
+    replaced: Arc<Notify>,
     /// their camera and screen, and what their page says of itself
     show: Show,
 }
@@ -308,13 +361,13 @@ impl Show {
     }
 }
 
-/// what a moderator asks of a seat (`POST /internal/voice`)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Action {
     Mute,
     Unmute,
     Disconnect,
+    Count,
 }
 
 #[derive(Deserialize)]
@@ -322,25 +375,57 @@ struct Order {
     action: Action,
     user_id: String,
     server: String,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 impl Rooms {
-    /// `action` on every seat `uid` holds in `server`'s rooms (a second tab is a second seat). → how many
-    fn moderate(&self, uid: &str, server: &str, action: Action) -> usize {
+    fn moderate(&self, uid: &str, server: &str, action: Action, tab: Option<&str>) -> usize {
         let mut n = 0;
         for (name, room) in &self.rooms {
             if name.split_once('/').is_none_or(|(s, _)| s != server) {
                 continue;
             }
-            for sitter in room.seats.0.iter().flatten().filter(|s| s.uid.as_deref() == Some(uid)) {
+            let theirs = room.seats.0.iter().flatten().filter(|s| s.uid.as_deref() == Some(uid));
+            for sitter in theirs.filter(|s| tab.is_none() || s.tab.as_deref() != tab) {
                 match action {
                     Action::Mute => sitter.muted.store(true, Ordering::SeqCst),
                     Action::Unmute => sitter.muted.store(false, Ordering::SeqCst),
                     // a permit if the socket is not waiting yet: it ends at its next look
                     Action::Disconnect => sitter.kick.notify_one(),
+                    Action::Count => {}
                 }
                 n += 1;
             }
+        }
+        n
+    }
+
+    fn replace(&mut self, uid: &str, tab: &str, into: &str) -> usize {
+        let mut n = 0;
+        let mut emptied = Vec::new();
+        for (name, room) in &mut self.rooms {
+            let mut took = false;
+            for slot in &mut room.seats.0 {
+                if slot.as_ref().is_some_and(|s| s.uid.as_deref() == Some(uid) && s.tab.as_deref() == Some(tab)) {
+                    if let Some(old) = slot.take() {
+                        old.replaced.notify_one();
+                        took = true;
+                        n += 1;
+                    }
+                }
+            }
+            if !took || name == into {
+                continue;
+            }
+            if room.seats.taken() == 0 {
+                emptied.push(name.clone());
+            } else {
+                room.tx.send_replace(Arc::new(room.seats.snapshot()));
+            }
+        }
+        for name in emptied {
+            self.rooms.remove(&name);
         }
         n
     }
@@ -403,6 +488,21 @@ fn line_of(seat: usize, own: usize) -> usize {
         seat + 1
     } else {
         seat
+    }
+}
+
+#[derive(Default)]
+struct Numbering {
+    dropped: u16,
+}
+
+impl Numbering {
+    fn skip(&mut self) {
+        self.dropped = self.dropped.wrapping_add(1);
+    }
+
+    fn of(&self, seq: u16) -> u16 {
+        seq.wrapping_sub(self.dropped)
     }
 }
 
@@ -579,8 +679,12 @@ pub async fn run() -> anyhow::Result<()> {
 async fn moderate(State(voice): State<Voice>, headers: HeaderMap, body: Result<Json<Order>, axum::extract::rejection::JsonRejection>) -> Result<Json<serde_json::Value>, StatusCode> {
     inside(&headers, voice.api.secret.as_deref())?;
     let Json(order) = body.map_err(|_| StatusCode::BAD_REQUEST)?;
-    let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).moderate(&order.user_id, &order.server, order.action);
-    log::info!("voice: {:?} on {n} seat(s) in {}", order.action, order.server);
+    let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).moderate(&order.user_id, &order.server, order.action, order.tab.as_deref());
+    if order.action == Action::Count {
+        log::info!("voice: count, {n} seat(s) in {} but this tab's", order.server);
+    } else {
+        log::info!("voice: {:?} on {n} seat(s) in {}", order.action, order.server);
+    }
     Ok(Json(serde_json::json!({ "seats": n })))
 }
 
@@ -590,16 +694,21 @@ async fn health(State(voice): State<Voice>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true, "rooms": state.rooms.len(), "peers": peers }))
 }
 
-/// every `BEAT_EVERY`, one `beat` to the api naming everyone granted we have seated, so its
-/// sweep keeps them. nothing is sent while nobody is.
 async fn beat(voice: Voice) {
     let mut tick = tokio::time::interval(BEAT_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
         let peers = voice.seated();
-        if !peers.is_empty() {
-            voice.api.tell("/api/voice/beat", serde_json::json!({ "peers": peers })).await;
+        if peers.is_empty() {
+            continue;
+        }
+        let asked = tokio::time::Instant::now();
+        for (uid, server) in voice.api.beat(peers).await {
+            if let Some((presence, seat)) = voice.presence_of(&uid, &server) {
+                log::info!("voice {server}: the api has no seat for someone seated, attaching again");
+                tokio::spawn(presence.attached(seat, Some(asked)));
+            }
         }
     }
 }
@@ -617,28 +726,27 @@ async fn ws(
         .on_upgrade(move |socket| handle(voice, socket, ip))
 }
 
-/// a seat just taken: its number, the mic the others hear it by, the room's seats to follow, and
-/// the moderator's two handles on it
 struct Sat {
     seat: usize,
     mic: Arc<TrackLocalStaticRTP>,
     seats: watch::Receiver<Snapshot>,
     muted: Arc<AtomicBool>,
     kick: Arc<Notify>,
+    replaced: Arc<Notify>,
 }
 
 /// a seat and an address slot, given back on drop however the socket ends
 struct Held {
     voice: Voice,
     ip: IpAddr,
-    seat: Option<(String, usize)>,
+    seat: Option<(String, usize, u64)>,
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
         let mut state = self.voice.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((name, seat)) = self.seat.take() {
-            if let Some(room) = state.rooms.get_mut(&name) {
+        if let Some((name, seat, id)) = self.seat.take() {
+            if let Some(room) = state.rooms.get_mut(&name).filter(|r| r.seats.0.get(seat).is_some_and(|s| s.as_ref().is_some_and(|s| s.id == id))) {
                 room.seats.free(seat);
                 if room.seats.taken() == 0 {
                     state.rooms.remove(&name);
@@ -668,23 +776,32 @@ impl Voice {
         Some(Held { voice: self.clone(), ip, seat: None })
     }
 
-    /// the lowest free seat in `name` with a new mic track, and the room's seats to follow
-    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>, muted: bool) -> Option<Sat> {
+    fn sit(&self, held: &mut Held, name: &str, user: &str, presence: Option<&Arc<Presence>>, tab: Option<&str>, muted: bool) -> Option<Sat> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let uid = presence.map(|p| p.user_id.as_str());
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let (Some(uid), Some(tab)) = (uid, tab) {
+            let n = state.replace(uid, tab, name);
+            if n > 0 {
+                log::info!("voice {name}: {user} joined again from the same tab, {n} old seat(s) let go");
+            }
+        }
         let room = state.rooms.entry(name.to_owned()).or_insert_with(|| Room {
             seats: Seats::new(),
             tx: watch::Sender::new(Arc::new(Vec::new())),
         });
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
-        let (muted, kick) = (Arc::new(AtomicBool::new(muted)), Arc::new(Notify::new()));
+        let (muted, kick, replaced) = (Arc::new(AtomicBool::new(muted)), Arc::new(Notify::new()), Arc::new(Notify::new()));
         let sitter = Sitter {
             user: user.to_owned(),
             uid: uid.map(str::to_owned),
+            tab: tab.map(str::to_owned),
+            presence: presence.cloned(),
             id,
             mic: mic.clone(),
             muted: muted.clone(),
             kick: kick.clone(),
+            replaced: replaced.clone(),
             show: Show::new(id),
         };
         let Some(seat) = room.seats.take(sitter) else {
@@ -693,10 +810,10 @@ impl Voice {
             }
             return None;
         };
-        held.seat = Some((name.to_owned(), seat));
+        held.seat = Some((name.to_owned(), seat, id));
         let snapshot = Arc::new(room.seats.snapshot());
         room.tx.send_replace(snapshot);
-        Some(Sat { seat, mic, seats: room.tx.subscribe(), muted, kick })
+        Some(Sat { seat, mic, seats: room.tx.subscribe(), muted, kick, replaced })
     }
 
     /// `change` on what the sitter `id` in `seat` of `name` shows, told to the room when it
@@ -726,6 +843,16 @@ impl Voice {
                 })
             })
             .collect()
+    }
+
+    fn presence_of(&self, uid: &str, server: &str) -> Option<(Arc<Presence>, usize)> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.rooms.iter().filter(|(name, _)| name.split_once('/').is_some_and(|(s, _)| s == server)).find_map(|(_, room)| {
+            room.seats.0.iter().enumerate().find_map(|(seat, s)| {
+                let p = s.as_ref()?.presence.as_ref()?;
+                (p.user_id == uid && !p.gone.load(Ordering::SeqCst)).then(|| (p.clone(), seat))
+            })
+        })
     }
 
     /// whether `uid` still has a seat in `server` here (a second tab): their `left` waits for it
@@ -844,19 +971,18 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     let Some(mut held) = voice.hold_ip(ip) else {
         return refuse(&mut socket, "too many voice peers from this address").await;
     };
-    let (room, user, presence, muted) = match claim {
-        Claim::Open { room, user } => (room, user, None, false),
+    let (room, user, presence, muted, tab) = match claim {
+        Claim::Open { room, user } => (room, user, None, false, None),
         Claim::Grant(grant) => match voice.api.redeem(&grant).await {
             Ok(who) => {
                 let room = format!("{}/{}", who.server, who.channel);
-                let presence = Presence { api: voice.api.clone(), user_id: who.user_id, server: who.server, channel: who.channel };
-                (room, who.name, Some(Arc::new(presence)), who.muted)
+                let presence = Presence::new(voice.api.clone(), who.user_id, who.server, who.channel);
+                (room, who.name, Some(Arc::new(presence)), who.muted, who.tab)
             }
             Err(e) => return refuse(&mut socket, e).await,
         },
     };
-    let uid = presence.as_ref().map(|p| p.user_id.as_str());
-    let Some(mut sat) = voice.sit(&mut held, &room, &user, uid, muted) else {
+    let Some(mut sat) = voice.sit(&mut held, &room, &user, presence.as_ref(), tab.as_deref(), muted) else {
         return refuse(&mut socket, "room full").await;
     };
     let tag = format!("voice {room} seat {}", sat.seat);
@@ -866,12 +992,8 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     talk(&voice, &mut socket, &tag, sdp, &offer, &mut sat, presence.clone(), &mut attached, joined).await;
     log::info!("{tag}: {user} left");
     drop(held);
-    // the seat is free: `left`, once `attached` is through so the two cannot cross
-    if let (Some(presence), Some(attached)) = (presence, attached) {
-        let _ = attached.await;
-        if !voice.sits_in(&presence.user_id, &presence.server) {
-            presence.left().await;
-        }
+    if let (Some(presence), Some(_)) = (presence, attached) {
+        presence.left(&voice).await;
     }
 }
 
@@ -946,9 +1068,6 @@ async fn talk(
         }
     };
 
-    // packets from the mic's section go to the mic track, which other peers' seats carry.
-    // header extensions carry ids from this peer's session, so drop them
-    // a moderator's mute drops them here, read packet by packet so it bites at once
     let mic_mid = offer[0].mid.clone();
     let writer = sat.mic.clone();
     let muted = sat.muted.clone();
@@ -963,10 +1082,13 @@ async fn talk(
             if transceiver.mid().map(|m| m.to_string()) != mic_mid {
                 return showing.forward(track, transceiver.mid().map(|m| m.to_string())).await;
             }
+            let mut numbering = Numbering::default();
             while let Ok((mut packet, _)) = track.read_rtp().await {
                 if muted.load(Ordering::SeqCst) {
+                    numbering.skip();
                     continue;
                 }
+                packet.header.sequence_number = numbering.of(packet.header.sequence_number);
                 packet.header.extension = false;
                 packet.header.extensions.clear();
                 let _ = mic.write_rtp(&packet).await;
@@ -1003,7 +1125,7 @@ async fn talk(
 
     if send(socket, &serde_json::json!({ "sdp": answer })).await.is_ok() {
         // spawned, so the first seats frame does not wait on the api
-        *attached = presence.map(|p| tokio::spawn(p.attached(seat)));
+        *attached = presence.map(|p| tokio::spawn(p.attached(seat, None)));
         let mut current = seats.borrow_and_update().clone();
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING_EVERY, PING_EVERY);
         let mut heard = tokio::time::Instant::now();
@@ -1055,6 +1177,11 @@ async fn talk(
                 _ = sat.kick.notified() => {
                     log::info!("{tag}: disconnected by a moderator");
                     refuse(socket, "disconnected").await;
+                    break;
+                }
+                _ = sat.replaced.notified() => {
+                    log::info!("{tag}: replaced by a newer join from the same tab");
+                    let _ = tokio::time::timeout(Duration::from_secs(1), refuse(socket, "replaced")).await;
                     break;
                 }
                 _ = dead.notified() => {
@@ -1406,7 +1533,18 @@ mod tests {
 
     fn sitter(user: &str, uid: Option<&str>) -> Sitter {
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic-{user}"), "voice".to_owned()));
-        Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id: 0, mic, muted: Arc::default(), kick: Arc::new(Notify::new()), show: Show::new(0) }
+        Sitter {
+            user: user.to_owned(),
+            uid: uid.map(str::to_owned),
+            tab: None,
+            presence: None,
+            id: 0,
+            mic,
+            muted: Arc::default(),
+            kick: Arc::new(Notify::new()),
+            replaced: Arc::new(Notify::new()),
+            show: Show::new(0),
+        }
     }
 
     fn room_of(sitters: Vec<Sitter>) -> Room {
@@ -1415,6 +1553,24 @@ mod tests {
             seats.take(s);
         }
         Room { seats, tx: watch::Sender::new(Arc::new(Vec::new())) }
+    }
+
+    #[test]
+    fn a_long_mute_leaves_no_gap_in_the_numbers() {
+        let mut numbering = Numbering::default();
+        let mut seq: u16 = 60000;
+        let mut sent = Vec::new();
+        for i in 0..40100u32 {
+            if (50..40050).contains(&i) {
+                numbering.skip();
+            } else {
+                sent.push(numbering.of(seq));
+            }
+            seq = seq.wrapping_add(1);
+        }
+        assert_eq!(sent.len(), 100);
+        assert!(sent.windows(2).all(|w| w[1] == w[0].wrapping_add(1)), "{sent:?}");
+        assert_eq!(sent[0], 60000);
     }
 
     #[test]
@@ -1429,14 +1585,118 @@ mod tests {
         rooms.rooms.insert("g/dev".into(), room_of(vec![sitter("u1", None)]));
         let muted = |rooms: &Rooms, room: &str, seat: usize| rooms.rooms[room].seats.0[seat].as_ref().unwrap().muted.load(Ordering::SeqCst);
 
-        assert_eq!(rooms.moderate("u1", "g", Action::Mute), 2);
+        assert_eq!(rooms.moderate("u1", "g", Action::Mute, None), 2);
         assert!(muted(&rooms, "g/lounge", 0) && muted(&rooms, "g/afk", 0));
         assert!(!muted(&rooms, "g/lounge", 1), "not bo");
         assert!(!muted(&rooms, "h/lounge", 0), "not another server");
         assert!(!muted(&rooms, "g/dev", 0), "not a name alone");
-        assert_eq!(rooms.moderate("u1", "g", Action::Unmute), 2);
+        assert_eq!(rooms.moderate("u1", "g", Action::Unmute, None), 2);
         assert!(!muted(&rooms, "g/lounge", 0));
-        assert_eq!(rooms.moderate("nobody", "g", Action::Mute), 0);
+        assert_eq!(rooms.moderate("nobody", "g", Action::Mute, None), 0);
+    }
+
+    fn tabbed(user: &str, uid: &str, tab: &str, id: u64) -> Sitter {
+        Sitter { tab: Some(tab.to_owned()), id, ..sitter(user, Some(uid)) }
+    }
+
+    fn ids(room: &Room) -> Vec<Option<u64>> {
+        room.seats.0.iter().map(|s| s.as_ref().map(|s| s.id)).filter(|s| s.is_some()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_join_from_the_same_tab_takes_that_tabs_seat_and_no_other() {
+        let mut rooms = Rooms::default();
+        let old = tabbed("a", "u1", "t1", 1);
+        let bell = old.replaced.clone();
+        let second = tabbed("a", "u1", "t2", 2);
+        let quiet = second.replaced.clone();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![old, second, tabbed("b", "u2", "t1", 3)]));
+        let mut seen = rooms.rooms["g/lounge"].tx.subscribe();
+        assert_eq!(rooms.replace("u1", "t1", "g/lounge"), 1);
+        assert_eq!(ids(&rooms.rooms["g/lounge"]), vec![Some(2), Some(3)], "the second tab and someone else's same-named tab stay");
+        assert!(rooms.rooms["g/lounge"].seats.0[0].is_none(), "the old seat is free for the new join");
+        tokio::time::timeout(Duration::from_millis(100), bell.notified()).await.expect("the old socket is told");
+        assert!(tokio::time::timeout(Duration::from_millis(50), quiet.notified()).await.is_err(), "the second tab is not");
+        assert!(!seen.has_changed().unwrap(), "the room the join sits in hears it from the join");
+        assert_eq!(rooms.replace("u1", "t1", "g/lounge"), 0);
+    }
+
+    #[test]
+    fn a_tab_that_moves_leaves_its_old_room() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![tabbed("a", "u1", "t1", 1)]));
+        rooms.rooms.insert("g/back".into(), room_of(vec![tabbed("a", "u1", "t1", 2), tabbed("b", "u2", "x", 3)]));
+        let mut back = rooms.rooms["g/back"].tx.subscribe();
+        assert_eq!(rooms.replace("u1", "t1", "g/other"), 2);
+        assert!(!rooms.rooms.contains_key("g/lounge"), "a room left empty goes");
+        assert_eq!(ids(&rooms.rooms["g/back"]), vec![Some(3)]);
+        assert!(back.has_changed().unwrap(), "a room it left hears its seats now");
+        let now = back.borrow_and_update();
+        assert_eq!(now.iter().flatten().map(|s| s.id).collect::<Vec<_>>(), vec![3]);
+    }
+
+    async fn scripted_api(statuses: Vec<u16>) -> (Api, Arc<Mutex<Vec<String>>>) {
+        let calls: Arc<Mutex<Vec<String>>> = Arc::default();
+        let script = Arc::new(Mutex::new(statuses.into_iter()));
+        let (seen, next) = (calls.clone(), script.clone());
+        let app = Router::new().route(
+            "/api/voice/{what}",
+            post(move |axum::extract::Path(what): axum::extract::Path<String>| {
+                let (seen, next) = (seen.clone(), next.clone());
+                async move {
+                    seen.lock().unwrap().push(what);
+                    StatusCode::from_u16(next.lock().unwrap().next().unwrap_or(200)).unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let api = Api { url, secret: Some(Arc::from("s")), http: reqwest::Client::builder().timeout(API_TIMEOUT).build().unwrap() };
+        (api, calls)
+    }
+
+    fn presence(api: Api) -> Arc<Presence> {
+        Arc::new(Presence::new(api, "u1".into(), "g".into(), "lounge".into()))
+    }
+
+    #[tokio::test]
+    async fn an_attached_the_api_did_not_take_is_tried_again() {
+        let (api, calls) = scripted_api(vec![503]).await;
+        let p = presence(api);
+        tokio::time::timeout(Duration::from_secs(5), p.clone().attached(0, None)).await.unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["attached", "attached"], "a 503, then again 1s on");
+        assert!(p.turn.lock().await.is_some(), "it went through");
+        let before = tokio::time::Instant::now() - Duration::from_secs(1);
+        p.clone().attached(0, Some(before)).await;
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        p.clone().attached(0, Some(tokio::time::Instant::now())).await;
+        assert_eq!(calls.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn an_attached_the_api_refused_or_a_seat_let_go_is_not_tried() {
+        let (api, calls) = scripted_api(vec![403]).await;
+        let p = presence(api.clone());
+        p.clone().attached(0, None).await;
+        p.clone().attached(0, Some(tokio::time::Instant::now())).await;
+        assert_eq!(*calls.lock().unwrap(), ["attached"], "a 4xx would come again");
+        let (down, calls) = scripted_api(vec![503; 10]).await;
+        let p = presence(down);
+        let trying = tokio::spawn(p.clone().attached(0, None));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let voice_less = || async {
+            let mux = UDPMuxDefault::new(UDPMuxParams::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap()));
+            Voice { public_ip: "127.0.0.1".into(), udp_port: 0, mux, open: false, api: api.clone(), state: Arc::default(), next_id: Arc::default() }
+        };
+        let voice = voice_less().await;
+        let t = std::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(3), p.left(&voice)).await.expect("left does not wait out the retries");
+        assert!(t.elapsed() < Duration::from_millis(900), "{:?}", t.elapsed());
+        trying.await.unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["attached", "left"]);
+        p.clone().attached(0, Some(tokio::time::Instant::now())).await;
+        assert_eq!(calls.lock().unwrap().len(), 2, "nothing after the seat is let go");
     }
 
     #[tokio::test]
@@ -1444,7 +1704,7 @@ mod tests {
         let mut rooms = Rooms::default();
         rooms.rooms.insert("g/lounge".into(), room_of(vec![sitter("al", Some("u1"))]));
         let kick = rooms.rooms["g/lounge"].seats.0[0].as_ref().unwrap().kick.clone();
-        assert_eq!(rooms.moderate("u1", "g", Action::Disconnect), 1);
+        assert_eq!(rooms.moderate("u1", "g", Action::Disconnect, None), 1);
         // told first, waited on after: the permit is kept
         tokio::time::timeout(Duration::from_millis(100), kick.notified()).await.expect("the disconnect was kept for the socket");
     }
@@ -1458,6 +1718,26 @@ mod tests {
         assert!(!r.muted, "an older api says nothing: not muted");
         let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge","muted":true}"#).unwrap();
         assert!(r.muted);
+        assert_eq!(r.tab, None, "an older api names no tab");
+        let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge","tab":"t1"}"#).unwrap();
+        assert_eq!(r.tab.as_deref(), Some("t1"));
+        let o: Order = serde_json::from_str(r#"{"action":"count","user_id":"u1","server":"g","tab":"t1"}"#).unwrap();
+        assert_eq!((o.action, o.tab.as_deref()), (Action::Count, Some("t1")));
+    }
+
+    #[test]
+    fn a_count_leaves_out_the_asking_tab_and_touches_nothing() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![tabbed("al", "u1", "t1", 1), tabbed("bo", "u2", "t9", 2)]));
+        rooms.rooms.insert("g/afk".into(), room_of(vec![tabbed("al", "u1", "t2", 3)]));
+        rooms.rooms.insert("h/lounge".into(), room_of(vec![tabbed("al", "u1", "t3", 4)]));
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, None), 2, "both tabs in g");
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, Some("t1")), 1, "t1 asks: its own seat is not another call, t2's is");
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, Some("t2")), 1);
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, Some("t3")), 2);
+        assert_eq!(rooms.moderate("u1", "h", Action::Count, Some("t3")), 0, "a voice server that holds only this tab's seat");
+        assert_eq!(rooms.moderate("u9", "g", Action::Count, None), 0, "a voice server that never saw them (restarted)");
+        assert!(!rooms.rooms["g/lounge"].seats.0[0].as_ref().unwrap().muted.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -1566,7 +1846,7 @@ mod tests {
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
         let mut show = Show::new(id);
         show.on = on;
-        Sitter { user: user.to_owned(), uid: None, id, mic, muted: Arc::default(), kick: Arc::new(Notify::new()), show }
+        Sitter { show, id, mic, ..sitter(user, None) }
     }
 
     #[test]

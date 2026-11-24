@@ -121,13 +121,28 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/voice/beat", post(beat))
 }
 
-/// What a grant stands for: who, and where they may talk.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Grant {
     user_id: Uuid,
     name: String,
     server: String,
     channel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tab: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct JoinBody {
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+fn tab_of(tab: Option<String>) -> Result<Option<String>, ApiError> {
+    match tab {
+        None => Ok(None),
+        Some(t) if (1..=64).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') => Ok(Some(t)),
+        Some(_) => Err(ApiError::new(StatusCode::BAD_REQUEST, "bad tab")),
+    }
 }
 
 fn grant_key(grant: &str) -> String {
@@ -269,21 +284,23 @@ fn new_grant() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `POST /api/groups/:group/voice/:channel/join`: a grant to take to the voice server,
-/// `{url: "/voice", grant, ttl: 30}`. 401 nobody; 403 not a member; 404 `no such channel` (or
-/// one this login does not see); 400 `not a voice channel`; 409 `already in voice` while in
-/// another channel; 409 `channel full` at its `user_limit` (16 when 0); then 503 `voice is off`
-/// with VOICE_SECRET unset or empty, since no voice server could redeem the grant. An owner, the
-/// channels power and a site admin are never kept out by the limit.
-async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> ApiResult {
+async fn join(
+    State(s): State<AppState>,
+    Path((group, channel)): Path<(String, String)>,
+    Me(me): Me,
+    body: Result<Option<Json<JoinBody>>, JsonRejection>,
+) -> ApiResult {
     let who = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
+    let tab = tab_of(body?.map(|Json(b)| b).unwrap_or_default().tab)?;
     let (server, channel) = channel_names(&group, &channel)?;
     let limit = may_talk(&s, who.id, &server, &channel).await?;
     let mut redis = s.redis.clone();
     let here = format!("{server}/{channel}");
     let now: Option<String> = redis::cmd("GET").arg(voiceof_key(who.id)).query_async(&mut redis).await?;
-    if now.is_some_and(|now| now != here) {
-        return Err(ApiError::new(StatusCode::CONFLICT, "already in voice"));
+    if let Some(now) = now.filter(|now| *now != here) {
+        if !stale_voiceof(&s, who.id, &now, tab.as_deref()).await {
+            return Err(ApiError::new(StatusCode::CONFLICT, "already in voice"));
+        }
     }
     if !allows(&s, who.id, &server, CHANNELS).await? {
         let fields: HashMap<String, String> = redis::cmd("HGETALL").arg(voice_key(&server)).query_async(&mut redis).await?;
@@ -293,7 +310,7 @@ async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, S
     }
     voice_on(secret())?;
     let grant = new_grant();
-    let kept = json!(Grant { user_id: who.id, name: who.name, server, channel }).to_string();
+    let kept = json!(Grant { user_id: who.id, name: who.name, server, channel, tab }).to_string();
     let set: Option<String> = redis::cmd("SET")
         .arg(grant_key(&grant))
         .arg(kept)
@@ -309,14 +326,16 @@ async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, S
     Ok(Json(json!({ "url": "/voice", "grant": grant, "ttl": GRANT_TTL })))
 }
 
+async fn stale_voiceof(s: &AppState, user: Uuid, now: &str, tab: Option<&str>) -> bool {
+    let Some((server, _)) = now.split_once('/') else { return false };
+    tell_voice(s, Order::Count, user, server, tab).await == Some(0)
+}
+
 #[derive(Deserialize)]
 struct RedeemBody {
     grant: String,
 }
 
-/// `POST /api/voice/redeem {grant}`: the voice server's, inside only (`inside`). Takes the grant
-/// out of redis (GETDEL, so a second redeem of it is a 403 `bad grant`, as is one past its half
-/// minute), asks `may_talk` again, and → `{user_id, name, server, channel}`.
 async fn redeem(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<RedeemBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -339,13 +358,12 @@ async fn is_muted(s: &AppState, server: &str, user: Uuid) -> Result<bool, redis:
 
 // ---- moderating voice -----------------------------------------------------------------------
 
-/// What a moderator tells the voice server about someone (`tell_voice`): their mic off or on
-/// again, or their seat taken. The voice server's `POST /internal/voice` (video/src/voice.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Order {
     Mute,
     Unmute,
     Disconnect,
+    Count,
 }
 
 impl Order {
@@ -354,6 +372,7 @@ impl Order {
             Order::Mute => "mute",
             Order::Unmute => "unmute",
             Order::Disconnect => "disconnect",
+            Order::Count => "count",
         }
     }
 }
@@ -371,22 +390,21 @@ fn voice_url() -> &'static str {
     })
 }
 
-/// The voice server's body for an order about `user` in `server`.
-fn order_body(order: Order, user: Uuid, server: &str) -> Value {
-    json!({ "action": order.word(), "user_id": user, "server": server })
+fn order_body(order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Value {
+    let mut body = json!({ "action": order.word(), "user_id": user, "server": server });
+    if let Some(tab) = tab {
+        body["tab"] = json!(tab);
+    }
+    body
 }
 
-/// Tells the voice server an order about `user` in `server`, with VOICE_SECRET (never logged).
-/// → how many seats it touched, None when it could not be told (voice off, the box down): the
-/// api's side stands anyway (`muted_key` is read again at the next redeem; a disconnect takes
-/// the seat out of the room here too).
-async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str) -> Option<u64> {
+async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Option<u64> {
     let secret = secret()?;
     let res = s
         .http
         .post(format!("{}/internal/voice", voice_url()))
         .header("x-voice-secret", secret)
-        .json(&order_body(order, user, server))
+        .json(&order_body(order, user, server, tab))
         .send()
         .await;
     match res {
@@ -421,7 +439,7 @@ pub(crate) async fn drop_from_voice(s: &AppState, server: &str, user: Uuid) {
     if !here {
         return;
     }
-    tell_voice(s, Order::Disconnect, user, server).await;
+    tell_voice(s, Order::Disconnect, user, server, None).await;
     if let Err(e) = leave(s, server, user, None).await {
         log::warn!("voice drop {server}: {}", e.message());
     }
@@ -457,7 +475,7 @@ async fn server_mute(State(s): State<AppState>, Path(group): Path<String>, Me(me
     } else {
         redis::cmd("SREM").arg(muted_key(&server)).arg(user.to_string()).query_async(&mut redis).await?
     };
-    tell_voice(&s, if body.muted { Order::Mute } else { Order::Unmute }, user, &server).await;
+    tell_voice(&s, if body.muted { Order::Mute } else { Order::Unmute }, user, &server, None).await;
     if changed > 0 {
         log::info!("{}: {} {name} in {server}'s voice", who.name, if body.muted { "muted" } else { "unmuted" });
         tell(&s, &server, "voice_mute", json!({ "who": name, "uid": user, "muted": body.muted })).await;
@@ -621,9 +639,6 @@ struct BeatBody {
     peers: Vec<Peer>,
 }
 
-/// `POST /api/voice/beat {peers: [{user_id, server}]}`: the voice server's, inside only, every
-/// 15s for everyone it has seated. Sets each one's `beat` to now; someone not in voice (swept,
-/// left) stays out. → `{beat}`, how many it found.
 async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<BeatBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -641,7 +656,16 @@ async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<B
             .arg(now);
     }
     let found: Vec<i64> = pipe.query_async(&mut s.redis.clone()).await?;
-    Ok(Json(json!({ "beat": found.iter().sum::<i64>() })))
+    Ok(Json(json!({ "beat": found.iter().sum::<i64>(), "missing": missing(&body.peers, &found) })))
+}
+
+fn missing(peers: &[Peer], found: &[i64]) -> Vec<Value> {
+    peers
+        .iter()
+        .zip(found)
+        .filter(|(_, &f)| f == 0)
+        .map(|(p, _)| json!({ "user_id": p.user_id, "server": p.server.trim().to_lowercase() }))
+        .collect()
 }
 
 /// Every `SWEEP_EVERY`, takes out of voice everyone whose beat is older than
@@ -710,9 +734,10 @@ mod tests {
     #[test]
     fn an_order_says_what_who_and_where() {
         let user = Uuid::from_u128(7);
-        assert_eq!(order_body(Order::Mute, user, "g"), json!({ "action": "mute", "user_id": user, "server": "g" }));
-        assert_eq!(order_body(Order::Unmute, user, "g")["action"], "unmute");
-        assert_eq!(order_body(Order::Disconnect, user, "g")["action"], "disconnect");
+        assert_eq!(order_body(Order::Mute, user, "g", None), json!({ "action": "mute", "user_id": user, "server": "g" }));
+        assert_eq!(order_body(Order::Unmute, user, "g", None)["action"], "unmute");
+        assert_eq!(order_body(Order::Disconnect, user, "g", None)["action"], "disconnect");
+        assert_eq!(order_body(Order::Count, user, "g", Some("t1")), json!({ "action": "count", "user_id": user, "server": "g", "tab": "t1" }));
     }
 
     #[test]
@@ -784,9 +809,24 @@ mod tests {
 
     #[test]
     fn a_grant_round_trips() {
-        let g = Grant { user_id: Uuid::from_u128(7), name: "a".into(), server: "s".into(), channel: "c".into() };
+        let g = Grant { user_id: Uuid::from_u128(7), name: "a".into(), server: "s".into(), channel: "c".into(), tab: None };
         let back: Grant = serde_json::from_str(&json!(g).to_string()).unwrap();
         assert_eq!(back, g);
+        assert!(!json!(g).to_string().contains("tab"), "no tab, none said");
+        let g = Grant { tab: Some("t1".into()), ..g };
+        assert_eq!(json!(g)["tab"], "t1");
+        let old: Grant = serde_json::from_str(r#"{"user_id":"00000000-0000-0000-0000-000000000007","name":"a","server":"s","channel":"c"}"#).unwrap();
+        assert_eq!(old.tab, None);
+    }
+
+    #[test]
+    fn a_tab_is_short_and_plain() {
+        assert_eq!(tab_of(None).unwrap(), None);
+        assert_eq!(tab_of(Some("a1-_Z".into())).unwrap().as_deref(), Some("a1-_Z"));
+        assert_eq!(tab_of(Some("x".repeat(64))).unwrap().map(|t| t.len()), Some(64));
+        for bad in ["", "a b", "a/b", "é", &"x".repeat(65)] {
+            assert_eq!(tab_of(Some(bad.into())).unwrap_err().message(), "bad tab", "{bad:?}");
+        }
     }
 
     #[test]
@@ -802,6 +842,14 @@ mod tests {
         assert_eq!(beat_of("not json"), None);
         // swept within a minute of the last beat
         const { assert!(STALE_AFTER + SWEEP_EVERY <= 60_000) };
+    }
+
+    #[test]
+    fn a_beat_names_who_it_did_not_find() {
+        let peer = |n: u128, server: &str| Peer { user_id: Uuid::from_u128(n), server: server.into() };
+        let peers = [peer(1, "g"), peer(2, " G "), peer(3, "h")];
+        assert_eq!(missing(&peers, &[1, 0, 0]), vec![json!({ "user_id": Uuid::from_u128(2), "server": "g" }), json!({ "user_id": Uuid::from_u128(3), "server": "h" })]);
+        assert!(missing(&peers, &[1, 1, 1]).is_empty());
     }
 
     #[test]

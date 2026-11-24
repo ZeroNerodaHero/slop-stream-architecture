@@ -130,6 +130,7 @@ let joiningAs = '';
 let putDownAt = 0;
 /** When a dropped call last joined again on its own, 0 for never. */
 let rejoinedAt = 0;
+const TAB = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
 
 function setCall(next: Partial<VoiceCall>): void {
   store.set(voiceCallAtom, { ...store.get(voiceCallAtom), ...next });
@@ -282,7 +283,7 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
   let grant;
   for (;;) {
     try {
-      grant = await api.joinVoice(server, channel);
+      grant = await api.joinVoice(server, channel, TAB);
       break;
     } catch (err) {
       if (mine !== attempt) return;

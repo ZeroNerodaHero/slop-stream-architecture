@@ -44,12 +44,12 @@ two steps, so the voice server never sees a cookie.
    - not a member of the server: 403 `join the server first`
    - no such channel, or one this login may not see: 404 `no such channel`
    - a text channel: 400 `not a voice channel`
-   - already in voice in another channel (`voiceof:<uid>`): 409 `already in voice`. in this same channel is fine.
+   - already in voice in another channel (`voiceof:<uid>`): 409 `already in voice`. in this same channel is fine. so is another channel when the voice server says it holds no seat of theirs in that server but this tab's (`count`, [the internal routes](#the-internal-routes)): `voiceof` that no `left` cleared (the voice server crashed or restarted, which says no `left`, and the sweep would take a minute), or this tab moving while its old socket's `left` is still on its way. a second tab that really is in a call there counts, and stays `already in voice`; so does a voice server that does not answer, or does not know `count` (an older one).
    - full (the others in it, from `voice:<server>`, at its `user_limit`, 16 when 0): 409 `channel full`. an owner, the channels power and a site admin are never kept out by this.
 
    - voice off (VOICE_SECRET unset or empty): 503 `voice is off`, since no voice server could redeem a grant.
 
-   then it makes a grant, 32 random bytes as hex (64 characters), keeps `voicegrant:<hex>` = `{user_id, name, server, channel}` for 30s, and answers `{url: "/voice", grant, ttl: 30}`.
+   then it makes a grant, 32 random bytes as hex (64 characters), keeps `voicegrant:<hex>` = `{user_id, name, server, channel, tab}` for 30s, and answers `{url: "/voice", grant, ttl: 30}`. the body `{"tab": "<id>"}` is optional: the page's id for itself, 1 to 64 of `a-z A-Z 0-9 _ -` (else 400 `bad tab`), a new random one on every load of the page and kept nowhere, so a second tab (or a duplicated one) is a second id. it rides the grant to the voice server ([seats](#seats)).
 2. the page opens the websocket at `/voice` (caddy sends it to `voice:7881/ws`) and its first frame, within 10s, is `{"role":"voice","grant":"<64 hex>","sdp":"<offer>"}`. the voice server redeems the grant with the api once (`POST /api/voice/redeem`), and the room and the name come from that reply, never from the page. the api takes the grant out (GETDEL) and asks the same questions as join again, since the grant may be half a minute old. a used grant, one past its 30s, or one no longer the person's to use is `bad grant`; an api that does not answer within 1.5s is `api unreachable`.
 
 the voice server's other refusals: `voice is not open` (no VOICE_SECRET), `bad offer`, `too many voice peers from this address`, `room full` (all 16 seats taken). after the answer, a peer that fails is said as an error frame before the socket closes: one that never connected is `no audio path: nothing reached the voice server over udp 7883, a firewall is closing it` (its ice gives up 20s in: 5s disconnected and 15s failed), one that did is `voice lost its connection`. the offer's audio: m-line 0 is the mic and the other audio ones (15 at most) are where the others are heard; video m-lines come after ([video](#video)). [video/src/voice.rs](../video/src/voice.rs) has the frames, the seats and the m-lines. the page sends its offers (the join's and the later ones) with m-line 0's udp candidates only ([frontend/src/infra/voice-offer.ts](../frontend/src/infra/voice-offer.ts)): before BUNDLE is agreed the browser gathers for every m-line, and a phone with many networks goes past the 128 KB `bad offer` limit with all of them (an iPhone's audio-only offer measured 72 KB, and a call's video lines add up to 32 more m-lines).
@@ -58,9 +58,9 @@ with the voice server started with `VOICE_DEV_OPEN=1` it also takes the old `{"r
 
 ## seats
 
-a room is one voice channel, `<server>/<channel>`, with 16 seats. each person takes the lowest free one. joins and leaves only swap the track behind each m-line (`replace_track`), so nobody renegotiates. a line is one ssrc whoever it carries, so the voice server numbers its packets on from the last (webrtc-rs `enable_seq_transformer`): each browser starts its own numbers anywhere, and one that started behind would be a replay to the listener, dropped for minutes. the voice server sends `{"event":"seats","seats":[{"seat","user","line"}]}` right after the answer and on every join and leave; `line` is the m-line that seat is heard on.
+a room is one voice channel, `<server>/<channel>`, with 16 seats. each person takes the lowest free one. joins and leaves only swap the track behind each m-line (`replace_track`), so nobody renegotiates. a mic's packets go on to the others with their header extensions dropped, since those carry ids from the sender's own session. a line is one ssrc whoever it carries, so the voice server numbers its packets on from the last (webrtc-rs `enable_seq_transformer`): each browser starts its own numbers anywhere, and one that started behind would be a replay to the listener, dropped for minutes. the voice server sends `{"event":"seats","seats":[{"seat","user","line"}]}` right after the answer and on every join and leave; `line` is the m-line that seat is heard on.
 
-closing the socket, or the peer going failed or closed (the ice timeout), frees the seat.
+closing the socket, or the peer going failed or closed (the ice timeout), frees the seat. so does a newer join from the same tab (the same account and the grant's `tab`): it takes the old seat's place at once, in whatever room of the voice server that one was, and the old socket ends with `{"error":"replaced"}`, given 1s to send (most likely nobody hears it: a network that changed left it dead, and its ice would have kept the seat, a silent ghost of the person, up to 20s). a second tab has its own id and keeps its own seat. dev-open joins carry no tab. the socket gets a ping every 30s (`PING_EVERY`), so nothing between forgets an idle call, and a page that sent nothing back (a pong, a frame, anything) for 90s (`IDLE_LIMIT`) is gone.
 
 the page ([voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts)) says `connecting to <channel>…` in the bar from the answer until its peer connects, then `in <channel>`. a call that ends shows its reason under the list: the voice server's error word when it sent one, else from what the page saw (`no audio path...` when its own peer failed before connecting, `voice dropped before the audio connected` when only the socket closed before then, `voice dropped: ...` when it had connected, `voice is unreachable` before an answer). a call that was through and dropped (the socket broke, or its ice failed after connecting: a redeploy of the voice server or of caddy, a network that changed) joins again on its own, a fresh run of tries, at most once in 30s; a moderator's `disconnected` and the other words of the voice server end it as before. both sides log what ice did: the voice server its ice states and the pair that won (`ice pair (local) ... <-> (remote) ...`), the page `voice: ice ...` and `voice: peer ...` in the console.
 
@@ -102,9 +102,11 @@ the voice server tells the api, and the api keeps it in redis:
 
 - `attached` once a person has their answer: the api writes their field in `voice:<server>`, `voiceof:<uid>`, adds the server to `voice:servers`, opens a `voice_sessions` row, and tells the group `voice`.
 - `left` when their seat frees: the field and `voiceof` go, the row gets its `left_at`, and the group hears `voice_left`.
-- one `beat` every 15s naming everyone it has seated: each one's `beat` is set to now. a beat never brings back someone who left.
+- one `beat` every 15s naming everyone it has seated: each one's `beat` is set to now. a beat never brings back someone who left. its answer, `{beat, missing}`, names the peers the api had no field for, and the voice server sends `attached` for each again while their seat is held: an `attached` whose tries all failed, a redis that restarted empty, an api that was out for longer than the sweep.
 
-the api's sweep looks every 15s and takes out, the same way `left` does, everyone whose beat is more than 45s old: a voice server that dies says nothing, and its people are gone within a minute. the sweep does not run while voice is off. a call from the voice server that fails is a warning in its log; nobody is dropped for it.
+an `attached` the api does not take (unreachable within 1.5s, or a 5xx) is tried again after 1s, 2s and 4s, then left to the next beat that finds them missing; a 4xx (they may not be there any more) is not tried again. the `attached` calls and the `left` of one seat go one at a time, and a seat let go stops its tries, so neither can bring back someone who left.
+
+the api's sweep looks every 15s and takes out, the same way `left` does, everyone whose beat is more than 45s old: a voice server that dies says nothing, and its people are gone within a minute. the sweep does not run while voice is off. a call from the voice server that fails is a warning in its log; nobody is dropped for it, and someone seated whose `attached` never got through, or whom redis lost, is in the room again within a beat of the api answering (above).
 
 the facts go to `group:<server>` on `/events`, both `{who, uid, channel}`: `voice` and `voice_left`. the room (`GET /api/groups/{group}`) has `voice`, `{"<channel>": [{name, uid, since}]}`, only the channels this login sees; with redis down it is `{}`.
 
@@ -112,7 +114,7 @@ the facts go to `group:<server>` on `/events`, both `{who, uid, channel}`: `voic
 
 | key | what | lives |
 |---|---|---|
-| `voicegrant:<hex>` | one grant: `{user_id, name, server, channel}` | 30s, or until redeemed (GETDEL) |
+| `voicegrant:<hex>` | one grant: `{user_id, name, server, channel, tab}` (`tab` when the join named one) | 30s, or until redeemed (GETDEL) |
 | `voice:<server>` | hash, user id to `{name, channel, seat, since, beat, session}` (`since` and `beat` unix ms, `session` the row's id) | while anyone is in voice there |
 | `voiceof:<uid>` | `<server>/<channel>` this person is in | until they leave or are swept |
 | `voice:servers` | set of servers that have had anyone in voice, for the sweep | a server goes when its hash is empty |
@@ -124,7 +126,7 @@ one row per stay: `id`, `server`, `channel`, `user_id`, `joined_at`, `left_at` (
 
 ## the internal routes
 
-`POST /api/voice/redeem {grant}`, `POST /api/voice/attached {user_id, server, channel, seat}`, `POST /api/voice/left {user_id, server}`, `POST /api/voice/beat {peers: [{user_id, server}]}`. only the voice server calls them, from inside the compose network, and each has the same guard:
+`POST /api/voice/redeem {grant}`, `POST /api/voice/attached {user_id, server, channel, seat}`, `POST /api/voice/left {user_id, server}`, `POST /api/voice/beat {peers: [{user_id, server}]}` → `{beat, missing: [{user_id, server}]}`. only the voice server calls them, from inside the compose network, and each has the same guard:
 
 - anything caddy passed (it always sets `X-Forwarded-For`) is a 404 `no such route`.
 - with VOICE_SECRET unset or empty, voice is off: 503 `voice is off`.
@@ -138,11 +140,11 @@ join looks at VOICE_SECRET too, last: with voice off it hands out no grants and 
 
 a moderator (the kick power, or the voice power; an owner, a site admin) can mute someone's mic or take them out of voice, from the voice row's card or the member's info (`GroupMod.tsx`). never themselves, an owner only by an owner.
 
-- `POST /api/groups/:group/voice-mute {name, muted}` puts their id in `voicemuted:<server>` (or takes it out), tells the voice server, and sends a `voice_mute {who, uid, muted}` fact. the room's `voice` marks the seat `muted: true`, as does the `voice` fact when they come back. the voice server drops every packet from a muted mic, so the page cannot lift it; a redeem says `muted` for someone muted before they came.
+- `POST /api/groups/:group/voice-mute {name, muted}` puts their id in `voicemuted:<server>` (or takes it out), tells the voice server, and sends a `voice_mute {who, uid, muted}` fact. the room's `voice` marks the seat `muted: true`, as does the `voice` fact when they come back. the voice server drops every packet from a muted mic, so the page cannot lift it, and numbers the ones after on from the last it carried: a mute leaves no gap in the line (one past 2^15 packets, ~11 minutes, would have the listener's srtp drop what follows as old). a redeem says `muted` for someone muted before they came.
 - `POST /api/groups/:group/voice-disconnect {name}` ends their socket with `{"error":"disconnected"}` and takes their seat out of the room at once. they may join again.
 - a kick, a ban and a timeout drop them out of voice the same way. `may_talk` refuses a timed out member (403 `timed out`) until it ends, and a kicked or banned one is no member.
 
-the api tells the voice server on `POST /internal/voice {action: mute|unmute|disconnect, user_id, server}` at VOICE_URL (`http://voice:7881`), with `X-Voice-Secret`: the guard of the internal routes above, on its side. caddy sends `/voice` alone there, so `/internal/voice` is not reachable from outside. a voice server that does not answer is a warning: the mute stands in redis for the next join, and a disconnect still takes the seat out of the room.
+the api tells the voice server on `POST /internal/voice {action: mute|unmute|disconnect|count, user_id, server, tab?}` at VOICE_URL (`http://voice:7881`), with `X-Voice-Secret`: the guard of the internal routes above, on its side. caddy sends `/voice` alone there, so `/internal/voice` is not reachable from outside. a voice server that does not answer is a warning: the mute stands in redis for the next join, and a disconnect still takes the seat out of the room. `count` touches nothing and answers how many seats the person holds in that server, those of `tab` left out (join's `already in voice`).
 
 ## limits
 
