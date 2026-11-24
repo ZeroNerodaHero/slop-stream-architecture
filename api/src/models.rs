@@ -441,7 +441,6 @@ pub(crate) async fn upload(args: &[String]) -> Result<(), String> {
             println!("  same  {}", describe(m));
             continue;
         }
-        // the picture is looked at before anything of this model goes up (moderate.rs); the model file is not
         if let Some((bytes, _)) = &m.thumb {
             crate::moderate::check_offline(crate::moderate::UploadKind::ModelThumb, picture_mime(bytes).unwrap_or("application/octet-stream"), bytes).await?;
         }

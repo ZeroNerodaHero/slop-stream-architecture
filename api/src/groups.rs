@@ -335,7 +335,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1 AND m.is_primary)
          FROM groups g
          LEFT JOIN streamers maker ON maker.id = g.created_by_id
-         WHERE g.public OR g.name = $2
+         WHERE (g.public AND NOT g.adult_content) OR g.name = $2
             OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1)
          ORDER BY g.name = $2 DESC, g.created_at, g.name",
     )
@@ -918,7 +918,7 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
          LEFT JOIN channels c ON c.server = g.name AND {}
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
          WHERE g.name <> $3
-           AND (g.public OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
+           AND ((g.public AND NOT g.adult_content) OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
          ORDER BY g.created_at, g.name, c.position NULLS LAST, c.created_at, c.name",
         sees_sql("$1", "$2")
     );

@@ -412,6 +412,7 @@ export interface GroupRoom {
   admin?: boolean;
   /** Absent on an older api. */
   public?: boolean;
+  adult?: boolean;
   /** The words they typed. Absent, or null, on a group made before the digits. */
   title?: string | null;
   /** Four digits. Absent, or null, when there are none. */
@@ -870,6 +871,7 @@ export const api = {
   saveGroupColor: (name: string, color: string) => request<{ color: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/color`, { color }),
   /** Appearance, from the manage dialog. A private group stays off the lists. */
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
+  setGroupAdult: (name: string, adult: boolean) => request<{ adult: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/adult`, { adult }),
   /** Appearance. Owners stay first; this is the order after them. */
   setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') => request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
   /** An owner (or a site admin), 403 for anyone else. The crop dialog made the jpeg. There is no remove: a group with a picture keeps one. */

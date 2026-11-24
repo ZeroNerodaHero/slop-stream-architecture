@@ -543,6 +543,9 @@ function apply(change: GroupChange): void {
     case 'access':
       store.set(roomAtom, { ...room, public: change.public });
       return;
+    case 'adult':
+      store.set(roomAtom, { ...room, adult: change.adult });
+      return;
     case 'order':
       store.set(roomAtom, { ...room, member_order: change.order, roster: room.roster ? sortMembers(room.roster, change.order) : room.roster });
       // pages of it were cut in the old order: the first one of the new

@@ -114,7 +114,6 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
         return Err(too_big());
     }
     let ip = crate::ratelimit::forwarded_ip(&headers);
-    // the poster is the one part of a video moderation looks at (moderate.rs), as the bytes kept
     let poster = chat_images::store(&s, &me, crate::moderate::UploadKind::VideoPoster, "image/jpeg", &ready.poster, ip.as_deref()).await?;
     // the row first, as the pictures do; a failed save deletes it, and the poster with it
     let id: Uuid = match sqlx::query_scalar(

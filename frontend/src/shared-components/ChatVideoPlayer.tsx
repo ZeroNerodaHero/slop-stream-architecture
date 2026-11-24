@@ -11,13 +11,11 @@ import { cn } from '@/utils/cn';
  * playing on its own. As tall as a picture is at most, five lines (`max-h-[7.5rem]`), or the
  * pins list's `small` row. Every chat draws it: a stream's, a group channel's, a direct message.
  * One an admin took down (its poster goes with it) says "removed" instead; one this viewer may not
- * see says so. One whose poster moderation flagged (a direct message's or a group channel's, the
- * api's 409) is covered, its poster blurred, until `show` is pressed.
+ * see says so.
  */
 export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; small?: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [gone, setGone] = useState<MediaGone | null>(null);
-  // the poster was flagged: false while covered, true once `show` was pressed
   const [sensitive, setSensitive] = useState<boolean | null>(null);
   // the poster is asked for at once, the video only on play: a poster that will not load is the word on the video too
   useEffect(() => {
@@ -45,7 +43,6 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
     const seen = new ResizeObserver(() => el.dispatchEvent(new Event(MEDIA_SIZED)));
     seen.observe(el);
     return () => seen.disconnect();
-    // the player is drawn again once a covered one is shown
   }, [sensitive]);
   if (gone) return <MediaGoneNote why={gone} />;
   const poster = sensitive === null ? posterSrc(video.poster) : shownSrc(posterSrc(video.poster));

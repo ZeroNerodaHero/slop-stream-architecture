@@ -232,9 +232,6 @@ pub(crate) fn redraw(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
 /// It must FAIL CLOSED once it is wired to anything: a check that errors, times out or cannot be
 /// reached refuses the upload (an `Err`, never a quiet `Ok`), so an outage of the checker is not
 /// a way past it. Only "checked, and fine" may return `Ok`.
-///
-/// moderate.rs `check` is that: the redrawn webp, the bytes the bucket keeps, refused (422) or
-/// failing closed (503) as it says, with its `uploads` row.
 async fn screen(s: &AppState, who: &crate::auth::Account, headers: &HeaderMap, webp: &[u8]) -> Result<crate::moderate::Passed, ApiError> {
     let ip = crate::ratelimit::forwarded_ip(headers);
     crate::moderate::check(s, crate::moderate::Upload { kind: crate::moderate::UploadKind::Emote, who: Some(who.id), ip: ip.as_deref(), mime: "image/webp", key: None }, webp).await

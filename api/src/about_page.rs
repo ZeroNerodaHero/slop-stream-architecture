@@ -549,8 +549,12 @@ async fn put_file(
         Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
     };
     let kind = sniffed(&q.kind, &body)?;
+    match kind.kind {
+        "image" => crate::moderate::refuse_animated(&body)?,
+        "video" => crate::moderate::refuse_about_video()?,
+        _ => {}
+    }
     let row = ensure_row(&s.db, &name).await?;
-    // a picture is looked at (moderate.rs); a video or a sound is not
     let looked = if kind.kind == "image" {
         let ip = crate::ratelimit::forwarded_ip(&headers);
         let up = crate::moderate::Upload { kind: crate::moderate::UploadKind::AboutFile, who: Some(me.0.as_ref().map_or(row, |a| a.id)), ip: ip.as_deref(), mime: kind.mime, key: None };

@@ -305,16 +305,11 @@ const THUMB_HOVER =
  * A direct message's pictures are drawn by the same (FriendChat.tsx), and so are a pinned line's in
  * a group channel's pins list (ServerRoom.tsx), `small` there: rows 4rem tall, one picture at most
  * 5rem, to sit in the narrow list.
- *
- * A picture moderation flagged (a direct message's or a group channel's, `sensitive`) is drawn
- * blurred with a `show` button over it; the click draws it as any other, full size view included.
- * A stream's chat never has one: the api refuses them there.
  */
 export function ChatImages({ ids, small = false }: { ids: string[]; small?: boolean }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
   // pictures that would not load, and why (an admin took it down, or it is not this viewer's to see): the word stands in their place
   const [gone, setGone] = useState<Record<string, MediaGone>>({});
-  // flagged pictures (the api's 409): false while blurred, true once `show` was pressed
   const [sensitive, setSensitive] = useState<Record<string, boolean>>({});
   const srcOf = (id: string) => (id in sensitive ? shownSrc(pictureSrc(id)) : pictureSrc(id));
   const failed = (id: string) =>
@@ -393,9 +388,7 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
 
 interface PictureViewProps {
   ids: string[];
-  /** Where each is fetched from: a flagged one's `?show=1` address. */
   srcOf: (id: string) => string;
-  /** A flagged one not shown yet: blurred here too, reached by the arrows from one that was. */
   blurred: (id: string) => boolean;
   /** Which of `ids` is up. */
   at: number;

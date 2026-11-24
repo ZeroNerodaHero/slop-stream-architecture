@@ -218,9 +218,6 @@ async fn lift_object(s: &AppState, from: &str, to: &str) -> Result<Option<Vec<u8
     Ok(Some(bytes))
 }
 
-/// The look before a picture of the name `row` is kept (moderate.rs), the exact bytes the bucket
-/// gets. Its uploader is the login, or the name's own row for a dummy-password write. Not for
-/// `lift_object` and `lift_legacy`: those move a picture already served under the name, on a read.
 #[allow(clippy::too_many_arguments)]
 async fn look(s: &AppState, me: &Me, row: Uuid, headers: &HeaderMap, kind: UploadKind, mime: &str, key: Option<&str>, body: &[u8]) -> Result<moderate::Passed, ApiError> {
     let ip = crate::ratelimit::forwarded_ip(headers);
@@ -749,6 +746,7 @@ async fn put_asset(
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let (body, kind) = asset_body(body)?;
+    moderate::refuse_animated(&body)?;
     let row = ensure_row(&s.db, &name).await?;
     let looked = look(&s, &me, row, &headers, UploadKind::Asset, kind.mime, None, &body).await?;
     for _ in 0..2 {

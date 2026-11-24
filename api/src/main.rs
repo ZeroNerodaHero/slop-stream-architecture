@@ -1131,6 +1131,7 @@ async fn main() {
 
     // chat, events and home returned above and do not create tables. this process does, from api/schema.sql.
     schema::ensure(&db).await.expect("schema");
+    moderate::warn_if_keyless();
 
     // `api passwd <name>`: a new random password, printed once. see auth.rs
     if env::args().nth(1).as_deref() == Some("passwd") {

@@ -55,6 +55,7 @@ export type GroupChange =
   /** The group's colour is `color` now (`#rrggbb`). */
   | { what: 'color'; color: string }
   | { what: 'access'; public: boolean }
+  | { what: 'adult'; adult: boolean }
   | { what: 'order'; order: string }
   | { what: 'icon'; icon: number }
   | { what: 'banner'; banner: number }

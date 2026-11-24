@@ -2675,6 +2675,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
                 <ColorSection server={server} room={room} run={run} />
                 <AboutSection server={server} room={room} run={run} />
                 <ListingSection server={server} room={room} run={run} />
+                {room.owner && <AdultSection server={server} room={room} run={run} />}
               </div>
             )}
             {tab === 'channels' && <ChannelsSection server={server} channel={channel} room={room} run={run} />}
@@ -2829,6 +2830,31 @@ function ListingSection({ server, room, run }: ManageProps) {
   return (
     <Section title="listing" description="public is on the lists for anyone. private is off them: someone with the address can still open it and join.">
       <VisibilityToggle isPublic={isPublic} ids={['room-public', 'room-private']} onChange={(next) => void run(() => api.setGroupPublic(server, next))} />
+    </Section>
+  );
+}
+
+function AdultSection({ server, room, run }: ManageProps) {
+  const on = room.adult === true;
+  return (
+    <Section
+      title="adult content"
+      description="on: sexual pictures are allowed in this group, blurred until clicked, and the group is off every list and search. only its address or an invite opens it. off: sexual pictures are refused."
+    >
+      <p className="flex flex-wrap items-center gap-2">
+        <span id="group-adult-state" className="text-textSecondary">
+          {on ? 'on' : 'off'}
+        </span>
+        <Button
+          id="group-adult"
+          size="sm"
+          variant={on ? 'outline-danger' : 'secondary'}
+          aria-describedby="group-adult-state"
+          onClick={() => void run(() => api.setGroupAdult(server, !on))}
+        >
+          {on ? 'turn off' : 'turn on'}
+        </Button>
+      </p>
     </Section>
   );
 }

@@ -339,7 +339,6 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
         }
         None => None,
     };
-    // the pictures' look (moderate.rs): a direct message keeps a flagged one, blurred, unless `DM_GROUP_IMAGE_BLOCK_SEXUAL`
     {
         let mut all: Vec<&str> = images.iter().map(String::as_str).collect();
         if let Some(video) = &video {

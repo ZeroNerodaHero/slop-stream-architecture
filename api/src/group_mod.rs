@@ -356,6 +356,11 @@ struct AccessIn {
 }
 
 #[derive(Deserialize)]
+struct AdultIn {
+    adult: bool,
+}
+
+#[derive(Deserialize)]
 struct OrderIn {
     order: String,
 }
@@ -380,6 +385,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/about", axum::routing::put(put_about))
         .route("/api/groups/{group}/color", axum::routing::put(put_color))
         .route("/api/groups/{group}/access", axum::routing::put(set_access))
+        .route("/api/groups/{group}/adult", axum::routing::put(set_adult))
         .route("/api/groups/{group}/order", axum::routing::put(set_order))
         .route("/api/groups/{group}/roles", get(list_roles).post(create_role))
         .route("/api/groups/{group}/roles/{id}", axum::routing::put(update_role).delete(delete_role))
@@ -415,18 +421,18 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
     #[allow(clippy::type_complexity)]
-    let row: (String, String, String, i64, Option<i64>, Option<i64>, bool, Option<String>, Option<i32>, String, String) = sqlx::query_as(
+    let row: (String, String, String, i64, Option<i64>, Option<i64>, bool, Option<String>, Option<i32>, String, String, bool) = sqlx::query_as(
         "SELECT g.badge, g.color, g.about,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 (EXTRACT(EPOCH FROM g.icon_at))::bigint,
                 (EXTRACT(EPOCH FROM g.banner_at))::bigint,
-                g.public, g.title, g.tag, g.member_order, g.owner_role
+                g.public, g.title, g.tag, g.member_order, g.owner_role, g.adult_content
          FROM groups g WHERE g.name = $1",
     )
     .bind(&group)
     .fetch_one(&s.db)
     .await?;
-    let (badge, color, about, members, icon, banner, public, title, tag, member_order, owner_role) = row;
+    let (badge, color, about, members, icon, banner, public, title, tag, member_order, owner_role, adult) = row;
     let mine = match user {
         Some(id) => groups::member(&s.db, id, &group).await?,
         None => false,
@@ -471,6 +477,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
         "owner_role": owner_role,
         "admin": admin,
         "public": public,
+        "adult": adult,
         "title": title,
         "tag": tag,
         "member_order": member_order,
@@ -558,6 +565,19 @@ async fn set_access(State(s): State<AppState>, Path(group): Path<String>, Me(me)
     sqlx::query("UPDATE groups SET public = $2 WHERE name = $1").bind(&group).bind(body.public).execute(&s.db).await?;
     groups::tell(&s, &group, "access", json!({ "public": body.public })).await;
     Ok(Json(json!({ "public": body.public })))
+}
+
+async fn set_adult(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<AdultIn>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    if !is_owner(&s.db, who.id, &group).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner changes this"));
+    }
+    sqlx::query("UPDATE groups SET adult_content = $2 WHERE name = $1").bind(&group).bind(body.adult).execute(&s.db).await?;
+    log::info!("{}: adult content {} in {group}", who.name, if body.adult { "on" } else { "off" });
+    groups::tell(&s, &group, "adult", json!({ "adult": body.adult })).await;
+    Ok(Json(json!({ "adult": body.adult })))
 }
 
 /// `PUT /api/groups/:group/order` `{order}`: how the member list sorts after the owners. Appearance.
@@ -1724,7 +1744,6 @@ async fn read_picture(s: &AppState, group: &str, key: &str, column: &str) -> Res
     }
 }
 
-/// The picture looked at (moderate.rs), then the bucket, then the column's time.
 #[allow(clippy::too_many_arguments)]
 async fn write_picture(s: &AppState, who: crate::auth::Account, headers: &HeaderMap, kind: crate::moderate::UploadKind, group: &str, key: &str, column: &str, body: Bytes) -> Result<i64, ApiError> {
     let ip = crate::ratelimit::forwarded_ip(headers);
