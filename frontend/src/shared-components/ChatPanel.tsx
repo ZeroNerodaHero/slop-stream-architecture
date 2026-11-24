@@ -167,9 +167,11 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
           {line.from}
         </span>
       ) : (
-        <span {...watched} data-from={line.from} title={someone ? undefined : 'not logged in'} className={cn('font-semibold', color)} style={style}>
-          {line.from}
-        </span>
+        <Tooltip content={someone ? null : 'not logged in'}>
+          <span {...watched} data-from={line.from} className={cn('font-semibold', color)} style={style}>
+            {line.from}
+          </span>
+        </Tooltip>
       )}
       {someone && line.oauth_verified && <OAuthMark size={14} className="ml-1 align-[-2px]" />}
       {someone && peek.at && (

@@ -362,7 +362,7 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
       onPointerEnter={(e) => peek.show(e, e.currentTarget)}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onPointerDown={(e) => {
-        if (e.target instanceof Element && e.target.closest('button')) peek.close();
+        if (e.target instanceof Element && e.target.closest('button') && !e.target.closest('[data-peek-hold]')) peek.close();
       }}
       onFocus={(e) => {
         if (!e.target.closest('button')) peek.focus(e, e.currentTarget);
@@ -404,7 +404,7 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
         </div>
       </div>
       <FollowButton id={`recent-follow-${p.name}`} name={p.name} compact className="relative z-10 shrink-0 self-center" />
-      {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} hold={peek.hold} />}
+      {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} follow hold={peek.hold} />}
     </article>
   );
 }

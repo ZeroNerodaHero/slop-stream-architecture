@@ -1698,6 +1698,7 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
           person={{ name: member.name, verified: true, avatar: member.avatar ?? null, presence }}
           at={peek.at}
           actions={actions}
+          follow
           below={heard && <VoiceLevel id={`roster-peek-${member.name}-level`} name={member.name} uid={heard} pin={peek.hold.pin} />}
           hold={peek.hold}
         />
