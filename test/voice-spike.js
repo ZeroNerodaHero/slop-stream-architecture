@@ -1,17 +1,6 @@
-// Voice spike (video/src/voice.rs): two browsers hear each other through `video voice`. A and B
-// join spike/lounge, each offering one sendrecv m-line (the fake mic) and 15 recvonly ones; each
-// hears the other on the m-line the seats frame names, and getStats shows those packets growing.
-// C comes and goes without anyone renegotiating (negotiationneeded and signalingState are
-// counted), and A and B keep hearing each other while their seats frames show C come and go.
-// Closing B's browser frees B's seat: A's seats frame drops it and the next comer sits there.
-// Not in scripts/test.sh. Run a server first, then:
-//   VOICE_DEV_OPEN=1 PUBLIC_IP=127.0.0.1 cargo run -p video -- voice
-//   node test/voice-spike.js            (VOICE_URL=ws://127.0.0.1:7881/ws by default)
-// A server without VOICE_DEV_OPEN turns the join away and this fails with 'voice is not open'.
 const { chromium } = require('playwright');
 const VOICE_URL = process.env.VOICE_URL || 'ws://127.0.0.1:7881/ws';
 const ROOM = 'spike/lounge';
-/** where each page starts, for its origin: the voice server's own /health (ws -> http) */
 const HEALTH_URL = new URL('/health', VOICE_URL.replace(/^ws/, 'http')).href;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'];
 const T0 = Date.now();
@@ -44,8 +33,6 @@ async function pollUntil(fn, until, { timeout, interval = 250, label }) {
   throw new Error(`${label}: timed out after ${timeout} ms; last value: ${JSON.stringify(last)}`);
 }
 
-// the page: no server of ours, just this. window.join offers 1 sendrecv + 15 recvonly, sends the
-// join frame, applies the answer and keeps every seats frame and every renegotiation sign.
 const PAGE = `<!doctype html><title>voice spike</title><body><script>
 window.v = { seats: [], frames: [], error: null, answered: false, negotiationneeded: 0, signaling: [] };
 window.join = async (url, room, user) => {
@@ -103,15 +90,11 @@ const people = {};
 async function open(user) {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: !process.env.HEADED, args: ARGS });
   const page = await (await browser.newContext()).newPage();
-  // about:blank is not a secure context and has no getUserMedia. the server's own /health is
-  // (127.0.0.1), and chrome lets it open a socket to its own address; a page faked with
-  // page.route would count as public and be blocked. setContent then replaces it
   await page.goto(HEALTH_URL);
   await page.setContent(PAGE);
   await page.evaluate(([url, room, u]) => window.join(url, room, u), [VOICE_URL, ROOM, user]);
   const person = { user, browser, page, frames: [] };
   people[user] = person;
-  // answered, or the server's error word
   const v = await pollUntil(() => page.evaluate(() => ({ error: v.error, answered: v.answered })), (v) => v.error || v.answered, {
     timeout: 10000,
     label: `${user} joins ${ROOM}`,
@@ -120,13 +103,11 @@ async function open(user) {
   return person;
 }
 const seatsOf = (p) => p.page.evaluate(() => v.seats);
-/** the m-line `p`'s seats frame gives `other`, waiting for it to appear */
 const lineFor = async (p, other, timeout = 5000) =>
   (await pollUntil(() => seatsOf(p), (s) => s.some((x) => x.user === other), { timeout, label: `${p.user} sees ${other} in the seats frame` })).find(
     (x) => x.user === other,
   ).line;
 const packets = (p, line) => p.page.evaluate((n) => window.packets(n), line);
-/** packets on `line` above 0 within `timeout`, then growing over the next second */
 async function hears(p, other, timeout = 5000) {
   const line = await lineFor(p, other, timeout);
   const first = await pollUntil(() => packets(p, line), (n) => n > 0, { timeout, label: `${p.user} gets packets from ${other} on m-line ${line}` });
@@ -153,7 +134,6 @@ async function grabFrames(p) {
   try {
     p.frames = await p.page.evaluate(() => v.frames);
   } catch {
-    // a closed browser keeps what was grabbed last
   }
 }
 
@@ -203,7 +183,6 @@ async function grabFrames(p) {
       await grabFrames(B);
       await B.browser.close();
       await pollUntil(() => seatsOf(A), (s) => !s.some((x) => x.user === 'B'), { timeout: 20000, label: 'A sees B leave' });
-      // the freed seat is the lowest free one, so the next comer takes it
       const D = await open('D');
       await lineFor(A, 'D');
       const seat = (await seatsOf(A)).find((x) => x.user === 'D').seat;
@@ -213,9 +192,6 @@ async function grabFrames(p) {
       await pollUntil(() => seatsOf(A), (s) => !s.some((x) => x.user === 'D'), { timeout: 20000, label: 'A sees D leave' });
       return `B's seat ${seatB} went to D`;
     });
-    // a seat taken again is the same m-line at A, the same ssrc: each comer's browser starts its
-    // sequence numbers anywhere, and one that starts behind the last is a replay to A's srtp
-    // (dropped, silent for minutes) unless the voice server renumbers the line
     await step('A hears each of four comers in the same seat, one after the other', async () => {
       const out = [];
       for (const user of ['E', 'F', 'G', 'H']) {

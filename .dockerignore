@@ -1,8 +1,6 @@
-# rust build output
 target
 **/target
 
-# not part of the rust images
 .git
 .DS_Store
 frontend
@@ -12,16 +10,13 @@ node_modules
 **/node_modules
 *.md
 
-# host config, must not end up inside an image
 .env
 .env.*
 .deployed
 .seeded-users
 
-# the seed script's pictures (seed.sh). random-media/gifs stays: the dummy image copies it
 random-media/random-pfps
 
-# editing these must not invalidate COPY layers
 docker-compose.yml
 **/Dockerfile
 .dockerignore

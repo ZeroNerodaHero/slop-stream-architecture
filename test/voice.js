@@ -1,20 +1,3 @@
-// Voice channels (api/src/voice.rs, video/src/voice.rs). Two parts.
-// The api part always runs: a voice channel is made (kind voice in the room and on the channel
-// fact; a kind that is neither 400), it is no chat (its socket and its search say `no such
-// channel`), the voice power is reached like any other (a roles holder cannot hand it out, the
-// owner can), and the join route's answers: nobody 401, not a member 403, a channel that is not
-// there or kept from you 404, a text channel 400, a member gets a 64-hex grant for /voice good for
-// 30s (a stack with no VOICE_SECRET answers it 503 `voice is off` instead), and the internal
-// redeem route is a 404 from outside. Locally it also writes who is in voice
-// straight into redis (as the voice server's calls would) for `already in voice` 409, `channel
-// full` 409 (the owner never kept out) and the room's `voice`, which hides a channel you cannot see.
-// The voice server part runs only with VOICE=1, against a stack started with `--profile voice` and
-// a VOICE_SECRET: two logins join through grants and hear each other, a watcher of group:<name>
-// on /events hears `voice` for both, the room shows them, a grant used once is `bad grant` the
-// second time, and a closed page is `voice_left` within 20s.
-// Run through ./scripts/test.sh (VOICE=1 ./scripts/test.sh voice for both parts), or:
-// BASE_URL=https://<ip> [LOCAL=1] [VOICE=1] node voice.js
-// The local-only and voice-only steps say SKIP when they cannot run, not PASS.
 const { chromium } = require('playwright');
 const { execFileSync } = require('child_process');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
@@ -29,8 +12,7 @@ const GROUP = 'vgrp' + RUN;
 const PW = 'correct horse battery 9!';
 const HEX64 = /^[0-9a-f]{64}$/;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
-const results = []; // 'pass' | 'fail' | 'skip'
-// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
+const results = [];
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
@@ -69,15 +51,10 @@ async function pollUntil(fn, until, { timeout, interval = 250, label }) {
   }
   throw new Error(`${label}: timed out after ${timeout} ms; last value: ${JSON.stringify(last)}`);
 }
-/** a command in a compose service, no shell between: the json and the names go as they are */
 const compose = (...args) => execFileSync('docker', ['compose', 'exec', '-T', ...args], { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const redis = (...args) => compose('redis', 'redis-cli', ...args);
 const sql = (query) => compose('database', 'psql', '-U', 'stream', '-d', 'stream', '-tAc', query);
 
-// the voice page: no page of ours, just this, put over the api's /api/health so it is this
-// origin (a secure one, with the login cookie for nothing: the grant is all /voice reads).
-// window.join offers 1 sendrecv (the fake mic) + 15 recvonly, sends the join frame with the grant,
-// applies the answer and keeps the last seats frame, or the server's error word
 const PAGE = `<!doctype html><title>voice</title><body><script>
 window.v = { seats: [], error: null, answered: false };
 window.join = async (url, grant) => {
@@ -128,7 +105,6 @@ window.packets = async (n) => {
 (async () => {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: !process.env.HEADED, args: ARGS });
   const context = () => browser.newContext({ baseURL: BASE, ignoreHTTPSErrors: true, permissions: ['microphone'] });
-  // a browser each: the owner, a member, someone who never joins the group, and nobody (the watcher)
   const ctx = { owner: await context(), member: await context(), outsider: await context(), anon: await context() };
   const owner = ctx.owner.request;
   const member = ctx.member.request;
@@ -137,12 +113,10 @@ window.packets = async (n) => {
   let slug = GROUP;
   const uid = {};
   const join = (who, channel) => who.post(`/api/groups/${slug}/voice/${channel}/join`);
-  // a stack with no VOICE_SECRET answers a join that passed every check 503 `voice is off`, not a grant
   const granted = async (r) => r.status() === 200 || (!VOICE && r.status() === 503 && (await body(r)).error === 'voice is off');
   const room = async (who) => body(await who.get(`/api/groups/${slug}`));
   const roles = [];
 
-  // the watcher: a raw /events socket with no login, watching group:<name>; every group frame kept
   const w = await ctx.anon.newPage();
   const frames = (what) => w.evaluate((what) => window.__frames.filter((f) => f.what === what), what);
 
@@ -247,7 +221,6 @@ window.packets = async (n) => {
     const held = await owner.post(`/api/groups/${slug}/roles/${made.id}/members`, { data: { name: MEMBER } });
     const now = await room(member);
     expect(held.status() === 204 && now.perms.voice === true, `the member with voicemod: ${held.status()} ${JSON.stringify(now.perms)}`);
-    // the member as they were, with no roles, for the steps after
     for (const id of roles.splice(0)) {
       const gone = await owner.delete(`/api/groups/${slug}/roles/${id}`);
       expect(gone.status() === 204, `dropping role ${id} got ${gone.status()}`);
@@ -257,7 +230,6 @@ window.packets = async (n) => {
 
   let hidden;
   await step('join: nobody 401, not a member 403, no such or hidden 404, text 400, a member gets a grant', async () => {
-    // backroom is a voice channel kept to a role the member does not hold
     const back = await owner.post(`/api/groups/${slug}/channels`, { data: { name: 'backroom', kind: 'voice' } });
     expect(back.status() === 201, `backroom got ${back.status()}`);
     hidden = await body(await owner.post(`/api/groups/${slug}/roles`, { data: { name: 'insiders', color: '#f2cc60' } }));
@@ -304,7 +276,6 @@ window.packets = async (n) => {
     return tried.join(', ');
   });
 
-  // straight into redis, as the voice server's `attached` would: a field in voice:<server> and voiceof
   const seat = (name, channel) => {
     const now = Date.now();
     redis('HSET', `voice:${slug}`, uid[name], JSON.stringify({ name, channel, seat: 0, since: now, beat: now, session: 0 }));
@@ -318,7 +289,6 @@ window.packets = async (n) => {
   await step('local: already in voice 409, channel full 409 (the owner never kept out)', async () => {
     if (!LOCAL) return { skip: 'reads and writes redis and the database here' };
     try {
-      // the member in another channel of this server: lounge is 409, their own channel is not
       redis('SET', `voiceof:${uid[MEMBER]}`, `${slug}/elsewhere`);
       const busy = await join(member, 'lounge');
       expect(busy.status() === 409 && (await body(busy)).error === 'already in voice', `in another channel got ${busy.status()} ${JSON.stringify(await body(busy))}`);
@@ -326,7 +296,6 @@ window.packets = async (n) => {
       const same = await join(member, 'lounge');
       expect(await granted(same), `back into their own channel got ${same.status()}`);
       redis('DEL', `voiceof:${uid[MEMBER]}`);
-      // lounge holds one, and the member is in it: the outsider (a member from here) is 409, the owner is not
       expect((await outsider.post(`/api/groups/${slug}/join`)).status() === 204, 'the outsider joining failed');
       sql(`UPDATE channels SET user_limit = 1 WHERE server = '${slug}' AND name = 'lounge'`);
       seat(MEMBER, 'lounge');
@@ -334,10 +303,8 @@ window.packets = async (n) => {
       expect(full.status() === 409 && (await body(full)).error === 'channel full', `the second into a channel of one got ${full.status()} ${JSON.stringify(await body(full))}`);
       const theOwner = await join(owner, 'lounge');
       expect(await granted(theOwner), `the owner into a full channel got ${theOwner.status()}`);
-      // the one already in it takes no second seat
       const again = await join(member, 'lounge');
       expect(await granted(again), `the member already in it got ${again.status()}`);
-      // 0 is 16: fifteen others and the outsider still fits, sixteen and it does not
       sql(`UPDATE channels SET user_limit = 0 WHERE server = '${slug}' AND name = 'lounge'`);
       redis('DEL', `voice:${slug}`, `voiceof:${uid[MEMBER]}`);
       const fake = (i) => [`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, JSON.stringify({ name: `f${i}`, channel: 'lounge', seat: i, since: 1, beat: Date.now(), session: 0 })];
@@ -372,11 +339,8 @@ window.packets = async (n) => {
     }
   });
 
-  // ---- the voice server: VOICE=1 only ----------------------------------------------------------
-
   const people = {};
   const VOICE_URL = `${BASE.replace(/^http/, 'ws')}/voice`;
-  /** a page in browser `c` on the voice page as `name`, joined to `channel` with a fresh grant (or `grant`) */
   async function talk(name, c, channel, grant) {
     const page = await c.newPage();
     await page.goto(`${BASE}/api/health`, { waitUntil: 'domcontentloaded' });
@@ -395,7 +359,6 @@ window.packets = async (n) => {
   }
   const seatsOf = (p) => p.page.evaluate(() => v.seats);
   const packets = (p, line) => p.page.evaluate((n) => window.packets(n), line);
-  /** packets from `other` on the m-line `p`'s seats frame gives them, above 0 within 5s, then growing */
   async function hears(p, other) {
     const seats = await pollUntil(() => seatsOf(p), (s) => s.some((x) => x.user === other), { timeout: 5000, label: `${p.name} sees ${other} seated` });
     const line = seats.find((x) => x.user === other).line;
@@ -432,7 +395,6 @@ window.packets = async (n) => {
 
   await step('voice: a grant used once is bad grant the second time', async () => {
     if (!VOICE) return skipVoice;
-    // a browser of its own: closing it after leaves the member's alone
     const again = await talk('reuse', await context(), 'lounge', people[MEMBER].grant);
     await again.page.context().close();
     expect(again.error === 'bad grant', `a used grant got ${JSON.stringify(again.error || 'an answer')}`);
@@ -452,9 +414,6 @@ window.packets = async (n) => {
     return `voice_left after ${f.at - t0} ms`;
   });
 
-  // what the page does on a click on another channel (voice-atoms.ts joinVoice): its socket shut,
-  // then a grant for the new channel at once. voiceof still names the old one until the voice
-  // server's `left` lands, so that first ask can be `already in voice`; the page asks again
   await step('voice: moving lounge -> backroom: closed, then a grant within 5s, and seated there', async () => {
     if (!VOICE) return skipVoice;
     const was = people[OWNER];
@@ -481,18 +440,15 @@ window.packets = async (n) => {
     return `the first ask ${said}, a grant after ${ms} ms; the room ${JSON.stringify(Object.keys(moved.voice))}`;
   });
 
-  // the owner leaves too, so the server's hash is empty before the group goes
   if (people[OWNER]) {
     await people[OWNER].page.close().catch(() => {});
     await pollUntil(() => frames('voice_left'), (f) => f.some((x) => x.who === OWNER), { timeout: 20000, label: `voice_left for ${OWNER}` }).catch(() => {});
   }
   await owner.delete(`/api/groups/${slug}`).catch(() => {});
   if (LOCAL) {
-    // the signups above count against this machine's address; the suites after need it clear
     try {
       execFileSync('docker', ['compose', 'exec', '-T', 'redis', 'sh', '-c', "redis-cli --scan --pattern 'rl:signup:*' | xargs -r redis-cli del"], { cwd: REPO, stdio: 'ignore' });
     } catch {
-      // nothing to clear
     }
   }
   await browser.close();
