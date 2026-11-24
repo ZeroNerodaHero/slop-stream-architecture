@@ -5,19 +5,21 @@ import { useState } from 'react';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { follow, followingNamesAtom, unfollow } from '@/infra/atoms/follow-atoms';
 import { Button } from '@/shared-components/Button';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 interface FollowButtonProps {
   id: string;
   name: string;
   small?: boolean;
+  compact?: boolean;
   className?: string;
   onChange?: (following: boolean) => void;
 }
 
-const LABEL = 'inline-flex items-center justify-center gap-1.5';
+const LABEL = 'inline-flex items-center justify-center';
 
-export function FollowButton({ id, name, small, className, onChange }: FollowButtonProps) {
+export function FollowButton({ id, name, small, compact, className, onChange }: FollowButtonProps) {
   const me = useAtomValue(meAtom);
   const following = useAtomValue(followingNamesAtom).has(name);
   const [busy, setBusy] = useState(false);
@@ -35,41 +37,43 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
   }
 
   if (mine) return null;
-  const size = small ? 14 : 16;
+  const size = compact ? 12 : small ? 14 : 16;
+  const label = cn(LABEL, compact ? 'gap-1' : 'gap-1.5', 'col-start-1 row-start-1');
   const unfollowing = following && hover;
   return (
-    <Button
-      id={id}
-      variant={unfollowing ? 'secondary' : following ? 'success' : 'primary'}
-      aria-busy={busy}
-      aria-pressed={following}
-      data-following={following}
-      title={following ? `stop following ${name}` : `follow ${name}`}
-      onClick={() => void toggle()}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onBlur={() => setHover(false)}
-      className={cn(
-        small ? 'px-2.5 py-1 text-sm' : 'px-3 py-1.5 text-sm',
-        unfollowing && 'border-decrease text-decrease hover:border-decrease',
-        busy && 'opacity-40',
-        className
-      )}
-    >
-      <span className="grid">
-        <span className={cn(LABEL, 'col-start-1 row-start-1', following && 'invisible')}>
-          <RiUserAddLine aria-hidden size={size} />
-          follow
+    <Tooltip content={following ? `stop following ${name}` : `follow ${name}`}>
+      <Button
+        id={id}
+        variant={unfollowing ? 'secondary' : following ? 'success' : 'primary'}
+        aria-busy={busy}
+        aria-pressed={following}
+        data-following={following}
+        onClick={() => void toggle()}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        onBlur={() => setHover(false)}
+        className={cn(
+          compact ? 'h-8 px-2 text-xs' : small ? 'px-2.5 py-1 text-sm' : 'px-3 py-1.5 text-sm',
+          unfollowing && 'border-decrease text-decrease hover:border-decrease',
+          busy && 'opacity-40',
+          className
+        )}
+      >
+        <span className="grid">
+          <span className={cn(label, following && 'invisible')}>
+            <RiUserAddLine aria-hidden size={size} />
+            follow
+          </span>
+          <span className={cn(label, (!following || hover) && 'invisible')}>
+            <RiUserFollowLine aria-hidden size={size} />
+            following
+          </span>
+          <span className={cn(label, !unfollowing && 'invisible')}>
+            <RiUserUnfollowLine aria-hidden size={size} />
+            unfollow
+          </span>
         </span>
-        <span className={cn(LABEL, 'col-start-1 row-start-1', (!following || hover) && 'invisible')}>
-          <RiUserFollowLine aria-hidden size={size} />
-          following
-        </span>
-        <span className={cn(LABEL, 'col-start-1 row-start-1', !unfollowing && 'invisible')}>
-          <RiUserUnfollowLine aria-hidden size={size} />
-          unfollow
-        </span>
-      </span>
-    </Button>
+      </Button>
+    </Tooltip>
   );
 }
