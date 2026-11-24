@@ -8,6 +8,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type UIEvent,
+  memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -46,7 +48,7 @@ import {
 } from '@/infra/atoms/dm-atoms';
 import { followingAtom, friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
-import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { type ChatStyle, chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { keepFocus, stuckAfterScroll, useBottomPin, useKeyboard } from '@/infra/keyboard';
 import { useIsMobile } from '@/infra/mobile';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
@@ -493,6 +495,82 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
   );
 }
 
+interface DmRowProps {
+  line: DmLine;
+  peer: string;
+  me: string | null | undefined;
+  shape: ChatStyle;
+  mobile: boolean;
+  myAvatar: number | null;
+  dmVerified: boolean;
+  dmAvatar: number | null;
+  mine: boolean;
+  first: boolean;
+  bucket: boolean;
+  flashed: boolean;
+  onReply: (line: DmLine) => void;
+  onJump: (id: number) => void;
+}
+
+const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmVerified, dmAvatar, mine, first, bucket, flashed, onReply, onJump }: DmRowProps) {
+  const person = { name: line.from, verified: mine || dmVerified, avatar: mine ? myAvatar : dmAvatar };
+  return (
+    <ChatLineShape
+      shape={shape}
+      mine={mine}
+      at={line.at}
+      name={line.from}
+      who={
+        <ProfileLink person={person} className={cn('font-semibold underline-offset-2 hover:underline', mine && 'text-primaryBlue')}>
+          {line.from}
+        </ProfileLink>
+      }
+      face={
+        <ProfileLink person={person} twin className="flex">
+          <Face name={line.from} version={person.avatar} className={mobile && shape === 'log' ? 'h-5 w-5 text-[10px]' : 'h-8 w-8 text-sm'} />
+        </ProfileLink>
+      }
+      faced={mobile}
+      words={
+        line.text ? (
+          <span className="whitespace-pre-wrap">
+            <LinkedText text={line.text} />
+          </span>
+        ) : null
+      }
+      pictures={
+        <>
+          <ChatImages ids={line.images} />
+          {line.video && <ChatVideoPlayer video={line.video} />}
+          <ChatEmbeds text={line.text} />
+        </>
+      }
+      actions={<LineActions onReact={(emoji) => void reactDm(peer, line, emoji)} reactions={line.reactions} me={me} onReply={() => onReply(line)} text={line.text} />}
+      reactions={<ReactionChips reactions={line.reactions ?? []} me={me} onReact={(emoji) => void reactDm(peer, line, emoji)} />}
+      quote={
+        line.reply && (
+          <ReplyQuote
+            shape={shape}
+            quote={{
+              from: line.reply.from ?? '',
+              text: line.reply.text ?? '',
+              avatar: line.reply.avatar ?? null,
+              images: line.reply.images ?? 0,
+              video: line.reply.video,
+              gone: line.reply.gone
+            }}
+            onJump={() => void onJump(line.reply!.id)}
+          />
+        )
+      }
+      flash={flashed}
+      attrs={{ 'data-id': line.id, 'data-mine': mine || undefined, 'data-reply-to': line.reply?.id }}
+      first={first}
+      bucket={bucket}
+    />
+  );
+});
+
 export function FriendChat() {
   const me = useAtomValue(meAtom);
   const dms = useAtomValue(dmsAtom);
@@ -676,20 +754,26 @@ export function FriendChat() {
     if (name) setDrafts((prev) => ({ ...prev, [name]: text }));
   }
 
-  function setReply(line: DmLine | null) {
-    if (name) setReplies((prev) => ({ ...prev, [name]: line }));
-  }
+  const setReply = useCallback(
+    (line: DmLine | null) => {
+      if (name) setReplies((prev) => ({ ...prev, [name]: line }));
+    },
+    [name]
+  );
 
-  async function jumpTo(id: number) {
-    if (!name) return;
-    if (!(await openDmLine(name, id))) {
-      showDmNotice('that line is not here any more');
-      return;
-    }
-    setFlash(id);
-    if (flashTimer.current) clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => setFlash(null), 1600);
-  }
+  const jumpTo = useCallback(
+    async (id: number) => {
+      if (!name) return;
+      if (!(await openDmLine(name, id))) {
+        showDmNotice('that line is not here any more');
+        return;
+      }
+      setFlash(id);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlash(null), 1600);
+    },
+    [name]
+  );
 
   function closeSearch() {
     setSearching(false);
@@ -912,60 +996,24 @@ export function FriendChat() {
                 {lines.map((line, i) => {
                   const mine = line.from === me;
                   const prev = lines[i - 1];
-                  const person = { name: line.from, verified: mine || (dm?.verified ?? false), avatar: mine ? myAvatar : (dm?.avatar ?? null) };
+                  const place = placeOf(line.at, prev?.at, prev?.from === line.from);
                   return (
-                    <ChatLineShape
+                    <DmRow
                       key={line.id}
+                      line={line}
+                      peer={name}
+                      me={me}
                       shape={shape}
+                      mobile={mobile}
+                      myAvatar={myAvatar}
+                      dmVerified={dm?.verified ?? false}
+                      dmAvatar={dm?.avatar ?? null}
                       mine={mine}
-                      at={line.at}
-                      name={line.from}
-                      who={
-                        <ProfileLink person={person} className={cn('font-semibold underline-offset-2 hover:underline', mine && 'text-primaryBlue')}>
-                          {line.from}
-                        </ProfileLink>
-                      }
-                      face={
-                        <ProfileLink person={person} twin className="flex">
-                          <Face name={line.from} version={person.avatar} className={mobile && shape === 'log' ? 'h-5 w-5 text-[10px]' : 'h-8 w-8 text-sm'} />
-                        </ProfileLink>
-                      }
-                      faced={mobile}
-                      words={
-                        line.text ? (
-                          <span className="whitespace-pre-wrap">
-                            <LinkedText text={line.text} />
-                          </span>
-                        ) : null
-                      }
-                      pictures={
-                        <>
-                          <ChatImages ids={line.images} />
-                          {line.video && <ChatVideoPlayer video={line.video} />}
-                          <ChatEmbeds text={line.text} />
-                        </>
-                      }
-                      actions={<LineActions onReact={(emoji) => void reactDm(name, line, emoji)} reactions={line.reactions} me={me} onReply={() => setReply(line)} text={line.text} />}
-                      reactions={<ReactionChips reactions={line.reactions ?? []} me={me} onReact={(emoji) => void reactDm(name, line, emoji)} />}
-                      quote={
-                        line.reply && (
-                          <ReplyQuote
-                            shape={shape}
-                            quote={{
-                              from: line.reply.from ?? '',
-                              text: line.reply.text ?? '',
-                              avatar: line.reply.avatar ?? null,
-                              images: line.reply.images ?? 0,
-                              video: line.reply.video,
-                              gone: line.reply.gone
-                            }}
-                            onJump={() => void jumpTo(line.reply!.id)}
-                          />
-                        )
-                      }
-                      flash={flash === line.id}
-                      attrs={{ 'data-id': line.id, 'data-mine': mine || undefined, 'data-reply-to': line.reply?.id }}
-                      {...placeOf(line.at, prev?.at, prev?.from === line.from)}
+                      first={place.first}
+                      bucket={place.bucket}
+                      flashed={flash === line.id}
+                      onReply={setReply}
+                      onJump={jumpTo}
                     />
                   );
                 })}
