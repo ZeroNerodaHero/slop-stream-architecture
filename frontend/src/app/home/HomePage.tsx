@@ -1,7 +1,8 @@
 import { RiTimeLine, RiUserLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
-import { useAtomValue } from 'jotai';
-import { lazy, memo, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { atom, useAtomValue } from 'jotai';
+import { selectAtom } from 'jotai/utils';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
@@ -11,6 +12,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
 import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
+import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
 import { Face as PersonFace } from '@/shared-components/Face';
 import { Badge } from '@/shared-components/Badge';
@@ -41,6 +43,30 @@ const GROUPS_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3'
 const FEATURED_GRID = 'grid grid-cols-1 gap-4 lg:grid-cols-2';
 const GROUPS_GUESS = 6;
 const PEOPLE_GUESS = 8;
+
+const homeHoverAtom = atom<string | null>(null);
+
+function useHovered(name: string): boolean {
+  const selector = useMemo(() => selectAtom(homeHoverAtom, (hover) => hover === name), [name]);
+  return useAtomValue(selector);
+}
+
+function setHomeHover(next: string | null | ((current: string | null) => string | null)): void {
+  const current = store.get(homeHoverAtom);
+  store.set(homeHoverAtom, typeof next === 'function' ? next(current) : next);
+}
+
+function HomePreviews({ namesKey }: { namesKey: string }) {
+  const hover = useAtomValue(homeHoverAtom);
+  useEffect(() => {
+    const liveNames = namesKey ? namesKey.split(',') : [];
+    const names = liveNames.slice(0, FEATURED);
+    if (hover && (!liveNames.includes(hover) || names.includes(hover))) store.set(homeHoverAtom, null);
+    else if (hover) names.push(hover);
+    setHomePreviews(names);
+  }, [namesKey, hover]);
+  return null;
+}
 const SECTION_TITLE = 'flex items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight';
 const LIVE_LINE = 'border-increase';
 const OFFLINE_LINE = 'border-textTertiary';
@@ -144,7 +170,7 @@ function Face({ stream }: { stream: LiveStream }) {
 function Card({
   stream,
   featured,
-  playing,
+  forcePlaying = false,
   onEnter,
   onLeave,
   idPrefix = '',
@@ -153,12 +179,14 @@ function Card({
   stream: LiveStream;
   featured: boolean;
   eager?: boolean;
-  playing: boolean;
+  forcePlaying?: boolean;
   onEnter: (pointer: string) => void;
   onLeave: () => void;
   idPrefix?: string;
 }) {
   const thumbs = stream.thumbs ?? [];
+  const hovered = useHovered(stream.name);
+  const playing = forcePlaying || hovered;
   return (
     <article className={CARD_LINK} data-featured={featured ? stream.name : undefined} onPointerEnter={(event) => onEnter(event.pointerType)} onPointerLeave={onLeave}>
       <Link
@@ -236,13 +264,11 @@ function Part({ id, title, line, heading, aside, children }: { id: string; title
 function Followed({
   streams,
   featuredNames,
-  hover,
   onEnter,
   onLeave
 }: {
   streams: LiveStream[];
   featuredNames: string[];
-  hover: string | null;
   onEnter: (name: string, pointer: string) => void;
   onLeave: (name: string) => void;
 }) {
@@ -273,7 +299,7 @@ function Followed({
               key={stream.name}
               stream={stream}
               featured={false}
-              playing={featuredNames.includes(stream.name) || hover === stream.name}
+              forcePlaying={featuredNames.includes(stream.name)}
               onEnter={(pointer) => onEnter(stream.name, pointer)}
               onLeave={() => onLeave(stream.name)}
               idPrefix="followed-"
@@ -561,21 +587,12 @@ export function HomePage() {
   const featured = list?.slice(0, FEATURED) ?? [];
   const rest = list?.slice(FEATURED) ?? [];
   const namesKey = (list ?? []).map((stream) => stream.name).join(',');
-  const [hover, setHover] = useState<string | null>(null);
-  const [cardHover] = useState(() => hoverPreview(window, setHover));
+  const [cardHover] = useState(() => hoverPreview(window, setHomeHover));
 
   useEffect(() => {
     enterHome();
     return leaveHome;
   }, []);
-
-  useEffect(() => {
-    const liveNames = namesKey ? namesKey.split(',') : [];
-    const names = liveNames.slice(0, FEATURED);
-    if (hover && (!liveNames.includes(hover) || names.includes(hover))) setHover(null);
-    else if (hover) names.push(hover);
-    setHomePreviews(names);
-  }, [namesKey, hover]);
 
   useEffect(
     () => () => {
@@ -620,7 +637,7 @@ export function HomePage() {
           {featured.length > 0 && (
             <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
               {featured.map((stream) => (
-                <Card key={stream.name} stream={stream} featured eager playing onEnter={() => undefined} onLeave={() => undefined} />
+                <Card key={stream.name} stream={stream} featured eager forcePlaying onEnter={() => undefined} onLeave={() => undefined} />
               ))}
             </div>
           )}
@@ -631,8 +648,7 @@ export function HomePage() {
                   key={stream.name}
                   stream={stream}
                   featured={false}
-                  playing={hover === stream.name}
-                  onEnter={(pointer) => cardHover.enter(stream.name, pointer, hover)}
+                  onEnter={(pointer) => cardHover.enter(stream.name, pointer, store.get(homeHoverAtom))}
                   onLeave={() => cardHover.leave(stream.name)}
                 />
               ))}
@@ -640,12 +656,12 @@ export function HomePage() {
           )}
         </div>
       </Part>
+      <HomePreviews namesKey={namesKey} />
       {list && (
         <Followed
           streams={list}
           featuredNames={featured.map((stream) => stream.name)}
-          hover={hover}
-          onEnter={(name, pointer) => cardHover.enter(name, pointer, hover)}
+          onEnter={(name, pointer) => cardHover.enter(name, pointer, store.get(homeHoverAtom))}
           onLeave={(name) => cardHover.leave(name)}
         />
       )}
