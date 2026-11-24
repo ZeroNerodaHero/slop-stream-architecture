@@ -5,12 +5,12 @@ import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-d
 import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
 import { dmOpenAtom } from '@/infra/atoms/dm-atoms';
+import { inspectorOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
-import { panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
 import { AuthDialog } from '@/shared-components/AuthDialog';
 import { CropDialog } from '@/shared-components/CropDialog';
-import { Inspector } from '@/shared-components/Inspector';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
 import { ProfilePopup } from '@/shared-components/ProfilePopup';
 import { UserModal } from '@/shared-components/UserModal';
@@ -20,6 +20,7 @@ import { cn } from '@/utils/cn';
 
 const FriendChat = lazy(() => import('@/shared-components/FriendChat').then((m) => ({ default: m.FriendChat })));
 const Notifications = lazy(() => import('@/shared-components/Notifications').then((m) => ({ default: m.Notifications })));
+const Inspector = lazy(() => import('@/shared-components/Inspector').then((m) => ({ default: m.Inspector })));
 
 function FriendChatWhenUsed() {
   const open = useAtomValue(dmOpenAtom);
@@ -35,6 +36,17 @@ function NotificationsWhenUsed() {
   return (
     <WhenUsed on={open}>
       <Notifications />
+    </WhenUsed>
+  );
+}
+
+function InspectorWhenUsed() {
+  const on = useAtomValue(inspectorEnabledAtom);
+  const open = useAtomValue(inspectorOpenAtom);
+  if (!on) return null;
+  return (
+    <WhenUsed on={open}>
+      <Inspector />
     </WhenUsed>
   );
 }
@@ -56,7 +68,7 @@ function Shell() {
       <AuthDialog />
       <ProfilePopup />
       <CropDialog />
-      <Inspector />
+      <InspectorWhenUsed />
     </div>
   );
 }
