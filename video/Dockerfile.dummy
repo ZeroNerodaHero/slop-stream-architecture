@@ -23,7 +23,7 @@ COPY random-media/gifs /in
 RUN mkdir -p /out && cd /in && for f in *.gif; do \
       [ -e "$f" ] || continue; \
       ffmpeg -hide_banner -loglevel error -i "$f" \
-        -vf "fps=15,scale=-2:144:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
+        -vf "fps=15,scale=-2:128:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
         -loop 0 "/out/$f" || exit 1; \
     done
 

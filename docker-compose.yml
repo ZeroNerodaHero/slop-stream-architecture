@@ -295,6 +295,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     pids_limit: 512
+    cpu_shares: 128
     environment:
       DUMMY_STREAMS: ${DUMMY_STREAMS:-0}
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}

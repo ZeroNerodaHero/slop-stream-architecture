@@ -120,11 +120,11 @@ DUMMY_PASSWORD=anyword
 ```
 
 then `./scripts/deploy.sh dummy`. home fills with `dummy-mango`, `dummy-pixel`, `dummy-disco`.
-each is three gifs from `random-media/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock. a quiet tone for sound. drop more `.gif` files in that folder and `./scripts/deploy.sh dummy` to use them.
+each is three gifs from `random-media/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock, over a dim backdrop of "this is 240p" tiled all over. 426×240, 15 fps, 180 kbps. a quiet tone for sound. drop more `.gif` files in that folder and `./scripts/deploy.sh dummy` to use them.
 your own names: `DUMMY_NAMES=alice,bob,carol`.
 set it back to 0 and run it again to turn them off.
 the password is what lets the dummy box use `dummy-` names. nobody else can.
-each fake stream costs about a tenth of a core.
+each fake stream costs a few percent of a core, at the lowest cpu priority on the box (nice 19, `cpu_shares: 128`), so real streams come first.
 
 ## test
 
