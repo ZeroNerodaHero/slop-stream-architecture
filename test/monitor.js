@@ -1,6 +1,7 @@
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const path = require('path');
+const { pageSurvivesOddAnswers } = require('./monitor-page');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const OPS_TOKEN = process.env.OPS_TOKEN || '';
 const REPO = path.join(__dirname, '..');
@@ -225,6 +226,15 @@ async function stateWhen(api, ready, what, ms = 40000) {
       const tiles = await page.locator('.tile').count();
       expect(tiles >= 7, `${tiles} graphs on local's tab`);
       return `"${meta}", ${tiles} graphs on local's tab`;
+    } finally {
+      await browser.close();
+    }
+  });
+
+  await step('the page keeps drawing through odd answers and reloads once for a new build', async () => {
+    const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
+    try {
+      return await pageSurvivesOddAnswers(browser, MON);
     } finally {
       await browser.close();
     }

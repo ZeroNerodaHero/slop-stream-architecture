@@ -177,6 +177,7 @@
     <h1>stats</h1>
     <span id="meta" class="muted"></span>
     <span id="asof" class="note"></span>
+    <span id="drawn" class="note"></span>
   </header>
   <div class="bar-nav">
     <nav id="tabs" class="tabs" aria-label="boxes"></nav>
@@ -189,6 +190,7 @@
 (() => {
   const $meta = document.getElementById('meta');
   const $asof = document.getElementById('asof');
+  const $drawn = document.getElementById('drawn');
   const $tabs = document.getElementById('tabs');
   const $ranges = document.getElementById('ranges');
   const $views = document.getElementById('views');
@@ -267,6 +269,54 @@
   const decade = (d) => (d < -3 ? `${10 ** (d + 6)}ns`.replace('1000ns', '1µs') : d < 0 ? `${Math.round(10 ** (d + 3))}µs` : d < 3 ? `${10 ** d}ms` : `${10 ** (d - 3)}s`);
   const per = (secs) => ({ 60: 'minute', 900: '15 minutes', 3600: 'hour' })[secs] || `${secs}s`;
   const blocking = (r) => / BLOCK$/.test(r.name || '');
+  const list = (v) => (Array.isArray(v) ? v : []);
+  const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+  const str = (v) => (v === null || v === undefined ? '' : String(v));
+  const numOr0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const numOrNull = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+  const normState = (d) => ({
+    ...d,
+    monitor: obj(d.monitor),
+    targets: list(d.targets).filter((t) => t && typeof t === 'object' && t.name).map((t) => ({ ...t, events: list(t.events), errors: list(t.errors) })),
+  });
+  const TIMING_NUMS = ['mean', 'p50', 'p95', 'p99', 'max', 'rate'];
+  const normTimingRow = (r) => {
+    const out = { ...r, kind: str(r.kind), method: str(r.method), name: str(r.name), src: str(r.src), key: str(r.key), target: r.target ?? null };
+    for (const k of ['n', 'e4', 'e5', 'err', 'sum_ms']) out[k] = numOr0(r[k]);
+    for (const k of TIMING_NUMS) out[k] = numOrNull(r[k]);
+    return out;
+  };
+  const normTimings = (d) => ({
+    ...d,
+    rows: list(d.rows).filter((r) => r && typeof r === 'object').map(normTimingRow),
+    totals: list(d.totals).filter((r) => r && typeof r === 'object').map(normTimingRow),
+  });
+  const normDetail = (d) => {
+    const t = list(d.t);
+    const out = { ...d, t, hist: list(d.hist).filter((h) => Array.isArray(h) && h.length >= 3) };
+    for (const k of ['n', 'e4', 'e5', 'err', 'sum', 'p50', 'p95', 'p99', 'max']) {
+      const v = list(d[k]);
+      out[k] = t.map((_, i) => numOrNull(v[i]));
+    }
+    return out;
+  };
+  const normArch = (d) => ({
+    ...d,
+    nodes: list(d.nodes).filter((n) => n && typeof n === 'object' && n.id).map((n) => ({ ...n, name: str(n.name || n.id), networks: list(n.networks), ports: list(n.ports) })),
+    edges: list(d.edges).filter((e) => e && typeof e === 'object' && e.from && e.to),
+    networks: list(d.networks).filter((n) => n && n.name).map((n) => ({ ...n, members: list(n.members) })),
+  });
+  const normSeries = (d) => ({ ...d, t: list(d.t), host: obj(d.host), containers: obj(d.containers) });
+  const guard = (what, fn) => {
+    try {
+      return fn();
+    } catch (e) {
+      console.error(what, e);
+      const sec = el('section', 'target');
+      sec.append(el('h2', null, what), el('p', 'note', `could not draw this part: ${e && e.message ? e.message : e}. the rest of the page keeps refreshing`));
+      return sec;
+    }
+  };
   const limitsOf = (r) => (blocking(r) ? null : LIMITS[r.kind] || null);
   const grade = (v, lim) => (!has(v) || !lim ? '' : v < lim[0] ? 'ok' : v < lim[1] ? 'warn' : 'bad');
 
@@ -281,7 +331,7 @@
   const archCache = new Map();
   const archBuilt = new Map();
   const tm = { data: null, error: null, at: 0, key: '' };
-  let state = null, lastOk = null;
+  let state = null, lastOk = null, pageBuild = null;
   const charts = [];
   const tcharts = [];
 
@@ -1428,12 +1478,22 @@
     out.push(bar);
     const titled = shown === ALL;
     for (const t of state.targets.filter((x) => shown === ALL || x.name === shown)) {
-      out.push(sel.cview === 'arch' ? archSection(t, now, titled) : containerSection(t, now, titled));
+      out.push(guard(`containers · ${t.name}`, () => (sel.cview === 'arch' ? archSection(t, now, titled) : containerSection(t, now, titled))));
     }
     return out;
   }
 
   function render() {
+    try {
+      renderPage();
+      $drawn.textContent = '';
+    } catch (e) {
+      console.error('render', e);
+      $drawn.textContent = `could not draw the page: ${e && e.message ? e.message : e}`;
+    }
+  }
+
+  function renderPage() {
     if (!state) return;
     charts.length = 0;
     const now = Date.parse(state.now) + (Date.now() - state.received);
@@ -1453,18 +1513,21 @@
     if (v) {
       if (!v.ui) timingBuild(v);
       if ($main.firstChild !== v.ui.sec || $main.childNodes.length !== 1) $main.replaceChildren(v.ui.sec);
-      timingRender(v);
+      const failed = guard(v.name, () => { timingRender(v); return null; });
+      if (failed) $main.replaceChildren(v.ui.sec, failed);
       return;
     }
     if (sel.tab === 'containers') {
       $main.replaceChildren(...containersTab(shown, now));
     } else if (shown === ALL) {
-      $main.replaceChildren(...state.targets.map((t) => statusCard(t, now, true)));
+      $main.replaceChildren(...state.targets.map((t) => guard(t.name, () => statusCard(t, now, true))));
     } else {
       const t = state.targets.find((x) => x.name === shown);
-      $main.replaceChildren(hostSection(t, now), statusCard(t, now, false));
+      $main.replaceChildren(guard(`host · ${t.name}`, () => hostSection(t, now)), guard(`status · ${t.name}`, () => statusCard(t, now, false)));
     }
-    for (const c of charts) draw(c);
+    for (const c of charts) {
+      try { draw(c); } catch (e) { console.error('chart', e); }
+    }
   }
 
   async function getJson(url) {
@@ -1483,7 +1546,7 @@
     try {
       const s = await getJson(`/api/monitor/metrics?target=${encodeURIComponent(box)}&range=${sel.range}`);
       const cur = seriesCache.get(box);
-      if (cur.key === key) { cur.data = s; cur.error = null; }
+      if (cur.key === key) { cur.data = normSeries(s); cur.error = null; }
     } catch (e) {
       const cur = seriesCache.get(box);
       cur.at = 0;
@@ -1498,7 +1561,7 @@
     archCache.set(box, { ...c, at: Date.now() });
     try {
       const d = await getJson(`/api/monitor/architecture?target=${encodeURIComponent(box)}`);
-      Object.assign(archCache.get(box), { data: d, error: null });
+      Object.assign(archCache.get(box), { data: normArch(d), error: null });
     } catch (e) {
       Object.assign(archCache.get(box), { at: 0, error: `could not load the architecture: ${e.message}` });
     }
@@ -1512,7 +1575,7 @@
     try {
       const d = await getJson(`/api/monitor/timings?range=${sel.range}`);
       if (d.range !== sel.range) return false;
-      tm.data = d;
+      tm.data = normTimings(d);
       tm.error = null;
     } catch (e) {
       tm.at = 0;
@@ -1527,7 +1590,7 @@
     const [target, key] = id.split('\u0000');
     try {
       const d = await getJson(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(key)}&range=${sel.range}`);
-      if (v.open === id) v.detail = { ...d, id };
+      if (v.open === id) v.detail = { ...normDetail(d), id };
     } catch (e) {
       if (v.open === id) v.detail = { id, error: `could not load the graphs: ${e.message}` };
     }
@@ -1547,14 +1610,23 @@
   }
 
   async function loadState() {
+    let next;
     try {
-      state = await getJson('/api/monitor');
-      lastOk = Date.now();
-      $asof.textContent = '';
-      render();
+      next = normState(await getJson('/api/monitor'));
     } catch (e) {
       $asof.textContent = lastOk ? `could not refresh (${e.message}). as of ${clock(new Date(lastOk).toISOString())}` : `could not load: ${e.message}`;
+      return;
     }
+    const build = next.monitor.build;
+    if (build && pageBuild && build !== pageBuild) {
+      location.reload();
+      return;
+    }
+    pageBuild = pageBuild || build;
+    state = next;
+    lastOk = Date.now();
+    $asof.textContent = '';
+    render();
   }
 
   async function tick() {
