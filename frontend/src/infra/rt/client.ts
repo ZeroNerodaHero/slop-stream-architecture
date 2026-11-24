@@ -1,6 +1,7 @@
 import { atom } from 'jotai';
 
 import { record } from '@/infra/atoms/inspector-atoms';
+import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { report } from '@/infra/report';
 import { type FromCore, openBrowserSocket, type Port, RtCore, type ToCore } from '@/infra/rt/core';
 import { type Release, TopicRefs } from '@/infra/rt/refs';
@@ -58,7 +59,6 @@ function deliver(msg: FromCore) {
       return;
     case 'frame': {
       const frame = msg.frame;
-      record(SOURCE, 'in', frame);
       if (frame.type === 'subbed' && Array.isArray(frame.topics)) held = new Set(frame.topics.filter((t): t is string => typeof t === 'string'));
       const topic = typeof frame.topic === 'string' ? frame.topic : null;
       if (topic !== null) {
@@ -75,9 +75,16 @@ function deliver(msg: FromCore) {
       done?.(msg.answer);
       return;
     }
+    case 'tap':
+      record(SOURCE, msg.dir, msg.frame);
+      return;
     case 'stale':
       return;
   }
+}
+
+function tapOn(): boolean {
+  return store.get(inspectorEnabledAtom);
 }
 
 function attachTab(why: string) {
@@ -88,6 +95,7 @@ function attachTab(why: string) {
   send = handle;
   store.set(rtTransportAtom, 'tab');
   handle({ kind: 'attach', build: __BUILD__, nick: nickOf() });
+  handle({ kind: 'debug', on: tapOn() });
   handle({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });
 }
 
@@ -135,6 +143,7 @@ function attachWorker(): boolean {
   const bye = () => post({ kind: 'bye' });
   window.addEventListener('pagehide', bye);
   post({ kind: 'attach', build: __BUILD__, nick: nickOf() });
+  post({ kind: 'debug', on: tapOn() });
   post({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });
   setTimeout(() => {
     if (!heard) fallBack(`the rt worker did not answer in ${WORKER_WAIT_MS}ms`);
@@ -147,6 +156,7 @@ export function startRt(nick: () => string | null): void {
   started = true;
   nickOf = nick;
   if (!attachWorker()) attachTab('no SharedWorker here');
+  store.sub(inspectorEnabledAtom, () => send?.({ kind: 'debug', on: tapOn() }));
   const focus = () => {
     if (document.visibilityState !== 'visible') return;
     send?.({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });
@@ -197,7 +207,6 @@ export function onRtPhase(listener: (phase: RtPhase) => void): () => void {
 export function rtAsk(ask: Ask): Promise<Answer> {
   rids += 1;
   const rid = `t${rids}`;
-  record(SOURCE, 'out', { ...ask, rid });
   return new Promise((resolve) => {
     answers.set(rid, resolve);
     if (!send) {

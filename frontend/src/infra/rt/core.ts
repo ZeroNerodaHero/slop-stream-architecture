@@ -67,13 +67,15 @@ export type ToCore =
   | { kind: 'ask'; rid: string; ask: Ask }
   | { kind: 'fill'; since: Record<string, string> }
   | { kind: 'fresh'; topic: string }
-  | { kind: 'identify'; nick: string | null };
+  | { kind: 'identify'; nick: string | null }
+  | { kind: 'debug'; on: boolean };
 
 export type FromCore =
   | { kind: 'phase'; phase: RtPhase }
   | { kind: 'frame'; frame: RtFrame }
   | { kind: 'answer'; rid: string; answer: Answer }
-  | { kind: 'stale'; build: string };
+  | { kind: 'stale'; build: string }
+  | { kind: 'tap'; dir: 'in' | 'out'; frame: unknown };
 
 export interface Port {
   post(msg: FromCore): void;
@@ -93,6 +95,7 @@ interface Tab {
   topics: Set<string>;
   peek: Set<string>;
   heard: number;
+  debug: boolean;
 }
 
 interface Pending {
@@ -134,6 +137,7 @@ export class RtCore {
   private seq = 0;
   private identifying = false;
   private identifyAgain = false;
+  private tapping = false;
 
   constructor(options: CoreOptions) {
     this.url = options.url;
@@ -153,8 +157,9 @@ export class RtCore {
           port.post({ kind: 'stale', build: this.build });
           return;
         }
-        tab = { port, topics: new Set(), peek: new Set(), heard: this.clock.now() };
+        tab = { port, topics: new Set(), peek: new Set(), heard: this.clock.now(), debug: false };
         this.tabs.set(port, tab);
+        this.retap();
         this.nick = msg.nick;
         port.post({ kind: 'phase', phase: this.phase });
         if (this.subbed && this.ready) port.post({ kind: 'frame', frame: this.subbed as unknown as RtFrame });
@@ -199,6 +204,10 @@ export class RtCore {
         case 'identify':
           this.nick = msg.nick;
           this.identify();
+          break;
+        case 'debug':
+          tab.debug = msg.on;
+          this.retap();
           break;
       }
     };
@@ -264,6 +273,7 @@ export class RtCore {
 
   private drop(tab: Tab) {
     if (!this.tabs.delete(tab.port)) return;
+    this.retap();
     for (const [rid, p] of this.pending) {
       if (p.tab !== tab) continue;
       this.clock.clearTimeout(p.timer);
@@ -290,6 +300,16 @@ export class RtCore {
     for (const tab of this.tabs.values()) if (now - tab.heard > TAB_DEAD_MS) this.drop(tab);
   }
 
+  private retap() {
+    let on = false;
+    for (const tab of this.tabs.values()) if (tab.debug) on = true;
+    this.tapping = on;
+  }
+
+  private tap(dir: 'in' | 'out', frame: unknown) {
+    for (const tab of this.tabs.values()) if (tab.debug) tab.port.post({ kind: 'tap', dir, frame });
+  }
+
   private dial() {
     this.retry = null;
     if (this.tabs.size === 0) return;
@@ -308,13 +328,16 @@ export class RtCore {
       if (this.ws !== socket) return;
       const hello: HelloOut = { type: 'hello', v: RT_VERSION };
       if (this.nick) hello.nick = this.nick;
+      if (this.tapping) this.tap('out', hello);
       socket.send(JSON.stringify(hello));
     };
     socket.onmessage = (e) => {
       if (this.ws !== socket) return;
       this.armWatchdog();
       const frame = parseFrame(e.data);
-      if (frame) this.onFrame(frame);
+      if (!frame) return;
+      if (this.tapping) this.tap('in', frame);
+      this.onFrame(frame);
     };
     socket.onclose = (e) => {
       if (this.ws !== socket) return;
@@ -477,6 +500,7 @@ export class RtCore {
       frame.fresh = [...this.fresh];
       this.fresh.clear();
     }
+    if (this.tapping) this.tap('out', frame);
     socket.send(JSON.stringify(frame));
   }
 
@@ -494,7 +518,9 @@ export class RtCore {
       tab.port.post({ kind: 'answer', rid, answer: { type: 'nack', rid, error: 'no answer' } });
     }, ANSWER_MS);
     this.pending.set(wire, { tab, rid, timer });
-    socket.send(JSON.stringify({ ...ask, topic, rid: wire }));
+    const out = { ...ask, topic, rid: wire };
+    if (this.tapping) this.tap('out', out);
+    socket.send(JSON.stringify(out));
   }
 
   private answer(frame: Answer) {
@@ -527,6 +553,7 @@ export class RtCore {
         if (this.ws !== socket || !this.ready || socket.readyState !== OPEN) return;
         const auth: Record<string, unknown> = { type: 'auth', ticket };
         if (this.nick) auth.nick = this.nick;
+        if (this.tapping) this.tap('out', auth);
         socket.send(JSON.stringify(auth));
         if (this.identifyAgain) {
           this.identifyAgain = false;
