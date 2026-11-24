@@ -29,8 +29,6 @@ import {
   readVoiceMicLevel,
   setVoiceDeaf,
   setVoiceMuted,
-  type VoiceCall,
-  voiceCallAtom,
   voiceDeafAtom,
   voiceModeAtom,
   voiceMutedAtom,
@@ -41,6 +39,7 @@ import {
   type VoiceStats,
   voiceStatsAtom
 } from '@/infra/atoms/voice-atoms';
+import { type VoiceCall, voiceCallAtom } from '@/infra/atoms/voice-state';
 import { Face } from '@/shared-components/Face';
 import { useCardMod } from '@/shared-components/GroupMod';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';

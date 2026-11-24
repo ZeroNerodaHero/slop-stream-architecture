@@ -4,7 +4,6 @@ import { api, messageOf } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat, refaceLines } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
-import { followIdentityOnLivePage } from '@/infra/atoms/publish-atoms';
 import { socialsAtom, watchNameAtom, watchWelcomeAtom } from '@/infra/atoms/watch-atoms';
 import { type Welcome, welcomeOf } from '@/infra/atoms/welcome-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
@@ -327,7 +326,7 @@ export function identityChanged(change: 'login' | 'nick') {
   void loadMyProfile();
   if (change === 'nick') reconnectChat();
   reconnectEvents();
-  followIdentityOnLivePage();
+  if (location.pathname.replace(/\/$/, '') === '/live') void import('@/infra/atoms/publish-atoms').then((m) => m.followIdentityOnLivePage());
 }
 
 onEvents((event) => {

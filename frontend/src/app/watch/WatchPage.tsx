@@ -52,7 +52,7 @@ import { type Presence, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
-import { publishPipAtom } from '@/infra/atoms/publish-atoms';
+import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';

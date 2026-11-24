@@ -12,7 +12,7 @@ import {
   RiUserLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { Fragment, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef } from 'react';
+import { Fragment, type KeyboardEvent, lazy, type ReactNode, type RefObject, Suspense, useEffect, useLayoutEffect, useRef } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -32,10 +32,11 @@ import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
 import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
 import { SidebarTab } from '@/shared-components/user-modal/SidebarTab';
 import { StatsTab } from '@/shared-components/user-modal/StatsTab';
-import { VoiceTab } from '@/shared-components/user-modal/VoiceTab';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { TAB_OFF, TAB_ON } from '@/utils/tabs';
+
+const VoiceTab = lazy(() => import('@/shared-components/user-modal/VoiceTab').then((m) => ({ default: m.VoiceTab })));
 
 const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> = {
   profile: { label: 'profile', group: 'you', icon: <RiUserLine aria-hidden size={18} /> },
@@ -301,7 +302,11 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'appearance' && <AppearanceTab />}
           {tab === 'chat' && <ChatTab />}
-          {tab === 'voice' && <VoiceTab />}
+          {tab === 'voice' && (
+            <Suspense fallback={null}>
+              <VoiceTab />
+            </Suspense>
+          )}
           {tab === 'sidebar' && <SidebarTab />}
           {tab === 'advanced' && <AdvancedTab />}
         </div>

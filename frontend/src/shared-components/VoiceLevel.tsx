@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { roomAtom } from '@/infra/atoms/room-atoms';
-import { HEARD_MAX, heardLevelOf, setHeardLevel, voiceCallAtom, voiceHeardAtom } from '@/infra/atoms/voice-atoms';
+import { HEARD_MAX, heardLevelOf, setHeardLevel, voiceCallAtom, voiceHeardAtom } from '@/infra/atoms/voice-state';
 import { Button } from '@/shared-components/Button';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
