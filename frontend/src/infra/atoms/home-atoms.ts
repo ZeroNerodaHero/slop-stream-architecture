@@ -3,7 +3,7 @@ import { atom } from 'jotai';
 import { api, type Explore, type LiveStream, messageOf, type Person } from '@/infra/api';
 import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import type { ServerFrame } from '@/infra/frames';
-import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
+import { onPrefetch, prefetch, PREFETCH_TTL_MS, takePrefetched } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 
 export const homeStreamsAtom = atom<LiveStream[] | null>(null);
@@ -46,6 +46,20 @@ export function leaveHome(): void {
 
 const SNAPSHOT = 'home:streams';
 
+declare global {
+  interface Window {
+    __bootStreams?: { born: number; response: Promise<Response> };
+  }
+}
+
+function takeBootStreams(): Promise<LiveStream[]> | null {
+  const boot = window.__bootStreams;
+  if (!boot) return null;
+  delete window.__bootStreams;
+  if (performance.now() - boot.born > PREFETCH_TTL_MS) return null;
+  return api.streamsAsked(boot.response).catch(() => api.streams());
+}
+
 export const homePeople = () => takePrefetched<Person[]>('home:people')?.answer ?? api.people();
 export const homeGroups = () => takePrefetched<Explore>('home:explore')?.answer ?? api.explore();
 
@@ -61,10 +75,11 @@ async function load(): Promise<void> {
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = null;
   const pressed = takePrefetched<LiveStream[]>(SNAPSHOT);
+  const booted = pressed ? null : takeBootStreams();
   inflight = pressed ? [...pressed.frames] : [];
   let list: LiveStream[];
   try {
-    list = await (pressed?.answer ?? api.streams());
+    list = await (pressed?.answer ?? booted ?? api.streams());
   } catch (err) {
     if (mine !== attempt) return;
     inflight = null;
