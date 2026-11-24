@@ -227,6 +227,28 @@ offered. Caps are on the sender: a camera 640x360 at 24fps and 600 kbps, a scree
 Watching one stream. Same shape as publish-atoms: atoms for what renders, module handles
 for the peer connection and socket, action functions for every transition.
 
+`start` runs the handshake beside the grant, not after it. When there is a warm peer (the
+press's, the boot script's, or one made at the start because the name is not known to be
+offline), `handshake` sends `role: watch` and the offer on its `/ws` socket as soon as the
+offer is set, while `POST /api/streams/<name>/watch` is still out. This opens nothing: video's
+watch path never asks the api or looks at a grant, it checks the name and whether the room is
+live and answers `{"error":"not live"}` otherwise; the grant was never what let a viewer in.
+Until the grant lands nothing of the stream reaches the page: tracks, socket frames and
+connection states are held, the phase stays `loading`, and no timer runs. Then:
+
+- the grant failed (no answer, an error): everything the handshake opened is closed and the
+  page retries later, as before;
+- renamed, or not live: closed, and the rename or `not live yet`;
+- live: `connecting` (once the setup has gone out), the held tracks and frames are applied,
+  the state is caught up, and the 10s no-video timer starts when the answer is in. A
+  handshake that already failed before the grant (video said `not live` because the
+  publisher was not attached yet, the socket closed) or a grant naming another socket path
+  than `/ws` is closed and run again on a fresh peer, the old sequential way.
+
+A name known to be offline makes no peer, and the handshake starts after a live grant.
+Every attempt checks `attempt` and its own `pc` after each wait, so a stale one does
+nothing, and `teardown` closes the warm socket and peer it was using.
+
 ## `atoms/welcome-atoms.ts`
 
 The chat welcome (docs/chat.md): a line from the bot `Eques` at the top of a stream's chat
@@ -711,8 +733,9 @@ The watch page's startup, phase by phase, on the performance timeline (docs/debu
 "Watch startup timings"). Every phase is a `watch:<phase>` mark and a `watch:<phase>`
 measure from the origin: the press on a link when the attempt took the peer warmed on it,
 the boot when the attempt took index.html's boot script's (a stream's page loaded straight), else
-the attempt's start. Phases: press or boot, start, grant, peer, offer, ws-open, setup-sent,
-answer, ice-connected, first-frame.
+the attempt's start. Phases: press or boot, start, peer, offer, ws-open, setup-sent, grant,
+answer, ice-connected, first-frame (the setup goes out beside the grant, so setup-sent and
+often answer come before grant).
 
 With `?perfdebug=1` in the url, or `localStorage.perfdebug = '1'`, the first frame prints the
 whole line with `console.debug`. Off, the marks are still there for devtools' performance
