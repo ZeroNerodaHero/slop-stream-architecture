@@ -193,6 +193,9 @@ pub(crate) async fn followed(s: &AppState, followed: Uuid, followed_name: &str, 
 }
 
 async fn follow_row(s: &AppState, followed: Uuid, followed_name: &str, follower: &Account) -> Result<(), ApiError> {
+    if followed == follower.id {
+        return Ok(());
+    }
     let Some(actor) = actor_by_id(&s.db, follower.id).await? else { return Ok(()) };
     let row: Option<(i64, i64)> = sqlx::query_as(
         "INSERT INTO notifications (user_id, kind, actor_id)
