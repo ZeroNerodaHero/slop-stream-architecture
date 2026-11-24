@@ -63,7 +63,7 @@ function GroupCard({ group, icon }: { group: GroupBadge; icon: number | null | u
   const members = group.name !== BOT_GROUP && typeof group.members === 'number' ? group.members : null;
   return (
     <span id="group-badge-card" data-group={group.name} className="flex flex-col">
-      {banner && <img src={banner} alt="" className="aspect-[16/5] w-full border-b border-primaryStroke object-cover" />}
+      {banner && <img src={banner} alt="" loading="lazy" decoding="async" className="aspect-[16/5] w-full border-b border-primaryStroke object-cover" />}
       <span className="flex flex-col gap-1 p-[3px]">
         <span className="flex items-center gap-1.5">
           <GroupMark name={group.name} color={group.color} icon={icon} className="h-10 w-10 text-base" />
