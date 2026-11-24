@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::extract::{Query, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::put;
 use axum::{Json, Router};
@@ -13,7 +13,8 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::Me;
-use crate::{is_live, may_write, ApiError, ApiResult, AppState, Name, PasswordQuery};
+use crate::test_streamers::DummySecret;
+use crate::{is_live, may_write, ApiError, ApiResult, AppState, Name};
 
 pub(crate) const EVENTS_KEY: &str = "events";
 pub(crate) const EVENTS_KEEP: usize = 1000;
@@ -263,15 +264,14 @@ async fn put_presence(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<StatusBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body?;
     let Some(status) = Status::parse(body.status.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad status. one of online, dnd, invisible"));
     };
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     sqlx::query(
         "INSERT INTO streamers (name, status) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET status = EXCLUDED.status",

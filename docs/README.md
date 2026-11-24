@@ -43,6 +43,7 @@ the database is one file, `api/schema.sql`, applied by the api at boot to an emp
 - `voice.md` — built, off on the live box. voice channels in a group: who is in each on the group page's right, the call where the chat is, cameras and screens in it, `video voice` as the server.
 - `keyframes.md` — built. how video gets a joining watcher its first picture: keyframe requests to the publisher, not a cache of the last keyframe.
 - `jannies.md` — who may clean a stream's chat, and only its chat. `api/src/janny.rs`.
+- `test-streamers.md` — built, backend only. the dummy box's fake streams as `streamers` rows flagged `is_test` (migration `0017-test-streamers.sql`), the dummy secret as an `X-Dummy-Password` header, the narrowed rate-limit skip, and `HIDE_TEST_STREAMERS`, which leaves them out of every list.
 - `rate-limits.md` — every route's limit (`api/src/ratelimit.rs`, `video/src/limits.rs`), the `429` with `Retry-After`, the numbers.
 - `image-moderation.md` — every uploaded picture checked by openai's moderation endpoint before the api keeps it (`api/src/moderate.rs`, migration `0015-image-moderation.sql`), the adult lock on groups, the follow-ups not built.
 - `chat-audit.md` — a dated audit (2026-11-19): why picture in picture showed the wrong chat, every chat surface, the bugs and the fixes. a record; the names in it are that day's.
