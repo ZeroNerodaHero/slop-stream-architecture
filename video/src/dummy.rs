@@ -52,6 +52,8 @@ struct Config {
     chat_ws_url: Option<String>,
     font: String,
     gifs: Vec<PathBuf>,
+    chat: bool,
+    chat_every: Duration,
 }
 
 enum Sprite<'a> {
@@ -76,6 +78,54 @@ const LINES: [&str; 14] = [
     "that was close to the corner",
     "gg",
 ];
+const OWNER_LINES: [&str; 34] = [
+    "hi chat",
+    "ok we are live",
+    "is the sound too loud?",
+    "how does the chat look on your end?",
+    "brb, getting water",
+    "back",
+    "gg",
+    "lol",
+    "W",
+    "ok",
+    "hmm",
+    "...anyway",
+    "😂",
+    "🔥🔥🔥",
+    "emoji check: 🎮 🎧 🍕 ✨ 💯",
+    "that gif almost hit the corner 👀",
+    "@pixelfan lol",
+    "@lurker_42 welcome in",
+    "thanks for the follow @night-owl 🙏",
+    "{me} here, testing the chat panel",
+    "welcome to {me}, the most fake stream on the site",
+    "uptime check: 42 minutes",
+    "1 2 3 testing",
+    "2 + 2 = 4, quick maths",
+    "notes for this stream are at https://example.com/notes",
+    "should I make the gifs bigger?",
+    "what should the next gif be?",
+    "ALL CAPS FOR NO REASON",
+    "first line\nsecond line",
+    "a word too long to fit: supercalifragilisticexpialidociousandthensomemoretomakeitwrapsomewhere",
+    "a medium length line so the panel shows something between a word and a paragraph",
+    "this one is longer on purpose: it should wrap onto two or three lines in a narrow column, so whoever is styling the chat can see how the spacing, the name and the time sit against more than one row of words.",
+    "this is a long line on purpose, close to the five hundred character limit, so the chat panel has to show a real wall of words: the name, the badges and the time should stay where they are while the words wrap and wrap again under them. if the column is narrow this takes most of the panel, which is the point, because somebody will paste a paragraph into chat one day and it should still look fine. nothing here means anything, it is just filler that keeps going for a while, and then it stops.",
+    "round 3 of the corner watch",
+];
+const OWNER_ANSWERS: [&str; 6] = [
+    "answering myself: yes",
+    "nobody answered so: no",
+    "@{me} good question tbh",
+    "chat says yes (chat is me)",
+    "I'll take that as a yes",
+    "replying to myself again, classic",
+];
+const CHAT_MAX_CHARS: usize = 500;
+const CHAT_EVERY: Duration = Duration::from_millis(1000);
+const CHAT_EVERY_MIN: Duration = Duration::from_millis(250);
+const CHAT_EVERY_MAX: Duration = Duration::from_millis(60_000);
 
 const ABOUT_OPENERS: [&str; 4] = [
     "this is a fake stream. nobody is behind it: a test box plays it so the site has something live to style and debug against.",
@@ -113,10 +163,7 @@ struct Reply {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let count: usize = std::env::var("DUMMY_STREAMS")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(0);
+    let count = stream_count(std::env::var("DUMMY_STREAMS").ok().as_deref());
     let password = std::env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty());
 
     if count == 0 {
@@ -139,23 +186,7 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
-    let mut names: Vec<String> = std::env::var("DUMMY_NAMES")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .filter(|s| {
-            let ok = crate::valid_name(s);
-            if !ok {
-                log::warn!("DUMMY_NAMES: skipping {s:?}. use a-z 0-9 _ - (1 to 32)");
-            }
-            ok
-        })
-        .collect();
-    for i in names.len()..count {
-        names.push(format!("{prefix}{}{}", WORDS[i % WORDS.len()], if i >= WORDS.len() { (i / WORDS.len()).to_string() } else { String::new() }));
-    }
-    names.truncate(count);
+    let names = stream_names(count, &prefix, &std::env::var("DUMMY_NAMES").unwrap_or_default());
 
     let cfg = Config {
         names,
@@ -166,12 +197,19 @@ pub async fn run() -> anyhow::Result<()> {
         chat_ws_url: std::env::var("CHAT_WS_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
         font: std::env::var("DUMMY_FONT").unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf".into()),
         gifs: load_gifs(&std::env::var("DUMMY_GIFS").unwrap_or_else(|_| "/usr/share/dummy-gifs".into())),
+        chat: chat_on(std::env::var("DUMMY_CHAT").ok().as_deref()),
+        chat_every: chat_every(std::env::var("DUMMY_CHAT_INTERVAL_MS").ok().as_deref()),
     };
     if cfg.api_url.is_none() {
         log::error!("API_URL is empty. video needs the api's go-live grant for every publish");
         return wait_for_signal().await;
     }
     log::info!("{} dummy stream(s): {}", cfg.names.len(), cfg.names.join(", "));
+    match (cfg.chat, &cfg.chat_ws_url) {
+        (false, _) => log::info!("DUMMY_CHAT is off: the streams run without chatter"),
+        (true, None) => log::info!("CHAT_WS_URL is empty: the streams run without chatter"),
+        (true, Some(_)) => log::info!("dummy chat on: each stream says a line every {}ms", cfg.chat_every.as_millis()),
+    }
     for (i, name) in cfg.names.iter().enumerate() {
         let hand: Vec<String> = sprites(&cfg, i)
             .iter()
@@ -208,6 +246,39 @@ pub async fn run() -> anyhow::Result<()> {
     wait_for_signal().await
 }
 
+fn stream_count(raw: Option<&str>) -> usize {
+    raw.and_then(|v| v.trim().parse().ok()).unwrap_or(0)
+}
+
+fn stream_names(count: usize, prefix: &str, raw: &str) -> Vec<String> {
+    let mut names: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .filter(|s| {
+            let ok = crate::valid_name(s);
+            if !ok {
+                log::warn!("DUMMY_NAMES: skipping {s:?}. use a-z 0-9 _ - (1 to 32)");
+            }
+            ok
+        })
+        .collect();
+    for i in names.len()..count {
+        names.push(format!("{prefix}{}{}", WORDS[i % WORDS.len()], if i >= WORDS.len() { (i / WORDS.len()).to_string() } else { String::new() }));
+    }
+    names.truncate(count);
+    names
+}
+
+fn chat_on(raw: Option<&str>) -> bool {
+    !raw.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "off" | "false"))
+}
+
+fn chat_every(raw: Option<&str>) -> Duration {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(CHAT_EVERY, |ms| Duration::from_millis(ms).clamp(CHAT_EVERY_MIN, CHAT_EVERY_MAX))
+}
+
 async fn wait_for_signal() -> anyhow::Result<()> {
     use tokio::signal::unix::{signal, SignalKind};
     let mut term = signal(SignalKind::terminate())?;
@@ -240,14 +311,19 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
         owner = Some(res.json().await.context("api go-live reply")?);
     }
 
-    let chatters: Vec<tokio::task::JoinHandle<()>> = match &cfg.chat_ws_url {
+    let chatters: Vec<tokio::task::JoinHandle<()>> = match cfg.chat_ws_url.as_ref().filter(|_| cfg.chat) {
         Some(chat) => vec![
-            tokio::spawn(chatter(format!("{chat}/chat/{name}"), serde_json::json!({ "type": "hello", "nick": VIEWER_NICKS[i % VIEWER_NICKS.len()], "bot": true }), i, 30 + 3 * (i % 4) as u64)),
+            tokio::spawn(chatter(
+                format!("{chat}/chat/{name}"),
+                serde_json::json!({ "type": "hello", "nick": VIEWER_NICKS[i % VIEWER_NICKS.len()], "bot": true }),
+                Script::new(&LINES, &[], name, i),
+                Duration::from_secs(30 + 3 * (i % 4) as u64),
+            )),
             tokio::spawn(chatter(
                 format!("{chat}/chat/{name}"),
                 serde_json::json!({ "type": "hello", "nick": name, "session": owner.as_ref().map(|g| g.session), "token": owner.as_ref().map(|g| g.token), "bot": true }),
-                i + 7,
-                23,
+                Script::new(&OWNER_LINES, &OWNER_ANSWERS, name, i + 7),
+                cfg.chat_every,
             )),
         ],
         None => Vec::new(),
@@ -456,8 +532,61 @@ async fn publish_on(pc: &RTCPeerConnection, i: usize, name: &str, cfg: &Config, 
     result
 }
 
-async fn chatter(url: String, hello: serde_json::Value, seed: usize, every: u64) {
-    let mut n = seed;
+struct Script {
+    lines: &'static [&'static str],
+    answers: &'static [&'static str],
+    name: String,
+    state: u64,
+    last: Option<usize>,
+    asked: bool,
+}
+
+impl Script {
+    fn new(lines: &'static [&'static str], answers: &'static [&'static str], name: &str, seed: usize) -> Script {
+        let state = std::collections::hash_map::RandomState::new().build_hasher().finish();
+        Script::seeded(lines, answers, name, state ^ (seed as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+    }
+
+    fn seeded(lines: &'static [&'static str], answers: &'static [&'static str], name: &str, state: u64) -> Script {
+        Script { lines, answers, name: name.to_owned(), state: state | 1, last: None, asked: false }
+    }
+
+    fn roll(&mut self) -> u64 {
+        self.state ^= self.state >> 12;
+        self.state ^= self.state << 25;
+        self.state ^= self.state >> 27;
+        self.state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 16
+    }
+
+    fn next(&mut self) -> String {
+        let roll = self.roll();
+        if self.asked && !self.answers.is_empty() && roll % 2 == 0 {
+            self.asked = false;
+            return self.said(self.answers[(roll / 2 % self.answers.len() as u64) as usize]);
+        }
+        let mut k = (roll % self.lines.len() as u64) as usize;
+        if self.last == Some(k) {
+            k = (k + 1) % self.lines.len();
+        }
+        self.last = Some(k);
+        self.asked = self.lines[k].ends_with('?');
+        self.said(self.lines[k])
+    }
+
+    fn said(&self, line: &str) -> String {
+        line.replace("{me}", &self.name).chars().take(CHAT_MAX_CHARS).collect()
+    }
+}
+
+fn wait_of(frame: &str) -> Option<Duration> {
+    let v: serde_json::Value = serde_json::from_str(frame).ok()?;
+    if v.get("type")?.as_str()? != "error" {
+        return None;
+    }
+    v.get("wait")?.as_u64().map(Duration::from_millis)
+}
+
+async fn chatter(url: String, hello: serde_json::Value, mut script: Script, every: Duration) {
     loop {
         if let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&url).await {
             let _ = ws.send(Message::Text(hello.to_string().into())).await;
@@ -467,15 +596,26 @@ async fn chatter(url: String, hello: serde_json::Value, seed: usize, every: u64)
                     return;
                 }
             }
+            let mut next = tokio::time::Instant::now() + every;
             loop {
-                tokio::time::sleep(Duration::from_secs(every)).await;
-                n += 1;
-                let line = LINES[(n * 5 + seed) % LINES.len()];
-                let say = serde_json::json!({ "type": "say", "text": line }).to_string();
-                if ws.send(Message::Text(say.into())).await.is_err() {
-                    break;
+                tokio::select! {
+                    _ = tokio::time::sleep_until(next) => {
+                        let say = serde_json::json!({ "type": "say", "text": script.next() }).to_string();
+                        if ws.send(Message::Text(say.into())).await.is_err() {
+                            break;
+                        }
+                        next = tokio::time::Instant::now() + every;
+                    }
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Some(wait) = wait_of(&text) {
+                                next = next.max(tokio::time::Instant::now() + wait);
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                        _ => {}
+                    },
                 }
-                while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(10), ws.next()).await {}
             }
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -621,5 +761,79 @@ mod tests {
         }
         let distinct: std::collections::HashSet<&String> = pages.iter().collect();
         assert_eq!(distinct.len(), pages.len());
+    }
+
+    #[test]
+    fn no_streams_means_no_names() {
+        assert_eq!(stream_count(None), 0);
+        assert_eq!(stream_count(Some("")), 0);
+        assert_eq!(stream_count(Some("0")), 0);
+        assert_eq!(stream_count(Some("nope")), 0);
+        assert_eq!(stream_count(Some(" 4 ")), 4);
+        assert!(stream_names(0, "dummy-", "").is_empty());
+        assert!(stream_names(0, "dummy-", "alpha,beta").is_empty());
+        assert_eq!(stream_names(2, "dummy-", ""), ["dummy-mango", "dummy-pixel"]);
+        assert_eq!(stream_names(2, "dummy-", "Alpha, bad name!"), ["alpha", "dummy-pixel"]);
+    }
+
+    #[test]
+    fn dummy_chat_is_on_unless_turned_off() {
+        assert!(chat_on(None));
+        assert!(chat_on(Some("")));
+        assert!(chat_on(Some("1")));
+        assert!(chat_on(Some("on")));
+        assert!(!chat_on(Some("0")));
+        assert!(!chat_on(Some(" OFF ")));
+        assert!(!chat_on(Some("false")));
+    }
+
+    #[test]
+    fn the_chat_interval_defaults_to_a_second_and_is_clamped() {
+        assert_eq!(chat_every(None), Duration::from_millis(1000));
+        assert_eq!(chat_every(Some("")), Duration::from_millis(1000));
+        assert_eq!(chat_every(Some("soon")), Duration::from_millis(1000));
+        assert_eq!(chat_every(Some("2500")), Duration::from_millis(2500));
+        assert_eq!(chat_every(Some("10")), Duration::from_millis(250));
+        assert_eq!(chat_every(Some("0")), Duration::from_millis(250));
+        assert_eq!(chat_every(Some("999999")), Duration::from_millis(60_000));
+    }
+
+    #[test]
+    fn the_viewers_are_plain_guest_nicks() {
+        for nick in VIEWER_NICKS {
+            assert!(!nick.starts_with("dummy-"), "{nick}");
+            assert!(crate::valid_name(nick), "{nick}");
+        }
+    }
+
+    #[test]
+    fn the_stream_talks_to_itself_without_repeating() {
+        for seed in 0..20u64 {
+            let mut script = Script::seeded(&OWNER_LINES, &OWNER_ANSWERS, "dummy-mango", seed);
+            let mut last = String::new();
+            let mut answered = false;
+            for _ in 0..500 {
+                let line = script.next();
+                assert_ne!(line, last);
+                assert!(!line.is_empty() && line.chars().count() <= CHAT_MAX_CHARS, "{line}");
+                assert!(!line.contains("{me}"), "{line}");
+                answered |= OWNER_ANSWERS.iter().any(|a| a.replace("{me}", "dummy-mango") == line);
+                last = line;
+            }
+            assert!(answered);
+        }
+        let all: Vec<&str> = OWNER_LINES.iter().chain(OWNER_ANSWERS.iter()).copied().collect();
+        assert!(all.iter().any(|l| l.chars().count() > 400));
+        assert!(all.iter().any(|l| l.ends_with('?')));
+        assert!(all.iter().any(|l| l.contains("{me}")));
+        assert!(all.iter().any(|l| l.starts_with('@')));
+    }
+
+    #[test]
+    fn a_slow_down_says_how_long_to_wait() {
+        assert_eq!(wait_of(r#"{"type":"error","error":"slow down","wait":1235}"#), Some(Duration::from_millis(1235)));
+        assert_eq!(wait_of(r#"{"type":"error","error":"bad nick"}"#), None);
+        assert_eq!(wait_of(r#"{"type":"message","wait":5}"#), None);
+        assert_eq!(wait_of("nope"), None);
     }
 }
