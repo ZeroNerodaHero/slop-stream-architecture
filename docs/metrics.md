@@ -132,6 +132,7 @@ the edges in the map are the ones the code makes today. a new service, or one th
 - the box, the tab, the range, the containers view and the timings filter, kind and sort are in the url (`#box=test-machine&tab=calls&kind=db&sort=-p99&range=24h`), so a link opens the same view. an old `#q=` or `#kind=` link opens endpoints or calls.
 - 1h, 24h, 7d, on every tab but the architecture. the status polls every 5 s, the graphs and the tables every 15 s, 60 s and 5 min. a tab only fetches what it shows.
 - every string through `textContent`: container names, images and error reports are not trusted.
+- a tab left open across a deploy reloads itself when the monitor's build changes, so an old page never reads a new answer. every answer is checked as it comes in (a missing list is empty, a missing number is `—`), and a part of the page that still cannot draw says so in its own box while the rest keeps refreshing (`test/monitor-page.js`).
 
 ## endpoint and call timings
 
