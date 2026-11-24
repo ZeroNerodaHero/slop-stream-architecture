@@ -140,6 +140,37 @@ async function stateWhen(api, ready, what, ms = 40000) {
     return `cpu ${h.cpu_pct}% · mem ${Math.round(h.mem_used / 1048576)} of ${Math.round(h.mem_total / 1048576)} MiB · ${m.containers} containers · ${series.t.length} points`;
   });
 
+  await step("the local box's endpoint and call timings come through the agent, and the page lists them", async () => {
+    if (!OPS_TOKEN) return { skip: 'no OPS_TOKEN in .env, so the agent is not asked' };
+    for (let i = 0; i < 5; i++) await api.get(`${BASE}/api/streamers/timing-probe-${i}`);
+    const until = Date.now() + 45000;
+    let rows = [];
+    while (Date.now() < until) {
+      const res = await api.get(`${MON}/api/monitor/timings?range=1h&target=local`);
+      if (res.ok()) rows = (await res.json()).rows;
+      if (rows.some((r) => r.name === '/api/streamers/{name}') && rows.some((r) => r.kind === 'db')) break;
+      await sleep(1000);
+    }
+    const route = rows.find((r) => r.kind === 'http' && r.method === 'GET' && r.name === '/api/streamers/{name}');
+    expect(route, `no GET /api/streamers/{name} line in ${rows.length} rows (is TIMINGS_FROM set on the agent, and does the stack run this build?)`);
+    expect(route.n >= 5 && route.p50 > 0 && route.p99 >= route.p50 && route.max >= route.p99, `the route line: ${JSON.stringify(route)}`);
+    expect(!rows.some((r) => r.name.includes('timing-probe')), 'a raw path made it into the names');
+    expect(rows.some((r) => r.kind === 'db') && rows.some((r) => r.kind === 'redis'), `kinds: ${[...new Set(rows.map((r) => r.kind))]}`);
+    const detail = await (await api.get(`${MON}/api/monitor/timings/series?target=local&range=1h&key=${encodeURIComponent(route.key)}`)).json();
+    expect(detail.t.length >= 1 && detail.p95.length === detail.t.length, `detail: ${JSON.stringify(detail).slice(0, 200)}`);
+    const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${MON}/#box=local&q=streamers`, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('table.eps tr.ep', { timeout: 20000 });
+      await page.locator('table.eps tr.ep', { hasText: '/api/streamers/{name}' }).first().click();
+      await page.waitForSelector('table.eps tr.detail canvas', { timeout: 15000 });
+    } finally {
+      await browser.close();
+    }
+    return `${rows.length} lines, ${[...new Set(rows.map((r) => r.kind))].join('/')} · GET /api/streamers/{name} p50 ${route.p50} ms p99 ${route.p99} ms`;
+  });
+
   await step('the page shows both boxes with their status', async () => {
     const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
     try {
@@ -148,7 +179,7 @@ async function stateWhen(api, ready, what, ms = 40000) {
       await page.waitForSelector('[data-name="local"] .pill', { timeout: 15000 });
       const up = (await page.textContent('[data-name="local"] .pill')).trim();
       const down = (await page.textContent('[data-name="dead"] .pill')).trim();
-      const cards = await page.locator('.target').count();
+      const cards = await page.locator('.target[data-name]').count();
       const meta = (await page.textContent('#meta')).trim();
       expect(up === 'up' && down === 'down', `pills: local "${up}", dead "${down}"`);
       expect(cards === 2, `${cards} cards`);

@@ -75,6 +75,20 @@
   .ctrs td.cell canvas { display: block; width: 72px; height: 18px; margin-top: 2px; }
   .ctrs .detail td { background: var(--bg); padding: 10px; cursor: default; }
   .scroll { overflow-x: auto; }
+  .ep-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; }
+  .ep-controls input { font: inherit; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 5px 10px; flex: 1 1 260px; min-width: 0; }
+  .ep-controls input:focus { outline: none; border-color: var(--blue); }
+  .seg.small button { padding: 4px 10px; font-size: 13px; }
+  .eps td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .eps th.num, .eps td.num { text-align: right; padding-right: 12px; }
+  .eps td.ep-name { max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
+  .eps th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+  .eps th button:hover, .eps th[aria-sort] button { color: var(--t1); }
+  .eps tr.ep { cursor: pointer; } .eps tr.ep:hover td, .eps tr.ep.open td { background: var(--bg3); }
+  .eps td.spark canvas { display: block; width: 96px; height: 20px; margin-top: 2px; }
+  .eps .detail td { background: var(--bg); padding: 10px; cursor: default; white-space: normal; }
+  .eps .detail pre { margin-top: 0; }
+  .k-http { color: var(--blue); } .k-ws { color: var(--violet); } .k-db { color: var(--up); } .k-redis { color: var(--down); } .k-s3, .k-video, .k-voice { color: var(--warn); }
   .st-running { color: var(--up); } .st-exited, .st-dead { color: var(--down); } .st-restarting, .st-paused, .st-created { color: var(--warn); }
 </style>
 </head>
@@ -90,6 +104,8 @@
     <div id="ranges" class="seg" role="group" aria-label="range"></div>
   </div>
   <div id="targets"></div>
+  <div id="endpoints"></div>
+  <div id="status"></div>
 </main>
 <script>
 (() => {
@@ -98,6 +114,8 @@
   const $asof = document.getElementById('asof');
   const $tabs = document.getElementById('tabs');
   const $ranges = document.getElementById('ranges');
+  const $endpoints = document.getElementById('endpoints');
+  const $status = document.getElementById('status');
 
   const RANGES = { '1h': { secs: 3600, every: 15000 }, '24h': { secs: 86400, every: 60000 }, '7d': { secs: 604800, every: 300000 } };
   const ALL = '';
@@ -138,6 +156,10 @@
     d.append(value instanceof Node ? value : el('span', null, value ?? '—'));
     return d;
   };
+  const ms = (v) => (!has(v) ? '—' : v < 1 ? `${Math.max(1, Math.round(v * 1000))} µs` : v < 10 ? `${v.toFixed(2)} ms` : v < 1000 ? `${v.toFixed(v < 100 ? 1 : 0)} ms` : `${(v / 1000).toFixed(2)} s`);
+  const count = (v) => (!has(v) ? '—' : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e4 ? `${Math.round(v / 1e3)}k` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v));
+  const rate = (v) => (!has(v) ? '—' : v === 0 ? '0' : v < 0.01 ? '<0.01' : v < 10 ? v.toFixed(2) : String(Math.round(v)));
+  const per = (secs) => ({ 60: 'minute', 900: '15 minutes', 3600: 'hour' })[secs] || `${secs}s`;
   const last = (arr) => {
     for (let i = (arr || []).length - 1; i >= 0; i--) if (has(arr[i])) return arr[i];
     return null;
@@ -147,16 +169,41 @@
   const expanded = new Set();
   let state = null, series = null, cur = null, seriesKey = '', seriesAt = 0, lastOk = null;
   const charts = [];
+  const KINDS = ['http', 'ws', 'db', 'redis', 's3', 'video', 'voice'];
+  const COLS = [
+    { id: 'target', label: 'box' },
+    { id: 'kind', label: 'kind' },
+    { id: 'method', label: 'method' },
+    { id: 'name', label: 'name' },
+    { id: 'src', label: 'where' },
+    { id: 'n', label: 'count', num: true, fmt: count },
+    { id: 'rate', label: '/s', num: true, fmt: rate },
+    { id: 'e4', label: '4xx', num: true, fmt: count, bad: 'note' },
+    { id: 'e5', label: '5xx', num: true, fmt: count, bad: 'no' },
+    { id: 'err', label: 'err', num: true, fmt: count, bad: 'no' },
+    { id: 'p50', label: 'p50', num: true, fmt: ms },
+    { id: 'p95', label: 'p95', num: true, fmt: ms },
+    { id: 'p99', label: 'p99', num: true, fmt: ms },
+    { id: 'max', label: 'max', num: true, fmt: ms },
+    { id: 'spark', label: 'p95 over the range', fixed: true },
+  ];
+  const ep = { q: '', kind: '', target: '', sort: 'n', dir: -1, open: null, data: null, error: null, at: 0, key: '', detail: null, ui: null };
+  const epCharts = [];
 
   function readHash() {
     const p = new URLSearchParams(location.hash.slice(1));
     sel.box = p.has('box') ? p.get('box') : null;
     sel.range = RANGES[p.get('range')] ? p.get('range') : '1h';
+    ep.q = p.get('q') || '';
+    ep.kind = p.get('kind') || '';
+    if (ep.ui && ep.ui.search.value !== ep.q) ep.ui.search.value = ep.q;
   }
   function writeHash() {
     const p = new URLSearchParams();
     if (sel.box !== null) p.set('box', sel.box);
     if (sel.range !== '1h') p.set('range', sel.range);
+    if (ep.kind) p.set('kind', ep.kind);
+    if (ep.q) p.set('q', ep.q);
     history.replaceState(null, '', p.toString() ? `#${p}` : location.pathname);
   }
   function boxShown() {
@@ -170,6 +217,7 @@
     writeHash();
     render();
     loadSeries(true);
+    if (range !== undefined) loadTimings(true);
   }
 
   function draw(c) {
@@ -216,15 +264,15 @@
     }
   }
 
-  function chart({ label, lines, max, now, value, read, thin, small }) {
-    const s = cur;
+  function chart({ label, lines, max, now, value, read, thin, small, src, store }) {
+    const s = src || cur;
     const t = s ? s.t : [];
     const t1 = Math.floor(now / 1000), t0 = t1 - RANGES[sel.range].secs;
     const canvas = el('canvas');
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', label);
     const c = { canvas, t, lines, t0, t1, gap: s ? s.bucket_secs : 15, max, hover: null, thin };
-    charts.push(c);
+    (store || charts).push(c);
     if (small) return canvas;
     const tile = el('div', 'tile');
     const head = el('div', 'head');
@@ -487,7 +535,7 @@
       $tabs.append(b);
     }
     $ranges.replaceChildren();
-    $ranges.hidden = shown === ALL;
+    $ranges.hidden = false;
     for (const r of Object.keys(RANGES)) {
       const b = el('button', null, r);
       b.type = 'button';
@@ -504,9 +552,11 @@
     const m = state.monitor;
     $meta.textContent = `build ${m.build} · up ${human(m.up_secs)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}`;
     $targets.replaceChildren();
+    $status.replaceChildren();
     if (!state.targets.length) {
       $tabs.replaceChildren();
       $ranges.hidden = true;
+      $endpoints.hidden = true;
       $targets.append(el('p', 'empty', 'nothing to watch. STATS_TARGETS in .env (or TARGETS in monitor/.env), then deploy'));
       return;
     }
@@ -517,9 +567,238 @@
       for (const t of state.targets) $targets.append(statusCard(t, now, true));
     } else {
       const t = state.targets.find((x) => x.name === shown);
-      $targets.append(hostSection(t, now), containerSection(t, now), statusCard(t, now, false));
+      $targets.append(hostSection(t, now), containerSection(t, now));
+      $status.append(statusCard(t, now, false));
     }
     for (const c of charts) draw(c);
+    $endpoints.hidden = false;
+    epTable();
+  }
+
+  function segFill(box, items, current, pick) {
+    const sig = items.map((i) => `${i.id}:${i.label}`).join('|');
+    if (box.dataset.sig !== sig) {
+      box.dataset.sig = sig;
+      box.replaceChildren(...items.map((i) => {
+        const b = el('button', null, i.label);
+        b.type = 'button';
+        b.dataset.id = i.id;
+        b.addEventListener('click', () => pick(i.id));
+        return b;
+      }));
+    }
+    for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.id === current));
+  }
+
+  function epBuild() {
+    const sec = el('section', 'target');
+    sec.append(el('h2', null, 'endpoints and calls'));
+    const controls = el('div', 'ep-controls');
+    const search = el('input');
+    search.type = 'search';
+    search.placeholder = 'filter: route, query, command, box';
+    search.spellcheck = false;
+    search.autocomplete = 'off';
+    search.setAttribute('aria-label', 'filter endpoints and calls');
+    search.value = ep.q;
+    search.addEventListener('input', () => { ep.q = search.value; writeHash(); epTable(); });
+    const kinds = el('div', 'seg small');
+    kinds.setAttribute('role', 'group');
+    kinds.setAttribute('aria-label', 'kind');
+    const boxes = el('div', 'seg small');
+    boxes.setAttribute('role', 'group');
+    boxes.setAttribute('aria-label', 'box');
+    controls.append(search, kinds, boxes);
+    const info = el('div', 'dim');
+    info.style.marginBottom = '6px';
+    const wrap = el('div', 'scroll');
+    const table = el('table', 'eps');
+    const thead = el('thead');
+    const tbody = el('tbody');
+    table.append(thead, tbody);
+    wrap.append(table);
+    const foot = el('div', 'dim', 'click a row for its graphs. latency: to the response headers (http, ws), the statement (db), the command (redis), the request (s3, video, voice)');
+    foot.style.marginTop = '6px';
+    sec.append(controls, info, wrap, foot);
+    $endpoints.append(sec);
+    ep.ui = { search, kinds, boxes, info, thead, tbody };
+  }
+
+  function epNow() {
+    return ep.data ? Date.parse(ep.data.now) + (Date.now() - ep.data.received) : Date.now();
+  }
+
+  function epTable() {
+    if (!state || !state.targets.length) return;
+    if (!ep.ui) epBuild();
+    const ui = ep.ui;
+    epCharts.length = 0;
+    const shown = boxShown();
+    const multi = shown === ALL && state.targets.length > 1;
+    if (!multi) ep.target = '';
+    const target = shown === ALL ? ep.target : shown;
+    const rows = (ep.data && ep.data.rows) || [];
+    const kinds = KINDS.concat([...new Set(rows.map((r) => r.kind))].filter((k) => !KINDS.includes(k)).sort());
+    segFill(ui.kinds, [{ id: '', label: 'all' }, ...kinds.map((k) => ({ id: k, label: k }))], ep.kind, (k) => { ep.kind = k; writeHash(); epTable(); });
+    ui.boxes.hidden = !multi;
+    segFill(ui.boxes, multi ? [{ id: '', label: 'all boxes' }, ...state.targets.map((t) => ({ id: t.name, label: t.name }))] : [], ep.target, (b) => { ep.target = b; epTable(); });
+
+    const words = ep.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const list = rows.filter((r) => (!target || r.target === target) && (!ep.kind || r.kind === ep.kind)
+      && words.every((w) => `${r.target} ${r.kind} ${r.method} ${r.name} ${r.src}`.toLowerCase().includes(w)));
+    const col = COLS.find((c) => c.id === ep.sort && !c.fixed) || COLS[5];
+    list.sort((a, b) => {
+      const x = a[col.id], y = b[col.id];
+      if (!has(x) || x === '') return has(y) && y !== '' ? 1 : b.n - a.n;
+      if (!has(y) || y === '') return -1;
+      const d = typeof x === 'number' ? x - y : String(x).localeCompare(String(y));
+      return d * ep.dir || b.n - a.n;
+    });
+    const LIMIT = 250;
+    const cols = COLS.filter((c) => c.id !== 'target' || multi);
+    const notes = [];
+    if (ep.error) notes.push(`could not refresh: ${ep.error}`);
+    if (ep.data) {
+      notes.push(`${list.length} of ${rows.length} lines over ${ep.data.range}${list.length > LIMIT ? `, showing the first ${LIMIT}` : ''}`);
+      for (const [box, n] of Object.entries(ep.data.dropped || {})) notes.push(`${box}: ${n} new lines dropped, the table holds 400 per box`);
+    }
+    ui.info.textContent = notes.join(' · ');
+
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.col : null;
+    const head = el('tr');
+    for (const c of cols) {
+      const th = el('th', c.num ? 'num' : null);
+      if (c.fixed) th.textContent = c.label;
+      else {
+        const b = el('button', null, c.label + (c.id === ep.sort ? (ep.dir < 0 ? ' ▼' : ' ▲') : ''));
+        b.type = 'button';
+        b.dataset.col = c.id;
+        b.title = `sort by ${c.label}`;
+        if (c.id === ep.sort) th.setAttribute('aria-sort', ep.dir < 0 ? 'descending' : 'ascending');
+        b.addEventListener('click', () => {
+          if (ep.sort === c.id) ep.dir = -ep.dir;
+          else { ep.sort = c.id; ep.dir = c.num ? -1 : 1; }
+          epTable();
+        });
+        th.append(b);
+      }
+      head.append(th);
+    }
+    ui.thead.replaceChildren(head);
+    if (focused) {
+      const again = ui.thead.querySelector(`button[data-col="${focused}"]`);
+      if (again) again.focus();
+    }
+
+    const body = [];
+    const sparks = [];
+    if (!rows.length) {
+      const tr = el('tr');
+      const td = el('td', 'empty', !ep.data ? 'loading' : 'no timings yet. each box sends them through its agent (TIMINGS_FROM in docker-compose.yml) once it runs this build');
+      td.colSpan = cols.length;
+      tr.append(td);
+      body.push(tr);
+    } else if (!list.length) {
+      const tr = el('tr');
+      const td = el('td', 'empty', 'nothing matches the filter');
+      td.colSpan = cols.length;
+      tr.append(td);
+      body.push(tr);
+    }
+    const now = epNow();
+    for (const r of list.slice(0, LIMIT)) {
+      const id = `${r.target}\u0000${r.key}`;
+      const tr = el('tr', `ep${ep.open === id ? ' open' : ''}`);
+      for (const c of cols) {
+        if (c.id === 'spark') {
+          const td = el('td', 'spark');
+          const canvas = el('canvas');
+          canvas.setAttribute('role', 'img');
+          canvas.setAttribute('aria-label', `p95 latency of ${r.name} over the range`);
+          td.append(canvas);
+          sparks.push({ canvas, t: r.spark.map((_, i) => i), lines: [{ v: r.spark, color: r.err > 0 ? COLORS.red : COLORS.blue }], t0: 0, t1: Math.max(1, r.spark.length - 1), gap: 1, max: 0, hover: null, thin: true });
+          tr.append(td);
+          continue;
+        }
+        const v = r[c.id];
+        const cls = [c.num ? 'num mono' : '', c.id === 'name' ? 'ep-name mono' : '', c.id === 'kind' ? `k-${r.kind}` : '', c.bad && v > 0 ? c.bad : '', c.id === 'src' || c.id === 'method' ? 'dim' : ''].filter(Boolean).join(' ');
+        const td = el('td', cls, c.fmt ? c.fmt(v) : v || '—');
+        if (c.id === 'name') td.title = r.name;
+        tr.append(td);
+      }
+      tr.addEventListener('click', () => {
+        ep.open = ep.open === id ? null : id;
+        ep.detail = null;
+        epTable();
+        if (ep.open) loadDetail().then(epTable);
+      });
+      body.push(tr);
+      if (ep.open === id) body.push(epDetail(r, cols.length, now));
+    }
+    ui.tbody.replaceChildren(...body);
+    for (const c of sparks) draw(c);
+    for (const c of epCharts) draw(c);
+  }
+
+  function epDetail(r, span, now) {
+    const tr = el('tr', 'detail');
+    const td = el('td');
+    td.colSpan = span;
+    td.append(el('pre', 'mono', `${r.kind}${r.method ? ' ' + r.method : ''} ${r.name}\n${r.target} · ${r.src} · ${count(r.n)} over ${ep.data.range} · ${rate(r.rate)}/s\nmean ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · 4xx ${r.e4} · 5xx ${r.e5} · all errors ${r.err}`));
+    const D = ep.detail;
+    const id = `${r.target}\u0000${r.key}`;
+    if (!D || D.id !== id) td.append(el('div', 'empty', 'loading'));
+    else if (D.error) td.append(el('div', 'note', D.error));
+    else {
+      const src = { t: D.t, bucket_secs: D.bucket_secs };
+      const tiles = el('div', 'tiles');
+      tiles.append(
+        chart({ label: `latency per ${per(D.bucket_secs)}`, now, read: ms, src, store: epCharts, value: `p95 ${ms(r.p95)}`,
+          lines: [{ name: 'p50', v: D.p50, color: COLORS.green }, { name: 'p95', v: D.p95, color: COLORS.blue }, { name: 'p99', v: D.p99, color: COLORS.violet }, { name: 'max', v: D.max, color: COLORS.red }] }),
+        chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: count(r.n),
+          lines: [{ name: 'count', v: D.n, color: COLORS.blue }] }),
+        chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: `${r.err + r.e4}`,
+          lines: [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }] })
+      );
+      td.append(tiles);
+    }
+    tr.append(td);
+    return tr;
+  }
+
+  async function loadTimings(force) {
+    if (!state || !state.targets.length) return;
+    if (!force && ep.key === sel.range && Date.now() - ep.at < RANGES[sel.range].every) return;
+    ep.key = sel.range;
+    ep.at = Date.now();
+    try {
+      const res = await fetch(`/api/monitor/timings?range=${sel.range}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`GET /api/monitor/timings answered ${res.status}`);
+      const d = await res.json();
+      if (d.range !== sel.range) return;
+      d.received = Date.now();
+      ep.data = d;
+      ep.error = null;
+    } catch (e) {
+      ep.at = 0;
+      ep.error = e.message;
+    }
+    await loadDetail();
+    epTable();
+  }
+
+  async function loadDetail() {
+    const id = ep.open;
+    if (!id) return;
+    const [target, key] = id.split('\u0000');
+    try {
+      const res = await fetch(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(key)}&range=${sel.range}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`GET /api/monitor/timings/series answered ${res.status}`);
+      const d = await res.json();
+      if (ep.open === id) ep.detail = { ...d, id };
+    } catch (e) {
+      if (ep.open === id) ep.detail = { id, error: `could not load the graphs: ${e.message}` };
+    }
   }
 
   async function loadState() {
@@ -558,13 +837,13 @@
 
   async function tick() {
     await loadState();
-    await loadSeries(false);
+    await Promise.all([loadSeries(false), loadTimings(false)]);
   }
 
   readHash();
-  window.addEventListener('hashchange', () => { readHash(); render(); loadSeries(true); });
+  window.addEventListener('hashchange', () => { readHash(); render(); loadSeries(true); loadTimings(true); });
   let resizeTimer = null;
-  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { for (const c of charts) draw(c); }, 100); });
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { for (const c of charts) draw(c); epTable(); }, 100); });
   tick();
   setInterval(tick, 5000);
 })();

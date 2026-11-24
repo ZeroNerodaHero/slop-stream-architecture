@@ -1,6 +1,6 @@
 # metrics
 
-cpu, memory, disk and network for every container and every box, in our own code, on a page at https://stats.nodentity.xyz, behind a password or, with an explicit `STATS_PUBLIC=true`, open to anyone. built: the agent, the monitor's history, the page, the stats site, the deploy target. not built yet: alerts on the numbers, `/admin`'s "this box now" panel, video's own per-stream numbers (end of this page).
+cpu, memory, disk and network for every container and every box, and the latency and error count of every api route, sql statement, redis command and s3, video and voice call, in our own code, on a page at https://stats.nodentity.xyz, behind a password or, with an explicit `STATS_PUBLIC=true`, open to anyone. built: the agent, the endpoint timings, the monitor's history, the page, the stats site, the deploy target. not built yet: alerts on the numbers, `/admin`'s "this box now" panel, video's own per-stream numbers (end of this page).
 
 ## the shape
 
@@ -100,8 +100,50 @@ the monitor pulls `/api/metrics` from every box in its `TARGETS` every 15 s (`ME
 
 - one tab per box, with its up/down dot and cpu, memory and disk right now. with more than one box an "all boxes" tab first, the status cards side by side. with one box it opens that box. the box and the range are in the url (`#box=test-machine&range=24h`), so a link opens the same view.
 - a box: the host graphs (cpu with steal and iowait, load, memory, swap, disk, network in and out, pressure), hover for the value at a time; then a table of containers (state, up since, restarts, cpu, memory, network, disk io, pids, each with a sparkline), a click opens that container's graphs; then the status card the monitor always had (up/down, the 24-hour bar, the health grid, events, error reports).
-- 1h, 24h, 7d. the status polls every 5 s, the graphs every 15 s, 60 s and 5 min.
+- under the containers (under the cards on "all boxes"), the endpoints and calls table: below.
+- 1h, 24h, 7d, on every tab. the status polls every 5 s, the graphs and the table every 15 s, 60 s and 5 min.
 - every string through `textContent`: container names, images and error reports are not trusted.
+
+## endpoint and call timings
+
+every api process (`api`, `chat`, `events`, `home`) times what it does and keeps a histogram per line, `api/src/timings.rs`:
+
+| kind | one line per | timed |
+|---|---|---|
+| `http` | method and the matched route template, `GET /api/streamers/{name}`, never the raw path. no match: `(no route)`. a method outside the usual seven: `OTHER` | to the response headers, through every layer of that router. 4xx and 5xx counted from the status |
+| `ws` | the same, for an answer of 101 (`/chat/{name}`, `/chat/{server}/{channel}`, `/events`) | the upgrade, not the life of the socket |
+| `db` | sql statement, values taken out: literals and numbers become `?`, `$1, $2, $3` becomes `$`, whitespace folded, cut at 200 characters | the statement, from sqlx's own statement log (`log_statements(Info)` on the main pool), which the api's logger reads and keeps out of the log. slow-statement warnings still print. a failed statement is not counted as an error: sqlx logs no outcome |
+| `redis` | command (`GET`, `ZCOUNT`, `XREAD BLOCK`), a pipeline as `PIPELINE` or `MULTI` and its first four commands | the round trip, through a wrapper round the connection manager (`timings::Redis`). an error answer counts as an error. a blocking `XREAD` is as long as it blocked |
+| `s3` | method and `object`, `object range` or `bucket` | the request to seaweedfs (`s3::send_with`). 404 counts as 4xx |
+| `video`, `voice` | method and path of the internal call: `/live`, `/viewers`, `/health`, `/thumb/{name}.jpg`, `/internal/voice` | the request. no answer counts as an error |
+
+the histogram: 240 counters per line, 8 per doubling, so a percentile is within about 6% of the real one, from 1 µs to 71 minutes. recording is a read lock on the map, then atomic adds; the write lock only for a line's first call. 500 lines per process at most, more go to one `(other)` line per kind. about 2 KB a line.
+
+each process serves its lines on `:9300` (`TIMINGS_PORT`), `GET /timings`, inside docker only: no port published, not in the Caddyfile. counts since the process started, plus the slowest call since the last read.
+
+the agent asks each of `TIMINGS_FROM` (set in compose: `api=http://api:9300,chat=http://chat:9300,events=http://events:9300,home=http://home:9300`) every sample, keeps the last answer, and puts the difference in the sample as `timings`: only the lines with calls since the last sample, buckets sparse. the first answer is a baseline; a process that restarted (its start time changed) gives its whole count. one that does not answer is a `problems` line, `timings from chat: ...`. so `/api/metrics` carries the timings with the host numbers, behind the same `OPS_TOKEN`, and a box needs nothing new.
+
+```json
+"timings": [ { "kind": "http", "method": "GET", "name": "/api/streamers/{name}", "src": "api",
+               "n": 12, "e4": 0, "e5": 0, "err": 0, "sum_us": 64100, "max_us": 11100, "b": [[170, 3], [171, 6], [172, 3]] } ]
+```
+
+the monitor adds each sample's timings into three rings per line and box, coarser than the host numbers so a week of a few hundred lines stays small:
+
+| range | one point per | points |
+|---|---|---|
+| 1h | 1 min | 60 |
+| 24h | 15 min | 96 |
+| 7d | 1 h | 168 |
+
+400 lines a box; a new line past that is dropped and counted (the page says so). a line with no calls for a week goes. kept in `/data/metrics.json` with the rest.
+
+- `GET /api/monitor/timings?range=1h|24h|7d[&target=<name>]`: a row per line and box over the range: `target, key, kind, method, name, src, n, rate` (per second), `e4, e5, err, mean, p50, p95, p99, max` (ms), and `spark`, p95 in 40 slots across the range.
+- `GET /api/monitor/timings/series?target=<name>&key=<key>&range=...`: one line's points, `t, n, e4, e5, err, p50, p95, p99, max`.
+
+on the page: a search box (every word must match the box, kind, method, name or where), a chip per kind, a chip per box on "all boxes", a header click sorts by that column and again the other way. 250 rows at most; the filter narrows it. a row click opens its latency (p50, p95, p99, max), count and error graphs. the kind and the search are in the url (`#kind=db&q=streamers`).
+
+`err` is every failure: a 5xx, an error from redis, no answer from s3, video or voice. `4xx` is apart, since a 404 on `/api/streamers/{name}` is a normal answer.
 
 ## stats.nodentity.xyz
 
@@ -118,7 +160,7 @@ dns: a proxied cloudflare cname to `nodentity.xyz`, ssl mode full. the request r
 |---|---|---|
 | the page and `/api/monitor*` | `https://stats.nodentity.xyz` only. the `stats` container publishes no port and sits on its own compose network, `stats`, with caddy and nothing else: not the api, not the database, not a host port | 401 (or 503 while off); anyone, with `STATS_PUBLIC=true` |
 | the agent's numbers | `https://<any host>/api/metrics` on the main site. the agent publishes no port | 404 with no `OPS_TOKEN` on the box, 401 with a wrong one |
-| the agent and the monitor's `/health` | inside docker only | — |
+| the agent and the monitor's `/health`, each api process's `:9300/timings` | inside docker only | — |
 
 on another box the `https://stats.nodentity.xyz` block exists too but dns does not point there; with no `STATS_BASIC_AUTH_*` in its `.env` it answers 503 anyway.
 
@@ -135,7 +177,7 @@ STATS_PUBLIC=true
 then `./scripts/deploy.sh stats`. caddy is recreated (a second or two), and the `stats` container is started if it was not running.
 
 - exactly `true`, lowercase. anything else (`TRUE`, `yes`, `1`) is not public: the site goes by the password settings as before, and with those blank it is still a 503. `deploy.sh` warns about any other value.
-- what goes public: the page, `GET /api/monitor` and `GET /api/monitor/metrics`. they only read; any other method is a 405. the box names, their urls in `STATS_TARGETS`, builds, uptimes, events and the host and container numbers are on it.
+- what goes public: the page, `GET /api/monitor`, `GET /api/monitor/metrics` and `GET /api/monitor/timings*`. they only read; any other method is a 405. the box names, their urls in `STATS_TARGETS`, builds, uptimes, events, the host and container numbers, and every route template and sql statement (values taken out) with its timings are on it.
 - what does not: the error reports. a report names the visitor's ip, login and user agent and the page they were on (`docs/debugging.md`), so with `STATS_PUBLIC=true` the monitor (which gets the same value as `PUBLIC`) leaves them out of `/api/monitor` and the page says how many are stored. they show again behind the password.
 - unchanged: the agent's `/api/metrics` on every box still wants the box's `OPS_TOKEN`; the docker socket is still read-only and `GET` only; `Cache-Control: private, no-store` is on every answer, so cloudflare keeps nothing; the monitor's own per-ip rate limit counts each visitor by the ip caddy resolved from cloudflare.
 - `STATS_BASIC_AUTH_*` are ignored while it is on, and keep working the moment it is off: empty `STATS_PUBLIC` (or set it to `false`) and `./scripts/deploy.sh stats`.
@@ -196,7 +238,7 @@ in the root `.env` (`.env.example` has them all, empty):
 | `STATS_ALERT_WEBHOOK` | where the monitor posts down and up (discord or slack style). empty: the page and the log only |
 | `OPS_TOKEN` | already there for `/api/errors`; now also the key to this box's `/api/metrics`. empty: the agent's numbers are off, and the page says so |
 
-compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15 and `KEEP_SAMPLES` 240 on the agent, `METRICS_EVERY_SECS` 15 on the monitor (and in `monitor/.env.example` for the standalone one).
+compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15, `KEEP_SAMPLES` 240 and `TIMINGS_FROM` on the agent, `METRICS_EVERY_SECS` 15 on the monitor (and in `monitor/.env.example` for the standalone one). `TIMINGS_PORT` (9300; 0 turns it off) is not set anywhere: the default is the one `TIMINGS_FROM` names.
 
 ## deploy
 
@@ -204,7 +246,7 @@ compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15 and `KEEP_SAMPLES`
 
 ## cost
 
-the agent: a few megabytes of memory, one docker round per container every 15 s, milliseconds of cpu. the monitor: a few hundred kilobytes of history a box, on disk and in memory. the page: static, in the binary.
+the agent: a few megabytes of memory, one docker round per container every 15 s, milliseconds of cpu. the timings: a hashmap read and a few atomic adds per request, query or command; at most a megabyte per process. the monitor: a few hundred kilobytes of host history a box, and up to a few megabytes of timings once a week of busy lines is in, on disk and in memory. the page: static, in the binary.
 
 ## not yet
 

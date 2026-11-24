@@ -32,6 +32,7 @@ mod release;
 mod s3;
 mod socket;
 mod test_streamers;
+mod timings;
 mod turnstile;
 mod voice;
 
@@ -55,7 +56,8 @@ use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use sqlx::ConnectOptions;
 use test_streamers::DummySecret;
 use tokio::time::sleep;
 
@@ -73,7 +75,7 @@ type RecentCache = Arc<Mutex<Option<(Instant, Value)>>>;
 pub(crate) struct AppState {
     pub(crate) db: PgPool,
     pub(crate) debug: Option<PgPool>,
-    pub(crate) redis: ConnectionManager,
+    pub(crate) redis: timings::Redis,
     pub(crate) http: reqwest::Client,
     video_url: String,
     pub(crate) dummy_prefix: String,
@@ -235,10 +237,7 @@ fn nx_ex() -> SetOptions {
 }
 
 pub(crate) async fn video_live(s: &AppState) -> Option<HashSet<String>> {
-    let res = s
-        .http
-        .get(format!("{}/live", s.video_url))
-        .send()
+    let res = timings::call("video", "GET", "/live", s.http.get(format!("{}/live", s.video_url)))
         .await
         .map_err(|e| log::warn!("video unreachable: {e}"))
         .ok()?;
@@ -261,9 +260,7 @@ pub(crate) async fn live_set(s: &AppState) -> Result<Arc<HashSet<String>>, ApiEr
 }
 
 pub(crate) async fn video_viewers(http: &reqwest::Client, video_url: &str) -> Option<HashMap<String, usize>> {
-    let res = http
-        .get(format!("{video_url}/viewers"))
-        .send()
+    let res = timings::call("video", "GET", "/viewers", http.get(format!("{video_url}/viewers")))
         .await
         .map_err(|e| log::warn!("video unreachable: {e}"))
         .ok()?;
@@ -281,9 +278,7 @@ pub(crate) async fn is_live(s: &AppState, name: &str) -> Result<bool, ApiError> 
 }
 
 pub(crate) async fn thumb_exists(s: &AppState, name: &str) -> bool {
-    s.http
-        .head(format!("{}/thumb/{name}.jpg", s.video_url))
-        .send()
+    timings::call("video", "HEAD", "/thumb/{name}.jpg", s.http.head(format!("{}/thumb/{name}.jpg", s.video_url)))
         .await
         .is_ok_and(|res| res.status().is_success())
 }
@@ -389,7 +384,7 @@ struct VideoHealth {
 }
 
 async fn video_health(s: &AppState) -> Option<VideoHealth> {
-    let res = s.http.get(format!("{}/health", s.video_url)).send().await.ok()?.error_for_status().ok()?;
+    let res = timings::call("video", "GET", "/health", s.http.get(format!("{}/health", s.video_url))).await.ok()?.error_for_status().ok()?;
     Some(res.json().await.unwrap_or_default())
 }
 
@@ -848,6 +843,7 @@ fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), ratelimit::api))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such route") })
         .layer(axum::middleware::map_response(media::no_store_by_default))
+        .layer(axum::middleware::from_fn(timings::http))
         .with_state(state)
 }
 
@@ -855,8 +851,10 @@ async fn connect_postgres(url: &str) -> PgPool {
     let options = PgPoolOptions::new()
         .max_connections(8)
         .acquire_timeout(Duration::from_secs(5));
+    let connect: PgConnectOptions = url.parse().expect("bad DATABASE_URL");
+    let connect = connect.log_statements(log::LevelFilter::Info);
     loop {
-        match options.clone().connect(url).await {
+        match options.clone().connect_with(connect.clone()).await {
             Ok(pool) => return pool,
             Err(e) => log::warn!("postgres not ready: {e}"),
         }
@@ -864,14 +862,14 @@ async fn connect_postgres(url: &str) -> PgPool {
     }
 }
 
-pub(crate) async fn connect_redis(url: &str) -> ConnectionManager {
+pub(crate) async fn connect_redis(url: &str) -> timings::Redis {
     let client = redis::Client::open(url).expect("bad REDIS_URL");
     let config = ConnectionManagerConfig::new()
         .set_connection_timeout(Some(Duration::from_secs(5)))
         .set_response_timeout(Some(Duration::from_secs(5)));
     loop {
         match ConnectionManager::new_with_config(client.clone(), config.clone()).await {
-            Ok(con) => return con,
+            Ok(con) => return timings::Redis::new(con),
             Err(e) => log::warn!("redis not ready: {e}"),
         }
         sleep(Duration::from_secs(2)).await;
@@ -891,7 +889,7 @@ pub(crate) async fn wait_for_signal() {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    timings::init_logging();
 
     if env::args().nth(1).as_deref() == Some("monitor") {
         monitor::run().await.expect("monitor");
@@ -1036,6 +1034,7 @@ async fn main() {
         .await
         .expect("bind");
     log::info!("api on 0.0.0.0:{port}");
+    timings::serve();
     tokio::spawn(sweep_sessions(state.clone()));
     tokio::spawn(voice::sweep(state.clone()));
     tokio::spawn(analytics::sampler(state.clone()));

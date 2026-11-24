@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -122,7 +122,7 @@ async fn clip(db: &PgPool, users: &[Uuid]) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-async fn tell(redis: &ConnectionManager, kind: Kind, actor: &Actor, made: &Made) {
+async fn tell(redis: &Redis, kind: Kind, actor: &Actor, made: &Made) {
     if made.to.is_empty() {
         return;
     }
@@ -272,13 +272,13 @@ pub(crate) fn room_of(server: &str, channel: &str) -> String {
     format!("{server}/{channel}")
 }
 
-pub(crate) async fn channel_line(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) {
+pub(crate) async fn channel_line(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) {
     if let Err(e) = chat_rows(db, redis, server, channel, actor, text, admins).await {
         log::warn!("notify: a line in {}: {}", room_of(server, channel), e.message());
     }
 }
 
-async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) -> Result<(), ApiError> {
+async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) -> Result<(), ApiError> {
     let Some(actor) = actor_by_id(db, actor).await? else { return Ok(()) };
     let room = room_of(server, channel);
     let words: String = text.chars().take(TEXT_CHARS).collect();
