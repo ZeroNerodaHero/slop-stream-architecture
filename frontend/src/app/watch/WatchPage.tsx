@@ -139,6 +139,11 @@ function DmButton({ name }: { name: string }) {
   );
 }
 
+function WatchStats({ muted, volume, className }: { muted: boolean; volume: number; className?: string }) {
+  const stats = useAtomValue(watchStatsAtom);
+  return <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} className={className} />;
+}
+
 export function WatchPage() {
   const [tab, setTab] = useState<PhoneTab>('about');
   const mobile = useIsMobile();
@@ -168,7 +173,6 @@ export function WatchPage() {
   const needsTap = useAtomValue(needsTapAtom);
   const muted = useAtomValue(mutedAtom);
   const volume = useAtomValue(volumeAtom);
-  const stats = useAtomValue(watchStatsAtom);
   const verified = useAtomValue(verifiedAtom);
   const oauthVerified = useAtomValue(oauthVerifiedAtom);
   const avatar = useAtomValue(avatarAtom);
@@ -398,7 +402,7 @@ export function WatchPage() {
               tap to play
             </Button>
           )}
-          {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} className={cn('left-3 top-3', mobile && strip.overlay)} />}
+          {canHear && <WatchStats muted={muted} volume={volume} className={cn('left-3 top-3', mobile && strip.overlay)} />}
           {phase !== 'bad-name' && (
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatTab && !chatOpen)), mobile && strip.overlay)}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
