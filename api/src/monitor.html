@@ -374,6 +374,7 @@
   const sparkCache = new Map();
   const archCache = new Map();
   const archBuilt = new Map();
+  const hostBuilt = new Map();
   const tm = { data: null, error: null, at: 0, key: '' };
   let state = null, stateError = null, pageBuild = null;
   const charts = [];
@@ -544,7 +545,7 @@
     const canvas = el('canvas');
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', label);
-    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log, dots: !!tip };
+    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log, dots: !!tip, dirty: true };
     (store || charts).push(c);
     if (small) return canvas;
     const tile = el('div', 'tile');
@@ -721,7 +722,14 @@
     charts2.append(meta);
     const S = (s && s.host) || {};
     const disk = (H.disk || [])[0];
-    charts2.append(
+    const cached = hostBuilt.get(t.name);
+    if (s && cached && cached.series === s && cached.range === sel.range) {
+      for (const c of cached.cs) charts.push(c);
+      charts2.append(...cached.tiles);
+      return wrap;
+    }
+    const base = charts.length;
+    const tiles = [
       chart({ label: 'cpu', now, src: s, max: 100, read: pct1, value: `${pct1(H.cpu_pct)} · steal ${pct1(H.steal_pct)} · iowait ${pct1(H.iowait_pct)}`,
         lines: [{ name: 'busy', v: S.cpu_pct, color: COLORS.blue }, { name: 'steal', v: S.steal_pct, color: COLORS.red }, { name: 'iowait', v: S.iowait_pct, color: COLORS.yellow }] }),
       chart({ label: 'load', now, src: s, max: H.cpus || 1, read: num, value: `${num(H.load1)} / ${num(H.load5)} / ${num(H.load15)}`,
@@ -736,7 +744,10 @@
         lines: [{ name: 'in', v: S.rx_bps, color: COLORS.green }, { name: 'out', v: S.tx_bps, color: COLORS.blue }] }),
       chart({ label: 'pressure', now, src: s, max: 5, read: pct1, value: `cpu ${pct1(H.pressure && H.pressure.cpu)} · mem ${pct1(H.pressure && H.pressure.memory)} · io ${pct1(H.pressure && H.pressure.io)}`,
         lines: [{ name: 'cpu', v: S.psi_cpu, color: COLORS.blue }, { name: 'memory', v: S.psi_memory, color: COLORS.violet }, { name: 'io', v: S.psi_io, color: COLORS.yellow }] })
-    );
+    ];
+    charts2.append(...tiles);
+    if (s) hostBuilt.set(t.name, { series: s, range: sel.range, tiles, cs: charts.slice(base) });
+    else hostBuilt.delete(t.name);
     return wrap;
   }
 
@@ -1799,7 +1810,8 @@
     }
     requestAnimationFrame(() => {
       for (const c of charts) {
-        try { draw(c); } catch (e) { console.error('chart', e); }
+        if (!c.dirty) continue;
+        try { draw(c); c.dirty = false; } catch (e) { console.error('chart', e); }
       }
     });
   }
