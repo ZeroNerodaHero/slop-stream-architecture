@@ -131,7 +131,7 @@ async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Res
             ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
             RETURNING id
          )
-         INSERT INTO follows (follower_id, followed_id) SELECT $1, id FROM named ON CONFLICT DO NOTHING RETURNING followed_id",
+         INSERT INTO follows (follower_id, followed_id) SELECT $1, id FROM named WHERE id <> $1 ON CONFLICT DO NOTHING RETURNING followed_id",
     )
     .bind(me_id)
     .bind(&name)

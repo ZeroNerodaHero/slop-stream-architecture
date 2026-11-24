@@ -389,7 +389,7 @@ function NotificationsList() {
         </p>
       ) : (
         <>
-          <ul id="notifications-list" aria-label="notifications" className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+          <ul id="notifications-list" aria-label="notifications" className="min-h-0 flex-auto overflow-y-auto overscroll-contain py-1">
             {list.map((n) => (
               <li key={n.id} className="group/notification relative">
                 <Row n={n} fresh={fresh.has(n.id) || !n.read} now={now} onPick={closeNotifications} />
