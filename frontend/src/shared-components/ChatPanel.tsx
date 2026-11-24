@@ -416,6 +416,30 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
 
 const BOT_BADGE: GroupBadge = { name: BOT_GROUP, badge: 'BOT', color: '#5865f2' };
 
+const TOAST =
+  'pointer-events-auto absolute bottom-full left-1/2 -translate-x-1/2 z-10 mb-2 flex w-max max-w-[calc(100%-1.5rem)] items-center gap-2 border border-decrease/60 bg-background px-2 py-1 text-xs text-decrease';
+
+function ChatNotice({ notice, onDismiss }: { notice: string; onDismiss: () => void }) {
+  return (
+    <span id="chat-notice" role="status" aria-live="polite" className={cn(TOAST, !notice && 'sr-only')}>
+      {notice && <span aria-hidden className="pointer-events-none absolute inset-0 bg-decrease/10" />}
+      <span className="relative min-w-0 break-words">{notice}</span>
+      {notice && (
+        <Tooltip content="dismiss">
+          <button
+            type="button"
+            aria-label="dismiss"
+            className="relative flex h-4 w-4 shrink-0 items-center justify-center text-decrease hover:text-textPrimary max-md:-my-3 max-md:-mr-2 max-md:h-11 max-md:w-11"
+            onClick={onDismiss}
+          >
+            <RiCloseLine aria-hidden size={12} />
+          </button>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
+
 function WelcomeLine({ welcome }: { welcome: Welcome }) {
   const hideBots = useAtomValue(hideBotsAtom);
   const show = useAtomValue(showWelcomesAtom);
@@ -739,7 +763,7 @@ export function ChatPanel({
       into.showNotice(STREAM_VIDEO_OFF, 5000);
     } else if (first) {
       if (video || videos.length > 1 || videoUp.progress !== null) into.showNotice('one video at a time');
-      if (!video && videoUp.progress === null) void videoUp.upload(first, (v) => into.setVideo(v), (words) => into.showNotice(words, 5000));
+      if (!video && videoUp.progress === null) void videoUp.upload(first, (v) => into.setVideo(v), (words) => into.showNotice(words, 4000));
     }
     void pickPictures(pictures);
   }
@@ -759,7 +783,7 @@ export function ChatPanel({
         into.addImage(saved.id);
       }
     } catch (err) {
-      into.showNotice(messageOf(err));
+      into.showNotice(messageOf(err), 4000);
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -892,7 +916,8 @@ export function ChatPanel({
 
       <footer className="border-t border-primaryStroke p-2">
         {needsNick ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="relative flex flex-wrap gap-2">
+            <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
             <label htmlFor="chat-nick" className="sr-only">
               your nick
             </label>
@@ -911,20 +936,12 @@ export function ChatPanel({
             <Button id="chat-join" variant="primary" className={cn(INPUT_BUTTON, 'h-[1.875rem] text-sm')} disabled={!nickOk} onClick={open}>
               join
             </Button>
-            {notice && (
-              <span id="chat-notice" className="w-full text-sm text-decrease" aria-live="polite">
-                {notice}
-              </span>
-            )}
           </div>
         ) : (
           <>
             <label htmlFor="chat-text" className="sr-only">
               your message
             </label>
-            <span id="chat-notice" className={cn('text-sm text-decrease', notice ? 'mb-1 block' : 'sr-only')} aria-live="polite">
-              {notice}
-            </span>
             {replyTo && (
               <div id="chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
                 <span className="min-w-0 flex-1 truncate text-textSecondary">
@@ -994,32 +1011,35 @@ export function ChatPanel({
                 </button>
               </Tooltip>
               <input ref={fileRef} id="chat-picture-file" type="file" accept={takesVideos ? ATTACH_ACCEPT : PICTURE_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
-              <input
-                ref={textRef}
-                id="chat-text"
-                value={draft}
-                {...emotes.box}
-                onChange={(e) => {
-                  room.setDraft(e.target.value);
-                  emotes.box.onSelect(e);
-                }}
-                onKeyDown={(e) => {
-                  if (emotes.box.onKeyDown(e)) return;
-                  if (e.key === 'Escape' && replyTo) {
+              <div className="relative flex min-w-0 flex-1">
+                <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
+                <input
+                  ref={textRef}
+                  id="chat-text"
+                  value={draft}
+                  {...emotes.box}
+                  onChange={(e) => {
+                    room.setDraft(e.target.value);
+                    emotes.box.onSelect(e);
+                  }}
+                  onKeyDown={(e) => {
+                    if (emotes.box.onKeyDown(e)) return;
+                    if (e.key === 'Escape' && replyTo) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      room.setReply(null);
+                      return;
+                    }
+                    if (!isSendKey(e)) return;
                     e.preventDefault();
-                    e.stopPropagation();
-                    room.setReply(null);
-                    return;
-                  }
-                  if (!isSendKey(e)) return;
-                  e.preventDefault();
-                  room.send();
-                }}
-                placeholder="comment"
-                aria-label={`comment as ${asStreamer ? name : speaker}`}
-                autoComplete="off"
-                className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
-              />
+                    room.send();
+                  }}
+                  placeholder="comment"
+                  aria-label={`comment as ${asStreamer ? name : speaker}`}
+                  autoComplete="off"
+                  className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
+                />
+              </div>
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
