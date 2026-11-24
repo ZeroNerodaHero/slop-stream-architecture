@@ -300,11 +300,7 @@ export interface GroupRoom {
   owner_role?: string;
   admin?: boolean;
   public?: boolean;
-<<<<<<< HEAD
   adult?: boolean;
-  /** The words they typed. Absent, or null, on a group made before the digits. */
-=======
->>>>>>> origin/main
   title?: string | null;
   tag?: number | null;
   member_order?: string;
@@ -644,11 +640,7 @@ export const api = {
   saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
   saveGroupColor: (name: string, color: string) => request<{ color: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/color`, { color }),
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
-<<<<<<< HEAD
   setGroupAdult: (name: string, adult: boolean) => request<{ adult: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/adult`, { adult }),
-  /** Appearance. Owners stay first; this is the order after them. */
-=======
->>>>>>> origin/main
   setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') => request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
