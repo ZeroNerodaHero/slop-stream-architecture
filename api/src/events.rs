@@ -201,6 +201,8 @@ enum Out {
         video: Option<crate::chat::Video>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reply: Option<Value>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        mentions: Vec<String>,
     },
     #[serde(rename = "dm_react")]
     DmReact { id: i64, from: String, to: String, emoji: String, on: bool },
@@ -792,7 +794,8 @@ impl Gateway {
                 let images = crate::chat::split_pictures(entry.get("images"));
                 let video = crate::chat::Video::parse(entry.get::<String>("video").as_deref());
                 let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
-                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, reply }).await;
+                let mentions = crate::mentions::from_field(entry.get("mentions"));
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, reply, mentions }).await;
             }
             "dm_react" => {
                 let (Some(from), Some(id), Some(emoji)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("emoji")) else { return };

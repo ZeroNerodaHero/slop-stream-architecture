@@ -18,6 +18,7 @@ mod history;
 mod home;
 mod janny;
 mod media;
+mod mentions;
 mod schema;
 mod models;
 mod moderate;
@@ -823,6 +824,7 @@ fn router(state: AppState) -> Router {
         .merge(pins::routes())
         .merge(follows::routes())
         .merge(dms::routes())
+        .merge(mentions::routes())
         .merge(chat_images::routes())
         .merge(chat_videos::routes())
         .merge(emotes::routes())

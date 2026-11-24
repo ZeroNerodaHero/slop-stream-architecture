@@ -282,6 +282,7 @@ mod tests {
             images: Vec::new(),
             video: None,
             reply: None,
+            mentions: Vec::new(),
             reactions: Vec::new(),
         }];
         with_reactions(&pool, Some(bob), lines.iter_mut().map(|l| (room.as_str(), l))).await;
