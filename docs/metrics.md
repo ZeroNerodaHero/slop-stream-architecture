@@ -78,9 +78,13 @@ the agent's docker client is a few lines of http over the unix socket that can o
     "containers": [ { "name": "video", "service": "video", "project": "stream", "image": "ghcr.io/you/stream-video:834450b",
                       "state": "running", "health": "healthy", "up_since": "…", "restarts": 0,
                       "cpu_pct": 22.5, "mem_bytes": 61000000, "mem_limit": null, "rx_bps": 310000, "tx_bps": 2500000,
-                      "read_bps": 0, "write_bps": 40000, "pids": 19 } ],
+                      "read_bps": 0, "write_bps": 40000, "pids": 19,
+                      "networks": ["stream_default"], "ports": [{ "port": 7880, "proto": "tcp", "published": 7880, "loopback": false }],
+                      "depends_on": ["api"] } ],
     "problems": [] } ] }
 ```
+
+`networks`, `ports` and `depends_on` come from the same `GET /containers/json` the agent already sends, no new request: the names of the docker networks the container is on (never its addresses), each exposed port with the host port it is published on and whether only on loopback (never the host ip), and the services in compose's `com.docker.compose.depends_on` label. a stopped container also carries `exit_code`, from the inspect it already does. each is left out when empty.
 
 `problems` names what could not be read in that sample (no socket, no pressure files on an old kernel) instead of failing the whole sample.
 
@@ -102,13 +106,31 @@ a box with a token whose agent misses `DOWN_AFTER` pulls in a row (3, 45 s) gets
 
 - `GET /api/monitor` (what the page polls) carries each box's newest sample as `metrics`, or `metrics.status` saying why there is none: `no OPS_TOKEN for this box`, `401: ...` (the token is wrong), `404: that box has no OPS_TOKEN for its agent, or its Caddyfile predates /api/metrics`, `no answer in 5s`.
 - `GET /api/monitor/metrics?target=<name>&range=1h|24h|7d`: one range of one box as columns, `{ "t": [...], "host": { "cpu_pct": [...], ... }, "containers": { "api": { "cpu_pct": [...], ... } }, "latest": {...} }`.
+- `GET /api/monitor/architecture?target=<name>`: that box's containers as a graph, from its newest sample (below).
+
+## the architecture
+
+`api/src/architecture.rs` turns one box's newest sample into `{ nodes, edges, networks }`; the page draws it. no new request to docker and nothing kept: it is worked out on each call.
+
+- a node per container, with its project, service, image, state, health, exit code, networks, ports, cpu, memory and network now. two outside nodes, `(internet)` and `(docker)` (the engine's socket).
+- the edges, three kinds (`via`):
+  - `map`: the connections the code makes, which docker cannot see, from `api/src/architecture.json`: `from`, `to`, `port` and what it is for (`frontend` to `api:4000`, `api` to `database:5432`, the agent to every process's `:9300`). a name there is a container name, or a service name when no container has that name. an edge to a container the box does not run is left out. `tiers` there says which column a container stands in (0 internet, 1 the edge, 2 the processes, 3 media, 4 storage; 2 when unnamed).
+  - `depends_on`: compose's start order inside one project, when the map has no edge between the two.
+  - `published`: a port published on the host, not on loopback only, from `(internet)`.
+- `shared` on an edge between two containers says whether they share a docker network (`over` names them). `false` is drawn red: that connection cannot work. with an agent from before this change there are no networks, `shared` is left out and the page says so.
+- `networks`: each docker network and the containers on it.
+
+the edges in the map are the ones the code makes today. a new service, or one that starts talking to another, wants a line there; a container nothing names still shows, in column 2, with its compose edges.
 
 ## the page
 
-- one tab per box, with its up/down dot and cpu, memory and disk right now. with more than one box an "all boxes" tab first, the status cards side by side. with one box it opens that box. the box and the range are in the url (`#box=test-machine&range=24h`), so a link opens the same view.
-- a box: the host graphs (cpu with steal and iowait, load, memory, swap, disk, network in and out, pressure), hover for the value at a time; then a table of containers (state, up since, restarts, cpu, memory, network, disk io, pids, each with a sparkline), a click opens that container's graphs; then the status card the monitor always had (up/down, the 24-hour bar, the health grid, events, error reports).
-- under the containers (under the cards on "all boxes"), the endpoints and calls table: below.
-- 1h, 24h, 7d, on every tab. the status polls every 5 s, the graphs and the table every 15 s, 60 s and 5 min.
+- a button per box, with its up/down dot and cpu, memory and disk right now. with more than one box an "all boxes" button first. with one box it opens that box.
+- under it four tabs (arrow keys move between them):
+  - **host**: the status card the monitor always had (up/down, the 24-hour bar, the health grid, events, error reports), then the host graphs (cpu with steal and iowait, load, memory, swap, disk, network in and out, pressure), hover for the value at a time. on "all boxes" the status cards side by side.
+  - **containers**: "table and graphs", a table of containers (state, up since, restarts, cpu, memory, network, disk io, pids, each with a sparkline; an exit 0 is grey, not red), a click opens that container's graphs. or "architecture", the graph above: a lane per compose project, a column per tier, a node per container coloured by its state, the edges with their ports. hover a container for its numbers and to light its connections, click it to keep them lit, hover or click a network to light its members, "all labels" shows every port. a table of every connection under it. on "all boxes", one per box.
+  - **endpoints**: the `http` and `ws` lines. **calls**: `db`, `redis`, `s3`, `video`, `voice`. below.
+- the box, the tab, the range, the containers view and the timings filter, kind and sort are in the url (`#box=test-machine&tab=calls&kind=db&sort=-p99&range=24h`), so a link opens the same view. an old `#q=` or `#kind=` link opens endpoints or calls.
+- 1h, 24h, 7d, on every tab but the architecture. the status polls every 5 s, the graphs and the tables every 15 s, 60 s and 5 min. a tab only fetches what it shows.
 - every string through `textContent`: container names, images and error reports are not trusted.
 
 ## endpoint and call timings
@@ -145,10 +167,15 @@ the monitor adds each sample's timings into three rings per line and box, coarse
 
 400 lines a box; a new line past that is dropped and counted (the page says so). a line with no calls for a week goes. kept in `/data/metrics.json` with the rest.
 
-- `GET /api/monitor/timings?range=1h|24h|7d[&target=<name>]`: a row per line and box over the range: `target, key, kind, method, name, src, n, rate` (per second), `e4, e5, err, mean, p50, p95, p99, max` (ms), and `spark`, p95 in 40 slots across the range.
-- `GET /api/monitor/timings/series?target=<name>&key=<key>&range=...`: one line's points, `t, n, e4, e5, err, p50, p95, p99, max`.
+- `GET /api/monitor/timings?range=1h|24h|7d[&target=<name>]`: `rows`, one per line and box over the range: `target, key, kind, method, name, src, n, rate` (per second), `e4, e5, err, mean, p50, p95, p99, max, sum_ms` (ms; `sum_ms` is the time spent in that line). and `totals`, one per kind and box (`target` null: every box), the lines' histograms added up, so its p95 is the p95 of every call of that kind, not an average of p95s. a blocking redis read (`XREAD BLOCK`) is left out of the totals: it is as long as it waited, and would be most of redis's time.
+- `GET /api/monitor/timings/series?target=<name>&key=<key>&range=...`: one line's points, `t, n, e4, e5, err, sum, p50, p95, p99, max`, and `hist`, the range's calls as `[from_ms, to_ms, count]` per bucket.
 
-on the page: a search box (every word must match the box, kind, method, name or where), a chip per kind, a chip per box on "all boxes", a header click sorts by that column and again the other way. 250 rows at most; the filter narrows it. a row click opens its latency (p50, p95, p99, max), count and error graphs. the kind and the search are in the url (`#kind=db&q=streamers`).
+the endpoints and calls tabs:
+
+- a card per kind on top (calls: one per kind, a click filters to it): calls and calls a second, time spent, p50, p95, p99 and max, the share of the tab's time, errors.
+- the table: method or kind, name, where, count, a second, total time, share (of its kind's time), avg, p50, p95, p99, max, a latency bar, 4xx and 5xx or errors. a header click sorts by that column, again the other way; total time first. a search box (every word must match the box, kind, method, name or where), a kind filter on calls, a box filter on "all boxes". 250 rows at most; the filter narrows it.
+- the latency bar: every row on one log scale (the axis is in the header), a thin line from p50 to max, thicker from p50 to p95 and p95 to p99, a tick at p50. its colour, and the p95, p99 and max numbers', is against the kind's limits: http and ws 100 and 500 ms, db 10 and 100 ms, redis 2 and 20 ms, s3, video and voice 100 ms and 1 s. green under the first, yellow to the second, red past it. a blocking read has none.
+- a row click opens it: the distribution (a bar per bucket on a log scale, p50, p95, p99 and max marked, hover for the range, the count and the share up to it), then p50, p95, p99 and max over time (log scale), the count, the time spent and the errors.
 
 `err` is every failure: a 5xx, an error from redis, no answer from s3, video or voice. `4xx` is apart, since a 404 on `/api/streamers/{name}` is a normal answer.
 
@@ -306,7 +333,7 @@ on a box of its own, `monitor/.env` (`monitor/.env.example`) takes the same `STA
 
 ## cost
 
-the agent: a few megabytes of memory, one docker round per container every 15 s, milliseconds of cpu. the timings: a hashmap read and a few atomic adds per request, query or command; at most a megabyte per process. the monitor: a few hundred kilobytes of host history a box, and up to a few megabytes of timings once a week of busy lines is in, on disk and in memory. the page: static, in the binary.
+the agent: a few megabytes of memory, one docker round per container every 15 s, milliseconds of cpu. the timings: a hashmap read and a few atomic adds per request, query or command; at most a megabyte per process. the totals, total time and distribution are added up from the histograms the monitor already keeps when the page asks, so nothing more is recorded or kept for them. the architecture is worked out from the newest sample per request. the monitor: a few hundred kilobytes of host history a box, and up to a few megabytes of timings once a week of busy lines is in, on disk and in memory. the page: static, in the binary.
 
 ## not yet
 
