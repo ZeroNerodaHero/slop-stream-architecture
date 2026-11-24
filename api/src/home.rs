@@ -88,9 +88,8 @@ async fn snapshot(h: &Home) -> ApiResult {
         (None, None) => a.0.cmp(&b.0),
     });
     let names: Vec<String> = live.iter().map(|(n, _)| n.clone()).collect();
-    let cards = cards_of(&h.db, &names).await?;
-    let thumbs = profile::thumb_ids(&h.db, &names).await?;
-    let mut badges = groups::badges_by_name(&h.db, &names).await?;
+    let (cards, thumbs, mut badges) =
+        tokio::try_join!(cards_of(&h.db, &names), profile::thumb_ids(&h.db, &names), groups::badges_by_name(&h.db, &names))?;
     let out = live.into_iter().map(|(name, l)| {
         let (bio, avatar) = cards.get(&name).cloned().unwrap_or_default();
         let pictures = thumbs.get(&name).cloned().unwrap_or_default();

@@ -19,6 +19,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0013-media-context", include_str!("../migrations/0013-media-context.sql")),
     ("0014-stream-analytics", include_str!("../migrations/0014-stream-analytics.sql")),
     ("0015-image-moderation", include_str!("../migrations/0015-image-moderation.sql")),
+    ("0016-people-index", include_str!("../migrations/0016-people-index.sql")),
 ];
 
 pub(crate) async fn ensure(db: &PgPool) -> anyhow::Result<()> {

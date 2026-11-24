@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
@@ -27,6 +28,7 @@ const PEOPLE_SCAN: i64 = 300;
 const PEOPLE_LIMIT: usize = 100;
 const RECENT_SCAN: i64 = 40;
 const RECENT_LIMIT: usize = 12;
+const RECENT_ANON_FRESH: Duration = Duration::from_secs(10);
 
 fn not_logged_in() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "not logged in")
@@ -275,28 +277,49 @@ async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
 type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>, i64, bool);
 
 async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
+    if me.is_some() {
+        return Ok(Json(recent_list(&s, me.map(|a| a.id)).await?));
+    }
+    if let Some((at, list)) = s.recent_cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if at.elapsed() < RECENT_ANON_FRESH {
+            return Ok(Json(list.clone()));
+        }
+    }
+    let list = recent_list(&s, None).await?;
+    *s.recent_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), list.clone()));
+    Ok(Json(list))
+}
+
+async fn recent_list(s: &AppState, me: Option<Uuid>) -> Result<Value, ApiError> {
     let rows: Vec<RecentRow> = sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
                 EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at,
                 (SELECT count(*) FROM follows f WHERE f.followed_id = s.id), ",
         crate::oauth::linked_sql!("s"),
         " FROM (
-             SELECT s.id, max(se.ended_at) AS ended_at
-             FROM sessions se
-             JOIN streamers s ON s.id = se.user_id OR (se.user_id IS NULL AND s.name = se.name AND s.password_hash IS NULL)
-             WHERE se.ended_at IS NOT NULL
-             GROUP BY s.id
+             SELECT ended.id, max(ended.ended_at) AS ended_at
+             FROM (
+                 SELECT se.user_id AS id, se.ended_at
+                 FROM sessions se
+                 WHERE se.user_id IS NOT NULL AND se.ended_at IS NOT NULL
+                 UNION ALL
+                 SELECT s.id, se.ended_at
+                 FROM sessions se
+                 JOIN streamers s ON s.name = se.name AND s.password_hash IS NULL
+                 WHERE se.user_id IS NULL AND se.ended_at IS NOT NULL
+             ) ended
+             GROUP BY ended.id
          ) last
          JOIN streamers s ON s.id = last.id
          ORDER BY last.ended_at DESC
          LIMIT $2",
     ))
-    .bind(me.as_ref().map(|a| a.id))
+    .bind(me)
     .bind(RECENT_SCAN)
     .fetch_all(&s.db)
     .await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
-    let words = words(&s, &people).await?;
+    let words = words(s, &people).await?;
     let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at, followers, oauth_verified)| {
         let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
         if live {
@@ -304,7 +327,7 @@ async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
         }
         Some(json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "presence": word, "following": following, "ended_at": ended_at, "followers": followers }))
     });
-    Ok(Json(Value::Array(out.take(RECENT_LIMIT).collect())))
+    Ok(Value::Array(out.take(RECENT_LIMIT).collect()))
 }
 
 pub(crate) fn routes() -> Router<AppState> {
