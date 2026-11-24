@@ -159,7 +159,7 @@ struct Presence {
     api: Api,
     user_id: String,
     server: String,
-    channel: String,
+    channel: Mutex<String>,
     gone: AtomicBool,
     bye: Notify,
     refused: AtomicBool,
@@ -168,7 +168,7 @@ struct Presence {
 
 impl Presence {
     fn new(api: Api, user_id: String, server: String, channel: String) -> Self {
-        Presence { api, user_id, server, channel, gone: AtomicBool::new(false), bye: Notify::new(), refused: AtomicBool::new(false), turn: Default::default() }
+        Presence { api, user_id, server, channel: Mutex::new(channel), gone: AtomicBool::new(false), bye: Notify::new(), refused: AtomicBool::new(false), turn: Default::default() }
     }
 
     async fn attached(self: Arc<Self>, seat: usize, since: Option<tokio::time::Instant>) {
@@ -176,7 +176,8 @@ impl Presence {
         if since.is_some_and(|since| last.is_some_and(|at| at >= since)) {
             return;
         }
-        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": self.channel, "seat": seat });
+        let channel = self.channel.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": channel, "seat": seat });
         let mut waits = ATTACH_RETRY.iter();
         loop {
             if self.gone.load(Ordering::SeqCst) || self.refused.load(Ordering::SeqCst) {
@@ -294,15 +295,21 @@ enum Action {
     Unmute,
     Disconnect,
     Count,
+    Rename,
 }
 
 #[derive(Deserialize)]
 struct Order {
     action: Action,
+    #[serde(default)]
     user_id: String,
     server: String,
     #[serde(default)]
     tab: Option<String>,
+    #[serde(default)]
+    channel: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
 }
 
 impl Rooms {
@@ -318,12 +325,47 @@ impl Rooms {
                     Action::Mute => sitter.muted.store(true, Ordering::SeqCst),
                     Action::Unmute => sitter.muted.store(false, Ordering::SeqCst),
                     Action::Disconnect => sitter.kick.notify_one(),
-                    Action::Count => {}
+                    Action::Count | Action::Rename => {}
                 }
                 n += 1;
             }
         }
         n
+    }
+
+    fn rename(&mut self, server: &str, from: &str, to: &str) -> usize {
+        let (old, new) = (format!("{server}/{from}"), format!("{server}/{to}"));
+        if old == new || !self.rooms.contains_key(&old) {
+            return 0;
+        }
+        if self.rooms.contains_key(&new) {
+            log::warn!("voice {old}: renamed to {new}, which already has seats; both stay as they are");
+            return 0;
+        }
+        let Some(room) = self.rooms.remove(&old) else { return 0 };
+        for presence in room.seats.0.iter().flatten().filter_map(|s| s.presence.as_ref()) {
+            *presence.channel.lock().unwrap_or_else(|e| e.into_inner()) = to.to_owned();
+        }
+        let n = room.seats.taken();
+        self.rooms.insert(new, room);
+        n
+    }
+
+    fn let_go(&mut self, seat: usize, id: u64) {
+        let Some(name) = self.rooms.iter().find(|(_, r)| r.seats.0.get(seat).is_some_and(|s| s.as_ref().is_some_and(|s| s.id == id))).map(|(n, _)| n.clone()) else {
+            return;
+        };
+        let Some(room) = self.rooms.get_mut(&name) else { return };
+        room.seats.free(seat);
+        if room.seats.taken() == 0 {
+            self.rooms.remove(&name);
+        } else {
+            room.tx.send_replace(Arc::new(room.seats.snapshot()));
+        }
+    }
+
+    fn holding(&mut self, seat: usize, id: u64) -> Option<&mut Room> {
+        self.rooms.values_mut().find(|r| r.seats.0.get(seat).is_some_and(|s| s.as_ref().is_some_and(|s| s.id == id)))
     }
 
     fn replace(&mut self, uid: &str, tab: &str, into: &str) -> usize {
@@ -581,6 +623,18 @@ pub async fn run() -> anyhow::Result<()> {
 async fn moderate(State(voice): State<Voice>, headers: HeaderMap, body: Result<Json<Order>, axum::extract::rejection::JsonRejection>) -> Result<Json<serde_json::Value>, StatusCode> {
     inside(&headers, voice.api.secret.as_deref())?;
     let Json(order) = body.map_err(|_| StatusCode::BAD_REQUEST)?;
+    if order.action == Action::Rename {
+        let (Some(from), Some(to)) = (order.channel.as_deref(), order.to.as_deref()) else { return Err(StatusCode::BAD_REQUEST) };
+        if !valid_room(&format!("{}/{from}", order.server)) || !valid_room(&format!("{}/{to}", order.server)) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).rename(&order.server, from, to);
+        log::info!("voice: {}/{from} is {}/{to} now, {n} seat(s) moved", order.server, order.server);
+        return Ok(Json(serde_json::json!({ "seats": n })));
+    }
+    if order.user_id.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).moderate(&order.user_id, &order.server, order.action, order.tab.as_deref());
     if order.action == Action::Count {
         log::info!("voice: count, {n} seat(s) in {} but this tab's", order.server);
@@ -640,22 +694,14 @@ struct Sat {
 struct Held {
     voice: Voice,
     ip: IpAddr,
-    seat: Option<(String, usize, u64)>,
+    seat: Option<(usize, u64)>,
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
         let mut state = self.voice.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((name, seat, id)) = self.seat.take() {
-            if let Some(room) = state.rooms.get_mut(&name).filter(|r| r.seats.0.get(seat).is_some_and(|s| s.as_ref().is_some_and(|s| s.id == id))) {
-                room.seats.free(seat);
-                if room.seats.taken() == 0 {
-                    state.rooms.remove(&name);
-                } else {
-                    let snapshot = Arc::new(room.seats.snapshot());
-                    room.tx.send_replace(snapshot);
-                }
-            }
+        if let Some((seat, id)) = self.seat.take() {
+            state.let_go(seat, id);
         }
         if let Some(n) = state.per_ip.get_mut(&self.ip) {
             *n -= 1;
@@ -711,15 +757,15 @@ impl Voice {
             }
             return None;
         };
-        held.seat = Some((name.to_owned(), seat, id));
+        held.seat = Some((seat, id));
         let snapshot = Arc::new(room.seats.snapshot());
         room.tx.send_replace(snapshot);
         Some(Sat { seat, mic, seats: room.tx.subscribe(), muted, kick, replaced })
     }
 
-    fn show(&self, name: &str, seat: usize, id: u64, change: impl FnOnce(&mut Show)) {
+    fn show(&self, seat: usize, id: u64, change: impl FnOnce(&mut Show)) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(room) = state.rooms.get_mut(name) else { return };
+        let Some(room) = state.holding(seat, id) else { return };
         let Some(Some(sitter)) = room.seats.0.get_mut(seat).filter(|s| s.as_ref().is_some_and(|s| s.id == id)) else { return };
         let was = (sitter.show.on, sitter.show.mute, sitter.show.deaf);
         change(&mut sitter.show);
@@ -877,7 +923,7 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     let tag = format!("voice {room} seat {}", sat.seat);
     log::info!("{tag}: {user} joined");
     let mut attached = None;
-    let joined = Joined { room: &room, labels: read_labels(&text) };
+    let joined = Joined { labels: read_labels(&text) };
     talk(&voice, &mut socket, &tag, sdp, &offer, &mut sat, presence.clone(), &mut attached, joined).await;
     log::info!("{tag}: {user} left");
     drop(held);
@@ -892,8 +938,7 @@ struct Line {
     bound: Option<u64>,
 }
 
-struct Joined<'a> {
-    room: &'a str,
+struct Joined {
     labels: HashMap<String, String>,
 }
 
@@ -907,7 +952,7 @@ async fn talk(
     sat: &mut Sat,
     presence: Option<Arc<Presence>>,
     attached: &mut Option<tokio::task::JoinHandle<()>>,
-    joined: Joined<'_>,
+    joined: Joined,
 ) {
     let (seat, seats) = (sat.seat, &mut sat.seats);
     let Some(me) = seats.borrow().get(seat).cloned().flatten() else {
@@ -1002,7 +1047,7 @@ async fn talk(
         lines[i] = Some(Line { sender, idle: idle.clone(), bound: None });
     }
     video.collect(&peer, offer, &video_idles).await;
-    voice.show(joined.room, seat, me.id, |s| s.on = on_of(&kinds));
+    voice.show(seat, me.id, |s| s.on = on_of(&kinds));
 
     if send(socket, &serde_json::json!({ "sdp": answer })).await.is_ok() {
         *attached = presence.map(|p| tokio::spawn(p.attached(seat, None)));
@@ -1035,12 +1080,12 @@ async fn talk(
                     Some(Ok(Message::Text(text))) => {
                         let Ok(said) = serde_json::from_str::<Said>(&text) else { continue };
                         if let Some(state) = said.state {
-                            voice.show(joined.room, seat, me.id, |s| (s.mute, s.deaf) = (state.mute, state.deaf));
+                            voice.show(seat, me.id, |s| (s.mute, s.deaf) = (state.mute, state.deaf));
                         }
                         let Some(sdp) = said.sdp else { continue };
                         match renegotiate(tag, &peer, offer, &text, sdp, &shown, &mut video).await {
                             Ok((answer, kinds)) => {
-                                voice.show(joined.room, seat, me.id, |s| s.on = on_of(&kinds));
+                                voice.show(seat, me.id, |s| s.on = on_of(&kinds));
                                 if send(socket, &serde_json::json!({ "sdp": answer })).await.is_err() {
                                     break;
                                 }
@@ -1475,6 +1520,45 @@ mod tests {
         assert!(back.has_changed().unwrap(), "a room it left hears its seats now");
         let now = back.borrow_and_update();
         assert_eq!(now.iter().flatten().map(|s| s.id).collect::<Vec<_>>(), vec![3]);
+    }
+
+    #[test]
+    fn a_renamed_channel_keeps_its_room_and_everyone_in_it() {
+        let api = Api { url: "http://127.0.0.1:9".into(), secret: None, http: reqwest::Client::new() };
+        let presence = Arc::new(Presence::new(api, "u1".into(), "g".into(), "lounge".into()));
+        let al = Sitter { presence: Some(presence.clone()), id: 7, ..sitter("al", Some("u1")) };
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![al, tabbed("bo", "u2", "t", 8)]));
+        rooms.rooms.insert("h/lounge".into(), room_of(vec![sitter("cy", Some("u3"))]));
+        let mut seen = rooms.rooms["g/lounge"].tx.subscribe();
+        let order: Order = serde_json::from_str(r#"{"action":"rename","server":"g","channel":"lounge","to":"hall"}"#).unwrap();
+        assert_eq!((order.action, order.channel.as_deref(), order.to.as_deref()), (Action::Rename, Some("lounge"), Some("hall")));
+
+        assert_eq!(rooms.rename("g", "lounge", "hall"), 2);
+        assert!(!rooms.rooms.contains_key("g/lounge"));
+        assert_eq!(ids(&rooms.rooms["g/hall"]), vec![Some(7), Some(8)]);
+        assert!(rooms.rooms.contains_key("h/lounge"), "another server's lounge stays");
+        assert_eq!(*presence.channel.lock().unwrap(), "hall");
+        assert!(!seen.has_changed().unwrap(), "the same room, so its peers keep listening");
+
+        rooms.let_go(0, 7);
+        assert_eq!(ids(&rooms.rooms["g/hall"]), vec![Some(8)], "a seat taken before the rename is still let go");
+        assert!(seen.has_changed().unwrap());
+        rooms.let_go(1, 8);
+        assert!(!rooms.rooms.contains_key("g/hall"));
+        assert_eq!(rooms.rename("g", "nothing", "x"), 0);
+    }
+
+    #[test]
+    fn a_rename_onto_a_room_with_seats_leaves_both() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/a".into(), room_of(vec![tabbed("al", "u1", "t", 1)]));
+        rooms.rooms.insert("g/b".into(), room_of(vec![tabbed("bo", "u2", "t", 2)]));
+        assert_eq!(rooms.rename("g", "a", "b"), 0);
+        assert_eq!(ids(&rooms.rooms["g/a"]), vec![Some(1)]);
+        assert_eq!(ids(&rooms.rooms["g/b"]), vec![Some(2)]);
+        rooms.let_go(0, 9);
+        assert_eq!(ids(&rooms.rooms["g/a"]), vec![Some(1)], "another sitter's id frees nothing");
     }
 
     async fn scripted_api(statuses: Vec<u16>) -> (Api, Arc<Mutex<Vec<String>>>) {
