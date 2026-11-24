@@ -24,12 +24,12 @@ import {
   leaveVoice,
   setVoiceDeaf,
   setVoiceMuted,
-  voiceCallAtom,
   voiceDeafAtom,
   voiceMutedAtom,
   voiceSeatsAtom,
   voiceSpeakingAtom
 } from '@/infra/atoms/voice-atoms';
+import { voiceCallAtom } from '@/infra/atoms/voice-state';
 import { SCREEN_SUPPORTED, setVoiceVideo, voiceLocalVideoAtom, voicePicturesAtom, voiceVideoErrorAtom } from '@/infra/atoms/voice-video';
 import { useIsMobile } from '@/infra/mobile';
 import { Button } from '@/shared-components/Button';

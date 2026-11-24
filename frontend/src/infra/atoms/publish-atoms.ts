@@ -6,8 +6,19 @@ import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
+import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
-import { type FaceLines, type FaceMarks, type FaceState, type LoadStep, type ModelSession, type ModelStats, type RigInfo, startModel } from '@/infra/face';
+import {
+  type FaceLines,
+  type FaceMarks,
+  type FaceState,
+  type LoadStep,
+  type ModelSession,
+  type ModelStats,
+  type RigInfo,
+  startModel,
+  warmModelFiles
+} from '@/infra/face';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { readModel } from '@/infra/model-file';
 import { forgetKept, keepDemo, keepForGood, keepModel, type KeptModel, keptDemoFile, keptFile, listKept, listKeptDemos, pruneKeptDemos } from '@/infra/model-store';
@@ -200,7 +211,6 @@ export const publishToneAtom = atom<Tone>((get) => {
   if (phase === 'live') return 'live';
   return BAD_PHASES.includes(phase) ? 'bad' : 'neutral';
 });
-export const publishPipAtom = atom(false);
 
 let pc: RTCPeerConnection | null = null;
 let stopStats: (() => void) | null = null;
@@ -266,6 +276,7 @@ export function commitStreamName(): Promise<void> {
 }
 
 export async function enterLivePage(): Promise<void> {
+  warmModelFiles();
   if (store.get(isPublishingAtom)) return;
   const generation = liveGeneration;
   await loadMe();

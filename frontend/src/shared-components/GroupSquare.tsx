@@ -16,7 +16,7 @@ export function GroupSquareFace({ server, corner, compact }: { server: Server; c
         className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105 group-focus-visible:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
         style={{ backgroundColor: server.color }}
       >
-        {banner && <img src={banner} alt="" className="h-full w-full object-cover" />}
+        {banner && <img src={banner} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />}
       </span>
       <span className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
       <GroupMark

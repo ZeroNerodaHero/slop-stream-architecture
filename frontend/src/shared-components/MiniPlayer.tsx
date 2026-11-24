@@ -1,28 +1,9 @@
-import { atom, useAtomValue } from 'jotai';
-import { Component, type ErrorInfo, type ReactNode, useRef } from 'react';
+import { useAtomValue } from 'jotai';
+import { Component, type ErrorInfo, lazy, type ReactNode, Suspense, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
-import {
-  cameraAtom,
-  endLive,
-  isPublishingAtom,
-  liveViewersAtom,
-  micLevelReader,
-  mixerOpenAtom,
-  ownerAtom,
-  previewSlotAtom,
-  previewStreamAtom,
-  publishMessageAtom,
-  publishPhaseAtom,
-  publishPipAtom,
-  publishStatsAtom,
-  publishToneAtom,
-  sceneAtom,
-  sentStreamAtom,
-  streamNameAtom
-} from '@/infra/atoms/publish-atoms';
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
-import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
+import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { pipChatPlaceAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import {
   avatarAtom,
@@ -51,10 +32,9 @@ import { useIsMobile } from '@/infra/mobile';
 import { cleanName } from '@/infra/names';
 import { report } from '@/infra/report';
 import { cn } from '@/utils/cn';
-import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { CORNER_BADGE, CORNER_BADGE_2, CornerPlayer } from '@/shared-components/CornerPlayer';
-import { MicMeter } from '@/shared-components/MicMeter';
+import { cornerChatAtom, isLivePage, toggleCornerChat } from '@/shared-components/corner-chat';
+import { CORNER_BADGE, CornerPlayer } from '@/shared-components/CornerPlayer';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { SoundControl } from '@/shared-components/VideoControls';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -63,8 +43,6 @@ function isWatchPageOf(pathname: string, name: string): boolean {
   const m = /^\/watch\/([^/]+)\/?$/.exec(pathname);
   return m !== null && cleanName(m[1]) === name;
 }
-
-const isLivePage = (pathname: string) => pathname.replace(/\/$/, '') === '/live';
 
 class CornerCatch extends Component<{ at: string; children: ReactNode }, { failed: boolean; at: string }> {
   state = { failed: false, at: this.props.at };
@@ -86,12 +64,18 @@ class CornerCatch extends Component<{ at: string; children: ReactNode }, { faile
   }
 }
 
-type Corner = 'pip' | 'live-pip';
+const LiveCorner = lazy(() => import('@/shared-components/LiveCorner').then((m) => ({ default: m.LiveCorner })));
 
-const cornerChatAtom = atom<Corner | null>(null);
-
-function toggleCornerChat(corner: Corner) {
-  store.set(cornerChatAtom, store.get(cornerChatAtom) === corner ? null : corner);
+function LiveCornerWhenUsed({ pathname }: { pathname: string }) {
+  const pip = useAtomValue(publishPipAtom);
+  const [used, setUsed] = useState(false);
+  if (!used && (pip || isLivePage(pathname))) setUsed(true);
+  if (!used) return null;
+  return (
+    <Suspense fallback={null}>
+      <LiveCorner />
+    </Suspense>
+  );
 }
 
 function WatchCorner() {
@@ -159,69 +143,6 @@ function WatchCorner() {
   );
 }
 
-function LiveCorner() {
-  const pip = useAtomValue(publishPipAtom);
-  const name = useAtomValue(streamNameAtom);
-  const message = useAtomValue(publishMessageAtom);
-  const tone = useAtomValue(publishToneAtom);
-  const phase = useAtomValue(publishPhaseAtom);
-  const publishing = useAtomValue(isPublishingAtom);
-  const stats = useAtomValue(publishStatsAtom);
-  const viewers = useAtomValue(liveViewersAtom);
-  const owner = useAtomValue(ownerAtom);
-  const scene = useAtomValue(sceneAtom);
-  const previewSlot = useAtomValue(previewSlotAtom);
-  const mixerOpen = useAtomValue(mixerOpenAtom);
-  const myAvatar = useAtomValue(myAvatarVersionAtom);
-  const storedPipChat = useAtomValue(pipChatPlaceAtom);
-  const pipChat = useIsMobile() ? 'bottom' : storedPipChat;
-  const cornerChat = useAtomValue(cornerChatAtom);
-  const { pathname } = useLocation();
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const sending = phase === 'live' || phase === 'reconnecting';
-
-  return (
-    <CornerPlayer
-      prefix="live-pip"
-      visible={pip && name !== '' && !isLivePage(pathname)}
-      popOutOnLeave={publishing && name !== ''}
-      label={`${name}, your stream, picture in picture`}
-      name={name}
-      to="/live"
-      message={message}
-      tone={tone}
-      streamAtom={previewStreamAtom}
-      videoRef={videoRef}
-      muted
-      scene={{
-        layers: scene.layers,
-        slot: previewSlot,
-        streamFor: sentStreamAtom,
-        imageUrl: (asset) => api.assetUrl(name, asset),
-        avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }
-      }}
-      chat={{
-        name,
-        owner,
-        place: pipChat,
-        open: cornerChat === 'live-pip',
-        pageChatIsOurs: isLivePage(pathname),
-        onToggle: () => toggleCornerChat('live-pip')
-      }}
-      closeLabel="stop streaming"
-      onClose={endLive}
-      closeConfirm={{ title: 'stop streaming?', message: 'closing this will stop the stream. everyone watching sees it end.', yes: 'yes, stop' }}
-      badge={
-        <>
-          {publishing && <MicMeter id="live-pip-mic" streamAtom={cameraAtom} className={CORNER_BADGE} />}
-          {sending && <StreamStatsButton id="live-pip-stats" role="publish" stats={stats} className={CORNER_BADGE_2} />}
-        </>
-      }
-      footer={<ViewerCount id="live-pip-viewers" count={viewers} />}
-    />
-  );
-}
-
 export function MiniPlayer() {
   const side = useAtomValue(panelSideAtom);
   const sidebarOpen = useAtomValue(friendsOpenAtom);
@@ -239,7 +160,7 @@ export function MiniPlayer() {
         <WatchCorner />
       </CornerCatch>
       <CornerCatch at={pathname}>
-        <LiveCorner />
+        <LiveCornerWhenUsed pathname={pathname} />
       </CornerCatch>
     </div>
   );
