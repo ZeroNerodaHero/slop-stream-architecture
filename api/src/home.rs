@@ -24,7 +24,6 @@ use crate::{video_viewers, ApiError, ApiResult, OPTIONAL_PROBE};
 
 const REPLAY_MS: i64 = 10_000;
 const HEAL_EVERY: Duration = Duration::from_secs(30);
-const LIST_CACHE: &str = "public, max-age=5";
 
 #[derive(Clone)]
 struct Home {
@@ -74,7 +73,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
 }
 
 async fn list(State(h): State<Home>) -> Result<impl IntoResponse, ApiError> {
-    Ok(([(header::CACHE_CONTROL, LIST_CACHE)], snapshot(&h).await?))
+    Ok(([(header::CACHE_CONTROL, crate::media::PRIVATE_CACHE)], snapshot(&h).await?))
 }
 
 async fn snapshot(h: &Home) -> ApiResult {
