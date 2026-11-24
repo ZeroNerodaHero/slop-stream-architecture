@@ -555,6 +555,22 @@ fn line_of(seat: usize, own: usize) -> usize {
     }
 }
 
+/// a mic's sequence numbers with the packets a mute dropped taken out, so the line sees no gap
+#[derive(Default)]
+struct Numbering {
+    dropped: u16,
+}
+
+impl Numbering {
+    fn skip(&mut self) {
+        self.dropped = self.dropped.wrapping_add(1);
+    }
+
+    fn of(&self, seq: u16) -> u16 {
+        seq.wrapping_sub(self.dropped)
+    }
+}
+
 /// the first frame as it comes. `room` and `user` are the dev-open frame's.
 #[derive(Deserialize)]
 struct Join {
@@ -1132,7 +1148,10 @@ async fn talk(
 
     // packets from the mic's section go to the mic track, which other peers' seats carry.
     // header extensions carry ids from this peer's session, so drop them
-    // a moderator's mute drops them here, read packet by packet so it bites at once
+    // a moderator's mute drops them here, read packet by packet so it bites at once. the packets
+    // dropped come out of the numbering too: a mute is a gap the line passes on as it is (its seq
+    // transformer only moves at a rebind), and past 2^15 (about 11 minutes) the listener's srtp
+    // takes what follows for old packets and drops them until the numbers come round again
     let mic_mid = offer[0].mid.clone();
     let writer = sat.mic.clone();
     let muted = sat.muted.clone();
@@ -1147,10 +1166,13 @@ async fn talk(
             if transceiver.mid().map(|m| m.to_string()) != mic_mid {
                 return showing.forward(track, transceiver.mid().map(|m| m.to_string())).await;
             }
+            let mut numbering = Numbering::default();
             while let Ok((mut packet, _)) = track.read_rtp().await {
                 if muted.load(Ordering::SeqCst) {
+                    numbering.skip();
                     continue;
                 }
+                packet.header.sequence_number = numbering.of(packet.header.sequence_number);
                 packet.header.extension = false;
                 packet.header.extensions.clear();
                 let _ = mic.write_rtp(&packet).await;
@@ -1617,6 +1639,25 @@ mod tests {
             seats.take(s);
         }
         Room { seats, tx: watch::Sender::new(Arc::new(Vec::new())) }
+    }
+
+    #[test]
+    fn a_long_mute_leaves_no_gap_in_the_numbers() {
+        // 40000 packets muted (13 minutes at 50/s), across the wrap of the mic's own numbers
+        let mut numbering = Numbering::default();
+        let mut seq: u16 = 60000;
+        let mut sent = Vec::new();
+        for i in 0..40100u32 {
+            if (50..40050).contains(&i) {
+                numbering.skip();
+            } else {
+                sent.push(numbering.of(seq));
+            }
+            seq = seq.wrapping_add(1);
+        }
+        assert_eq!(sent.len(), 100);
+        assert!(sent.windows(2).all(|w| w[1] == w[0].wrapping_add(1)), "{sent:?}");
+        assert_eq!(sent[0], 60000);
     }
 
     #[test]
