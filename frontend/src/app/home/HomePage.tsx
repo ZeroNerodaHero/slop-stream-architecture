@@ -347,7 +347,7 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
     <article
       id={`recent-${p.name}`}
       data-presence={p.presence}
-      className={cn(CARD_LINK, 'relative flex cursor-pointer items-center gap-2.5 p-2.5')}
+      className={cn(CARD_LINK, 'relative flex cursor-pointer items-center gap-2 p-2.5')}
       onPointerEnter={(e) => peek.show(e, e.currentTarget)}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onPointerDown={(e) => {
@@ -364,25 +364,21 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
         <PresenceSquare status={p.presence} className="border-backgroundSecondary" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center gap-2">
-          <Link
-            id={`recent-link-${p.name}`}
-            to={to}
-            className="flex min-w-0 border border-transparent outline-none after:absolute after:inset-0 focus-visible:border-primaryBlue"
-          >
-            <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
-          </Link>
-          <span className="flex-1" />
-          <FollowButton id={`recent-follow-${p.name}`} name={p.name} small className="relative z-10 shrink-0" />
-        </div>
-        <div className="flex items-center gap-2 text-xs text-textTertiary">
+        <Link
+          id={`recent-link-${p.name}`}
+          to={to}
+          className="flex min-w-0 border border-transparent outline-none after:absolute after:inset-0 focus-visible:border-primaryBlue"
+        >
+          <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
+        </Link>
+        <div className="flex items-center gap-1.5 text-xs text-textTertiary">
+          <RiTimeLine aria-hidden size={12} className="shrink-0" />
           <Tooltip content={new Date(p.ended_at).toLocaleString()}>
-            <span id={`recent-when-${p.name}`} className="relative z-10 flex items-center gap-1 whitespace-nowrap">
-              <RiTimeLine aria-hidden size={12} />
+            <span id={`recent-when-${p.name}`} className="relative z-10 whitespace-nowrap">
               {ago(p.ended_at, now)}
             </span>
           </Tooltip>
-          <span className="flex-1" />
+          <span aria-hidden>·</span>
           <Tooltip content={`${p.followers} ${p.followers === 1 ? 'follower' : 'followers'}`}>
             <span
               id={`recent-followers-${p.name}`}
@@ -396,6 +392,7 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
           </Tooltip>
         </div>
       </div>
+      <FollowButton id={`recent-follow-${p.name}`} name={p.name} compact className="relative z-10 shrink-0 self-center" />
       {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} hold={peek.hold} />}
     </article>
   );
