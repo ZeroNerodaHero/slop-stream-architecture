@@ -18,7 +18,6 @@ import {
   wildcardOf,
   WORKER_WAIT_MS
 } from '@/infra/rt/wire';
-import RtWorker from '@/infra/rt.worker?sharedworker';
 import { store } from '@/infra/store';
 
 const SOURCE = '/rt';
@@ -96,7 +95,7 @@ function attachWorker(): boolean {
   if (typeof SharedWorker === 'undefined') return false;
   let worker: SharedWorker;
   try {
-    worker = new RtWorker({ name: `rt-${__BUILD__}` });
+    worker = new SharedWorker(new URL('../rt.worker.ts', import.meta.url), { type: 'module', name: `rt-${__BUILD__}` });
   } catch {
     return false;
   }

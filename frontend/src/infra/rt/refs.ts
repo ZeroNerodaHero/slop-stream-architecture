@@ -9,7 +9,7 @@ export class TopicRefs {
   private queued = false;
   private last: string[] = [];
 
-  constructor(onChange: (topics: string[]) => void, schedule: (run: () => void) => void = queueMicrotask) {
+  constructor(onChange: (topics: string[]) => void, schedule: (run: () => void) => void = (run) => queueMicrotask(run)) {
     this.onChange = onChange;
     this.schedule = schedule;
   }
