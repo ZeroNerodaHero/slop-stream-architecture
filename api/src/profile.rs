@@ -1,53 +1,3 @@
-//! The profile picture, and the one html route: the watch document.
-//!
-//! The picture is a small jpeg the browser makes from whatever file was picked
-//! (256x256, see the live page) and is stored in the bucket at `avatars/<id>.jpg`,
-//! keyed by the row's id (docs/ids.md), so a name can change and nothing moves.
-//! The streamers row only keeps when it was saved. That time is the `?v=` of the
-//! url, so it is cached for a day and still changes the moment a new one is saved.
-//! A picture saved before ids sits at `avatars/<name>.jpg`, and one saved before the
-//! bucket is bytes still in the row: either is served from where it is and copied to
-//! the id's key on that read. Only the name's owner may change it, the same rule as
-//! the bio.
-//!
-//! Thumbnails are the pictures on that name's card on home: up to six, each a
-//! 960x540 jpeg the browser made, at `thumbs/<id>/<n>.jpg` (before ids:
-//! `thumbs/<name>/<n>.jpg`, lifted the same way). The row is written first and
-//! dropped again if the bucket does not take the bytes. None means home shows the
-//! camera, the way it always has.
-//!
-//! The offline picture is what the watch page shows where the player would be while the
-//! name is not live: a 1920x1080 jpeg the browser made, at `offline/<id>.jpg`, its save time
-//! in `offline_at` as the `?v=`. Newer than ids, so there is no name key to lift. With it
-//! goes a line under the word, `offline_note`. Both through the bio's gate.
-//!
-//! Socials are where else to find them (docs/socials.md): the `socials` tab under the player.
-//! One jsonb document on the row, replaced whole like the bio: how the links sit (`row` or
-//! `grid`), how big, and the links, each a kind from a fixed list (the icon the page draws),
-//! an http(s) url and a label of theirs. Checked at the door, every field: a url that is not
-//! http(s) with a host never reaches the row, so the page can draw what the row holds.
-//!
-//! About me (docs/about.md) is the longer piece of words first on the `about` tab: a few
-//! paragraphs, `about` on the row, replaced whole through the bio's gate like the rest. The
-//! bio itself is the status, one line beside the name (main.rs `put_streamer`).
-//!
-//! Assets are the pictures a streamer lays onto the scene (docs/screen.md): png, jpeg, gif or
-//! webp, up as they are (a gif keeps its frames, a png its holes), so the api sniffs the first
-//! bytes and never decodes. Up to 24 a name, 2 mb each, at `assets/<id>/<n>.<ext>`, listed by
-//! name like the thumbnails; an id is never reused and the bytes never change, so the url
-//! caches for good. The scene names them by id, and the watch page builds the url under the
-//! stream's name: nobody can point a layer at somebody else's picture.
-//!
-//! `GET /watch/<name>` exists for link previews. iMessage, Discord, Slack and X
-//! make them with a bot that fetches the url once, reads `<title>` and the
-//! `og:*` tags, and never runs js; the spa's index.html says "streams" for
-//! every page. So caddy sends `/watch/*` here instead of to the files, and
-//! this answers with the same index.html, read from the pages volume so the
-//! hashed asset names are always the current ones, with a real head for this
-//! one name. The profile card in its `<template id="watch-shell">` is filled
-//! in and put inside `#root`, so the page shows the name, picture, the word and
-//! the status line before react boots. React replaces the card when it renders.
-
 use std::collections::HashMap;
 use std::env;
 
@@ -73,76 +23,44 @@ use crate::moderate::{self, UploadKind};
 use crate::s3;
 use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
 
-/// The browser sends 256x256 at quality 0.85, a few tens of kb. This is the ceiling.
-/// A thumbnail is 960x540 and shares it: the same body limit covers both routes, and the
-/// page steps a busy photo down a notch to fit.
 const MAX_AVATAR_BYTES: usize = 256 * 1024;
-/// The offline picture is 1920x1080 at quality 0.8, and a photo at that size runs far past
-/// the avatar's ceiling. The page steps the quality down until it fits under this one.
 const MAX_OFFLINE_BYTES: usize = 1024 * 1024;
-/// The line under the word while they are not live. One line; the page's box stops here too.
 const MAX_NOTE_CHARS: usize = 140;
-/// How many pictures one name may put on its home card.
 const MAX_THUMBS: i64 = 6;
-/// The url changes with every upload (`?v=`), so a day is safe.
 const AVATAR_CACHE: &str = "public, max-age=86400";
 const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
-/// A scene's picture goes up as it is: no re-encode, so transparency and the frames of a gif
-/// survive. Bigger than any picture the page makes itself, which is why its route has its own
-/// read limit. And how many one name may keep.
 const MAX_ASSET_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ASSETS: i64 = 24;
-/// The id is the url and an id is never reused, so the bytes behind one never change.
 const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
 
-/// The markup the api itself emits into the card. The classes are tailwind's, generated
-/// because the same strings appear in the pages (`Avatar.tsx`, `WatchPage.tsx`).
 const AVATAR_IMG_CLASS: &str = "mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle";
 const VERIFIED_HTML: &str = r#"<span class="ml-2 text-increase" title="has an account: this really is them">✓</span>"#;
-/// The status line under the name (`WatchPage.tsx`, `#bio`): one line, the whole of it on hover.
 const STATUS_SPAN_CLASS: &str = "mt-1 block truncate text-base font-normal text-textSecondary";
 const TEMPLATE_OPEN: &str = r#"<template id="watch-shell">"#;
 const TEMPLATE_CLOSE: &str = "</template>";
 const EMPTY_ROOT: &str = r#"<div id="root"></div>"#;
 
-/// Where the pages one-shot copies the vite build. The same volume caddy serves from.
 fn pages_dir() -> String {
     env::var("PAGES_DIR").unwrap_or_else(|_| "/srv".into())
 }
 
-// ---- the profile row -------------------------------------------------------------
-
 pub(crate) struct Profile {
     pub(crate) name: String,
     pub(crate) bio: String,
-    /// When the picture was saved, unix seconds. None: no picture. The `?v=` of its url.
     pub(crate) avatar: Option<i64>,
-    /// The name has an account, so only its owner can be behind it.
     pub(crate) verified: bool,
-    /// The account has an outside login linked (oauth.rs `linked_sql!`): the second mark.
     pub(crate) oauth_verified: bool,
-    /// When the offline picture was saved, unix seconds. None: none. The `?v=` of its url.
     pub(crate) offline: Option<i64>,
-    /// The line under the word while they are not live. Empty for none.
     pub(crate) offline_note: String,
-    /// When the account was made: the row's `created_at`, for a claimed name only (a free
-    /// name's row is made by whoever first saves a bio or follows it, and says nothing about
-    /// a person). `joined_at` on the profile read and the watch grant: the socials tab's
-    /// `joined october 2026` (docs/socials.md). None for a free name.
     pub(crate) joined: Option<DateTime<Utc>>,
-    /// Where else to find them: the links under the player, as the row keeps them. The empty document for none.
     pub(crate) socials: Socials,
-    /// About me: the words first on the about tab. Empty for none.
     pub(crate) about: String,
-    /// The chat welcome: whether `Eques` says it when a viewer opens the chat, and the words.
     pub(crate) welcome_on: bool,
     pub(crate) welcome: String,
 }
 
-/// bio, picture, account, offline picture, offline note, joined, socials, about, oauth verified, welcome on, welcome
 type ProfileRow = (String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value, String, bool, bool, String);
 
-/// Bio, picture versions, account flag, oauth-verified flag, the offline line, when the account was made, the links and the about me, in one query. A name nobody saved anything for is all defaults.
 pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sqlx::Error> {
     let row: Option<ProfileRow> = sqlx::query_as(concat!(
         "SELECT bio, (EXTRACT(EPOCH FROM avatar_at))::bigint, password_hash IS NOT NULL,
@@ -154,25 +72,17 @@ pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sql
     .bind(name)
     .fetch_optional(db)
     .await?;
-    // a name with no row has the columns' defaults, the welcome on with its default words
     let row = row.unwrap_or_else(|| (String::new(), None, false, None, String::new(), None, Value::Null, String::new(), false, true, DEFAULT_WELCOME.to_owned()));
     let (bio, avatar, verified, offline, offline_note, joined, socials, about, oauth_verified, welcome_on, welcome) = row;
-    // the row's json as the document, and the empty one for a row that has none (or one from before the column)
     let socials = serde_json::from_value(socials).unwrap_or_default();
-    // only an account can have a login linked; said twice so a free name never wears it
     let oauth_verified = oauth_verified && verified;
     Ok(Profile { name: name.to_owned(), bio, avatar, verified, oauth_verified, offline, offline_note, joined, socials, about, welcome_on, welcome })
 }
 
-// ---- the row behind a name ---------------------------------------------------------------
-
-/// The id of the name's row, if it has one.
 async fn row_id(db: &PgPool, name: &str) -> Result<Option<Uuid>, sqlx::Error> {
     sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1").bind(name).fetch_optional(db).await
 }
 
-/// The id of the name's row, made bare if it had none: a picture needs a key before the
-/// bytes go up. The `DO UPDATE` is the idiom that makes `RETURNING` answer for a row already there.
 async fn ensure_row(db: &PgPool, name: &str) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar(
         "INSERT INTO streamers (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
@@ -182,13 +92,10 @@ async fn ensure_row(db: &PgPool, name: &str) -> Result<Uuid, sqlx::Error> {
     .await
 }
 
-// ---- the picture ---------------------------------------------------------------------
-
 fn avatar_key(id: Uuid) -> String {
     format!("avatars/{id}.jpg")
 }
 
-/// Where a picture saved before ids sits. Read from, lifted out of, never written.
 fn legacy_avatar_key(name: &str) -> String {
     format!("avatars/{name}.jpg")
 }
@@ -206,9 +113,6 @@ fn picture_failed(name: &str, what: &str, err: String) -> ApiError {
     ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, what)
 }
 
-/// The bytes at `from`, if any, copied to `to` and gone from `from`. For the pictures saved
-/// before ids: a read serves them from where they are and moves them, so the next read, and
-/// a rename, find them under the id. The bucket has no copy, so this is a get and a put.
 async fn lift_object(s: &AppState, from: &str, to: &str) -> Result<Option<Vec<u8>>, String> {
     let Some(bytes) = s3::get(&s.s3, from).await? else { return Ok(None) };
     s3::put(&s.s3, to, &bytes, "image/jpeg").await?;
@@ -226,10 +130,7 @@ async fn look(s: &AppState, me: &Me, row: Uuid, headers: &HeaderMap, kind: Uploa
 }
 
 async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
-    // a name held after a rename answers for the name it became (docs/ids.md): a chat line keeps
-    // the name it was said under, and the page fetches its face by that name for the hold's length
     let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
-    // avatar_at set, or bytes still in the row from before the bucket: there is a picture.
     let row: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
         "SELECT id, avatar FROM streamers WHERE name = $1 AND (avatar IS NOT NULL OR avatar_at IS NOT NULL)",
     )
@@ -242,7 +143,6 @@ async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Respo
     let key = avatar_key(id);
     match s3::get(&s.s3, &key).await {
         Ok(Some(bytes)) => Ok(jpeg(bytes)),
-        // not under the id: saved before ids (at the name's key), or before the bucket (in the row)
         Ok(None) => match lift_object(&s, &legacy_avatar_key(&name), &key).await {
             Ok(Some(bytes)) => Ok(jpeg(bytes)),
             Ok(None) => match legacy {
@@ -270,8 +170,6 @@ async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Respo
     }
 }
 
-/// A picture from before the bucket. Copy it up and drop the postgres bytes. A miss
-/// here still serves the row: the next read tries again.
 async fn lift_legacy(s: &AppState, id: Uuid, name: &str, bytes: &[u8]) {
     if let Err(e) = s3::put(&s.s3, &avatar_key(id), bytes, "image/jpeg").await {
         log::warn!("s3: could not move {name}'s picture out of postgres: {e}");
@@ -286,9 +184,6 @@ async fn lift_legacy(s: &AppState, id: Uuid, name: &str, bytes: &[u8]) {
     }
 }
 
-/// Before a rename (auth.rs): every picture of this name that still sits at a name key moves
-/// to the id's, so nothing in the bucket says the name when it changes. Best effort: a miss
-/// is logged, and the read path lifts what is left on its next look.
 pub(crate) async fn lift_pictures(s: &AppState, id: Uuid, name: &str) {
     if let Err(e) = lift_object(s, &legacy_avatar_key(name), &avatar_key(id)).await {
         log::warn!("s3: could not lift {name}'s picture to its id before the rename: {e}");
@@ -307,8 +202,6 @@ pub(crate) async fn lift_pictures(s: &AppState, id: Uuid, name: &str) {
     }
 }
 
-/// Every key a row's pictures can sit under: for a rename that takes a free name's row away.
-/// `assets` are the scene pictures' ids with their mime, as `stream_assets` keeps them.
 pub(crate) fn picture_keys(id: Uuid, thumbs: &[i64], assets: &[(i64, String)]) -> Vec<String> {
     [avatar_key(id), offline_key(id)]
         .into_iter()
@@ -317,7 +210,6 @@ pub(crate) fn picture_keys(id: Uuid, thumbs: &[i64], assets: &[(i64, String)]) -
         .collect()
 }
 
-/// Objects nobody can reach any more, dropped. Best effort: a miss leaves an orphan, nothing worse.
 pub(crate) async fn drop_pictures(s: &AppState, keys: &[String]) {
     for key in keys {
         if let Err(e) = s3::delete(&s.s3, key).await {
@@ -330,9 +222,6 @@ fn too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 256 kb at most")
 }
 
-/// The body as the jpeg it has to be: not a form, under `max` (the route's read limit stopped
-/// an oversized one already, and that reads as the same 413 here), and starting like a jpeg.
-/// The page resizes before sending, so this is all the api ever checks of a picture.
 fn jpeg_body(body: Result<Bytes, BytesRejection>, max: usize, too_big: fn() -> ApiError) -> Result<Bytes, ApiError> {
     let body = match body {
         Ok(body) => body,
@@ -348,7 +237,6 @@ fn jpeg_body(body: Result<Bytes, BytesRejection>, max: usize, too_big: fn() -> A
     Ok(body)
 }
 
-/// The route's body limit stops reading at the ceiling, so an oversized upload costs nothing past it.
 async fn put_avatar(
     State(s): State<AppState>,
     Name(name): Name,
@@ -360,9 +248,6 @@ async fn put_avatar(
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
-    // the row's id is the key, so the row first (bare, if the name had none). then the
-    // bucket, then the version: a failed save leaves the old version number, so a cached
-    // url does not start pointing at a picture that never landed.
     let id = ensure_row(&s.db, &name).await?;
     look(&s, &me, id, &headers, UploadKind::Avatar, "image/jpeg", Some(&avatar_key(id)), &body).await?;
     if let Err(e) = s3::put(&s.s3, &avatar_key(id), &body, "image/jpeg").await {
@@ -387,13 +272,11 @@ async fn delete_avatar(
 ) -> Result<StatusCode, ApiError> {
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
-    // the version the pages ask for it under (`?v=`), for the edge's purge after
     let version: Option<i64> = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1")
         .bind(&name)
         .fetch_optional(&s.db)
         .await?
         .flatten();
-    // under the id, and under the name for one saved before ids
     let mut keys = vec![legacy_avatar_key(&name)];
     if let Some(id) = row_id(&s.db, &name).await? {
         keys.push(avatar_key(id));
@@ -414,18 +297,14 @@ async fn delete_avatar(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- thumbnails --------------------------------------------------------------------------
-
 fn thumb_key(id: Uuid, n: i64) -> String {
     format!("thumbs/{id}/{n}.jpg")
 }
 
-/// Where a thumbnail saved before ids sits. Read from, lifted out of, never written.
 fn legacy_thumb_key(name: &str, n: i64) -> String {
     format!("thumbs/{name}/{n}.jpg")
 }
 
-/// A name from a path that also carries an id. `Name` only fits a path with the one segment.
 fn checked_name(raw: &str) -> Result<String, ApiError> {
     let name = raw.trim().to_lowercase();
     if !valid_name(&name) {
@@ -447,12 +326,10 @@ fn too_many_thumbs() -> ApiError {
     ApiError::new(StatusCode::CONFLICT, "6 pictures at most. remove one first")
 }
 
-/// 53 bits, so the id survives a js number. Never 0.
 fn new_thumb_id() -> i64 {
     ((OsRng.next_u64() >> 11) as i64).max(1)
 }
 
-/// Ids for these names, oldest first. A name with none is absent.
 pub(crate) async fn thumb_ids(db: &PgPool, names: &[String]) -> Result<HashMap<String, Vec<i64>>, sqlx::Error> {
     let mut out: HashMap<String, Vec<i64>> = HashMap::new();
     if names.is_empty() {
@@ -486,7 +363,6 @@ async fn get_thumb(State(s): State<AppState>, Path((raw, n)): Path<(String, i64)
     let key = thumb_key(id, n);
     match s3::get(&s.s3, &key).await {
         Ok(Some(bytes)) => Ok(jpeg(bytes)),
-        // saved before ids: at the name's key, moved to the id's on this read
         Ok(None) => match lift_object(&s, &legacy_thumb_key(&name, n), &key).await {
             Ok(Some(bytes)) => Ok(jpeg(bytes)),
             Ok(None) => Err(no_thumbnail()),
@@ -496,10 +372,6 @@ async fn get_thumb(State(s): State<AppState>, Path((raw, n)): Path<(String, i64)
     }
 }
 
-/// The row first, then the bytes. A bucket miss drops the row, so home never lists a
-/// picture that is not there. A failed save of a later one does not touch the rest.
-/// The cap is counted and the row written under a lock on the name, so two saves at
-/// once cannot both land as the seventh.
 async fn put_thumb(
     State(s): State<AppState>,
     Name(name): Name,
@@ -511,15 +383,10 @@ async fn put_thumb(
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
-    // the row's id is the key in the bucket; the thumbs table still lists them by name
     let row = ensure_row(&s.db, &name).await?;
     let looked = look(&s, &me, row, &headers, UploadKind::Thumb, "image/jpeg", None, &body).await?;
     for _ in 0..2 {
         let id = new_thumb_id();
-        // the cap is a count in the insert's own statement, but a statement only sees rows
-        // committed before it began: two puts at five would both see 5 < 6 and both land.
-        // the lock is per name and lasts until the transaction ends, so the second waits
-        // for the first to commit and counts its row
         let mut tx = s.db.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))").bind(&name).execute(&mut *tx).await?;
         let inserted: Option<i64> = match sqlx::query_scalar(
@@ -535,7 +402,6 @@ async fn put_thumb(
         .await
         {
             Ok(row) => row,
-            // a failed statement aborts the transaction: end it, and the next pass opens a new one
             Err(e) if unique_violation(&e) => {
                 tx.rollback().await?;
                 continue;
@@ -584,8 +450,6 @@ async fn delete_thumb(
     if !exists {
         return Err(no_thumbnail());
     }
-    // the object first, under the id and under the name (one saved before ids). a miss
-    // there leaves the row, so the next try removes it
     let mut keys = vec![legacy_thumb_key(&name, id)];
     if let Some(row) = row_id(&s.db, &name).await? {
         keys.push(thumb_key(row, id));
@@ -604,10 +468,6 @@ async fn delete_thumb(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- the scene's pictures ---------------------------------------------------------------
-
-/// One of the four kinds a scene's picture may be: what the first bytes say, what goes back on
-/// the wire, and what the key ends in. No decode: the bytes are stored and served as they are.
 struct Kind {
     mime: &'static str,
     ext: &'static str,
@@ -618,8 +478,6 @@ const JPEG: Kind = Kind { mime: "image/jpeg", ext: "jpg" };
 const GIF: Kind = Kind { mime: "image/gif", ext: "gif" };
 const WEBP: Kind = Kind { mime: "image/webp", ext: "webp" };
 
-/// What the first bytes say this is, or None. A gif is `GIF87a` or `GIF89a`; a webp is a riff
-/// container, so the word is at byte 8, past the four-byte length. Never svg: a script.
 fn sniff(b: &[u8]) -> Option<&'static Kind> {
     if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         return Some(&PNG);
@@ -636,7 +494,6 @@ fn sniff(b: &[u8]) -> Option<&'static Kind> {
     None
 }
 
-/// Back from what the row kept, for the read and the delete. An unknown string is no kind.
 fn kind_of(mime: &str) -> Option<&'static Kind> {
     [&PNG, &JPEG, &GIF, &WEBP].into_iter().find(|k| k.mime == mime)
 }
@@ -662,10 +519,6 @@ fn asset_too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 2 mb at most")
 }
 
-/// The body as one of the four kinds, and which it is. Not a form, under `MAX_ASSET_BYTES`
-/// (the route's read limit stopped an oversized one already, and that reads as the same 413
-/// here), and starting like a picture. The bytes go up as they are, so this is all the api
-/// ever looks at; the browser's own content-type is not trusted.
 fn asset_body(body: Result<Bytes, BytesRejection>) -> Result<(Bytes, &'static Kind), ApiError> {
     let body = match body {
         Ok(body) => body,
@@ -681,7 +534,6 @@ fn asset_body(body: Result<Bytes, BytesRejection>) -> Result<(Bytes, &'static Ki
     Ok((body, kind))
 }
 
-/// Ids with their mime and size, oldest first: the order `thumb_ids` uses.
 pub(crate) async fn asset_rows(db: &PgPool, name: &str) -> Result<Vec<(i64, String, i32)>, sqlx::Error> {
     sqlx::query_as("SELECT id, mime, bytes FROM stream_assets WHERE name = $1 ORDER BY created_at, id")
         .bind(name)
@@ -703,7 +555,6 @@ async fn get_asset(State(s): State<AppState>, Path((raw, id)): Path<(String, i64
     if id <= 0 {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     }
-    // the row's uuid is the key, the mime is what goes back on the wire
     let row: Option<(Uuid, String)> =
         sqlx::query_as("SELECT s.id, a.mime FROM stream_assets a JOIN streamers s ON s.name = a.name WHERE a.name = $1 AND a.id = $2")
             .bind(&name)
@@ -721,7 +572,6 @@ async fn get_asset(State(s): State<AppState>, Path((raw, id)): Path<(String, i64
             [
                 (header::CONTENT_TYPE, kind.mime),
                 (header::CACHE_CONTROL, ASSET_CACHE),
-                // bytes someone else uploaded, served from our origin: never let a browser guess
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             bytes,
@@ -732,9 +582,6 @@ async fn get_asset(State(s): State<AppState>, Path((raw, id)): Path<(String, i64
     }
 }
 
-/// `put_thumb`'s shape: the row first, then the bytes, a bucket miss dropping the row so the
-/// scene never lists a picture that is not there; the cap counted and the row written under a
-/// lock on the name, so two saves at once cannot both land as the twenty-fifth.
 async fn put_asset(
     State(s): State<AppState>,
     Name(name): Name,
@@ -816,7 +663,6 @@ async fn delete_asset(
     let Some(mime) = mime else {
         return Err(no_asset());
     };
-    // the object first. a miss there leaves the row, so the next try removes it
     if let (Some(row), Some(kind)) = (row_id(&s.db, &name).await?, kind_of(&mime)) {
         if let Err(e) = s3::delete(&s.s3, &asset_key(row, id, kind.ext)).await {
             return Err(asset_failed(&name, "could not remove the picture", e));
@@ -830,8 +676,6 @@ async fn delete_asset(
     crate::cf_purge::purge(vec![format!("/api/streamers/{name}/assets/{id}")]);
     Ok(StatusCode::NO_CONTENT)
 }
-
-// ---- the offline picture and the line under the word ----------------------------------------
 
 fn offline_key(id: Uuid) -> String {
     format!("offline/{id}.jpg")
@@ -861,8 +705,6 @@ async fn get_offline(State(s): State<AppState>, Name(name): Name) -> Result<Resp
     }
 }
 
-/// The same shape as the avatar's save, with its own ceiling: the bucket first, then the version,
-/// so a cached url never points at a picture that did not land.
 async fn put_offline(
     State(s): State<AppState>,
     Name(name): Name,
@@ -898,7 +740,6 @@ async fn delete_offline(
 ) -> Result<StatusCode, ApiError> {
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
-    // the object first: a miss there leaves the version, so the next try removes it
     if let Some(id) = row_id(&s.db, &name).await? {
         if let Err(e) = s3::delete(&s.s3, &offline_key(id)).await {
             return Err(offline_failed(&name, "could not remove the picture", e));
@@ -916,13 +757,10 @@ struct NoteBody {
     note: String,
 }
 
-/// The note as it is kept: one line (any run of whitespace is a space), MAX_NOTE_CHARS at most.
 fn clean_note(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_NOTE_CHARS).collect()
 }
 
-/// `{ note }`: the line under the word while they are not live. Empty clears it. The bio's
-/// upsert, so a name nobody saved anything for gets its row here too.
 async fn put_offline_note(
     State(s): State<AppState>,
     Name(name): Name,
@@ -945,9 +783,6 @@ async fn put_offline_note(
     Ok(Json(json!({ "name": name, "offline_note": note })))
 }
 
-// ---- about me (docs/about.md) -------------------------------------------------------------------
-
-/// The about me as kept, at most. The page's box stops here too.
 const MAX_ABOUT_CHARS: usize = 2000;
 
 #[derive(Deserialize)]
@@ -955,14 +790,10 @@ struct AboutBody {
     about: String,
 }
 
-/// The about me as it is kept: a chat line's cleaning (no control or invisible characters, no
-/// zalgo, two newlines in a row at most), trimmed, MAX_ABOUT_CHARS at most. Paragraphs stay.
 fn clean_about(raw: &str) -> String {
     clean_text(raw).chars().take(MAX_ABOUT_CHARS).collect()
 }
 
-/// `{ about }`: the words first on the about tab. Empty clears it. The bio's gate and the bio's
-/// upsert, so a name nobody saved anything for gets its row here too. → `{ name, about }` as kept.
 async fn put_about(
     State(s): State<AppState>,
     Name(name): Name,
@@ -985,11 +816,7 @@ async fn put_about(
     Ok(Json(json!({ "name": name, "about": about })))
 }
 
-// ---- the chat welcome (docs/chat.md) ----------------------------------------------------------
-
-/// What `Eques` says until the streamer changes it: the column's default (0009-chat-welcome.sql).
 const DEFAULT_WELCOME: &str = "welcome to the chat!";
-/// The welcome as kept, at most. The page's box stops here too.
 const MAX_WELCOME_CHARS: usize = 300;
 
 #[derive(Deserialize)]
@@ -998,16 +825,12 @@ struct WelcomeBody {
     message: String,
 }
 
-/// The words as kept: a chat line's cleaning, trimmed, MAX_WELCOME_CHARS at most. Empty is the default.
 fn clean_welcome(raw: &str) -> String {
     let text: String = clean_text(raw).chars().take(MAX_WELCOME_CHARS).collect();
     let text = text.trim_end();
     if text.is_empty() { DEFAULT_WELCOME.to_owned() } else { text.to_owned() }
 }
 
-/// `{ on, message }`: whether `Eques` welcomes a viewer to the chat, and with what. Never a chat
-/// line: the page draws it for the one viewer (ChatPanel.tsx). The bio's gate and upsert.
-/// → `{ name, welcome_on, welcome }` as kept.
 async fn put_welcome(
     State(s): State<AppState>,
     Name(name): Name,
@@ -1031,18 +854,11 @@ async fn put_welcome(
     Ok(Json(json!({ "name": name, "welcome_on": on, "welcome": welcome })))
 }
 
-// ---- where else to find them (docs/socials.md) ------------------------------------------------
-
-/// How many links one name may put under its player.
 const MAX_LINKS: usize = 20;
-/// A link as kept, at most. The page's box stops here too.
 const MAX_URL_CHARS: usize = 500;
-/// The words on a link, if they gave any. One line.
 const MAX_LABEL_CHARS: usize = 40;
-/// The whole document, as a body: twenty links with the longest url and label each is under 12 kb.
 const MAX_SOCIALS_BYTES: usize = 32 * 1024;
 
-/// How the links sit on the page: in a line that wraps, or as squares with the words under each.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Layout {
@@ -1061,7 +877,6 @@ impl Layout {
     }
 }
 
-/// How big the icons are drawn.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Size {
@@ -1082,9 +897,6 @@ impl Size {
     }
 }
 
-/// The places a link can be of: the word the page picks its icon by. `web` is any other site.
-/// A word is a label the owner picks, never a check on the host: a `youtube` link may be a
-/// `youtu.be`, a redirector, a linktree. What is checked is the url, the same for every kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Platform {
     Tiktok,
@@ -1108,7 +920,6 @@ pub(crate) enum Platform {
     Web,
 }
 
-/// Each kind and its word on the wire. One list, read both ways.
 const PLATFORMS: &[(Platform, &str)] = &[
     (Platform::Tiktok, "tiktok"),
     (Platform::Youtube, "youtube"),
@@ -1146,8 +957,6 @@ impl Serialize for Platform {
     }
 }
 
-/// A word the row holds that this build does not know (a kind taken off the list) reads as
-/// `web`: the link stays, with the plain icon. The door (`clean_socials`) is where a word is refused.
 impl<'de> Deserialize<'de> for Platform {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Platform, D::Error> {
         let word = String::deserialize(d)?;
@@ -1155,7 +964,6 @@ impl<'de> Deserialize<'de> for Platform {
     }
 }
 
-/// One link: where, the url, and the words on it ('' for the kind's own word).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SocialLink {
     pub(crate) kind: Platform,
@@ -1164,7 +972,6 @@ pub(crate) struct SocialLink {
     pub(crate) label: String,
 }
 
-/// The document the row keeps and the page draws. Replaced whole, like the bio.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) struct Socials {
     pub(crate) layout: Layout,
@@ -1172,7 +979,6 @@ pub(crate) struct Socials {
     pub(crate) links: Vec<SocialLink>,
 }
 
-/// The body as the page sends it: strings, checked below. `layout` and `size` may be left out.
 #[derive(Deserialize)]
 struct SocialsBody {
     #[serde(default)]
@@ -1195,11 +1001,6 @@ fn bad_url() -> ApiError {
     ApiError::new(StatusCode::BAD_REQUEST, "bad url. http or https, 500 characters at most")
 }
 
-/// A link as kept: absolute, `http` or `https`, with a host and no credentials, MAX_URL_CHARS at
-/// most, written back the way the parser has it (the scheme and host lowercased, a control
-/// character escaped: nothing a browser would read differently, and nothing postgres refuses in
-/// json). None for everything else: `javascript:`, `data:`, a path, a bare `twitch.tv/bob`. The
-/// parser is the whatwg one, the browser's own `new URL`, so the api and the page agree.
 fn clean_url(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() || raw.chars().count() > MAX_URL_CHARS {
@@ -1209,7 +1010,6 @@ fn clean_url(raw: &str) -> Option<String> {
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return None;
     }
-    // `https://twitch.tv@evil.example/` reads as twitch and lands elsewhere
     if !url.username().is_empty() || url.password().is_some() {
         return None;
     }
@@ -1217,15 +1017,10 @@ fn clean_url(raw: &str) -> Option<String> {
     (kept.chars().count() <= MAX_URL_CHARS).then_some(kept)
 }
 
-/// The words on a link as kept: a chat line's cleaning (no control or invisible characters),
-/// one line, MAX_LABEL_CHARS at most. Empty for none: the page says the kind's word then.
 fn clean_label(raw: &str) -> String {
     clean_text(raw).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LABEL_CHARS).collect()
 }
 
-/// The body as the document the row will hold, or the first thing wrong with it. Refused, not
-/// trimmed: the bio loses its tail quietly, but a link dropped from the middle of a list is a save
-/// the owner cannot see. A layout or size left out is the default; one given wrong is refused.
 fn clean_socials(body: SocialsBody) -> Result<Socials, ApiError> {
     let layout = match body.layout.as_deref().map(str::trim) {
         None | Some("") => Layout::Row,
@@ -1247,8 +1042,6 @@ fn clean_socials(body: SocialsBody) -> Result<Socials, ApiError> {
     Ok(Socials { layout, size, links })
 }
 
-/// The document, replaced whole. The bio's gate and the bio's upsert, so a name nobody saved
-/// anything for gets its row here too; an empty list clears it. → `{ name, socials }` as kept.
 async fn put_socials(
     State(s): State<AppState>,
     Name(name): Name,
@@ -1269,13 +1062,9 @@ async fn put_socials(
     .execute(&s.db)
     .await?;
     log::info!("{name}: {} links", socials.links.len());
-    // the document, not the row's json: postgres orders the keys its own way, and the profile read and the grant write the struct
     Ok(Json(json!({ "name": name, "socials": socials })))
 }
 
-// ---- the watch document ------------------------------------------------------------------
-
-/// Text into html: safe inside a tag and inside a double-quoted attribute.
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -1291,7 +1080,6 @@ fn escape(text: &str) -> String {
     out
 }
 
-/// A bio as one line for a preview card. Bots show about 200 characters.
 fn one_line(text: &str, max_chars: usize) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max_chars {
@@ -1302,16 +1090,12 @@ fn one_line(text: &str, max_chars: usize) -> String {
     cut
 }
 
-/// `https://<host>` as the browser sees it. Caddy keeps the Host header and sets the proto.
 fn origin(headers: &HeaderMap) -> String {
     let proto = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("https");
     let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
     format!("{proto}://{host}")
 }
 
-/// What the picture in the card is: the stream itself while live and a thumbnail exists, else
-/// the offline picture while not live, else the profile picture, else nothing. The two wide
-/// ones show big (`summary_large_image`); the profile picture is a square beside the words.
 enum Card {
     Thumbnail,
     Offline(i64),
@@ -1319,8 +1103,6 @@ enum Card {
     None,
 }
 
-/// The title keeps `live|offline`: it is about the stream, and previews are cached for hours.
-/// The description with no bio says the presence word too: a watcher deciding whether to wait.
 fn head_tags(p: &Profile, presence: Presence, card: &Card, origin: &str) -> String {
     let live = presence == Presence::Streaming;
     let title = format!("{} · {}", p.name, if live { "live" } else { "offline" });
@@ -1366,8 +1148,6 @@ fn head_tags(p: &Profile, presence: Presence, card: &Card, origin: &str) -> Stri
     h
 }
 
-/// The `<template id="watch-shell">` of index.html with the placeholders filled in.
-/// None if the pages have no such template (an older build): the head alone still works.
 fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Option<String> {
     let start = shell.find(TEMPLATE_OPEN)? + TEMPLATE_OPEN.len();
     let end = start + shell[start..].find(TEMPLATE_CLOSE)?;
@@ -1375,16 +1155,12 @@ fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Optio
         .avatar
         .map(|v| format!(r#"<img src="/api/streamers/{}/avatar?v={v}" alt="" class="{AVATAR_IMG_CLASS}" draggable="false">"#, p.name))
         .unwrap_or_default();
-    // the status under the name, as markup: a name with none leaves no empty line
     let status = if p.bio.is_empty() {
         String::new()
     } else {
         let bio = escape(&p.bio);
         format!(r#"<span class="{STATUS_SPAN_CLASS}" title="{bio}">{bio}</span>"#)
     };
-    // the box where the player goes: the offline picture over it while they are not live and
-    // have one, else black. an inline style, so an api older than the placeholder leaves words
-    // the browser ignores, not words on the page
     let banner = match card {
         Card::Offline(v) => format!("background-image:url(/api/streamers/{}/offline?v={v})", p.name),
         _ => String::new(),
@@ -1401,7 +1177,6 @@ fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Optio
     )
 }
 
-/// The same colours the pages give the four words (`presence-atoms.ts`).
 fn presence_tone(presence: Presence) -> &'static str {
     match presence {
         Presence::Streaming => "text-primaryBlue",
@@ -1411,16 +1186,13 @@ fn presence_tone(presence: Presence) -> &'static str {
     }
 }
 
-/// index.html with its head replaced for this name and the card inside `#root`.
 fn render(shell: &str, p: &Profile, presence: Presence, card: &Card, origin: &str) -> String {
     let mut html = shell.to_owned();
-    // one title: ours, not the "streams" of every other page
     if let (Some(a), Some(b)) = (html.find("<title>"), html.find("</title>")) {
         if a < b {
             html.replace_range(a..b + "</title>".len(), "");
         }
     }
-    // after everything else in the head, so <meta charset> stays in the first bytes
     if let Some(at) = html.find("</head>") {
         html.insert_str(at, &head_tags(p, presence, card, origin));
     }
@@ -1438,9 +1210,6 @@ fn page(status: StatusCode, html: String) -> Response {
     (status, [(header::CACHE_CONTROL, "no-cache")], Html(html)).into_response()
 }
 
-/// Caddy sends every `/watch/*` here. The rest of the path is the name, with or without a
-/// trailing slash. Anything else is still the spa, with a 404, so a mistyped link shows the
-/// page's own "bad name" instead of json.
 async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): Path<String>) -> Response {
     let shell = match read_shell().await {
         Ok(shell) => shell,
@@ -1454,8 +1223,6 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
     if trimmed.contains('/') || !valid_name(&name) {
         return page(StatusCode::NOT_FOUND, shell);
     }
-    // a name somebody renamed away from leads to the new one while it is held (docs/ids.md):
-    // a shared link keeps working, and the preview bots follow a redirect
     if let Ok(Some(to)) = auth::renamed_to(&s.db, &name).await {
         return (StatusCode::FOUND, [(header::LOCATION, format!("/watch/{to}")), (header::CACHE_CONTROL, "no-cache".to_owned())]).into_response();
     }
@@ -1471,14 +1238,11 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
         Card::Thumbnail
     } else {
         match (live, profile.offline, profile.avatar) {
-            // the offline picture is for a page with no player on it: live without a thumbnail yet shows the face
             (false, Some(v), _) => Card::Offline(v),
             (_, _, Some(v)) => Card::Picture(v),
             _ => Card::None,
         }
     };
-    // the word beside the name: live is known; here and the choice come from redis and the row.
-    // a redis that does not answer leaves the two words the page always had
     let presence = match presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await {
         Ok(presence) => presence,
         Err(_) if live => Presence::Streaming,
@@ -1487,7 +1251,6 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
     page(StatusCode::OK, render(&shell, &profile, presence, &card, &origin(&headers)))
 }
 
-/// `/watch/` with nothing after it: the spa's own not-found page.
 async fn watch_nobody() -> Response {
     match read_shell().await {
         Ok(shell) => page(StatusCode::NOT_FOUND, shell),
@@ -1500,20 +1263,16 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/streamers/{name}/avatar", get(get_avatar).put(put_avatar).delete(delete_avatar))
         .route("/api/streamers/{name}/thumbs", get(list_thumbs).put(put_thumb))
         .route("/api/streamers/{name}/thumbs/{id}", get(get_thumb).delete(delete_thumb))
-        // the picture's ceiling is the read limit too: past it the body is dropped, not buffered
         .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES))
-        // after that layer, so the wider picture gets its own ceiling and nothing else does
         .route(
             "/api/streamers/{name}/offline",
             get(get_offline).put(put_offline).delete(delete_offline).layer(DefaultBodyLimit::max(MAX_OFFLINE_BYTES)),
         )
-        // the scene's pictures go up as they are, so this ceiling is the widest of the three
         .route("/api/streamers/{name}/assets", get(list_assets).put(put_asset).layer(DefaultBodyLimit::max(MAX_ASSET_BYTES)))
         .route("/api/streamers/{name}/assets/{id}", get(get_asset).delete(delete_asset))
         .route("/api/streamers/{name}/offline-note", put(put_offline_note))
         .route("/api/streamers/{name}/about", put(put_about))
         .route("/api/streamers/{name}/welcome", put(put_welcome))
-        // the links are words, not a picture: a body past this is not a document anyone wrote
         .route("/api/streamers/{name}/socials", put(put_socials).layer(DefaultBodyLimit::max(MAX_SOCIALS_BYTES)))
         .route("/watch/", get(watch_nobody))
         .route("/watch/{*rest}", get(watch_page))
@@ -1542,12 +1301,10 @@ mod tests {
         let id = Uuid::parse_str("7f3a1b2c-0000-4000-8000-000000000001").unwrap();
         assert_eq!(thumb_key(id, 7), "thumbs/7f3a1b2c-0000-4000-8000-000000000001/7.jpg");
         assert_eq!(avatar_key(id), "avatars/7f3a1b2c-0000-4000-8000-000000000001.jpg");
-        // the ones from before ids, read and lifted, never written
         assert_eq!(legacy_thumb_key("bob", 7), "thumbs/bob/7.jpg");
         assert_eq!(legacy_avatar_key("bob"), "avatars/bob.jpg");
         assert_eq!(offline_key(id), "offline/7f3a1b2c-0000-4000-8000-000000000001.jpg");
         assert_eq!(asset_key(id, 7, "gif"), "assets/7f3a1b2c-0000-4000-8000-000000000001/7.gif");
-        // the avatar, the offline picture, two thumbnails, one scene picture; a mime nobody knows has no key
         assert_eq!(picture_keys(id, &[7, 9], &[(3, "image/png".into()), (4, "image/svg+xml".into())]).len(), 5);
     }
 
@@ -1557,7 +1314,6 @@ mod tests {
         assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]).map(|k| k.ext), Some("jpg"));
         assert_eq!(sniff(b"GIF89a\x01\x00").map(|k| k.mime), Some("image/gif"));
         assert_eq!(sniff(b"RIFF\x00\x00\x00\x00WEBPVP8 ").map(|k| k.mime), Some("image/webp"));
-        // a wave is a riff too; an svg is a script
         assert!(sniff(b"RIFF\x00\x00\x00\x00WAVEfmt ").is_none());
         assert!(sniff(b"<svg xmlns=\"http://www.w3.org/2000/svg\">").is_none());
         assert!(sniff(b"").is_none());
@@ -1579,11 +1335,8 @@ mod tests {
         assert!(html.contains(r#"og:description" content="hi &lt;all&gt;""#));
         assert!(html.contains(r#"<div id="root"><h1>bob<span class="ml-2 text-increase""#));
         assert!(html.contains(r#"<p class="text-primaryBlue">streaming</p>"#));
-        // the status line under the name, escaped, in the title and on hover
         assert!(html.contains(&format!(r#"<span class="{STATUS_SPAN_CLASS}" title="hi &lt;all&gt;">hi &lt;all&gt;</span></h1>"#)));
-        // the player's box stays black: the stream goes there
         assert!(html.contains(r#"<div style=""></div>"#));
-        // the head came after the charset, before </head>, and the script is still there
         assert!(html.find("<meta charset").unwrap() < html.find("og:title").unwrap());
         assert!(html.find("og:title").unwrap() < html.find("</head>").unwrap());
         assert!(html.contains("/assets/index-abc.js"));
@@ -1598,9 +1351,7 @@ mod tests {
         assert!(html.contains(r#"twitter:card" content="summary""#));
         assert!(html.contains(r#"<img src="/api/streamers/bob/avatar?v=1700000000" alt="" class=""#));
         assert!(html.contains(r#"<p class="text-textSecondary">offline</p>"#));
-        // no status: no line under the name, not an empty one
         assert!(!html.contains(STATUS_SPAN_CLASS));
-        // every placeholder in the card is filled; the inert <template> keeps its own
         let root = &html[html.find(r#"<div id="root">"#).unwrap()..];
         assert!(!root.contains("{{"));
     }
@@ -1610,7 +1361,6 @@ mod tests {
         let mut p = profile("", Some(1700000000), false);
         p.offline = Some(1700000001);
         let html = render(SHELL, &p, Presence::Offline, &Card::Offline(1700000001), "https://x");
-        // the wide picture is the card, big; the face stays beside the name; the player's box is the picture
         assert!(html.contains(r#"og:image" content="https://x/api/streamers/bob/offline?v=1700000001""#));
         assert!(html.contains(r#"twitter:card" content="summary_large_image""#));
         assert!(html.contains(r#"<img src="/api/streamers/bob/avatar?v=1700000000" alt="""#));
@@ -1626,7 +1376,6 @@ mod tests {
 
     #[test]
     fn about_me_keeps_its_paragraphs_and_is_capped() {
-        // paragraphs stay, a third blank line in a row goes, invisible characters go, the ends are trimmed
         assert_eq!(clean_about("  hi\n\nthere\n\n\n\nall\u{200b}  "), "hi\n\nthere\n\nall");
         assert_eq!(clean_about("").len(), 0);
         assert_eq!(clean_about(&"x".repeat(3000)).chars().count(), MAX_ABOUT_CHARS);
@@ -1638,14 +1387,12 @@ mod tests {
         assert_eq!(clean_welcome(""), DEFAULT_WELCOME);
         assert_eq!(clean_welcome(" \n\u{200b} "), DEFAULT_WELCOME);
         assert_eq!(clean_welcome(&"x".repeat(400)).chars().count(), MAX_WELCOME_CHARS);
-        // cut at the cap and then trimmed: no trailing space left from the cut
         assert_eq!(clean_welcome(&format!("{} y", "x".repeat(MAX_WELCOME_CHARS - 1))), "x".repeat(MAX_WELCOME_CHARS - 1));
     }
 
     #[test]
     fn a_link_is_http_with_a_host_and_nothing_else() {
         assert_eq!(clean_url(" https://twitch.tv/bob ").as_deref(), Some("https://twitch.tv/bob"));
-        // written back the parser's way: the scheme and the host lowercased
         assert_eq!(clean_url("HTTP://Example.COM").as_deref(), Some("http://example.com/"));
         for bad in ["javascript:alert(1)", "data:text/html,hi", "twitch.tv/bob", "/watch/bob", "https://", "ftp://x.com/a", "https://twitch.tv@evil.example/", "https://bob:pw@x.com/", ""] {
             assert!(clean_url(bad).is_none(), "{bad:?} got through");
@@ -1667,25 +1414,20 @@ mod tests {
         assert_eq!(doc.links[0].label, "my channel");
         assert_eq!(doc.links[1].kind, Platform::Web);
         assert_eq!(doc.links[1].url, "https://example.com/");
-        // left out: the defaults. an empty list is a document too (it clears)
         let empty = clean_socials(body(vec![])).unwrap();
         assert_eq!(empty, Socials::default());
         assert_eq!((empty.layout, empty.size), (Layout::Row, Size::Medium));
-        // refused, with the word for it
         assert_eq!(clean_socials(body(vec![link("myspace", "https://x.com", "")])).unwrap_err().message(), "bad kind");
         assert_eq!(clean_socials(body(vec![link("web", "javascript:alert(1)", "")])).unwrap_err().message(), "bad url. http or https, 500 characters at most");
         assert_eq!(clean_socials(body((0..=MAX_LINKS).map(|_| link("web", "https://x.com", "")).collect())).unwrap_err().message(), "too many links. 20 at most");
         assert_eq!(clean_socials(SocialsBody { layout: Some("spiral".into()), size: None, links: vec![] }).unwrap_err().message(), "bad layout. one of row, grid");
         assert_eq!(clean_socials(SocialsBody { layout: None, size: Some("huge".into()), links: vec![] }).unwrap_err().message(), "bad size. one of small, medium, large");
-        // the label is capped, not refused
         assert_eq!(clean_label(&"y".repeat(100)).chars().count(), MAX_LABEL_CHARS);
-        // the row round-trips, an empty label is left off the wire, and a word this build does not know reads as web
         let json = serde_json::to_value(&doc).unwrap();
         assert!(json["links"][1].get("label").is_none());
         assert_eq!(serde_json::from_value::<Socials>(json).unwrap(), doc);
         let odd: Socials = serde_json::from_value(json!({ "layout": "row", "size": "small", "links": [{ "kind": "myspace", "url": "https://x.com/" }] })).unwrap();
         assert_eq!((odd.links[0].kind, odd.links[0].label.as_str(), odd.size), (Platform::Web, "", Size::Small));
-        // a row from before the column, or nothing at all, is the empty document
         assert_eq!(serde_json::from_value::<Socials>(Value::Null).unwrap_or_default(), Socials::default());
     }
 
@@ -1699,7 +1441,6 @@ mod tests {
     #[test]
     fn online_but_not_live() {
         let html = render(SHELL, &profile("", None, false), Presence::Online, &Card::None, "https://x");
-        // the title is about the stream; the description and the card say they are around
         assert!(html.contains("<title>bob · offline</title>"));
         assert!(html.contains(r#"og:description" content="online, not live""#));
         assert!(html.contains(r#"<p class="text-increase">online</p>"#));

@@ -1,9 +1,3 @@
-//! The about tab's page (docs/about.md): a json document of blocks, each `type` plus where it
-//! sits (`x`, `y`, `z`) and how big it is (`w`, `h`). The bytes are in the bucket, not in the row. A picture, a clip or a
-//! track goes up on its own (`PUT .../about-file`) and the document names it by id. The text
-//! is html, cleaned here and cut at 10 000 characters, and that cleaned string is the object
-//! the document's text block points at. The row keeps only the layout.
-
 use std::collections::{HashMap, HashSet};
 
 use axum::body::Bytes;
@@ -27,16 +21,12 @@ const TEXT_MAX: usize = 10_000;
 const BLOCKS_MAX: usize = 40;
 const POS_MAX: i32 = 1600;
 const Z_MAX: i32 = 40;
-/// The smallest a block can be dragged, and the largest. A missing size takes the kind's usual box.
 const W_MIN: i32 = 80;
 const H_MIN: i32 = 40;
 const SIZE_MAX: i32 = 800;
-/// A picture, the same ceiling as a scene picture.
 const MAX_IMAGE: usize = 2 * 1024 * 1024;
-/// A short clip on the page, not a stream.
 const MAX_VIDEO: usize = 12 * 1024 * 1024;
 const MAX_SOUND: usize = 8 * 1024 * 1024;
-/// The document: forty texts at the cap, plus the layout.
 const MAX_PAGE: usize = 2 * 1024 * 1024;
 const FILE_CACHE: &str = "public, max-age=31536000, immutable";
 
@@ -98,15 +88,11 @@ struct Kept {
     z: i32,
     w: i32,
     h: i32,
-    /// Text only: the cleaned html to write. None for a picture, a clip, a track, a shape.
     html: Option<String>,
-    /// True when this id is not in `about_files` yet.
     fresh: bool,
     look: Paint,
 }
 
-/// How a block is painted. Fonts are css families already on the machine: nothing is fetched.
-/// A color is `#rrggbb` or it is dropped. A shape (`line`, `box`, `border`) has no file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Paint {
@@ -157,7 +143,6 @@ fn is_shape(kind: &str) -> bool {
     matches!(kind, "line" | "box" | "border")
 }
 
-/// The bucket key. The row's uuid, so a rename does not move the object.
 pub(crate) fn about_key(row: uuid::Uuid, id: i64, ext: &str) -> String {
     format!("about/{row}/{id}.{ext}")
 }
@@ -310,7 +295,6 @@ async fn save_page(
             .bind(id)
             .execute(&mut *conn)
             .await?;
-        // served public and immutable, so the edge may hold it a year (cf_purge.rs)
         crate::cf_purge::purge(vec![file_src(name, *id)]);
     }
     let mut out = Vec::with_capacity(kept.len());
@@ -338,8 +322,6 @@ async fn save_page(
     Ok(Json(json!({ "blocks": out })))
 }
 
-/// The layout as it will be kept. A text with id 0 is a new object. A picture, clip or track
-/// must already be one of this name's files, and the same kind.
 fn plan(body: &PageBody, have: &HashMap<i64, (String, String)>) -> Result<Vec<Kept>, ApiError> {
     let mut kept = Vec::with_capacity(body.blocks.len());
     let mut seen = HashSet::new();
@@ -425,8 +407,6 @@ fn clamp_z(n: i64) -> i32 {
     n.clamp(0, Z_MAX as i64) as i32
 }
 
-/// A missing size (an older page) takes the kind's usual box. A given size stays between the
-/// smallest a block can be and `SIZE_MAX`.
 fn clamp_size(n: i64, fallback: i32, min: i32) -> i32 {
     if n <= 0 {
         return fallback;
@@ -753,11 +733,6 @@ async fn ensure_row(db: &PgPool, name: &str) -> Result<uuid::Uuid, sqlx::Error> 
     .await
 }
 
-/// The text as it is kept: a fragment of the tags a line needs (`p`, `br`, `b`, `i`, `a`, a list,
-/// a heading), nothing else. A `div` becomes a `p` (that is what a text box writes for a new
-/// line). A link is http or https, or it is not a link. Script, style, and the rest are dropped
-/// with what is inside them. Cut at `TEXT_MAX` characters of text. The string is what the bucket
-/// stores, and what the page draws.
 fn sanitize_html(raw: &str) -> String {
     let mut out = String::new();
     let mut budget = TEXT_MAX;

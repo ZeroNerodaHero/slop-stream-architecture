@@ -1,16 +1,3 @@
-// Video in voice (video/src/voice.rs, docs/voice.md): three headless chromes with fake devices
-// (a beeping mic, the moving test picture) in one voice room of a `video voice` started with
-// VOICE_DEV_OPEN=1. Each joins with the page's offer (1 sendrecv mic + 15 recvonly audio), then:
-// A and B turn their cameras on (a new sendonly VP8 m-line, offered again with its mid named
-// `camera`), and every one of A, B and C gets the others' audio and video with frames decoding,
-// each picture on the mid its seats frame names; A shares its screen mid-call (a second sendonly
-// line named `screen`) and B and C decode it next to A's camera, at the screen's size; A's camera
-// goes off (its line inactive) and the others' seats frames drop it while the screen keeps
-// going; B's mute and deafen show in A's seats frame; C leaves and the rest go on. How long a
-// new viewer waits for its first picture (the PLI on subscribe) is printed and kept under 3s.
-// Not in scripts/test.sh: it needs its own voice server. Run one first, then this:
-//   VOICE_DEV_OPEN=1 PUBLIC_IP=127.0.0.1 VOICE_WS_PORT=17881 VOICE_UDP_PORT=17883 cargo run -p video -- voice
-//   VOICE_URL=ws://127.0.0.1:17881/ws node test/voice-video.js
 const { chromium } = require('playwright');
 const VOICE_URL = process.env.VOICE_URL || 'ws://127.0.0.1:7881/ws';
 const ROOM = 'vvideo/lounge';
@@ -19,7 +6,6 @@ const ARGS = [
   '--use-fake-device-for-media-stream',
   '--use-fake-ui-for-media-stream',
   '--autoplay-policy=no-user-gesture-required',
-  // getDisplayMedia with no picker: this tab is the screen
   '--auto-accept-this-tab-capture',
   '--auto-select-desktop-capture-source=Entire screen',
 ];
@@ -52,9 +38,6 @@ async function pollUntil(fn, until, { timeout, interval = 200, label }) {
   throw new Error(`${label}: timed out after ${timeout} ms; last value: ${JSON.stringify(last)}`);
 }
 
-// the page: the same protocol as frontend/src/infra/atoms/voice-video.ts, written out. the page
-// is always the offerer: one offer in flight at a time, each frame naming its sending video
-// mids; recvonly video lines are added when a seats frame lists more pictures than there are.
 const PAGE = `<!doctype html><title>voice video</title><body><script>
 window.v = { seats: [], error: null, answered: 0, offers: 0, firstFrame: {} };
 const VP8 = () => (RTCRtpReceiver.getCapabilities('video')?.codecs ?? []).filter((c) => /vp8/i.test(c.mimeType));
@@ -212,7 +195,6 @@ async function open(user) {
 const from = (p, other) => p.page.evaluate((u) => window.from(u), other);
 const errorOf = async (p) => (await p.page.evaluate(() => window.state())).error;
 
-/** `p` gets `other`'s audio and every picture in `kinds`, frames decoding and growing over a second */
 async function sees(p, other, kinds, timeout = 8000) {
   const ok = (f) => f && f.packets > 0 && kinds.every((k) => f.video[k] && f.video[k].mid && f.video[k].decoded > 0);
   const first = await pollUntil(() => from(p, other), ok, { timeout, label: `${p.user} gets ${other}'s audio and ${kinds.join('+') || 'no video'}` });

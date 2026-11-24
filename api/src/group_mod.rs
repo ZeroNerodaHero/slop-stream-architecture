@@ -1,13 +1,3 @@
-//! An owner's powers, and the custom roles under them. See docs/groups.md.
-//!
-//! The maker of a group is an owner. An owner can do everything, including name another owner.
-//! Only an owner can do that. The picture and the banner are the owner's too: no role carries
-//! them. A custom role is a name, a colour and a set of the powers below. It cannot grant
-//! owner, it cannot touch an owner, and it reaches only the powers its holder has: whoever
-//! makes, changes, deletes, gives or takes a role must hold every power on it. A role is
-//! known by a uuid postgres made (schema.sql, docs/ids.md), so a rename is a save like any
-//! other, and a page holds a role open while its name changes under it.
-
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -24,25 +14,17 @@ use crate::groups::{self, BOT_GROUP};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
-/// Edit the about line, the colour, public or private, and the member order. Not the pictures: those are the owner's.
 pub(crate) const APPEARANCE: i32 = 1;
-/// Make, edit, delete and hand out custom roles. Not owner.
 pub(crate) const ROLES: i32 = 2;
-/// Add a channel, rename one, and delete one that is not the home channel (`general`).
 pub(crate) const CHANNELS: i32 = 4;
-/// Remove a member who is not an owner.
 pub(crate) const KICK: i32 = 8;
-/// The same, and they cannot join again until the ban is lifted.
 pub(crate) const BAN: i32 = 16;
-/// In a voice channel: server mute, deafen, disconnect, and move someone to another voice channel.
 pub(crate) const VOICE: i32 = 32;
-/// Upload, rename and delete the group's custom emotes (emotes.rs).
 pub(crate) const EMOTES: i32 = 64;
 
 const ALL: i32 = APPEARANCE | ROLES | CHANNELS | KICK | BAN | VOICE | EMOTES;
 const MAX_ROLES: i64 = 20;
 const MAX_ICON: usize = 256 * 1024;
-/// The banner is 2560x640, the room's width on a sharp screen; a photo at that size needs the room.
 const MAX_BANNER: usize = 1024 * 1024;
 const JPEG: [u8; 3] = [0xFF, 0xD8, 0xFF];
 
@@ -89,8 +71,6 @@ fn perms_json(bits: i32) -> Value {
     })
 }
 
-/// What this login may do here. An owner may do all of it. A site admin may do the listed
-/// powers too, and still cannot name an owner: that check does not call this.
 pub(crate) async fn allows(s: &AppState, user: uuid::Uuid, group: &str, bit: i32) -> Result<bool, sqlx::Error> {
     let held = held(&s.db, user, group).await?;
     let admin = s.admins.iter().any(|a| a.id == user);
@@ -127,7 +107,6 @@ async fn owner_count(db: &sqlx::PgPool, group: &str) -> Result<i64, sqlx::Error>
     sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1 AND owner").bind(group).fetch_one(db).await
 }
 
-/// Who is shaping a role, and what they hold. See `shaper`.
 struct Shaper {
     owner: bool,
     admin: bool,
@@ -135,16 +114,11 @@ struct Shaper {
 }
 
 impl Shaper {
-    /// Whether a role with these powers is within reach. An owner and a site admin reach every
-    /// power. Anyone else reaches the powers they hold: the roles power makes, changes, deletes,
-    /// gives and takes roles that carry nothing more than the shaper has, so nobody writes
-    /// themselves a power they were not given.
     fn reaches(&self, bits: i32) -> bool {
         self.owner || self.admin || bits & !self.perms == 0
     }
 }
 
-/// The login shaping a role: an owner, a site admin, or the roles power. 403 for anyone else.
 async fn shaper(s: &AppState, who: uuid::Uuid, group: &str) -> Result<Shaper, ApiError> {
     let held = held(&s.db, who, group).await?;
     let admin = s.admins.iter().any(|a| a.id == who);
@@ -158,7 +132,6 @@ fn out_of_reach() -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, "that role carries a power you don't hold")
 }
 
-/// A role cannot touch an owner: only an owner gives one a role, or takes one back.
 fn not_an_owner(me: &Shaper, target_is_owner: bool) -> Result<(), ApiError> {
     if target_is_owner && !me.owner {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "a role can't touch an owner"));
@@ -166,14 +139,11 @@ fn not_an_owner(me: &Shaper, target_is_owner: bool) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// A role's powers, by id, in this group. 404 `no such role`.
 async fn role_perms(db: &sqlx::PgPool, group: &str, id: uuid::Uuid) -> Result<i32, ApiError> {
     let perms: Option<i32> = sqlx::query_scalar("SELECT perms FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(group).fetch_optional(db).await?;
     perms.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such role"))
 }
 
-/// The picture and the banner are the owner's: no role carries them. A site admin may too,
-/// as with everything here but naming an owner.
 async fn need_owner(s: &AppState, who: uuid::Uuid, group: &str) -> Result<(), ApiError> {
     if is_owner(&s.db, who, group).await? || s.admins.iter().any(|a| a.id == who) {
         Ok(())
@@ -227,8 +197,6 @@ async fn member_id(db: &sqlx::PgPool, group: &str, name: &str) -> Result<(uuid::
     row.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "they are not in the group"))
 }
 
-/// The member a body names (a role given, an owner named, kick, timeout, ban, a transfer): the
-/// name rule, so a 400 `bad name` and not a lookup of whatever was sent.
 fn target_name(raw: &str) -> Result<String, ApiError> {
     let name = raw.trim().to_lowercase();
     if crate::valid_name(&name) {
@@ -247,12 +215,10 @@ fn role_name(raw: &str) -> Result<String, ApiError> {
     Ok(name)
 }
 
-/// What the group calls its owner role (docs/groups.md): `owner` until an owner renames it.
 async fn owner_role_of(db: &sqlx::PgPool, group: &str) -> Result<String, sqlx::Error> {
     sqlx::query_scalar("SELECT owner_role FROM groups WHERE name = $1").bind(group).fetch_one(db).await
 }
 
-/// A custom role cannot be called what the owner role is: that word is the owners' on the roster.
 async fn not_the_owner_role(db: &sqlx::PgPool, group: &str, name: &str) -> Result<(), ApiError> {
     if owner_role_of(db, group).await?.eq_ignore_ascii_case(name) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that name is reserved"));
@@ -290,18 +256,13 @@ struct RoleIn {
     color: String,
     #[serde(default)]
     perms: PermsIn,
-    /// The channels kept to this role (docs/groups.md): its holders see them, whoever else
-    /// cannot. Absent: none.
     #[serde(default)]
     channels: Vec<String>,
-    /// Seconds its holders wait between lines (docs/groups.md). Absent, or 0: no cooldown.
     #[serde(default)]
     cooldown: i32,
 }
 
-/// A role's cooldown is seconds, none to an hour.
 const MAX_COOLDOWN_SECS: i32 = 3600;
-/// A timeout is seconds, ten to a week.
 const MIN_TIMEOUT_SECS: i64 = 10;
 const MAX_TIMEOUT_SECS: i64 = 7 * 86400;
 
@@ -314,7 +275,6 @@ fn cooldown_of(raw: i32) -> Result<i32, ApiError> {
 
 #[derive(Deserialize)]
 struct ChannelRolesIn {
-    /// The roles a channel is kept to, by id. Empty: everyone's.
     roles: Vec<uuid::Uuid>,
 }
 
@@ -322,7 +282,6 @@ struct ChannelRolesIn {
 struct TimeoutIn {
     name: String,
     seconds: i64,
-    /// The moderator's words, a ban's rule (`clean_about`). Absent: none.
     #[serde(default)]
     reason: String,
 }
@@ -365,7 +324,6 @@ struct OrderIn {
     order: String,
 }
 
-/// `name`, `newest`, or `oldest`. Owners stay first either way.
 fn member_order(raw: &str) -> Result<&'static str, ApiError> {
     match raw.trim() {
         "newest" => Ok("newest"),
@@ -376,7 +334,6 @@ fn member_order(raw: &str) -> Result<&'static str, ApiError> {
 }
 
 pub(crate) fn routes() -> Router<AppState> {
-    // no DELETE: there is no remove. a group with a picture keeps one, or changes it for another
     let pictures = Router::new()
         .route("/api/groups/{group}/icon", get(get_icon).put(put_icon))
         .route("/api/groups/{group}/banner", get(get_banner).put(put_banner))
@@ -411,13 +368,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .merge(pictures)
 }
 
-/// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
-/// login may do, its channels, who in it is live, who is in which voice channel, the roster (anyone's on a public group; a
-/// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`,
-/// `holders` (who holds each role) and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
-/// first page, `roster_next` the cursor for `GET .../members?after=`. The page loads this once and then
-/// follows the `group` facts on the events socket (docs/groups.md); nothing here is asked
-/// again on a channel change.
 pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Query(q): Query<RoomQuery>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
@@ -448,12 +398,9 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     let channels = groups::channels_of(&s, &group, user, admin).await?;
     let sees = crate::moderate::sees_group(public, adult, mine, admin);
     let live = if sees { groups::live_in(&s, &group).await? } else { Vec::new() };
-    // the channels this login has muted (docs/notifications.md): its own, so the list can say so
     let muted = groups::muted_in(&s.db, user, &group).await?;
-    // the lines pinned in each channel this login sees, by id (pins.rs): the header's count and the lines' marks
     let seen = groups::visible_channels(&s.db, &group, user, admin).await?;
     let pins = crate::pins::pinned_ids(&s.db, &group, &seen).await?;
-    // who is in voice, in the channels this login sees (voice.rs). An extra and not the room: redis down reads as nobody
     let voice = if sees { voice_in(&s, &group, &seen).await } else { json!({}) };
     let first = page_of(q.roster, None, None)?;
     let (roster, roster_next, holders) = if sees {
@@ -495,10 +442,6 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     })))
 }
 
-/// Who is in voice: `{"<channel>": [{name, uid, since}]}` from `voice:<server>` (voice.rs),
-/// each channel in order of who came first. Only the channels in `seen`, so a hidden channel's
-/// people stay hidden with it. `{}` when redis cannot be asked: the room still opens, and the
-/// `voice` and `voice_left` facts fill it in from there.
 async fn voice_in(s: &AppState, group: &str, seen: &[String]) -> Value {
     let fields: Result<(std::collections::HashMap<String, String>, std::collections::HashSet<String>), redis::RedisError> = redis::pipe()
         .cmd("HGETALL")
@@ -516,9 +459,6 @@ async fn voice_in(s: &AppState, group: &str, seen: &[String]) -> Value {
     }
 }
 
-/// The fields of `voice:<server>` (user id to `{name, channel, since, ...}`) as the room's
-/// `voice`. A field that does not read, or sits in a channel not in `seen`, is left out. Someone
-/// in `muted` (a moderator's mute, voice.rs `server_mute`) says `muted: true`.
 fn seated_by_channel(fields: &std::collections::HashMap<String, String>, seen: &[String], muted: &std::collections::HashSet<String>) -> Value {
     let mut by: std::collections::BTreeMap<&str, Vec<(i64, &str, String)>> = std::collections::BTreeMap::new();
     for (uid, raw) in fields {
@@ -610,7 +550,6 @@ async fn lift_adult_lock(State(s): State<AppState>, Path(group): Path<String>, M
     Ok(Json(json!({ "adult": adult, "locked": false })))
 }
 
-/// `PUT /api/groups/:group/order` `{order}`: how the member list sorts after the owners. Appearance.
 async fn set_order(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<OrderIn>, JsonRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
@@ -633,9 +572,6 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     Ok(Json(json!({ "about": about })))
 }
 
-/// `PUT /api/groups/:group/color` `{color}`: the group's colour, `#rrggbb` as the create form
-/// takes it (`groups::clean_color`). Appearance, like the about line. The `color` fact repaints
-/// the room, and the lists the page has, at once.
 async fn put_color(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<ColorIn>, JsonRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
@@ -647,14 +583,10 @@ async fn put_color(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     Ok(Json(json!({ "color": color })))
 }
 
-/// One role as the room, the list and the `role` fact say it. `channels` is the ones kept to it,
-/// `cooldown` the seconds its holders wait between lines (0: none).
 fn role_json(id: uuid::Uuid, name: &str, color: &str, perms: i32, channels: &[String], cooldown: i32) -> Value {
     json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms), "channels": channels, "cooldown": cooldown })
 }
 
-/// The group's roles, oldest first: the id is a uuid and says nothing about the order. Each
-/// with the channels kept to it, by name, and its cooldown.
 async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Error> {
     let roles: Vec<(uuid::Uuid, String, String, i32, Vec<String>, i32)> = sqlx::query_as(
         "SELECT r.id, r.name, r.color, r.perms,
@@ -668,9 +600,6 @@ async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Er
     Ok(roles.into_iter().map(|(id, name, color, perms, channels, cooldown)| role_json(id, &name, &color, perms, &channels, cooldown)).collect())
 }
 
-/// Who holds each role, by the name they have now: `{"<role id>": [name, …]}`, a role nobody
-/// holds left out. The whole group's, not a roster page's, so a line's speaker past the pages
-/// loaded so far still wears their role's colour in the chat (docs/groups.md).
 async fn holders_of(db: &sqlx::PgPool, group: &str) -> Result<Value, sqlx::Error> {
     let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
         "SELECT rm.role_id, s.name FROM role_members rm
@@ -688,10 +617,6 @@ async fn holders_of(db: &sqlx::PgPool, group: &str) -> Result<Value, sqlx::Error
     Ok(json!(holders))
 }
 
-/// The channels a role's body names, cleaned, as the shaper may put them: each a channel of the
-/// group the shaper sees (`groups::may_see`; a hidden one and a missing one are both `no such
-/// channel`, so the roles power cannot unlock for itself what it cannot see), never the home
-/// channel (`general` until renamed: everyone's), each once. Sorted, as `roles_of` lists them.
 async fn kept_channels(s: &AppState, group: &str, me: &Shaper, who: uuid::Uuid, raw: &[String]) -> Result<Vec<String>, ApiError> {
     let mut channels: Vec<String> = Vec::with_capacity(raw.len());
     for name in raw {
@@ -711,9 +636,6 @@ async fn kept_channels(s: &AppState, group: &str, me: &Shaper, who: uuid::Uuid, 
     Ok(channels)
 }
 
-/// The channels kept to a role, replaced by `channels` as far as the shaper sees: a channel kept
-/// to the role that the shaper cannot see stays kept, since the body could not have named it.
-/// → the role's channels as they stand after. Within the caller's transaction.
 async fn keep_channels(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     group: &str,
@@ -769,7 +691,6 @@ async fn create_role(
     if n >= MAX_ROLES {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("this group has {MAX_ROLES} roles already")));
     }
-    // the id is postgres's (gen_random_uuid, the column's default), read back here
     let mut tx = s.db.begin().await?;
     let id: Option<uuid::Uuid> = sqlx::query_scalar(
         "INSERT INTO roles (group_name, name, color, perms, cooldown) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING RETURNING id",
@@ -792,9 +713,6 @@ async fn create_role(
     Ok((StatusCode::CREATED, Json(role)))
 }
 
-/// `PUT /api/groups/:group/roles/:id`: the role replaced whole, name included: a rename is
-/// this, since the id is what the role is known by. The same reach as making it. `channels`
-/// replaces the channels kept to the role, as far as the shaper sees them (`keep_channels`).
 async fn update_role(
     State(s): State<AppState>,
     Path((group, id)): Path<(String, uuid::Uuid)>,
@@ -810,7 +728,6 @@ async fn update_role(
     let color = groups::clean_color(&body.color)?;
     let perms = body.perms.bits();
     let cooldown = cooldown_of(body.cooldown)?;
-    // the role as it is, and as it would be: both within reach
     if !me.reaches(role_perms(&s.db, &group, id).await?) || !me.reaches(perms) {
         return Err(out_of_reach());
     }
@@ -860,7 +777,6 @@ async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String,
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The roles in one list and not the other: the ones a channel's save keeps it to, or lets go.
 fn changed_roles(was: &[uuid::Uuid], now: &[uuid::Uuid]) -> Vec<uuid::Uuid> {
     let mut changed: Vec<uuid::Uuid> = was.iter().filter(|id| !now.contains(id)).chain(now.iter().filter(|id| !was.contains(id))).copied().collect();
     changed.sort();
@@ -868,14 +784,6 @@ fn changed_roles(was: &[uuid::Uuid], now: &[uuid::Uuid]) -> Vec<uuid::Uuid> {
     changed
 }
 
-/// `PUT /api/groups/:group/channels/:channel/roles` `{ roles: [id, …] }`: who sees the channel
-/// (docs/groups.md), from the channel's side. The channel is kept to exactly these roles, in
-/// one transaction; an empty list is everyone's (no `channel_roles` rows). The channels power,
-/// and a member. Each role kept or let go must be within the caller's reach, as with a role's
-/// own save: nobody hands a channel to, or takes one from, a role carrying a power they do not
-/// hold. → `{ channel, roles }`, and a `role` fact for each role whose channels changed, so an
-/// open room asks again who sees what. 400 for the home channel (everyone's), 404 for no such channel
-/// or a role not of this group, 403 without the power or out of reach.
 async fn set_channel_roles(
     State(s): State<AppState>,
     Path((group, channel)): Path<(String, String)>,
@@ -926,7 +834,6 @@ async fn set_channel_roles(
     .fetch_all(&mut *tx)
     .await?;
     let changed = changed_roles(&was.iter().map(|(id, _)| *id).collect::<Vec<_>>(), &roles);
-    // every role kept or let go, as it is: within reach
     let reach = known.iter().chain(was.iter()).filter(|(id, _)| changed.contains(id)).all(|(_, perms)| me.reaches(*perms));
     if !reach {
         return Err(out_of_reach());
@@ -941,7 +848,6 @@ async fn set_channel_roles(
     tx.commit().await?;
     log::info!("{}: #{channel} in {group} is kept to {} role(s)", who.name, roles.len());
     if !changed.is_empty() {
-        // each changed role whole, as the role save says it: the rooms open ask again who sees what
         for role in roles_of(&s.db, &group).await? {
             if role["id"].as_str().and_then(|id| id.parse::<uuid::Uuid>().ok()).is_some_and(|id| changed.contains(&id)) {
                 groups::tell(&s, &group, "role", json!({ "role": role })).await;
@@ -1013,7 +919,6 @@ async fn grant_owner(
     if already {
         return Ok(StatusCode::NO_CONTENT);
     }
-    // the cap on owning counts this too: one who owns as many as it allows is not named an owner of another
     if groups::groups_owned(&s.db, user).await? >= s.groups_per_owner {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("{name} owns {}", groups::owned_cap_words(s.groups_per_owner))));
     }
@@ -1023,12 +928,6 @@ async fn grant_owner(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/groups/:group/transfer` `{ name }`: the group is `name`'s from now on, and not
-/// this login's (docs/groups.md): they are made an owner and the caller stops being one, in one
-/// transaction, so the group has an owner throughout. An owner, for a member who is not one
-/// (an owner already is 409), not themselves (400); the cap on owning counts for them as it
-/// does for a naming. Two `owner` facts, theirs then the caller's. 204. The caller keeps their
-/// roles and stays in the group; the members tab asks before this.
 async fn transfer_ownership(
     State(s): State<AppState>,
     Path(group): Path<String>,
@@ -1062,10 +961,6 @@ async fn transfer_ownership(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `PUT /api/groups/:group/owner-role` `{ name }`: what the owner role is called from now on
-/// (docs/groups.md): the word on the roster's crown and the roles tab's first row. An owner
-/// (or a site admin). A role's name rule; not a custom role's name (409). → `{ name }`, and an
-/// `owner_role` fact to every room open. Owning itself is untouched: the owners stay the owners.
 async fn rename_owner_role(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<NameIn>, JsonRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
@@ -1108,22 +1003,15 @@ async fn revoke_owner(State(s): State<AppState>, Path((group, name)): Path<(Stri
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The most of the roster one page carries (`GET .../members?limit=`, the room's `?roster=`).
 const MEMBERS_PAGE_MAX: i64 = 100;
-/// A page's size when `limit` is left out but `after` or `q` asks for a page.
 const MEMBERS_PAGE_DEFAULT: i64 = 50;
 
-/// One page of the roster: at most `limit`, after the row `after` names (`Cursor`), and with
-/// `q`, only the members whose name, or a role they hold, has it in it.
 struct Page {
     limit: i64,
     after: Option<Cursor>,
     q: Option<String>,
 }
 
-/// Where a page left off: the last row's sort key (owner, when they joined in microseconds,
-/// name), so the next page goes on from there however many joined or left in between. Written
-/// `<0|1>.<micros>.<name>`; the page hands it out as `next`, opaque to the client.
 struct Cursor {
     owner: bool,
     joined: i64,
@@ -1161,10 +1049,6 @@ struct MembersQuery {
     q: Option<String>,
 }
 
-/// A page's `limit`, `after` and `q` read; none of them is the whole roster (`None`), the
-/// answer from before there were pages. `limit` is held to 1..=MEMBERS_PAGE_MAX. `q` is the
-/// room's search box (history.rs `SEARCH_CHARS`): 400 past that, or with a control character
-/// (postgres refuses a \0).
 fn page_of(limit: Option<i64>, after: Option<&str>, q: Option<&str>) -> Result<Option<Page>, ApiError> {
     let q = q.map(str::trim).filter(|w| !w.is_empty()).map(str::to_lowercase);
     if let Some(q) = &q {
@@ -1182,7 +1066,6 @@ fn page_of(limit: Option<i64>, after: Option<&str>, q: Option<&str>) -> Result<O
     Ok(Some(Page { limit: limit.unwrap_or(MEMBERS_PAGE_DEFAULT).clamp(1, MEMBERS_PAGE_MAX), after, q }))
 }
 
-/// The words as a `LIKE` pattern that means them: a `%` or `_` typed is not a wildcard.
 fn like_pattern(words: &str) -> String {
     let mut out = String::from("%");
     for c in words.chars() {
@@ -1195,20 +1078,12 @@ fn like_pattern(words: &str) -> String {
     out
 }
 
-/// The roster: every member with their picture, when they joined (unix seconds, so a room
-/// keeps the order right as people come and go), whether they own the group, and the roles
-/// they hold. Owners first, then `order` (`name`, `newest`, `oldest`), the name breaking a tie.
-/// With a `page`, that page alone and the cursor of the one after it (`None` at the end);
-/// without, all of it and `None`.
 async fn members_of(db: &sqlx::PgPool, group: &str, order: &str, page: Option<&Page>) -> Result<(Vec<Value>, Option<String>), sqlx::Error> {
     members_where(db, group, order, page, None).await
 }
 
-/// `members_of`, or with `only`, that one member's row alone (none when they are not in it).
 async fn members_where(db: &sqlx::PgPool, group: &str, order: &str, page: Option<&Page>, only: Option<&str>) -> Result<(Vec<Value>, Option<String>), sqlx::Error> {
     let after = page.and_then(|p| p.after.as_ref());
-    // `timeout`: unix seconds until a timeout that is still running ends, else null. `j`: when
-    // they joined in microseconds, the key a cursor carries (seconds would tie)
     #[allow(clippy::type_complexity)]
     let mut rows: Vec<(String, bool, Option<i64>, i64, Option<i64>, i64)> = sqlx::query_as(
         "SELECT name, owner, avatar, joined, timeout, j FROM (
@@ -1239,7 +1114,6 @@ async fn members_where(db: &sqlx::PgPool, group: &str, order: &str, page: Option
     .bind(after.map_or(0, |c| c.joined))
     .bind(after.map_or("", |c| c.name.as_str()))
     .bind(page.and_then(|p| p.q.as_deref()).map(like_pattern))
-    // one past the page says whether there is another
     .bind(page.map_or(i64::MAX, |p| p.limit + 1))
     .bind(only)
     .fetch_all(db)
@@ -1326,13 +1200,6 @@ async fn kick(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/groups/:group/timeout` `{ name, seconds, reason? }`: no line of `name`'s in the group's
-/// channels for that long (docs/groups.md): the chat refuses them with `timed out` and the wait.
-/// The kick power; a member (404), not yourself (400), an owner only by an owner (403); ten
-/// seconds to a week (400). Set again, the new end stands. A row of its own (`timeouts`), so
-/// leaving and joining again does not end it; the expired rows of the group are swept here.
-/// `reason` is kept with it, a ban's rule. They are out of voice too, and kept out until it ends
-/// (voice.rs). A `timeout` fact carries `until`, unix seconds. 204.
 async fn timeout(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<TimeoutIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
@@ -1365,14 +1232,10 @@ async fn timeout(State(s): State<AppState>, Path(group): Path<String>, Me(me): M
     .await?;
     log::info!("{}: timed {name} out of {group} for {}s", who.name, body.seconds);
     groups::tell(&s, &group, "timeout", json!({ "who": name, "until": until })).await;
-    // out of voice too, and `may_talk` keeps them out until it ends (voice.rs)
     crate::voice::drop_from_voice(&s, &group, user).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/groups/:group/timeout/:name`: the timeout lifted, early. The kick power. 204,
-/// also when there was none; the name needs an account (404), not a membership, since a timeout
-/// outlives a leave. A `timeout` fact with `until` null.
 async fn lift_timeout(State(s): State<AppState>, Path((group, name)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
@@ -1387,11 +1250,6 @@ async fn lift_timeout(State(s): State<AppState>, Path((group, name)): Path<(Stri
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/groups/:group/timeouts`: every timeout still running, the soonest to end first:
-/// `[{ name, avatar, until, reason, by, member }]`. `until` is unix seconds; `by` is null when
-/// whoever set it is gone; `member` is false for one who left while timed out, since it
-/// outlives a leave. The kick power, the one that sets and lifts them, as the bans list is the
-/// ban power's.
 async fn list_timeouts(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
@@ -1451,7 +1309,6 @@ async fn ban(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, b
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Who is banned, newest ban first, with the reason given.
 async fn bans_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Error> {
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT s.name, b.reason FROM bans b JOIN streamers s ON s.id = b.user_id WHERE b.group_name = $1 ORDER BY b.banned_at DESC",
@@ -1482,33 +1339,19 @@ async fn unban(State(s): State<AppState>, Path((group, name)): Path<(String, Str
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// True when this account is banned from the group. Join asks.
 pub(crate) async fn banned(db: &sqlx::PgPool, user: uuid::Uuid, group: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM bans WHERE group_name = $1 AND user_id = $2)").bind(group).bind(user).fetch_one(db).await
 }
 
-// ---- moderating a member: one member, their lines, a line deleted ------------------------------
-
-/// The powers that moderate a member: kick (and with it a timeout, a line's delete, a voice
-/// mute and a disconnect) and ban. A member's lines (`member_messages`) are for either.
 pub(crate) const MODERATE: i32 = KICK | BAN;
-/// Moderation actions one login may take a minute here, on top of the route's tier (ratelimit.rs
-/// `MODERATE`): the jannies' number (janny.rs), so a hijacked login cannot wipe a channel.
 const ACTIONS_PER_MINUTE: i64 = 30;
-/// The most of a member's lines one page carries.
 const LOG_PAGE_MAX: i64 = 50;
-/// How far back redis is read for a member's lines: a room's stream keeps its last 500 (chat.rs).
 const LOG_REDIS_SCAN: usize = 500;
 
-/// Whether `actor` may act on `target` (kick, timeout, ban, a line's delete, a voice mute or
-/// disconnect): never on themselves, and on an owner only as an owner. The rule kick, timeout and
-/// ban have always had; a custom role has no rank above another's.
 pub(crate) fn may_touch(actor: uuid::Uuid, actor_owner: bool, target: uuid::Uuid, target_owner: bool) -> bool {
     actor != target && (!target_owner || actor_owner)
 }
 
-/// Whether `actor` may delete a line by `author` (None: no account behind it). Their own always;
-/// anyone else's with the kick power (`moderates`), an owner's only as an owner (`may_touch`).
 fn may_delete(actor: uuid::Uuid, actor_owner: bool, moderates: bool, author: Option<uuid::Uuid>, author_owner: bool) -> bool {
     match author {
         Some(a) if a == actor => true,
@@ -1521,8 +1364,6 @@ async fn paced(s: &AppState, who: uuid::Uuid) -> Result<(), ApiError> {
     crate::auth::limit(s, &format!("rl:groupmod:{who}"), 60, ACTIONS_PER_MINUTE, "slow down: too many moderation actions").await
 }
 
-/// The member a moderation names, for `who` with any power of `bits`: 403 without, 400 for
-/// themselves, 404 for no member, 403 for an owner unless `who` is one. Paced. → (id, name).
 pub(crate) async fn moderated(s: &AppState, who: &crate::auth::Account, group: &str, bits: i32, raw: &str) -> Result<(uuid::Uuid, String), ApiError> {
     need(s, who.id, group, bits).await?;
     let name = target_name(raw)?;
@@ -1549,9 +1390,6 @@ async fn sees_roster(s: &AppState, group: &str, me: Option<&crate::auth::Account
     Ok(())
 }
 
-/// `GET /api/groups/:group/members/:name`: one member as the roster has them (name, owner,
-/// avatar, joined, roles, timeout), for the member info modal: the roster's pages may not have
-/// reached them yet. The roster's rule. 404 `they are not in the group`.
 async fn one_member(State(s): State<AppState>, Path((group, name)): Path<(String, String)>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     sees_roster(&s, &group, me.as_ref()).await?;
@@ -1566,8 +1404,6 @@ struct LogQuery {
     limit: Option<i64>,
 }
 
-/// Where a member's log left off: its last line's id and channel, `<ms>-<seq>.<channel>` (an id
-/// has no dot, so the first one splits them). The lines go newest first by (ms, seq, channel).
 #[derive(Debug, PartialEq)]
 struct LogCursor {
     ms: u64,
@@ -1591,21 +1427,16 @@ impl LogCursor {
         Ok(LogCursor { ms, seq, channel: channel.to_owned() })
     }
 
-    /// The order key: a line comes after the cursor in the log when its key is below this one's.
     fn key(&self) -> (u64, u64, &str) {
         (self.ms, self.seq, self.channel.as_str())
     }
 }
 
-/// The log's order key of a line in `channel`: (ms, seq, channel), compared the other way round.
 fn log_key<'a>(line: &crate::chat::Line, channel: &'a str) -> (u64, u64, &'a str) {
     let (ms, seq) = crate::socket::id_parts(&line.id);
     (ms, seq, channel)
 }
 
-/// The two sides of a member's lines into one page: by (room, id) once, newest first, `limit`
-/// at most, the rest saying where the next page starts. `room` is `server/channel` on the way
-/// in; the channel alone on the way out.
 fn merge_log(server: &str, found: Vec<(String, crate::chat::Line)>, limit: usize) -> (Vec<(String, crate::chat::Line)>, Option<String>) {
     let prefix = format!("{server}/");
     let mut seen = std::collections::HashSet::new();
@@ -1627,13 +1458,6 @@ fn merge_log(server: &str, found: Vec<(String, crate::chat::Line)>, limit: usize
     (lines, next)
 }
 
-/// `GET /api/groups/:group/members/:name/messages?before=&limit=`: one account's lines in this
-/// group, newest first (docs/groups.md), for the member info modal: in the text channels the
-/// caller sees, each with its `channel`, and with what it answered (`reply`) as it was said.
-/// The kick or ban power (an owner, a site admin). A past member's lines too: the name needs an
-/// account, not a membership. `limit` 1..=50 (50 left out); `before` the page before's `next`,
-/// null at the end. Kept rows and the redis tail together, so a line not yet kept (or a chat
-/// that keeps none) is there too. 401, 403, 404 `no such account`, 400 `bad cursor`.
 async fn member_messages(State(s): State<AppState>, Path((group, name)): Path<(String, String)>, Query(q): Query<LogQuery>, Me(me): Me) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
@@ -1647,8 +1471,6 @@ async fn member_messages(State(s): State<AppState>, Path((group, name)): Path<(S
     let before_room = before.as_ref().map(|c| format!("{group}/{}", c.channel));
     let pg_before = before.as_ref().zip(before_room.as_deref()).map(|(c, room)| (c.ms as i64, c.seq as i64, room));
     let mut found = crate::history::by_account(&s.db, &rooms, user, pg_before, limit + 1).await?;
-    // the redis tail of every channel: a line said a moment ago may not be kept yet, and a chat
-    // without CHAT_PERSIST keeps nothing
     let mut pipe = redis::pipe();
     for room in &rooms {
         pipe.cmd("XREVRANGE").arg(crate::chat::room_key(room)).arg("+").arg("-").arg("COUNT").arg(LOG_REDIS_SCAN);
@@ -1678,12 +1500,6 @@ async fn member_messages(State(s): State<AppState>, Path((group, name)): Path<(S
     Ok(Json(json!({ "lines": out, "next": next })))
 }
 
-/// `DELETE /api/groups/:group/channels/:channel/messages/:id`: the line goes, from redis and
-/// postgres with its reactions (chat.rs `remove_line`), and off the channel's pins. Its author
-/// may delete it; anyone else's takes the kick power (an owner, a site admin), and an owner's
-/// line an owner. Every room open hears it on the chat socket (`delete`, with the channel) and
-/// drops it. 204. 401, 404 `no such channel` (or one the caller does not see), 400 `bad id`,
-/// 404 `no such line`, 403.
 async fn delete_message(State(s): State<AppState>, Path((group, channel, id)): Path<(String, String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let (group, channel) = groups::channel_names(&group, &channel)?;
@@ -1789,7 +1605,6 @@ async fn get_icon(State(s): State<AppState>, Path(group): Path<String>) -> Resul
     read_picture(&s, &group, &icon_key(&group), "icon_at").await
 }
 
-/// `PUT /api/groups/:group/icon`: a jpeg, from an owner. The new version goes out as `icon`.
 async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
@@ -1805,7 +1620,6 @@ async fn get_banner(State(s): State<AppState>, Path(group): Path<String>) -> Res
     read_picture(&s, &group, &banner_key(&group), "banner_at").await
 }
 
-/// `PUT /api/groups/:group/banner`: the same, 1 mb, as `banner`.
 async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
@@ -1826,7 +1640,6 @@ mod tests {
         let back = Cursor::read(&c.text()).unwrap();
         assert!(back.owner);
         assert_eq!(back.joined, 1_763_500_000_123_456);
-        // the name is the rest, dots and all
         assert_eq!(back.name, "a.b");
         for bad in ["", "2.1.x", "1.x.x", "1.5", "1.5.", "0..x"] {
             assert!(Cursor::read(bad).is_err(), "{bad:?} read as a cursor");
@@ -1891,7 +1704,6 @@ mod tests {
         assert_eq!(back(ALL), ALL);
         assert_eq!(perms_json(VOICE)["voice"], json!(true));
         assert_eq!(perms_json(VOICE)["ban"], json!(false));
-        // an older client that never heard of voice gives none
         let old: PermsIn = serde_json::from_value(json!({ "kick": true })).unwrap();
         assert_eq!(old.bits(), KICK);
     }
@@ -1913,7 +1725,6 @@ mod tests {
             json!({ "lounge": [{ "name": "al", "uid": "u2", "since": 10 }, { "name": "bo", "uid": "u1", "since": 20 }] })
         );
         assert_eq!(seated_by_channel(&fields, &[], &none), json!({}));
-        // a moderator's mute shows on their seat, and only theirs
         let muted: std::collections::HashSet<String> = ["u1".to_string(), "u3".to_string()].into();
         assert_eq!(
             seated_by_channel(&fields, &seen, &muted),
@@ -1947,15 +1758,11 @@ mod tests {
     #[test]
     fn a_line_is_its_authors_to_delete_and_the_kick_powers() {
         let [me, them] = [uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2)];
-        // my own, with no power at all
         assert!(may_delete(me, false, false, Some(me), false));
-        // someone else's needs the power
         assert!(!may_delete(me, false, false, Some(them), false));
         assert!(may_delete(me, false, true, Some(them), false));
-        // an owner's line is an owner's to delete
         assert!(!may_delete(me, false, true, Some(them), true));
         assert!(may_delete(me, true, true, Some(them), true));
-        // a line with no account behind it: the power
         assert!(!may_delete(me, false, false, None, false));
         assert!(may_delete(me, false, true, None, false));
     }
@@ -1990,21 +1797,16 @@ mod tests {
         let found = vec![
             ("g/general".to_owned(), line("100-0", "a")),
             ("g/clips".to_owned(), line("300-0", "b")),
-            // the same line from redis and from postgres: once
             ("g/clips".to_owned(), line("300-0", "b")),
-            // the same id in another channel is another line
             ("g/general".to_owned(), line("300-0", "c")),
             ("g/general".to_owned(), line("200-1", "d")),
-            // not this group's
             ("other/general".to_owned(), line("900-0", "e")),
         ];
         let (page, next) = merge_log("g", found.clone(), 3);
         let got: Vec<(&str, &str)> = page.iter().map(|(c, l)| (c.as_str(), l.text.as_str())).collect();
-        // (ms, seq, channel) down: general sorts after clips at the same id
         assert_eq!(got, vec![("general", "c"), ("clips", "b"), ("general", "d")]);
         assert_eq!(next.as_deref(), Some("200-1.general"));
         let after = LogCursor::read(next.as_deref().unwrap()).unwrap();
-        // what comes after the cursor is what the next page holds
         let rest: Vec<&str> = found.iter().filter(|(room, l)| room.starts_with("g/") && log_key(l, &room[2..]) < after.key()).map(|(_, l)| l.text.as_str()).collect();
         assert_eq!(rest, vec!["a"]);
         let (whole, end) = merge_log("g", found, 50);

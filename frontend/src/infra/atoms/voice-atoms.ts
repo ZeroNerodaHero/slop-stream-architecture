@@ -1,25 +1,8 @@
-/**
- * Being in a voice channel (docs/voice.md). One call at a time, for the whole tab: a join asks
- * the api for a grant (`POST /api/groups/:group/voice/:channel/join`), opens `/voice`, and its
- * first frame is `{role: 'voice', grant, sdp}` with an offer of 1 sendrecv mic and 15 recvonly
- * audio m-lines (video/src/voice.rs). The voice server answers `{sdp}` or `{error}`, then
- * `{event: 'seats', seats: [{seat, user, line}]}` on every join and leave: `line` is the m-line
- * that person is heard on. Who is in which channel is the room's (`voice` in room-atoms.ts,
- * kept by the `voice` and `voice_left` facts); this module is only this tab's own call, and who
- * is speaking in it, from each m-line's `audioLevel` (getStats). Same shape as the other atom
- * modules: atoms for what renders, module handles, action functions. Cameras and screens in the
- * call are voice-video.ts's, on this call's peer. The devices a call uses (the mic, the
- * speakers, the camera) are picked in the user modal's voice tab and kept in this browser; they
- * are after the call. Last is the mic itself: one stream, shared by the call and the tab's
- * meter, through voice isolation and the noise gate, and push to talk.
- */
-
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
 import rnnoiseWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise.wasm?url';
 import rnnoiseSimdWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url';
-// oxlint-disable-next-line import/default -- `?url` is vite's: the default export is the file's url
 import rnnoiseWorkletUrl from '@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url';
 
 import { api, messageOf, statusOf } from '@/infra/api';
@@ -31,45 +14,26 @@ import { trimOffer } from '@/infra/voice-offer';
 
 import { sayVoiceState, startVideo, stopVideo, switchVoiceCamera, takeVideoAnswer, type VideoKind, videoSeats } from './voice-video';
 
-/** How many m-lines hear the others: a room's 16 seats less your own. */
 const HEARD_LINES = 15;
-/** How long the offer waits for its candidates: there is no trickle, the join frame carries them. */
 const GATHER_MS = 3000;
-/** How often the levels are read. */
 const LEVEL_MS = 150;
-/** An `audioLevel` (0 to 1) at or over this is speaking. */
 const SPEAKING = 0.03;
-/** How often the call's quality (ping, loss, bitrate) is read: off the same getStats as the levels, every so many of them. */
 const STATS_MS = 2000;
-/** How long a join waits for the voice server's answer once the mic is held: a socket that opens and says nothing is a failed try. */
 const ANSWER_MS = 15000;
-/** The waits before each retry of a join that failed: 5 tries in all, the first at once. */
 export const RETRY_MS: readonly number[] = [1000, 2000, 4000, 8000];
-/** How long after this tab put down a call of its own an `already in voice` from the grant is that call still: the voice server's `left` is on its way to the api (a move to another channel asks at once). */
 const MOVE_MS = 5000;
-/** How often the grant is asked again meanwhile. */
 const MOVE_ASK_MS = 200;
-/** A call that was through and dropped joins again on its own (a fresh run of tries), at most once in this long: one that keeps dropping ends as failed. */
 const REJOIN_GAP_MS = 30000;
 
 export interface VoiceSeat {
   seat: number;
   user: string;
   line: number;
-  /** Their own mute and deafen, as their page says them. */
   mute?: boolean;
   deaf?: boolean;
-  /** Their camera and screen while on, and the mid each comes to this page on (null: no line for it yet). voice-video.ts. */
   video?: { kind: VideoKind; mid: string | null }[];
 }
 
-/**
- * This tab's call. `joining` from the click to the answer, through every retry and the waits
- * between them; `linked` once the audio itself is through (the peer connected over udp), which
- * can lag the answer or never come; `failed` once the last try failed, still on its server and
- * channel (the greyed seat and the dialog say why) until it is left or tried again. `error` is
- * the last try's reason, '' for none; `retry` is which retry this is, 0 for the first try.
- */
 export interface VoiceCall {
   phase: 'idle' | 'joining' | 'connected' | 'failed';
   server: string;
@@ -81,38 +45,26 @@ export interface VoiceCall {
 
 const IDLE: VoiceCall = { phase: 'idle', server: '', channel: '', linked: false, error: '', retry: 0 };
 
-/** A call whose audio never got through: the answer came over the socket, the udp did not. */
 const NO_AUDIO_PATH = 'no audio path: nothing got through to the voice server over udp, a firewall is closing it';
 
 export const voiceCallAtom = atom<VoiceCall>(IDLE);
-/** Who sits where in the room, as the last seats frame said. Your own seat is not in it. */
 export const voiceSeatsAtom = atom<VoiceSeat[]>([]);
-/** The names speaking now, your own among them while your mic is. */
 export const voiceSpeakingAtom = atom<ReadonlySet<string>>(new Set<string>());
-/** Your mic is off: the track is still there, sending silence. */
 export const voiceMutedAtom = atom(false);
-/** You hear nobody, and your mic is off with it. */
 export const voiceDeafAtom = atom(false);
-/** How the call is getting through, every STATS_MS while connected; null before the first read and while idle. */
 export const voiceStatsAtom = atom<VoiceStats | null>(null);
 
-/** The live call's handles, null while idle. */
 interface Live {
   pc: RTCPeerConnection;
   ws: WebSocket | null;
   audios: HTMLAudioElement[];
-  /** What each of `audios` plays, and its gain once a level of yours needs one (`amplify`). */
   heard: Heard[];
-  /** The context the gains are on: made with the first one, closed with the call. */
   ctx: AudioContext | null;
   timer: ReturnType<typeof setInterval> | null;
-  /** Fails the try when no answer came in ANSWER_MS; cleared by the answer. */
   deadline: ReturnType<typeof setTimeout> | null;
-  /** The counters at the last stats read, for the deltas of the next; null before the first. */
   sample: StatsSample | null;
 }
 
-/** One heard m-line: the track off the peer, and once it is turned up or down, the gain it goes through and the silent player that keeps chrome feeding web audio. */
 interface Heard {
   raw: MediaStream;
   gain: GainNode | null;
@@ -120,15 +72,10 @@ interface Heard {
 }
 
 let live: Live | null = null;
-/** Which try is the current one: anything an older one finishes after a leave or a retry is dropped. */
 let attempt = 0;
-/** The wait before the next retry, while there is one. */
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-/** Who the join is for: a retry joins as them again. */
 let joiningAs = '';
-/** When this tab last put down a socket to the voice server, 0 for never: until its `left` lands the api still has it in that call. */
 let putDownAt = 0;
-/** When a dropped call last joined again on its own, 0 for never. */
 let rejoinedAt = 0;
 const TAB = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -136,7 +83,6 @@ function setCall(next: Partial<VoiceCall>): void {
   store.set(voiceCallAtom, { ...store.get(voiceCallAtom), ...next });
 }
 
-/** Puts everything down: socket, peer, the call's hold on the mic, players, the level reader. Nothing is said to anyone: the voice server frees the seat when the socket closes. */
 function teardown(): void {
   const was = live;
   live = null;
@@ -165,17 +111,14 @@ function teardown(): void {
   void was.ctx?.close().catch(() => undefined);
 }
 
-/** Reasons another try would get the same answer: the channel is full, voice is shut to you, the mic is blocked or missing. */
 const FINAL = ['room full', 'too many voice peers', 'voice is not open', 'not allowed', 'notallowederror', 'notfounderror', 'unauthorized'];
 
-/** Whether a join that failed with `error` is worth another try. `status` is the grant's http status when the api answered with one: a 4xx is final. */
 export function retryable(error: string, status?: number): boolean {
   if (status !== undefined && status >= 400 && status < 500) return false;
   const said = error.toLowerCase();
   return !FINAL.some((word) => said.includes(word));
 }
 
-/** The wait before retry number `retry` (1 for the first), or null once the tries are spent. */
 export function retryDelay(retry: number): number | null {
   return RETRY_MS[retry - 1] ?? null;
 }
@@ -185,19 +128,10 @@ function clearRetry(): void {
   retryTimer = null;
 }
 
-/** Whether a call that was through ended by its connection breaking (the socket, or the peer's ice), not by a word from the voice server such as a moderator's `disconnected`. */
 export function dropped(error: string): boolean {
   return error.startsWith('voice dropped') || error === 'voice lost its connection';
 }
 
-/**
- * The try went wrong: everything put down (no mic, socket or peer through a wait). A join whose
- * audio never got through tries again from scratch after its wait, still `joining`, unless the
- * reason is final or the tries are spent: then `failed`, on the same server and channel, for the
- * dialog. A call that was through and dropped (a redeploy of the voice server or of caddy, a
- * network that changed) starts a fresh run of tries, once per REJOIN_GAP_MS; any other end of a
- * call that was through is not retried.
- */
 function fail(mine: number, error: string, status?: number): void {
   if (mine !== attempt) return;
   teardown();
@@ -211,12 +145,10 @@ function fail(mine: number, error: string, status?: number): void {
   const wait = retryDelay(retry);
   if (!call.linked && wait !== null && retryable(error, status)) {
     console.info(`voice: try ${retry} failed (${error}), again in ${wait}ms`);
-    // the next try's number now: anything the one that failed still finishes is dropped
     const next = ++attempt;
     store.set(voiceCallAtom, { ...call, phase: 'joining', linked: false, error, retry });
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      // the call as it is now: a channel renamed during the wait is joined by its new name
       const now = store.get(voiceCallAtom);
       if (next === attempt && now.phase === 'joining') void tryJoin(now.server, now.channel, joiningAs);
     }, wait);
@@ -225,7 +157,6 @@ function fail(mine: number, error: string, status?: number): void {
   store.set(voiceCallAtom, { ...call, phase: 'failed', linked: false, error });
 }
 
-/** Out of the call, if in one, and no more retries. Clicked (leave, cancel, dismiss), another channel, or the page going away. */
 export function leaveVoice(): void {
   clearRetry();
   attempt++;
@@ -233,13 +164,11 @@ export function leaveVoice(): void {
   store.set(voiceCallAtom, IDLE);
 }
 
-/** The mic is heard now: not muted, not deafened, and in push to talk, the key held. */
 function micOpen(): boolean {
   if (store.get(voiceMutedAtom) || store.get(voiceDeafAtom)) return false;
   return store.get(voiceModeAtom) !== 'ptt' || store.get(voicePttHeldAtom);
 }
 
-/** The mic on or off, as micOpen says. Only the track the call sends: the tab's meter reads before it, so it moves while muted. */
 function applyMic(): void {
   if (mic) mic.out.enabled = micOpen();
 }
@@ -257,16 +186,11 @@ export function setVoiceDeaf(deaf: boolean): void {
   sayVoiceState(store.get(voiceMutedAtom), deaf);
 }
 
-/** The mic could not be had: its DOMException's name goes in the reason, so a blocked or missing one is final (`retryable`) and the dialog can say which. */
 function noMic(err: unknown): string {
   const name = (err as { name?: string } | null)?.name || 'Error';
   return `no microphone (${name}): allow it in the browser to talk`;
 }
 
-/**
- * Into `channel` of `server`: a run of up to 5 tries (fail). Already in it or joining it: nothing;
- * failed there, a fresh run. In another: out of that one first.
- */
 export async function joinVoice(server: string, channel: string, me: string): Promise<void> {
   const call = store.get(voiceCallAtom);
   if ((call.phase === 'joining' || call.phase === 'connected') && call.server === server && call.channel === channel) return;
@@ -276,7 +200,6 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   await tryJoin(server, channel, me);
 }
 
-/** One try, from scratch: a fresh grant, mic, peer and socket. `attempt` is already this try's. */
 async function tryJoin(server: string, channel: string, me: string): Promise<void> {
   const mine = attempt;
 
@@ -287,7 +210,6 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
       break;
     } catch (err) {
       if (mine !== attempt) return;
-      // our own call, just put down, that the api has not heard leave yet: not someone else's
       if (statusOf(err) === 409 && messageOf(err).includes('already in voice') && Date.now() - putDownAt < MOVE_MS) {
         await new Promise((done) => setTimeout(done, MOVE_ASK_MS));
         if (mine !== attempt) return;
@@ -313,15 +235,11 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
   const pc = new RTCPeerConnection();
   const audios: HTMLAudioElement[] = [];
   const heard: Heard[] = [];
-  // from here teardown lets go of the mic
   live = { pc, ws: null, audios, heard, ctx: null, timer: null, deadline: null, sample: null };
   live.deadline = setTimeout(() => fail(mine, 'voice timed out: no answer from the voice server'), ANSWER_MS);
-  // the mic is allowed now, so the browser names the devices: a pick that is gone shows as gone
   void refreshVoiceDevices();
   applyMic();
   syncPtt();
-  // m-line 0 is the mic; 1 to 15 are where the others are heard, in the order they were added.
-  // the mic's track can change under the call (a new device, new settings): sendMic swaps it on this sender
   pc.addTransceiver(track, { direction: 'sendrecv', streams: [new MediaStream([track])] });
   for (let i = 0; i < HEARD_LINES; i++) {
     const t = pc.addTransceiver('audio', { direction: 'recvonly' });
@@ -334,7 +252,6 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
     heard.push({ raw, gain: null, keep: null });
   }
   applyHeard();
-  // what ice did, in the console: a call that never links says how far it got
   pc.oniceconnectionstatechange = () => console.info(`voice: ice ${pc.iceConnectionState}`);
   pc.onconnectionstatechange = () => {
     console.info(`voice: peer ${pc.connectionState}`);
@@ -356,10 +273,7 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
 
   const ws = new WebSocket(socketUrl(grant.url, location.href));
   live.ws = ws;
-  // trimmed: a phone's full offer can be over the voice server's 128 KB (voice-offer.ts)
   ws.onopen = () => ws.send(JSON.stringify({ role: 'voice', grant: grant.grant, sdp: trimOffer(pc.localDescription?.sdp ?? '') }));
-  // the voice server says why in an error frame when it knows (that one wins: fail tears this
-  // handler down); a socket that only closes is said from what this side saw
   ws.onclose = (e: CloseEvent) => fail(mine, closedWord(store.get(voiceCallAtom), e.code));
   ws.onmessage = (e: MessageEvent) => {
     let msg: { error?: string; sdp?: string; event?: string; seats?: VoiceSeat[] };
@@ -369,7 +283,6 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
       return;
     }
     if (msg.error) return fail(mine, msg.error);
-    // a later offer's answer is the video's (voice-video.ts): the page offers again for a camera, a screen, or more to see
     if (msg.sdp && takeVideoAnswer(msg.sdp)) return;
     if (msg.sdp) {
       pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).then(
@@ -396,22 +309,12 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
   live.timer = setInterval(() => void readLevels(mine, me), LEVEL_MS);
 }
 
-/**
- * Why the socket closed with no word from the voice server, from where the call had got to. An
- * ice that never connects is the voice server's to say (its `no audio path` frame), so a bare
- * close before the audio linked is the socket's doing, not udp's.
- */
 function closedWord(call: VoiceCall, code: number): string {
   if (call.phase !== 'connected') return code === 1006 ? 'voice is unreachable: the voice server did not answer' : `voice is unreachable (${code})`;
   if (!call.linked) return code === 1006 ? 'voice dropped before the audio connected: the connection to the voice server broke' : `voice dropped before the audio connected (${code})`;
   return code === 1006 ? 'voice dropped: the connection to the voice server broke' : `voice dropped: the voice server closed the call (${code})`;
 }
 
-/**
- * Who is speaking: each heard m-line's `audioLevel` by its seat's name, and the mic's as `me`.
- * Set only when the set changes. Every STATS_MS once connected, the same report is the call's
- * quality too (voiceStatsAtom).
- */
 async function readLevels(mine: number, me: string): Promise<void> {
   const call = live;
   if (!call || mine !== attempt) return;
@@ -445,26 +348,19 @@ async function readLevels(mine: number, me: string): Promise<void> {
   if (store.get(voiceCallAtom).phase !== 'connected' || (call.sample && now - call.sample.at < STATS_MS)) return;
   const read = readStats(entries, call.sample, now);
   call.sample = read.sample;
-  // `disconnected` is ice's own word for a path that stopped answering, before it gives up as `failed`
   store.set(voiceStatsAtom, { ...read.stats, dropped: call.pc.connectionState === 'disconnected' });
 }
 
-// ---- how loud each person is to you -------------------------------------------------------
-
-/** Your own level for someone you hear: their volume in percent (0 to HEARD_MAX, 100 as they come) and whether you muted them for yourself. Nobody else hears a difference. */
 export interface HeardLevel {
   volume: number;
   muted: boolean;
 }
 
 export const HEARD_DEFAULT: HeardLevel = { volume: 100, muted: false };
-/** The loudest a person can be turned up to, in percent: past 100 is a gain, which an element's volume cannot do. */
 export const HEARD_MAX = 200;
 
-/** The levels, by user id, kept in this browser: a rejoin and a reload keep them. Only the ones moved off the default are kept. */
 const storedHeardAtom = atomWithStorage<unknown>('voice.heard', {}, undefined, { getOnInit: true });
 
-/** Read: the kept levels, by user id, what was kept checked over. */
 export const voiceHeardAtom = atom((get) => {
   const kept = get(storedHeardAtom);
   const levels: Record<string, HeardLevel> = {};
@@ -477,15 +373,12 @@ export const voiceHeardAtom = atom((get) => {
   return levels;
 });
 
-/** Name to user id for whoever is in voice in the room on the page (room-atoms.ts keeps it): the seats frame says names, the levels are kept by id. */
 export const voiceUidsAtom = atom<ReadonlyMap<string, string>>(new Map<string, string>());
 
-/** `uid`'s level: what is kept, else the default. */
 export function heardLevelOf(levels: Record<string, HeardLevel>, uid: string): HeardLevel {
   return levels[uid] ?? HEARD_DEFAULT;
 }
 
-/** Moves `uid`'s level, live on the call. Back at the default, nothing is kept for them. */
 export function setHeardLevel(uid: string, next: Partial<HeardLevel>): void {
   const levels = { ...store.get(voiceHeardAtom) };
   const level = { ...heardLevelOf(levels, uid), ...next };
@@ -495,13 +388,6 @@ export function setHeardLevel(uid: string, next: Partial<HeardLevel>): void {
   store.set(storedHeardAtom, levels);
 }
 
-/**
- * Each heard line as its seat's person is to you: muted when you are deafened or muted them
- * (the element's own mute), and their volume. A line plays straight off the peer until somebody
- * on it is turned off 100%; from then it goes through a gain (`amplify`), which is how it goes
- * past 100 and how a phone (whose element volume is fixed) turns it down. Where web audio will
- * not run, the element's volume, up to 100.
- */
 function applyHeard(): void {
   const call = live;
   if (!call) return;
@@ -522,17 +408,14 @@ function applyHeard(): void {
   });
 }
 
-/** Puts a heard line through a gain: the track into web audio and back out to the same element, so its speakers (`sinkTo`) and its mute stand. */
 function amplify(call: Live, audio: HTMLAudioElement, h: Heard): void {
   if (typeof AudioContext === 'undefined') return;
   try {
     call.ctx ??= new AudioContext();
-    // a slider moved is a gesture: the context may start now
     void call.ctx.resume().catch(() => undefined);
     const gain = call.ctx.createGain();
     const out = call.ctx.createMediaStreamDestination();
     call.ctx.createMediaStreamSource(h.raw).connect(gain).connect(out);
-    // chrome hands a peer's track to web audio only while a media element plays it too: this one, silent
     const keep = new Audio();
     keep.muted = true;
     keep.srcObject = h.raw;
@@ -543,7 +426,6 @@ function amplify(call: Live, audio: HTMLAudioElement, h: Heard): void {
     h.gain = gain;
     h.keep = keep;
   } catch {
-    // no gain to be had: the element's volume, up to 100
   }
 }
 
@@ -551,9 +433,6 @@ store.sub(voiceSeatsAtom, applyHeard);
 store.sub(voiceUidsAtom, applyHeard);
 store.sub(voiceHeardAtom, applyHeard);
 
-// ---- quality ------------------------------------------------------------------------------
-
-/** The fields of a getStats report this file reads: every report is one of these, most of them absent. */
 export interface StatsEntry {
   id: string;
   type: string;
@@ -578,26 +457,17 @@ export interface StatsEntry {
   clockRate?: number;
 }
 
-/** How the call is getting through. A number is null when the browser did not say or there is no window yet (the first read). */
 export interface VoiceStats {
-  /** Round trip on the path in use, ms. */
   rtt: number | null;
-  /** The worst of the heard lines' jitter, ms. */
   jitter: number | null;
-  /** Of the packets due on the heard lines over the window, how many were lost, %. Null with nobody to hear. */
   loss: number | null;
-  /** Kbps out and in on the path in use, over the window. */
   up: number | null;
   down: number | null;
-  /** Like `opus 48k`; '' when not said. */
   codec: string;
-  /** `relay` when either end of the path in use is a turn relay, else `direct`; '' when not said. */
   route: 'direct' | 'relay' | '';
-  /** Ice lost the path for now (`disconnected`): it may come back or fail. */
   dropped: boolean;
 }
 
-/** The running counters a delta is taken against. */
 export interface StatsSample {
   at: number;
   sent: number | null;
@@ -608,7 +478,6 @@ export interface StatsSample {
 
 export type VoiceQuality = 'good' | 'ok' | 'poor';
 
-/** Good under 100ms and 1% lost, ok under 250ms and 5%, else poor. Null when neither is known. An unknown one counts as fine. */
 export function voiceQuality(stats: Pick<VoiceStats, 'rtt' | 'loss'>): VoiceQuality | null {
   if (stats.rtt === null && stats.loss === null) return null;
   const rtt = stats.rtt ?? 0;
@@ -618,25 +487,17 @@ export function voiceQuality(stats: Pick<VoiceStats, 'rtt' | 'loss'>): VoiceQual
   return 'poor';
 }
 
-/** `now - was` per ms, as kbps from bytes; null without both, or when the counter went back (a new path). */
 export function kbps(was: number | null, now: number | null, ms: number): number | null {
   if (was === null || now === null || now < was || ms <= 0) return null;
   return ((now - was) * 8) / ms;
 }
 
-/** The share of packets lost over a window, %, from the running lost and received counters; null when no packet was due. */
 export function lossPercent(was: Pick<StatsSample, 'lost' | 'got'>, now: Pick<StatsSample, 'lost' | 'got'>): number | null {
-  // packetsLost can go down (a late packet counted after all): a negative window is none lost
   const lost = Math.max(0, now.lost - was.lost);
   const got = Math.max(0, now.got - was.got);
   return lost + got > 0 ? (lost / (lost + got)) * 100 : null;
 }
 
-/**
- * One getStats report read as the call's quality, with the deltas against `was` (the last
- * read's counters). The path is the transport's selected candidate pair (chrome, safari), else
- * the pair marked `selected` or nominated and succeeded (firefox).
- */
 export function readStats(entries: readonly StatsEntry[], was: StatsSample | null, at: number): { stats: Omit<VoiceStats, 'dropped'>; sample: StatsSample } {
   const byId = new Map(entries.map((e) => [e.id, e]));
   const transport = entries.find((e) => e.type === 'transport' && e.selectedCandidatePairId);
@@ -676,9 +537,6 @@ export function readStats(entries: readonly StatsEntry[], was: StatsSample | nul
   };
 }
 
-// ---- devices ------------------------------------------------------------------------------
-
-/** A pick that is no device in particular: the browser's own (the system's). */
 export const DEFAULT_DEVICE = 'default';
 
 export interface VoiceDevice {
@@ -686,11 +544,6 @@ export interface VoiceDevice {
   label: string;
 }
 
-/**
- * What is plugged in, by kind. The browser names its devices (and gives their ids) only once
- * one of that kind was allowed: until then a list is empty and its `named` is false, and a
- * kept pick cannot be told from a gone one.
- */
 export interface VoiceDevices {
   inputs: VoiceDevice[];
   outputs: VoiceDevice[];
@@ -701,27 +554,22 @@ export interface VoiceDevices {
 
 export const voiceDevicesAtom = atom<VoiceDevices>({ inputs: [], outputs: [], cameras: [], micNamed: false, cameraNamed: false });
 
-/** The browser can send a player's sound to a device of its choosing. Not safari, not an older firefox: the speakers are the system's there. */
 export const SINK_SUPPORTED = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
 
-/** The three picks, kept in this browser. A kept id stays kept while its device is unplugged, so plugging it back in brings it back. */
 const storedInputAtom = atomWithStorage<unknown>('settings.voiceInput', DEFAULT_DEVICE, undefined, { getOnInit: true });
 const storedOutputAtom = atomWithStorage<unknown>('settings.voiceOutput', DEFAULT_DEVICE, undefined, { getOnInit: true });
 const storedCameraAtom = atomWithStorage<unknown>('settings.voiceCamera', DEFAULT_DEVICE, undefined, { getOnInit: true });
 
-/** The kept pick, when it is plugged in (or the list is not known yet); the default when it is gone. */
 function inUse(kept: unknown, list: readonly VoiceDevice[], named: boolean): string {
   const id = typeof kept === 'string' && kept ? kept : DEFAULT_DEVICE;
   if (id === DEFAULT_DEVICE || !named) return id;
   return list.some((d) => d.id === id) ? id : DEFAULT_DEVICE;
 }
 
-/** Read: the device each is on now. */
 export const voiceInputAtom = atom((get) => inUse(get(storedInputAtom), get(voiceDevicesAtom).inputs, get(voiceDevicesAtom).micNamed));
 export const voiceOutputAtom = atom((get) => inUse(get(storedOutputAtom), get(voiceDevicesAtom).outputs, get(voiceDevicesAtom).micNamed));
 export const voiceCameraAtom = atom((get) => inUse(get(storedCameraAtom), get(voiceDevicesAtom).cameras, get(voiceDevicesAtom).cameraNamed));
 
-/** A call on now follows a new mic and new speakers at once. */
 export function setVoiceInput(id: string): void {
   store.set(storedInputAtom, id);
   void syncMic();
@@ -732,19 +580,16 @@ export function setVoiceOutput(id: string): void {
   applySink();
 }
 
-/** A call's camera, when on, moves to the new one at once. */
 export function setVoiceCamera(id: string): void {
   store.set(storedCameraAtom, id);
   void switchVoiceCamera();
 }
 
-/** The picked device was asked for and is not there (unplugged, or an id from another day). */
 function gone(err: unknown): boolean {
   const name = (err as { name?: string } | null)?.name;
   return name === 'OverconstrainedError' || name === 'NotFoundError';
 }
 
-/** `deviceId`'s stream, else the browser's own when that one is gone. `device` is which it got. Throws as getUserMedia does. */
 async function openDevice(kind: 'audio' | 'video', deviceId: string, base: MediaTrackConstraints): Promise<{ stream: MediaStream; device: string }> {
   if (deviceId !== DEFAULT_DEVICE) {
     try {
@@ -756,12 +601,10 @@ async function openDevice(kind: 'audio' | 'video', deviceId: string, base: Media
   return { stream: await navigator.mediaDevices.getUserMedia({ [kind]: base }), device: DEFAULT_DEVICE };
 }
 
-/** The camera for the tab's preview and for a call (voice-video.ts, with its size and rate). */
 export async function openVoiceCamera(deviceId = store.get(voiceCameraAtom), base: MediaTrackConstraints = {}): Promise<MediaStream> {
   return (await openDevice('video', deviceId, base)).stream;
 }
 
-/** Sends `audio` to `deviceId`, or to the default when it cannot be had. Nothing where the browser cannot. */
 async function sinkTo(audio: HTMLAudioElement, deviceId: string): Promise<void> {
   if (!SINK_SUPPORTED) return;
   try {
@@ -771,14 +614,12 @@ async function sinkTo(audio: HTMLAudioElement, deviceId: string): Promise<void> 
   }
 }
 
-/** The call's players, to the speakers in use. */
 function applySink(): void {
   for (const audio of live?.audios ?? []) void sinkTo(audio, store.get(voiceOutputAtom));
 }
 
 let watching = false;
 
-/** The devices plugged in now, into `voiceDevicesAtom`; a call on moves off one that went. Watches for plugging from its first call on. */
 export async function refreshVoiceDevices(): Promise<void> {
   if (!navigator.mediaDevices?.enumerateDevices) return;
   if (!watching) {
@@ -791,7 +632,6 @@ export async function refreshVoiceDevices(): Promise<void> {
   } catch {
     return;
   }
-  // `default` and `communications` are chrome's stand-ins for another device in the list: the default pick is them
   const listOf = (kind: MediaDeviceKind, word: string) =>
     devices
       .filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
@@ -804,18 +644,15 @@ export async function refreshVoiceDevices(): Promise<void> {
     micNamed: named('audioinput'),
     cameraNamed: named('videoinput')
   };
-  // the same list again (a devicechange that moved nothing, a second look) renders nothing and re-sinks nothing
   if (JSON.stringify(next) === JSON.stringify(store.get(voiceDevicesAtom))) return;
   store.set(voiceDevicesAtom, next);
   void syncMic();
   applySink();
 }
 
-/** The test tone: a short beep, faded in and out so it does not click. */
 const TONE_HZ = 660;
 const TONE_S = 0.5;
 
-/** A short beep through the speakers picked. On the mic's audio context while there is one (the tab's meter has it open): a new context is a slow thing to make. */
 export async function playTestTone(): Promise<void> {
   if (typeof AudioContext === 'undefined') return;
   const shared = mic?.ctx ?? null;
@@ -847,14 +684,6 @@ export async function playTestTone(): Promise<void> {
   }
 }
 
-// ---- the mic ------------------------------------------------------------------------------
-
-/**
- * How the mic is taken and what it does before it leaves, kept in this browser. Voice isolation
- * is rnnoise in an AudioWorklet, its wasm fetched the first time it is on; with it on the
- * browser's own noise suppression is off, so the voice is not cleaned twice. Echo cancellation
- * and auto gain are the browser's, asked for when the mic is opened.
- */
 const storedIsolationAtom = atomWithStorage<unknown>('settings.voiceIsolation', true, undefined, { getOnInit: true });
 const storedEchoAtom = atomWithStorage<unknown>('settings.voiceEchoCancellation', true, undefined, { getOnInit: true });
 const storedAutoGainAtom = atomWithStorage<unknown>('settings.voiceAutoGain', true, undefined, { getOnInit: true });
@@ -863,7 +692,6 @@ const storedGateAtom = atomWithStorage<unknown>('settings.voiceGateDb', FLOOR_DB
 const storedPttKeyAtom = atomWithStorage<unknown>('settings.voicePttKey', 'Backquote', undefined, { getOnInit: true });
 const storedPttDelayAtom = atomWithStorage<unknown>('settings.voicePttDelay', 200, undefined, { getOnInit: true });
 
-/** A kept number, inside [min, max]; `fallback` when it is no number. */
 const numberIn = (kept: unknown, min: number, max: number, fallback: number) =>
   typeof kept === 'number' && Number.isFinite(kept) ? Math.min(max, Math.max(min, kept)) : fallback;
 
@@ -872,21 +700,15 @@ export type VoiceMode = 'activity' | 'ptt';
 export const voiceIsolationAtom = atom((get) => get(storedIsolationAtom) !== false);
 export const voiceEchoCancellationAtom = atom((get) => get(storedEchoAtom) !== false);
 export const voiceAutoGainAtom = atom((get) => get(storedAutoGainAtom) !== false);
-/** Voice activity (the gate decides) or push to talk (a held key does). */
 export const voiceModeAtom = atom<VoiceMode>((get) => (get(storedModeAtom) === 'ptt' ? 'ptt' : 'activity'));
-/** The gate's threshold, dB, on the meter's scale: FLOOR_DB (the meter's empty end) is always open. */
 export const voiceGateAtom = atom((get) => numberIn(get(storedGateAtom), FLOOR_DB, 0, FLOOR_DB));
-/** Push to talk's key, a `KeyboardEvent.code`. */
 export const voicePttKeyAtom = atom((get) => {
   const kept = get(storedPttKeyAtom);
   return typeof kept === 'string' && kept ? kept : 'Backquote';
 });
-/** How long the mic stays open after the key comes up, ms: the end of the last word. */
 export const voicePttDelayAtom = atom((get) => numberIn(get(storedPttDelayAtom), 0, 1000, 200));
 export const PTT_DELAY_MAX = 1000;
-/** Push to talk's key is down (or was, within its delay), in a call. */
 export const voicePttHeldAtom = atom(false);
-/** Voice isolation is on and could not be had (no web audio, the wasm would not load): the mic goes out with the browser's own cleaning. */
 export const voiceIsolationFailedAtom = atom(false);
 
 export function setVoiceIsolation(on: boolean): void {
@@ -924,7 +746,6 @@ export function setVoicePttDelay(ms: number): void {
   store.set(storedPttDelayAtom, ms);
 }
 
-/** A key's `code` as it is printed on the key. */
 export function keyName(code: string): string {
   const names: Record<string, string> = {
     Backquote: 'backtick `',
@@ -951,14 +772,7 @@ export function keyName(code: string): string {
     .toLowerCase();
 }
 
-/**
- * The mic, opened once for everyone who wants it (a call, the tab's meter) and put down when the
- * last lets go. raw (getUserMedia) → rnnoise when isolation is on → the gate → `out`, the track
- * a call sends; the meter's analyser sits before the gate, so it shows the mic, not the gate.
- * Where there is no web audio `out` is the raw track and there is no meter.
- */
 interface Mic {
-  /** The device and settings it was opened for: another key is another mic. */
   key: string;
   raw: MediaStream;
   ctx: AudioContext | null;
@@ -969,9 +783,7 @@ interface Mic {
 }
 
 let mic: Mic | null = null;
-/** How many hold it: a call, the tab. */
 let holders = 0;
-/** Opens and closes one at a time, in order. */
 let micQueue: Promise<unknown> = Promise.resolve();
 
 function queued<T>(step: () => Promise<T>): Promise<T> {
@@ -980,7 +792,6 @@ function queued<T>(step: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Opens the mic, or joins whoever has it open. Throws as getUserMedia does; then it is not held. */
 export async function holdVoiceMic(): Promise<void> {
   holders++;
   try {
@@ -992,7 +803,6 @@ export async function holdVoiceMic(): Promise<void> {
   }
 }
 
-/** Lets go of the mic; the last to let go puts it down. */
 export function releaseVoiceMic(): void {
   holders = Math.max(0, holders - 1);
   void queued(async () => {
@@ -1002,22 +812,18 @@ export function releaseVoiceMic(): void {
   });
 }
 
-/** The mic as it should be now (the device in use, the settings), when it is held and is not. */
 function syncMic(): Promise<void> {
-  return queued(() => buildMic()).catch(() => undefined); // the old mic stays
+  return queued(() => buildMic()).catch(() => undefined);
 }
 
-/** The mic's loudness for the tab's meter, 0..1 on the meter's scale; 0 with no mic or no web audio. */
 export function readVoiceMicLevel(now: number): number {
   return mic?.level?.read(now) ?? 0;
 }
 
-/** The gate's threshold on the meter's 0..1 scale: 0 is always open. */
 export function gateFraction(db: number): number {
   return Math.min(1, Math.max(0, 1 - db / FLOOR_DB));
 }
 
-/** Opens a new mic when the one open is not for the device and settings in use now (or its track ended), swaps it onto the call, then puts the old one down. */
 async function buildMic(): Promise<void> {
   if (!holders) return;
   const device = store.get(voiceInputAtom);
@@ -1025,7 +831,6 @@ async function buildMic(): Promise<void> {
   const constraints = {
     echoCancellation: store.get(voiceEchoCancellationAtom),
     autoGainControl: store.get(voiceAutoGainAtom),
-    // rnnoise cleans the voice: the browser's own suppression on top only thins it
     noiseSuppression: !isolation
   };
   const key = JSON.stringify([device, isolation, constraints]);
@@ -1047,11 +852,9 @@ async function buildMic(): Promise<void> {
   if (was) closeMic(was);
 }
 
-/** The chain for an opened mic. Isolation that will not load leaves it out (voiceIsolationFailedAtom); web audio that will not run at all leaves the raw track. */
 async function micOf(raw: MediaStream, key: string, isolation: boolean): Promise<Mic> {
   const [track] = raw.getAudioTracks();
   if (!track) throw new DOMException('no microphone', 'NotFoundError');
-  // a device pulled out: the mic opens again on what is there
   track.addEventListener('ended', () => void syncMic());
   const bare: Mic = { key, raw, ctx: null, denoise: null, gate: null, level: null, out: track };
   if (typeof AudioContext === 'undefined' || typeof AudioWorkletNode === 'undefined') {
@@ -1060,7 +863,6 @@ async function micOf(raw: MediaStream, key: string, isolation: boolean): Promise
   }
   let ctx: AudioContext | null = null;
   try {
-    // rnnoise is made for 48kHz. firefox will not take a mic into a context of another rate: then the browser's rate, without isolation
     let source: MediaStreamAudioSourceNode;
     try {
       ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
@@ -1096,7 +898,6 @@ async function micOf(raw: MediaStream, key: string, isolation: boolean): Promise
   }
 }
 
-/** rnnoise's wasm, fetched once, the first time isolation is on. */
 let rnnoiseWasm: Promise<ArrayBuffer> | null = null;
 
 async function denoiser(ctx: AudioContext): Promise<NonNullable<Mic['denoise']>> {
@@ -1107,13 +908,11 @@ async function denoiser(ctx: AudioContext): Promise<NonNullable<Mic['denoise']>>
   });
   const [wasmBinary] = await Promise.all([rnnoiseWasm, ctx.audioWorklet.addModule(rnnoiseWorkletUrl)]);
   const node = new RnnoiseWorkletNode(ctx, { wasmBinary, maxChannels: 1 });
-  // one voice: a stereo mic is mixed down before it, not cleaned twice
   node.channelCount = 1;
   node.channelCountMode = 'explicit';
   return node;
 }
 
-/** Everything a mic holds, let go: the device, the worklets, the context. */
 function closeMic(m: Mic): void {
   for (const t of m.raw.getTracks()) t.stop();
   m.out.stop();
@@ -1121,14 +920,12 @@ function closeMic(m: Mic): void {
   void m.ctx?.close().catch(() => undefined);
 }
 
-/** The call's m-line 0 onto the mic's track now, when it is another: no new offer, the seat stays. */
 async function sendMic(): Promise<void> {
   const sender = live?.pc.getTransceivers()[0]?.sender;
   if (!sender || !mic || sender.track === mic.out) return;
   await sender.replaceTrack(mic.out).catch(() => undefined);
 }
 
-/** The gate's threshold now: the slider's in voice activity, always open in push to talk (the key is the gate). */
 function applyGate(): void {
   const param = mic?.gate?.parameters.get('threshold');
   if (!param || !mic?.ctx) return;
@@ -1137,9 +934,6 @@ function applyGate(): void {
   param.setValueAtTime(open ? 0 : 10 ** (db / 20), mic.ctx.currentTime);
 }
 
-// ---- push to talk -------------------------------------------------------------------------
-
-/** Keys typed into a box are words, not push to talk. */
 const NOT_TYPED = new Set(['button', 'checkbox', 'radio', 'range', 'color', 'file', 'image', 'reset', 'submit']);
 
 function typing(target: EventTarget | null): boolean {
@@ -1159,7 +953,6 @@ function setHeld(held: boolean): void {
   applyMic();
 }
 
-/** Up after the delay: the end of the last word goes out. */
 function letGo(): void {
   if (!store.get(voicePttHeldAtom) || pttRelease) return;
   pttRelease = setTimeout(() => setHeld(false), store.get(voicePttDelayAtom));
@@ -1175,12 +968,10 @@ function onPttUp(e: KeyboardEvent): void {
   if (e.code === store.get(voicePttKeyAtom)) letGo();
 }
 
-/** The page lost the keyboard (another window, another tab): the key's up never comes, so it is up now. */
 function onPttLost(): void {
   if (document.visibilityState === 'hidden' || !document.hasFocus()) letGo();
 }
 
-/** The key is listened for while in a call in push to talk. The page's own keys only: a browser has no key it hears while another window has the focus. */
 function syncPtt(): void {
   const want = live !== null && store.get(voiceModeAtom) === 'ptt';
   if (want === pttListening) return;

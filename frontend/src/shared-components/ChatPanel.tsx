@@ -49,13 +49,9 @@ import { keepFocus, stuckAfterScroll, useBottomPin } from '@/infra/keyboard';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
-/** Within this many px of the newest line counts as "at the bottom", so a one-line gap after a font swap does not unstick the view. */
 const STUCK_PX = 40;
-/** How long the pointer rests on a name before the speaker's card shows: a pause, not a pass over the names while reading. */
 const PEEK_MS = 300;
-/** How many grey lines stand in the room before its past has landed: enough to fill the panel, the rest clipped. Blocks are twice as tall, so half as many. */
 const LINES_GUESS = 16;
-/** The grey lines' shapes, cycled: the name's width, then the words'. Uneven, so the grey reads as talk and not as a table. */
 const LINE_SHAPES: readonly (readonly [name: string, words: string])[] = [
   ['w-16', 'w-1/2'],
   ['w-12', 'w-3/4'],
@@ -68,59 +64,31 @@ const LINE_SHAPES: readonly (readonly [name: string, words: string])[] = [
 ];
 
 interface ChatPanelProps {
-  /** A stream's room, or, with `channel`, the server. */
   name: string;
-  /** The streamer's own grant. With it, our lines are marked. */
   owner?: Owner | null;
-  /** Inside another box (the corner player): no stroke or minimum height of its own, and no header, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
-  /**
-   * A second panel on a room the page's own panel already holds open: the popped out player's
-   * chat, over the go live page, whose chat is that same room. It draws the room and neither
-   * joins nor leaves it, and the page's panel draws nothing while this one is up, so there is
-   * still one room, one socket and one list on screen. The lines and a half typed line are the
-   * same ones on both sides of the move: nothing reconnects.
-   */
   guest?: boolean;
-  /**
-   * A group's channel: `name` is the server, this the channel on screen. One socket for every
-   * channel of the server (`openServerChat`); a change of channel is `showChannel`, no socket
-   * and no history. The header is the channel. The lines are the same as a stream's, in the
-   * shape this browser picked; the ids and the data attributes stay. The panel has no search
-   * box of its own: a group's is the roster's first row (ServerRoom.tsx `RoomSearch`), and the
-   * hits land here, in the lines' place (`#chat-results`); a stream's chat is not searched,
-   * though the same pane shows a speaker's lines.
-   */
   channel?: string;
-  /** A hit from another channel of the group was opened: the page puts that channel in its address (the lines have moved already, `openLine`). */
   onChannel?: (channel: string) => void;
-  /** A group channel's own controls in the header, before the count: the pins (ServerRoom.tsx). */
   headerEnd?: ReactNode;
-  /** A mark always at a line's top right, and buttons in its action bar beside react and reply: a group line's pin (ServerRoom.tsx), a janny's delete, time out and ban on a stream's (ChatMod.tsx). */
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
-  /** Rows of a line's `more` menu after its own: a group moderator's delete, kick, timeout and ban (GroupMod.tsx `lineModItems`). */
   lineMenu?: (line: ChatLine) => LineMenuItem[];
-  /** A stream's chat welcome (welcome-atoms.ts): `Eques` says it at the top of the lines, on this screen alone. The watch page's and the go live page's chat. */
   welcome?: Welcome | null;
   className?: string;
 }
 
-/** Enter sends. The enter that picks an ime candidate is not a send (safari says it with keyCode 229). */
 function isSendKey(e: ReactKeyboardEvent<HTMLInputElement>): boolean {
   return e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229;
 }
 
-/** A wait on the send button: `12s` under a minute, `9:05` from there (a cooldown or a timeout can run minutes), `3h 10m` past an hour. */
 function waitWords(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
-/** Whole seconds until `until` (unix ms), counting down; 0 once it has passed, or when there is nothing to wait for. */
 function useCountdown(until: number): number {
-  // the clock as an external store: the seconds left are the snapshot, and a timer says "look again" four times a second until the wait is over
   const subscribe = useCallback(
     (onChange: () => void) => {
       if (until <= Date.now()) return () => {};
@@ -138,34 +106,12 @@ function useCountdown(until: number): number {
   });
 }
 
-/**
- * The chat next to the video, and a group channel's. Lines newest at the bottom, a nick box
- * until you have one (or a login), then one row: a picture, the text, send. The lines take the
- * shape this browser picked (settings.chatStyle, the chat tab's cards, drawn by ChatLine.tsx
- * as a friend's chat is: a log, bubbles, or blocks; `#chat-lines` carries it as `data-style`),
- * each wearing its speaker's group badges after the name; the blocks' face is the picture when
- * the line is a login's or the streamer's, the letter their name makes otherwise. The robot in
- * the header hides the bots' lines (a setting too, the chat tab has it as well). Joins on
- * mount, leaves on unmount (a room the next panel takes over right away stays open: the chat
- * going with the player into a window of its own is not a reconnect); a change of `owner`
- * (going live, stopping) or of the login says hello again. Each panel draws its own room
- * (`chatRoomFor`, chat-atoms.ts): the page's and the corner player's are two rooms at once,
- * each with its lines and its box, and two panels on one room share its socket and its lines.
- * A `guest` is a second panel on the page's own room, and the page's draws nothing while it is up.
- */
-
-/**
- * The names' colours in a group's channel: each their top coloured role's, made to read on this
- * theme (room-atoms.ts `roleColorsAtom`). None in a stream's chat, which has no roles, and none
- * for someone holding no role: the name keeps the colour it had.
- */
 function useRoleColors(room: ChatRoom): (name: string) => string | undefined {
   const { server, colors } = useAtomValue(roleColorsAtom);
   const ours = room.server !== null && room.server === server;
   return (name) => (ours ? colors.get(name) : undefined);
 }
 
-/** What a press on a speaker (their name, their face) does, and whether it does anything: the popup, or a login's lines here (Speaker). */
 function useSpeakerPress(line: ChatLine, room: ChatRoom) {
   const popup = useAtomValue(profilePopupEnabledAtom);
   const press = (name: HTMLElement) => {
@@ -182,19 +128,6 @@ function useSpeakerPress(line: ChatLine, room: ChatRoom) {
   return { popup, pressable: line.verified || (popup && line.streamer), press };
 }
 
-/**
- * The speaker's name. When the line is really that name's (a login's, or the streamer's; an
- * anonymous nick is nobody), a click on it shows them over the page (ProfilePopup.tsx: who
- * they are, their stream while they are live, their page, and the button that goes there),
- * and the pointer resting on the name, or the keyboard's focus landing on it, puts the
- * person's card (PersonCard.tsx, the sidebar's) beside the chat: the face with the word on
- * it, the name, their status. Where this browser turned the popup off (settings.profilePopup),
- * and in a chat that is in a window of its own (the popped out player, infra/popout.ts: the
- * popup is the page's, under that window), a login's name opens that account's lines here
- * instead, which the popup has as `their messages`. No `title` beside it: two boxes for
- * one name is one too many. The colour says who the line is really from: the streamer green,
- * a login blue, an anonymous nick red (no card for it, so its `title` says why).
- */
 function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
   const peek = usePeek(PEEK_MS);
   const { popup, pressable, press } = useSpeakerPress(line, room);
@@ -208,7 +141,6 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
         onKeyDown: peek.keyDown
       }
     : {};
-  // a login's name wears their role's colour in a group's channel; a nick is nobody's, whatever it is called
   const roleColor = useRoleColors(room);
   const tint = line.verified ? roleColor(line.from) : undefined;
   const color = tint ? undefined : line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
@@ -240,7 +172,6 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
           {line.from}
         </span>
       )}
-      {/* the speaker's account has a provider linked: the mark, as the row is now (api chat.rs `with_faces`) */}
       {someone && line.oauth_verified && <OAuthMark size={14} className="ml-1 align-[-2px]" />}
       {someone && peek.at && (
         <PersonCard
@@ -254,11 +185,6 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
   );
 }
 
-/**
- * The speaker's face at the head of a run (blocks, ChatLine.tsx): a click on it does what a
- * click on their name does (Speaker). For the pointer alone: the name beside it is the way for a
- * key and a reader, so the face is no second tab stop. An anonymous nick's face is only a face.
- */
 function SpeakerFace({ line, room }: { line: ChatLine; room: ChatRoom }) {
   const { pressable, press } = useSpeakerPress(line, room);
   const face = <Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />;
@@ -270,7 +196,6 @@ function SpeakerFace({ line, room }: { line: ChatLine; room: ChatRoom }) {
   );
 }
 
-/** What stands after the name: the group badges (each shows its group's card on hover and focus, from what the line carried: Badge.tsx), the red broadcast mark for the streamer's own lines (LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. No ✓: the name's colour says whether a login is behind it (Speaker). */
 function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   return (
     <>
@@ -287,28 +212,15 @@ function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   );
 }
 
-/** Where a chat picture is fetched from, by the id `POST /api/chat-images` handed back. */
 export function pictureSrc(id: string): string {
   return `/api/chat-images/${encodeURIComponent(id)}`;
 }
 
-/** A thumbnail under the pointer (or with keyboard focus): the picture greyed a little under a translucent black, still plainly seen, so the hover is felt. */
 const THUMB_HOVER =
   "relative after:pointer-events-none after:absolute after:inset-0 after:bg-black/25 after:opacity-0 after:transition-opacity after:duration-150 after:content-[''] hover:after:opacity-100 focus-visible:after:opacity-100";
 
-/**
- * The pictures on a line, under the words. One is drawn as it is, at most five lines tall. Two
- * sit side by side. More make two rows, the first with the odd one out, and the pictures of a
- * row share its width, cropped to fill their cells: three are two over one across the whole row,
- * five are three over two, eight are four over four. A click on any puts it over the whole page
- * (`PictureView`), in the window the chat is in: the page's, or the popped-out player's own.
- * A direct message's pictures are drawn by the same (FriendChat.tsx), and so are a pinned line's in
- * a group channel's pins list (ServerRoom.tsx), `small` there: rows 4rem tall, one picture at most
- * 5rem, to sit in the narrow list.
- */
 export function ChatImages({ ids, small = false }: { ids: string[]; small?: boolean }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
-  // pictures that would not load, and why (an admin took it down, or it is not this viewer's to see): the word stands in their place
   const [gone, setGone] = useState<Record<string, MediaGone>>({});
   const [sensitive, setSensitive] = useState<Record<string, boolean>>({});
   const srcOf = (id: string) => (id in sensitive ? shownSrc(pictureSrc(id)) : pictureSrc(id));
@@ -320,11 +232,9 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
 
   if (ids.length === 0) return null;
   const many = ids.length > 1;
-  // one or two pictures are one row; more are two, the first with the odd one out
   const first = ids.length <= 2 ? ids.length : Math.ceil(ids.length / 2);
   const rows = [ids.slice(0, first), ids.slice(first)].filter((row) => row.length > 0);
   return (
-    // the grid asks for 28rem and takes what the line has: inside a block, and inside the server line's shrink-to-fit column alike
     <span className={cn('mt-1 flex max-w-full flex-col gap-1', many && 'w-[28rem]')}>
       {rows.map((row, r) => (
         <span key={r} className={cn('flex gap-1', many && (small ? 'h-16' : 'h-24'))}>
@@ -391,35 +301,21 @@ interface PictureViewProps {
   srcOf: (id: string) => string;
   blurred: (id: string) => boolean;
   onShow: (id: string) => void;
-  /** Which of `ids` is up. */
   at: number;
-  /** The arrows and the arrow keys: one on, or one back, round the end. */
   onStep: (by: number) => void;
   onClose: () => void;
 }
 
-/** The picture stops this far from the window's edges, in percent of the window, on the two sides it reaches. */
 const PICTURE_EDGE = 3;
 
-/**
- * A chat picture over the whole page: the page dimmed dark grey behind it, the picture as tall or
- * as wide as the window allows less a small edge (scaled up as well as down), and a little blue
- * in the grey under it. A native <dialog> opened modal on mount, the way ConfirmDialog is: the
- * browser keeps focus in it, closes it on escape and hands focus back to the thumbnail. The ×
- * closes it too, and so does a click on the grey beside the picture. Several on the line get
- * arrows at the edges, and the arrow keys.
- */
 function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: PictureViewProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  /** The press that began this click was beside the picture too: a drag off the picture is not a close. */
   const pressedBeside = useRef(false);
-  /** Width over height of each picture seen so far, read when it loads: its drawn size comes from it. */
   const [ratios, setRatios] = useState<Record<string, number>>({});
   const many = ids.length > 1;
   const shown = ids[at];
   const ratio = shown === undefined ? undefined : ratios[shown];
 
-  // A layout effect: its cleanup runs while the node is still in the document, which is when close() hands focus back.
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
@@ -430,9 +326,7 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
   }, []);
 
   const close = () => dialogRef.current?.close();
-  // already the whole window, a phone's page over the page: the back button shuts it too (MobileSheet.tsx)
   useSheetBack(close);
-  /** On the grey: not on a button, and not on the picture (the <img> is drawn at exactly the picture's size). */
   const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img, [data-sensitive]');
   const span = 100 - 2 * PICTURE_EDGE;
 
@@ -453,8 +347,6 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
         e.preventDefault();
         onStep(e.key === 'ArrowLeft' ? -1 : 1);
       }}
-      // the whole window, a column: the room over the picture, the picture, the room under it. a size container, so
-      // the picture's width can be put in terms of the window's height (`cqh`) without the scrollbar gutter in the way
       className="fixed inset-0 m-0 hidden h-auto w-auto max-h-none max-w-none flex-col overflow-hidden border-0 bg-neutral-700/85 p-0 backdrop:bg-transparent open:flex [container-type:size]"
     >
       <div className="flex-1" />
@@ -476,14 +368,11 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
             const { naturalWidth, naturalHeight } = e.currentTarget;
             if (naturalWidth && naturalHeight) setRatios((all) => ({ ...all, [shown]: naturalWidth / naturalHeight }));
           }}
-          // as wide as the window less the edge, or as tall as that, whichever comes first; the height follows from the ratio. unseen until the ratio is known
           style={ratio === undefined ? undefined : { width: `min(${span}cqw, calc(${span}cqh * ${ratio}))` }}
           className={cn('shrink-0 self-center', ratio === undefined && 'invisible')}
         />
       )}
-      {/* everything under the picture: the grey with a little of the blue in it */}
       <div className="flex-1 bg-primaryBlue/10" />
-      {/* chips over the picture: their names read on it the video controls' way (ControlTip), not the page's */}
       <button
         type="button"
         id="chat-picture-close"
@@ -496,7 +385,6 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
       </button>
       {many && (
         <>
-          {/* which picture this is, top right just left of close: only when there is more than one */}
           <span id="chat-picture-count" aria-hidden className={cn(CHIP, 'pointer-events-none absolute right-16 top-3 h-10 items-center px-3 text-sm font-semibold tabular-nums')}>
             {at + 1} / {ids.length}
           </span>
@@ -526,16 +414,8 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
   );
 }
 
-/** The badge the bots' lines wear (the `bot` group, schema.sql), worn by `Eques` too. */
 const BOT_BADGE: GroupBadge = { name: BOT_GROUP, badge: 'BOT', color: '#5865f2' };
 
-/**
- * The chat welcome: one line from the bot `Eques` at the top of the lines, in the shape the lines
- * take, stamped when the chat was opened (`room` remounts it). Drawn here and nowhere else: not
- * in the room's lines, so never sent, kept, counted as unread or searched, and no action bar. A
- * bot's line, so the bots' switch hides it, and so does this browser's `show welcome messages`.
- * Its links go through `ExternalLink` (LinkedText), the leave-site word with them.
- */
 function WelcomeLine({ welcome }: { welcome: Welcome }) {
   const hideBots = useAtomValue(hideBotsAtom);
   const show = useAtomValue(showWelcomesAtom);
@@ -544,7 +424,6 @@ function WelcomeLine({ welcome }: { welcome: Welcome }) {
   return <EquesLine message={welcome.message} at={at} attrs={{ id: 'chat-welcome', 'data-bot': true, 'data-welcome': '' }} />;
 }
 
-/** Eques's line itself, in the lines' shape, whatever the switches say: the chat's welcome, and its preview in the welcome editor (WelcomeEditor.tsx). */
 export function EquesLine({ message, at, attrs }: { message: string; at: number; attrs: ChatLineShapeProps['attrs'] }) {
   const shape = useAtomValue(chatStyleAtom);
   return (
@@ -577,14 +456,6 @@ export function EquesLine({ message, at, attrs }: { message: string; at: number;
   );
 }
 
-/**
- * What stands in the lines' place while the room's past is on its way: grey lines in the shape
- * the lines will take, so the panel reads as a chat that has not arrived and not as one with
- * nothing in it. A log's are one line each, the time, a name, some words; bubbles are a box a
- * side at a time; blocks are the face beside the name over the words. Clipped to the panel,
- * never scrolled, and no <p>, so nothing that keys on `#chat-lines p` takes a grey line for a
- * said one.
- */
 function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   const rows = shape === 'blocks' ? LINES_GUESS / 2 : LINES_GUESS;
   return (
@@ -603,7 +474,6 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
           );
         }
         if (shape === 'bubbles') {
-          // the box on one side or the other, the way two people's lines fall
           return (
             <div key={i} className="flex gap-2.5">
               <Bone className="h-3 w-8 shrink-0 self-center" />
@@ -613,7 +483,6 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
             </div>
           );
         }
-        // one line of text-sm leading-snug tall (14px × 1.375), the way a said line is
         return (
           <div key={i} className="flex h-[1.203125rem] items-center gap-2">
             <Bone className="h-3 w-8 shrink-0" />
@@ -626,17 +495,6 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   );
 }
 
-/**
- * A room's lines in the shape this browser picked, each as the panel draws it: the panel's
- * list, and a group channel's pinned lines in a phone's sheet (PinSheet.tsx). `name` is the
- * panel's: whose lines are `mine` is said against it. Each line has the action bar (ChatLine.tsx
- * `LineActions`): react where `reacts` (the panel's own list, not a pin's copy: a login picks an
- * emoji, a nick is told to log in), reply where `replies` (the panel's own list once it can speak),
- * the caller's own buttons (`lineActions`), and `more`; `lineSide` puts buttons in a column of
- * their own at the line's right (the sheet's jump and unpin). A reply wears the quote of its line, a
- * click on which goes there where `jumps` (`ChatRoom.jumpToReply`); a line's reactions stand under
- * it as chips (Reactions.tsx `ReactionChips`), a click on one putting yours on or off.
- */
 export function RoomLines({
   name,
   room,
@@ -655,7 +513,6 @@ export function RoomLines({
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
-  /** Buttons in a column of their own at each line's right (ChatLine.tsx `side`). */
   lineSide?: (line: ChatLine) => ReactNode;
   replies?: boolean;
   reacts?: boolean;
@@ -666,15 +523,12 @@ export function RoomLines({
   const asStreamer = useAtomValue(room.asStreamerAtom);
   const speaker = useAtomValue(chatSpeakerAtom);
   const me = useAtomValue(meAtom);
-  // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
   const myName = asStreamer ? name : speaker;
   const roleColor = useRoleColors(room);
   return (
     <>
       {lines.map((line, i) => {
-        // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
         const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
-        // a run is one speaker's lines in a row: the same name of the same kind, since a nick may wear a name a login holds elsewhere
         const prev = lines[i - 1];
         const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
         return (
@@ -773,21 +627,16 @@ export function ChatPanel({
   className
 }: ChatPanelProps) {
   const server = channel !== undefined;
-  // in the chat window (ChatSlot.tsx) this header is the window's bar: drag it to move, the close at its right
   const bar = useChatWindowBar();
   const listRef = useRef<HTMLDivElement | null>(null);
-  // height before the last paint, so prepending older lines can put the same pixels back
   const hold = useRef(0);
-  // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
   const shown = useRef(0);
   const shownRoom = useRef<ChatRoom | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const textRef = useRef<HTMLInputElement | null>(null);
-  // a touch on send came while the box was being typed in: the box gets the focus back after the send
   const sendKeepsFocus = useRef(false);
-  // this panel's room, and none other's: its lines, its box, its socket (chat-atoms.ts)
   const room = chatRoomFor(name, server);
   const lines = useAtomValue(room.visibleLinesAtom);
   const total = useAtomValue(room.linesAtom).length;
@@ -800,7 +649,6 @@ export function ChatPanel({
   const images = useAtomValue(room.imagesAtom);
   const video = useAtomValue(room.videoAtom);
   const videoUp = useVideoUpload();
-  // a stream's box takes pictures alone while videos are off there (ChatAttach.tsx `STREAM_CHAT_VIDEO`); a group channel's takes both
   const takesVideos = server || STREAM_CHAT_VIDEO;
   const replyTo = useAtomValue(room.replyAtom);
   const replyColor = useRoleColors(room)(replyTo?.verified ? replyTo.from : '');
@@ -818,52 +666,37 @@ export function ChatPanel({
   const scrollTick = useAtomValue(room.scrollAtom);
   const tier = useAtomValue(room.tierAtom);
   const shake = useAtomValue(room.shakeAtom);
-  // a send refused for the rate: the seconds until the next line may go, on the send button
   const wait = useCountdown(useAtomValue(room.waitAtom));
-  // a guest is drawing this room somewhere else: this panel, the one that holds the room open, stands aside
   const aside = useAtomValue(room.guestAtom) && !guest;
-  // the box's `:` list of the login's emotes, a drop-up over the box (EmoteComplete.tsx)
   const emotes = useEmoteComplete({ value: draft, onChange: (next) => room.setDraft(next), input: textRef, id: 'chat-emotes' });
 
-  // The inputs that change while mounted: the room, the owner (going live) and the login.
-  // Nothing opens until /api/me has answered, so the first hello is the right one.
-  // A server is one socket for every channel: the channel is not one of these inputs.
-  // Going is not yet a close: the room may be the next panel's to take over, a moment from now.
   useEffect(() => {
     if (me === undefined) return;
     return room.join(owner);
   }, [room, owner?.session, owner?.token, me]);
 
-  // A guest says it is up for as long as it is, and the panel that holds the room stands aside.
   useEffect(() => {
     if (!guest) return;
     room.setGuest(true);
     return () => room.setGuest(false);
   }, [room, guest]);
 
-  // The channel on screen, for a server: a swap of what is shown, nothing opened or asked.
   useEffect(() => {
     if (channel !== undefined) room.showChannel(channel);
   }, [room, channel]);
 
-  /** The nick box's join: the socket as the panels want it. */
   const open = () => room.open();
 
-  // a reply begun (the action bar's reply): the box takes the focus, so the words go straight in
   useEffect(() => {
     if (replyTo) textRef.current?.focus();
   }, [replyTo]);
 
-  // Keep the newest line in view, unless the reader has scrolled up, or a jump asked for one line.
-  // A layout effect: the store fires before react has put the new lines in the dom.
   useLayoutEffect(() => {
     const el = listRef.current;
     if (!el) {
-      // standing aside for a guest: there is no list. the one that comes back is a new one, and starts at the newest line
       shown.current = 0;
       return;
     }
-    // another room in this panel (the corner following another stream) starts at its newest line
     if (shownRoom.current !== room) {
       shownRoom.current = room;
       shown.current = 0;
@@ -873,7 +706,6 @@ export function ChatPanel({
       el.scrollTop += el.scrollHeight - hold.current;
     } else if (plan && typeof plan === 'object') {
       const node = el.querySelector(`[data-id="${CSS.escape(plan.id)}"]`);
-      // centred by the list's own scroll, not scrollIntoView: that would centre the line in the window as well, scrolling the page under the panel (the room page snaps between its views)
       if (node instanceof HTMLElement) el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - (el.clientHeight - node.offsetHeight) / 2;
       stuck.current = false;
       room.setFollowing(false);
@@ -884,13 +716,9 @@ export function ChatPanel({
     }
     shown.current = lines.length;
     hold.current = el.scrollHeight;
-    // too few lines to scroll: older ones are asked for here, since no scroll will reach the top
     if (lines.length > 0 && el.scrollHeight <= el.clientHeight) room.fillShort();
   }, [room, lines, total, scrollTick, aside]);
 
-  // The list changes height under the reader (a phone's keyboard, the player easing to a strip and
-  // back, mobile.ts; the `replying to` bar or the pictures' strip coming up over the box): one
-  // sitting at the newest line stays there through it (keyboard.ts)
   useBottomPin(listRef, stuck, aside);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
@@ -902,11 +730,9 @@ export function ChatPanel({
     if (el.scrollTop < 48) void room.loadOlder();
   }
 
-  /** Files from the picker, a paste or a drop: the pictures up the pictures' way, a video (one) up its own. */
   function pickFiles(list: FileList | File[] | null) {
     const { pictures, videos } = splitFiles(list ? [...list] : []);
     if (fileRef.current) fileRef.current.value = '';
-    // the room the files were picked in, even when the panel moves to another before they are up
     const into = room;
     const [first] = videos;
     if (first && !takesVideos) {
@@ -920,7 +746,6 @@ export function ChatPanel({
 
   async function pickPictures(files: File[]) {
     if (files.length === 0 || uploading) return;
-    // the room the pictures were picked in, even when the panel moves to another before they are up
     const into = room;
     const left = MAX_CHAT_IMAGES - images.length;
     const batch = files.slice(0, Math.max(0, left));
@@ -941,15 +766,9 @@ export function ChatPanel({
     }
   }
 
-  // the nick box stays until "join" actually opened the socket. a login never needs one.
   const needsNick = !owner && !me && phase === 'off';
-  // the room's past is still on its way, and nothing of it has come: a server's lines are asked of the api as its page
-  // arrives; a stream's come down the socket, which opens once /api/me has answered and, without a login, once a nick
-  // is picked (the nick box waits on nobody, so there the room is as empty as it says)
   const waiting = !loaded && total === 0 && (server || me === undefined || phase !== 'off');
 
-  // the room is being drawn in the player's own window: the panel's box, and where the chat went. the tab is
-  // behind another while that window is up, so this is seen only where a browser leaves the window open
   if (aside) {
     return (
       <aside
@@ -982,13 +801,10 @@ export function ChatPanel({
       data-phase={phase}
       data-room={room.key}
       className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
-      // a picture or a video dropped anywhere on the chat, or pasted into its box, goes where the picker's would
       onDragOver={needsNick ? undefined : dragFiles}
       onDrop={needsNick ? undefined : (e) => dropFiles(e, pickFiles)}
       onPaste={needsNick ? undefined : (e) => pasteFiles(e, pickFiles)}
     >
-      {/* on a phone this bar is dropped, kept for screen readers and ids as they are: a stream's chat (watch, go live) leaves the lines room over the keyboard, and a
-          group's title row already names the channel and has the pins (ServerRoom.tsx, which gives a phone no `headerEnd`) */}
       {!embedded && (
         <header
           onPointerDown={bar?.grip}
@@ -1003,7 +819,6 @@ export function ChatPanel({
           </span>
           <span className="flex min-w-0 items-center gap-3">
             {headerEnd}
-            {/* who is here and the socket's state: read out, not shown. the bots' switch is the settings' chat tab */}
             <span id="chat-count" className="sr-only">
               {count} here · {phase === 'open' ? 'live' : phase}
             </span>
@@ -1017,9 +832,7 @@ export function ChatPanel({
         </header>
       )}
 
-      {/* the lines (and `latest` over them while the view is off the tail), and over those the hits while there are any. `relative`: the pane is `absolute` in it (relative-parent.mdc) */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {/* under the hits the lines keep their place unseen (`invisible`), so the scroll, the ref and the plan hold and a line coming meanwhile lands at the bottom */}
         <div className={cn('flex min-h-0 flex-1 flex-col', results && 'invisible')}>
           {pinned && (
             <button
@@ -1039,8 +852,6 @@ export function ChatPanel({
             role="log"
             aria-live="polite"
             data-style={shape}
-            // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
-            // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
             className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
@@ -1052,11 +863,9 @@ export function ChatPanel({
           </div>
         </div>
 
-        {/* the hits, or one speaker's lines, newest first, where the lines were (ChatSearch.tsx). one clicked puts the lines back with it in view; close puts them back as they were */}
         {results && (
           <SearchResults id="chat-results" label={resultsFor} count={results.length} onClose={() => room.clearResults()} className="absolute inset-0 text-sm">
             {results.map((line) => {
-              // where the hit is, when it is not here: a server's search is every channel's
               const elsewhere = line.channel !== undefined && line.channel !== channel ? line.channel : null;
               return (
                 <SearchHit
@@ -1070,7 +879,6 @@ export function ChatPanel({
                   images={line.images.length}
                   video={!!line.video}
                   onClick={() => {
-                    // a server's hit from another channel: the lines move there now, and the page's address follows
                     if (elsewhere !== null) onChannel?.(elsewhere);
                     room.clearResults();
                     void room.openLine(line.id, line.channel);
@@ -1103,7 +911,6 @@ export function ChatPanel({
             <Button id="chat-join" variant="primary" className={cn(INPUT_BUTTON, 'h-[1.875rem] text-sm')} disabled={!nickOk} onClick={open}>
               join
             </Button>
-            {/* "that name has an account": the refusal that sent you back here */}
             {notice && (
               <span id="chat-notice" className="w-full text-sm text-decrease" aria-live="polite">
                 {notice}
@@ -1118,7 +925,6 @@ export function ChatPanel({
             <span id="chat-notice" className={cn('text-sm text-decrease', notice ? 'mb-1 block' : 'sr-only')} aria-live="polite">
               {notice}
             </span>
-            {/* the line the next send answers, discord's bar over the box: who, and the × (escape in the box too) */}
             {replyTo && (
               <div id="chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
                 <span className="min-w-0 flex-1 truncate text-textSecondary">
@@ -1165,7 +971,6 @@ export function ChatPanel({
                 ))}
               </div>
             )}
-            {/* `relative`: the emote list stands over this row (EmoteComplete.tsx) */}
             <div className="relative flex items-center gap-2">
               {emotes.list}
               <Tooltip
@@ -1199,9 +1004,7 @@ export function ChatPanel({
                   emotes.box.onSelect(e);
                 }}
                 onKeyDown={(e) => {
-                  // the emote list's keys first, while it is up: the arrows walk it, enter and tab pick, escape shuts it
                   if (emotes.box.onKeyDown(e)) return;
-                  // escape lets go of the reply first, and goes no further (a sheet or a window over the chat stays up)
                   if (e.key === 'Escape' && replyTo) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1215,22 +1018,15 @@ export function ChatPanel({
                 placeholder="comment"
                 aria-label={`comment as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
-                // text-sm like the lines, pinned at the 30px box so the row keeps its height. a phone zooms in on a focused box
-                // under 16px: never smaller there, whatever text size the appearance tab picked
                 className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
               />
-              {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
-                // a phone's: a 44px target at least, as tall as the box beside it
                 className="h-8 shrink-0 px-4 py-0 text-sm tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
-                // a touch while typing: the box keeps the focus (keyboard.ts, `keepFocus`; and is given it back
-                // after, should the browser blur it anyway), so a phone's keyboard stays up and its player stays
-                // a strip (mobile.ts, `keyboardStrip`). a mouse's press is left as it was
                 onPointerDown={(e) => {
                   sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
                   keepFocus(e);

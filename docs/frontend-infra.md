@@ -1,6 +1,6 @@
 # frontend/src/infra
 
-the header comment of each file in `frontend/src/infra`, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). what a file does now is the code; these say what it was written for and the reasons behind it at the time of the move, so check them against the code before you trust a detail. `atoms/voice-atoms.ts` and `chat-video.ts` were left out of that sweep (open work touches them) and still carry their own.
+the header comment of each file in `frontend/src/infra`, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). what a file does now is the code; these say what it was written for and the reasons behind it at the time of the move, so check them against the code before you trust a detail.
 
 ## `about.ts`
 
@@ -717,3 +717,136 @@ answer, ice-connected, first-frame.
 With `?perfdebug=1` in the url, or `localStorage.perfdebug = '1'`, the first frame prints the
 whole line with `console.debug`. Off, the marks are still there for devtools' performance
 panel and for watchperf's measure script; nothing is printed.
+
+## `atoms/voice-atoms.ts`
+
+Being in a voice channel (docs/voice.md). One call at a time, for the whole tab: a join asks
+the api for a grant (`POST /api/groups/:group/voice/:channel/join`), opens `/voice`, and its
+first frame is `{role: 'voice', grant, sdp}` with an offer of 1 sendrecv mic and 15 recvonly
+audio m-lines (video/src/voice.rs). The voice server answers `{sdp}` or `{error}`, then
+`{event: 'seats', seats: [{seat, user, line}]}` on every join and leave: `line` is the m-line
+that person is heard on. Who is in which channel is the room's (`voice` in room-atoms.ts,
+kept by the `voice` and `voice_left` facts); this module is only this tab's own call, and who
+is speaking in it, from each m-line's `audioLevel` (getStats). Same shape as the other atom
+modules: atoms for what renders, module handles, action functions. Cameras and screens in the
+call are voice-video.ts's, on this call's peer. The devices a call uses (the mic, the
+speakers, the camera) are picked in the user modal's voice tab and kept in this browser; they
+are after the call. Last is the mic itself: one stream, shared by the call and the tab's
+meter, through voice isolation and the noise gate, and push to talk.
+
+`export const RETRY_MS`: The waits before each retry of a join that failed: 5 tries in all, the first at once.
+
+`export interface VoiceCall`: This tab's call. `joining` from the click to the answer, through every retry and the waits
+between them; `linked` once the audio itself is through (the peer connected over udp), which
+can lag the answer or never come; `failed` once the last try failed, still on its server and
+channel (the greyed seat and the dialog say why) until it is left or tried again. `error` is
+the last try's reason, '' for none; `retry` is which retry this is, 0 for the first try.
+
+`export const voiceSeatsAtom`: Who sits where in the room, as the last seats frame said. Your own seat is not in it.
+
+`export const voiceSpeakingAtom`: The names speaking now, your own among them while your mic is.
+
+`export const voiceMutedAtom`: Your mic is off: the track is still there, sending silence.
+
+`export const voiceDeafAtom`: You hear nobody, and your mic is off with it.
+
+`export const voiceStatsAtom`: How the call is getting through, every STATS_MS while connected; null before the first read and while idle.
+
+`export function retryable`: Whether a join that failed with `error` is worth another try. `status` is the grant's http status when the api answered with one: a 4xx is final.
+
+`export function retryDelay`: The wait before retry number `retry` (1 for the first), or null once the tries are spent.
+
+`export function dropped`: Whether a call that was through ended by its connection breaking (the socket, or the peer's ice), not by a word from the voice server such as a moderator's `disconnected`.
+
+`export function leaveVoice`: Out of the call, if in one, and no more retries. Clicked (leave, cancel, dismiss), another channel, or the page going away.
+
+`export async function joinVoice`: Into `channel` of `server`: a run of up to 5 tries (fail). Already in it or joining it: nothing;
+failed there, a fresh run. In another: out of that one first.
+
+`export interface HeardLevel`: Your own level for someone you hear: their volume in percent (0 to HEARD_MAX, 100 as they come) and whether you muted them for yourself. Nobody else hears a difference.
+
+`export const HEARD_MAX`: The loudest a person can be turned up to, in percent: past 100 is a gain, which an element's volume cannot do.
+
+`export const voiceHeardAtom`: Read: the kept levels, by user id, what was kept checked over.
+
+`export const voiceUidsAtom`: Name to user id for whoever is in voice in the room on the page (room-atoms.ts keeps it): the seats frame says names, the levels are kept by id.
+
+`export function heardLevelOf`: `uid`'s level: what is kept, else the default.
+
+`export function setHeardLevel`: Moves `uid`'s level, live on the call. Back at the default, nothing is kept for them.
+
+`export interface StatsEntry`: The fields of a getStats report this file reads: every report is one of these, most of them absent.
+
+`export interface VoiceStats`: How the call is getting through. A number is null when the browser did not say or there is no window yet (the first read).
+
+`export interface StatsSample`: The running counters a delta is taken against.
+
+`export function voiceQuality`: Good under 100ms and 1% lost, ok under 250ms and 5%, else poor. Null when neither is known. An unknown one counts as fine.
+
+`export function kbps`: `now - was` per ms, as kbps from bytes; null without both, or when the counter went back (a new path).
+
+`export function lossPercent`: The share of packets lost over a window, %, from the running lost and received counters; null when no packet was due.
+
+`export function readStats`: One getStats report read as the call's quality, with the deltas against `was` (the last
+read's counters). The path is the transport's selected candidate pair (chrome, safari), else
+the pair marked `selected` or nominated and succeeded (firefox).
+
+`export const DEFAULT_DEVICE`: A pick that is no device in particular: the browser's own (the system's).
+
+`export interface VoiceDevices`: What is plugged in, by kind. The browser names its devices (and gives their ids) only once
+one of that kind was allowed: until then a list is empty and its `named` is false, and a
+kept pick cannot be told from a gone one.
+
+`export const SINK_SUPPORTED`: The browser can send a player's sound to a device of its choosing. Not safari, not an older firefox: the speakers are the system's there.
+
+`export const voiceInputAtom`: Read: the device each is on now.
+
+`export function setVoiceInput`: A call on now follows a new mic and new speakers at once.
+
+`export function setVoiceCamera`: A call's camera, when on, moves to the new one at once.
+
+`export async function openVoiceCamera`: The camera for the tab's preview and for a call (voice-video.ts, with its size and rate).
+
+`export async function refreshVoiceDevices`: The devices plugged in now, into `voiceDevicesAtom`; a call on moves off one that went. Watches for plugging from its first call on.
+
+`export async function playTestTone`: A short beep through the speakers picked. On the mic's audio context while there is one (the tab's meter has it open): a new context is a slow thing to make.
+
+`export const voiceModeAtom`: Voice activity (the gate decides) or push to talk (a held key does).
+
+`export const voiceGateAtom`: The gate's threshold, dB, on the meter's scale: FLOOR_DB (the meter's empty end) is always open.
+
+`export const voicePttKeyAtom`: Push to talk's key, a `KeyboardEvent.code`.
+
+`export const voicePttDelayAtom`: How long the mic stays open after the key comes up, ms: the end of the last word.
+
+`export const voicePttHeldAtom`: Push to talk's key is down (or was, within its delay), in a call.
+
+`export const voiceIsolationFailedAtom`: Voice isolation is on and could not be had (no web audio, the wasm would not load): the mic goes out with the browser's own cleaning.
+
+`export function keyName`: A key's `code` as it is printed on the key.
+
+`export async function holdVoiceMic`: Opens the mic, or joins whoever has it open. Throws as getUserMedia does; then it is not held.
+
+`export function releaseVoiceMic`: Lets go of the mic; the last to let go puts it down.
+
+`export function readVoiceMicLevel`: The mic's loudness for the tab's meter, 0..1 on the meter's scale; 0 with no mic or no web audio.
+
+`export function gateFraction`: The gate's threshold on the meter's 0..1 scale: 0 is always open.
+
+## `chat-video.ts`
+
+`export interface ChatVideo`: A video on a chat line (chat_videos.rs, docs/chat.md "videos"): its id and its poster's, a chat picture the api drew from a frame.
+
+`export const MAX_VIDEO_BYTES`: The api's ceilings (chat_videos.rs `MAX_BYTES`, `MAX_MS`): checked here first, so a refusal costs no upload. The api measures the file itself and has the last word.
+
+`export function videoSrc`: Where a chat video is played from, by the id `POST /api/chat-videos` handed back.
+
+`export function posterSrc`: The poster, a chat picture like any other (ChatPanel's `pictureSrc`, which this module does not import: the panel imports it).
+
+`export function isVideoFile`: A video the picker, a paste or a drop brought: anything the browser calls one, or a video's file name.
+
+`export async function readVideo`: A video file checked before it goes up: an mp4 or a webm, 10 mb and 30 seconds at most, read
+by a `<video>` of the page's own, so a file the api would refuse is not sent. The api reads the
+length again itself and draws the poster (chat_videos.rs). Throws the words the box shows.
+
+`export function videoOf`: A line's `video` as the wire has it: both ids, or none (an older api leaves it off).
