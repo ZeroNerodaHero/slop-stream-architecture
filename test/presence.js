@@ -74,7 +74,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await page.click('#settings');
     await page.waitForSelector('#user-modal[open]', { timeout: 5000 });
     await page.click('#tab-advanced');
-    await page.waitForSelector('#inspector-open-settings:not([disabled])', { timeout: 15000 });
+    await page.waitForSelector('#inspector-open-settings', { timeout: 15000 });
     await page.click('#inspector-open-settings');
     await page.waitForSelector('#inspector-panel[open]', { timeout: 5000 });
     await page.keyboard.press('Escape');
@@ -156,7 +156,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.waitForSelector('#inspector', { timeout: 5000 });
     await a.click('#inspector');
     expect(await a.isChecked('#inspector'), '#inspector is not checked');
-    await a.waitForSelector('#inspector-open-settings:not([disabled])', { timeout: 5000 });
+    await a.waitForSelector('#inspector-open-settings', { timeout: 5000 });
     await a.keyboard.press('Escape');
     await a.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
   });

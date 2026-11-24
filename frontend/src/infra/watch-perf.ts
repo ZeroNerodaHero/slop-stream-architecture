@@ -7,7 +7,7 @@ let sent = false;
 let label = '';
 const MAX_PHASES = 50;
 
-onDebugChange((on) => {
+onDebugChange('timings', (on) => {
   if (on) return;
   phases = [];
   printed = false;
@@ -21,7 +21,7 @@ export function watchPerfHeld(): number {
 }
 
 export function perfBegin(phase: 'press' | 'boot' | 'start', name: string, at = performance.now()): void {
-  if (!debug.on) return;
+  if (!debug.timings) return;
   origin = at;
   phases = [];
   printed = false;
@@ -31,7 +31,7 @@ export function perfBegin(phase: 'press' | 'boot' | 'start', name: string, at = 
 }
 
 export function perfMark(phase: string, at = performance.now(), done = phase === 'first-frame-decoded'): void {
-  if (!debug.on) return;
+  if (!debug.timings) return;
   if (phases.length >= MAX_PHASES) phases.shift();
   phases.push([phase, at]);
   try {

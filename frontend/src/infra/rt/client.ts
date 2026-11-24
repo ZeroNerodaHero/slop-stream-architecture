@@ -1,7 +1,7 @@
 import { atom } from 'jotai';
 
 import { record } from '@/infra/atoms/inspector-atoms';
-import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { messagesEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { report } from '@/infra/report';
 import { type FromCore, openBrowserSocket, type Port, RtCore, type ToCore } from '@/infra/rt/core';
 import { type Release, TopicRefs } from '@/infra/rt/refs';
@@ -84,7 +84,7 @@ function deliver(msg: FromCore) {
 }
 
 function tapOn(): boolean {
-  return store.get(inspectorEnabledAtom);
+  return store.get(messagesEnabledAtom);
 }
 
 function attachTab(why: string) {
@@ -156,7 +156,7 @@ export function startRt(nick: () => string | null): void {
   started = true;
   nickOf = nick;
   if (!attachWorker()) attachTab('no SharedWorker here');
-  store.sub(inspectorEnabledAtom, () => send?.({ kind: 'debug', on: tapOn() }));
+  store.sub(messagesEnabledAtom, () => send?.({ kind: 'debug', on: tapOn() }));
   const focus = () => {
     if (document.visibilityState !== 'visible') return;
     send?.({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });

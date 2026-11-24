@@ -7,7 +7,7 @@ import { NotFoundPage } from '@/app/NotFoundPage';
 import { dmOpenAtom } from '@/infra/atoms/dm-atoms';
 import { inspectorOpenAtom, qualityOpenAtom, timingsOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
-import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
 import { AuthDialog } from '@/shared-components/AuthDialog';
 import { CropDialog } from '@/shared-components/CropDialog';
@@ -43,9 +43,7 @@ function NotificationsWhenUsed() {
 }
 
 function InspectorWhenUsed() {
-  const on = useAtomValue(inspectorEnabledAtom);
   const open = useAtomValue(inspectorOpenAtom);
-  if (!on) return null;
   return (
     <WhenUsed on={open}>
       <Inspector />
@@ -54,9 +52,7 @@ function InspectorWhenUsed() {
 }
 
 function TimingsWhenUsed() {
-  const on = useAtomValue(inspectorEnabledAtom);
   const open = useAtomValue(timingsOpenAtom);
-  if (!on) return null;
   return (
     <WhenUsed on={open}>
       <TimingsWindow />
@@ -65,9 +61,7 @@ function TimingsWhenUsed() {
 }
 
 function QualityWhenUsed() {
-  const on = useAtomValue(inspectorEnabledAtom);
   const open = useAtomValue(qualityOpenAtom);
-  if (!on) return null;
   return (
     <WhenUsed on={open}>
       <QualityWindow />

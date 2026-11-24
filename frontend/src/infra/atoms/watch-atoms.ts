@@ -568,7 +568,7 @@ export function retry() {
 
 export function markPlaying(e?: { currentTarget: EventTarget | null }) {
   if (!pc) return;
-  if (!played && debug.on) markFirstFrame(e?.currentTarget);
+  if (!played && debug.timings) markFirstFrame(e?.currentTarget);
   played = true;
   failures = 0;
   store.set(needsTapAtom, false);

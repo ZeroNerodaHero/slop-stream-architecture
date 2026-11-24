@@ -2,9 +2,21 @@ import type { RunKind } from './debug/rings.ts';
 
 export type DebugSink = (kind: RunKind, label: string, start: number, phases: readonly (readonly [string, number])[]) => void;
 
-export const debug: { on: boolean; inspector: boolean; sink: DebugSink | null } = { on: false, inspector: false, sink: null };
+export type DebugFeature = 'messages' | 'timings' | 'quality';
 
-const listeners = new Set<(on: boolean) => void>();
+export const debug: Record<DebugFeature, boolean> & { sink: DebugSink | null } = { messages: false, timings: false, quality: false, sink: null };
+
+const listeners: Record<DebugFeature, Set<(on: boolean) => void>> = { messages: new Set(), timings: new Set(), quality: new Set() };
+
+export const DEBUG_KEYS: Record<DebugFeature, string> = { messages: 'settings.debugMessages', timings: 'settings.debugTimings', quality: 'settings.debugQuality' };
+
+export function migrateDebugSettings(storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>): void {
+  const old = storage.getItem('settings.inspector');
+  const keys = Object.values(DEBUG_KEYS);
+  if (old === null || keys.some((key) => storage.getItem(key) !== null)) return;
+  for (const key of keys) storage.setItem(key, JSON.stringify(old === 'true'));
+  storage.removeItem('settings.inspector');
+}
 
 export function perfDebugOn(): boolean {
   try {
@@ -14,17 +26,16 @@ export function perfDebugOn(): boolean {
   }
 }
 
-export function setDebug(inspector: boolean, perf = perfDebugOn()): void {
-  const on = inspector || perf;
-  const changed = on !== debug.on;
-  debug.inspector = inspector;
-  debug.on = on;
-  if (changed) for (const fn of listeners) fn(on);
+export function setDebug(feature: DebugFeature, on: boolean, perf = feature === 'timings' && perfDebugOn()): void {
+  const next = on || perf;
+  if (next === debug[feature]) return;
+  debug[feature] = next;
+  for (const fn of listeners[feature]) fn(next);
 }
 
-export function onDebugChange(fn: (on: boolean) => void): () => void {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
+export function onDebugChange(feature: DebugFeature, fn: (on: boolean) => void): () => void {
+  listeners[feature].add(fn);
+  return () => listeners[feature].delete(fn);
 }
 
 export function clearPerfEntries(prefix: string): void {

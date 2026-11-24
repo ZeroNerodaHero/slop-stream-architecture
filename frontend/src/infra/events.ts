@@ -4,7 +4,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { bindInspectorToWorker, keep, record, replaceEntries, unbindInspector } from '@/infra/atoms/inspector-atoms';
 import { identifiedAs, presenceChanged, presenceLost } from '@/infra/atoms/presence-atoms';
-import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { messagesEnabledAtom } from '@/infra/atoms/settings-atoms';
 import EventsWorker from '@/infra/events.worker?sharedworker';
 import { type ClientFrame, type FrameEntry, type FromWorker, type LinkPhase, parseServerFrame, type ServerFrame, TAB_PING_MS, type ToWorker } from '@/infra/frames';
 import { relayUrl } from '@/infra/relay';
@@ -118,7 +118,7 @@ class WorkerLink implements Link {
       }
     };
     this.port.start();
-    const inspector = store.get(inspectorEnabledAtom);
+    const inspector = store.get(messagesEnabledAtom);
     this.post({ kind: 'attach', nick: nickForHello(), inspector });
     if (inspector) this.post({ kind: 'snapshot' });
     for (const name of allWanted()) this.post({ kind: 'watch', name });
@@ -400,7 +400,7 @@ export function holdTopic(topic: string): Release {
   };
 }
 
-store.sub(inspectorEnabledAtom, () => link?.inspector(store.get(inspectorEnabledAtom)));
+store.sub(messagesEnabledAtom, () => link?.inspector(store.get(messagesEnabledAtom)));
 
 export function stopEvents(): void {
   link?.close();

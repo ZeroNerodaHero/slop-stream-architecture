@@ -136,18 +136,13 @@ test('twenty switch on and off cycles leave no data and no fetch wrapper', async
       now: () => 0,
       schedule: () => undefined
     });
-    const stop = onDebugChange((on) => {
-      if (on) {
-        timings.start();
-        quality.start();
-      } else {
-        timings.stop();
-        quality.stop();
-      }
-    });
+    const stopTimings = onDebugChange('timings', (on) => (on ? timings.start() : timings.stop()));
+    const stopQuality = onDebugChange('quality', (on) => (on ? quality.start() : quality.stop()));
     for (let i = 0; i < 20; i++) {
-      setDebug(true, false);
-      assert.equal(debug.on, true);
+      setDebug('timings', true, false);
+      setDebug('quality', true);
+      assert.equal(debug.timings, true);
+      assert.equal(debug.quality, true);
       assert.equal(timings.api!.size(), 0);
       assert.equal(timings.timings!.size(), 0);
       assert.equal(quality.quality!.count, 0);
@@ -159,7 +154,8 @@ test('twenty switch on and off cycles leave no data and no fetch wrapper', async
       ]);
       for (const fn of listeners) fn(stats(i));
       assert.equal(timings.api!.size(), 1);
-      setDebug(false, false);
+      setDebug('timings', false, false);
+      setDebug('quality', false);
       assert.equal(timings.api, null);
       assert.equal(timings.timings, null);
       assert.equal(quality.quality, null);
@@ -167,8 +163,10 @@ test('twenty switch on and off cycles leave no data and no fetch wrapper', async
       assert.equal(listeners.size, 0);
       assert.equal(globalThis.fetch, fake.fn);
     }
-    stop();
-    assert.equal(debug.on, false);
+    stopTimings();
+    stopQuality();
+    assert.equal(debug.timings, false);
+    assert.equal(debug.quality, false);
   } finally {
     globalThis.fetch = before;
   }
