@@ -5,6 +5,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { keepDmWindow, keptDmWindow } from '@/infra/atoms/chat-layout-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import type { Presence } from '@/infra/atoms/presence-atoms';
+import { Attachments, wordsOf } from '@/infra/chat-attach';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { encodeEmotes } from '@/infra/emotes';
 import { onEvents } from '@/infra/events';
@@ -129,6 +130,8 @@ export function closeAllDms() {
   store.set(dmActiveAtom, null);
   store.set(dmOpenAtom, false);
   store.set(dmThreadsAtom, {});
+  for (const attach of dmAttachments.values()) attach.clear();
+  dmAttachments.clear();
   store.set(dmNoticeAtom, '');
   store.set(dmResultsAtom, null);
   store.set(dmJumpAtom, null);
@@ -236,17 +239,29 @@ function append(name: string, line: DmLine) {
   setThread(name, (prev) => ({ lines: merge(prev?.lines ?? [], [line]), loaded: prev?.loaded ?? false, start: prev?.start ?? false }));
 }
 
-export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null, video: string | null = null): Promise<boolean> {
+export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null, video: string | null = null): Promise<string | null> {
   const text = raw.trim();
-  if (!text && images.length === 0 && !video) return false;
+  if (!text && images.length === 0 && !video) return 'nothing to say';
   try {
     const line = await api.sendDm(name, encodeEmotes(text), images, reply, video);
     append(name, lineOf(line));
-    return true;
+    return null;
   } catch (err) {
-    showDmNotice(messageOf(err));
-    return false;
+    const error = messageOf(err);
+    showDmNotice(error);
+    return error;
   }
+}
+
+const dmAttachments = new Map<string, Attachments>();
+
+export function dmAttach(name: string): Attachments {
+  let attach = dmAttachments.get(name);
+  if (!attach) {
+    attach = new Attachments(showDmNotice);
+    dmAttachments.set(name, attach);
+  }
+  return attach;
 }
 
 export function markRead(name: string) {
@@ -318,7 +333,7 @@ function touchLine(name: string, id: number, next: (now: Reaction[] | undefined)
 }
 
 export function showDmNotice(text: string) {
-  store.set(dmNoticeAtom, text);
+  store.set(dmNoticeAtom, wordsOf(text));
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => store.set(dmNoticeAtom, ''), NOTICE_MS);
 }

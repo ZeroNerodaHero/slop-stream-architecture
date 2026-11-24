@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiLoader4Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
@@ -16,7 +16,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import { api, type GroupBadge, messageOf, type Owner } from '@/infra/api';
+import { type GroupBadge, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { BOT_GROUP, type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
@@ -26,7 +26,7 @@ import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-ato
 import { type MediaGone, shownSrc, whyGone } from '@/infra/chat-video';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
-import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, PICTURE_ACCEPT, splitFiles, STREAM_CHAT_VIDEO, STREAM_VIDEO_OFF, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
+import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingVideo, PICTURE_ACCEPT, splitFiles, STREAM_CHAT_VIDEO, STREAM_VIDEO_OFF } from '@/shared-components/ChatAttach';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
@@ -46,7 +46,6 @@ import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP, CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
 import { keepFocus, stuckAfterScroll, useBottomPin } from '@/infra/keyboard';
-import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
 const STUCK_PX = 40;
@@ -659,7 +658,6 @@ export function ChatPanel({
   const stuck = useRef(true);
   const shown = useRef(0);
   const shownRoom = useRef<ChatRoom | null>(null);
-  const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const textRef = useRef<HTMLInputElement | null>(null);
   const sendKeepsFocus = useRef(false);
@@ -672,9 +670,9 @@ export function ChatPanel({
   const count = useAtomValue(room.countAtom);
   const phase = useAtomValue(room.phaseAtom);
   const draft = useAtomValue(room.draftAtom);
-  const images = useAtomValue(room.imagesAtom);
+  const pictures = useAtomValue(room.picturesAtom);
   const video = useAtomValue(room.videoAtom);
-  const videoUp = useVideoUpload();
+  const sending = useAtomValue(room.sendingAtom);
   const takesVideos = server || STREAM_CHAT_VIDEO;
   const replyTo = useAtomValue(room.replyAtom);
   const replyColor = useRoleColors(room)(replyTo?.verified ? replyTo.from : '');
@@ -759,37 +757,10 @@ export function ChatPanel({
   function pickFiles(list: FileList | File[] | null) {
     const { pictures, videos } = splitFiles(list ? [...list] : []);
     if (fileRef.current) fileRef.current.value = '';
-    const into = room;
     const [first] = videos;
-    if (first && !takesVideos) {
-      into.showNotice(STREAM_VIDEO_OFF, 5000);
-    } else if (first) {
-      if (video || videos.length > 1 || videoUp.progress !== null) into.showNotice('one video at a time');
-      if (!video && videoUp.progress === null) void videoUp.upload(first, (v) => into.setVideo(v), (words) => into.showNotice(words, 4000));
-    }
-    void pickPictures(pictures);
-  }
-
-  async function pickPictures(files: File[]) {
-    if (files.length === 0 || uploading) return;
-    const into = room;
-    const left = MAX_CHAT_IMAGES - images.length;
-    const batch = files.slice(0, Math.max(0, left));
-    if (files.length > left) into.showNotice(`${MAX_CHAT_IMAGES} pictures at most`);
-    if (batch.length === 0) return;
-    setUploading(true);
-    try {
-      for (const file of batch) {
-        const blob = await compressChatImage(file);
-        const saved = await api.uploadChatImage(blob);
-        into.addImage(saved.id);
-      }
-    } catch (err) {
-      into.showNotice(messageOf(err), 4000);
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
+    if (first && !takesVideos) room.showNotice(STREAM_VIDEO_OFF, 5000);
+    else if (first) room.addVideo(first, videos.length > 1);
+    room.addPictures(pictures);
   }
 
   const needsNick = !owner && !me && phase === 'off';
@@ -969,24 +940,11 @@ export function ChatPanel({
                 </Tooltip>
               </div>
             )}
-            {videoUp.progress !== null && <VideoProgress progress={videoUp.progress} />}
-            {(images.length > 0 || video) && (
+            {(pictures.length > 0 || video) && (
               <div id="chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
-                {video && <PendingVideo video={video} onRemove={() => room.setVideo(null)} />}
-                {images.map((id) => (
-                  <span key={id} className="relative">
-                    <img src={pictureSrc(id)} alt="" className="h-20 w-20 object-cover" />
-                    <Tooltip content="remove">
-                      <button
-                        type="button"
-                        aria-label="remove picture"
-                        className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
-                        onClick={() => room.removeImage(id)}
-                      >
-                        <RiCloseLine aria-hidden size={14} />
-                      </button>
-                    </Tooltip>
-                  </span>
+                {video && <PendingVideo clip={video} sending={sending} onRemove={() => room.removeVideo()} />}
+                {pictures.map((picture) => (
+                  <PendingThumb key={picture.key} picture={picture} sending={sending} onRemove={() => room.removePicture(picture.key)} />
                 ))}
               </div>
             )}
@@ -994,7 +952,7 @@ export function ChatPanel({
               {emotes.list}
               <Tooltip
                 content={
-                  images.length >= MAX_CHAT_IMAGES
+                  pictures.length >= MAX_CHAT_IMAGES
                     ? `${MAX_CHAT_IMAGES} pictures at most`
                     : takesVideos
                       ? 'add a picture or a video'
@@ -1006,7 +964,7 @@ export function ChatPanel({
                   id="chat-picture"
                   aria-label={takesVideos ? 'picture or video' : 'picture'}
                   className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
-                  disabled={uploading || images.length >= MAX_CHAT_IMAGES}
+                  disabled={pictures.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
                   <RiImageAddLine size={20} aria-hidden />
@@ -1034,7 +992,7 @@ export function ChatPanel({
                     }
                     if (!isSendKey(e)) return;
                     e.preventDefault();
-                    room.send();
+                    void room.send();
                   }}
                   placeholder="comment"
                   aria-label={`comment as ${asStreamer ? name : speaker}`}
@@ -1042,31 +1000,38 @@ export function ChatPanel({
                   className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
                 />
               </div>
-              <Button
-                id="chat-send"
-                variant={wait > 0 ? 'danger' : 'primary'}
-                className="h-8 shrink-0 px-4 py-0 text-sm tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
-                disabled={!canSend}
-                title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
-                data-wait={wait > 0 ? wait : undefined}
-                onPointerDown={(e) => {
-                  sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
-                  keepFocus(e);
-                }}
-                onClick={() => {
-                  room.send();
-                  if (sendKeepsFocus.current) textRef.current?.focus();
-                  sendKeepsFocus.current = false;
-                }}
-              >
-                {wait > 0 ? (
-                  <span key={shake} className="inline-block motion-safe:animate-shake">
-                    {waitWords(wait)}
-                  </span>
-                ) : (
-                  'send'
-                )}
-              </Button>
+              <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : null}>
+                <Button
+                  id="chat-send"
+                  variant={wait > 0 ? 'danger' : 'primary'}
+                  className="h-8 shrink-0 px-4 py-0 text-sm tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                  disabled={!canSend}
+                  aria-busy={sending || undefined}
+                  data-wait={wait > 0 ? wait : undefined}
+                  onPointerDown={(e) => {
+                    sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
+                    keepFocus(e);
+                  }}
+                  onClick={() => {
+                    void room.send();
+                    if (sendKeepsFocus.current) textRef.current?.focus();
+                    sendKeepsFocus.current = false;
+                  }}
+                >
+                  {wait > 0 ? (
+                    <span key={shake} className="inline-block motion-safe:animate-shake">
+                      {waitWords(wait)}
+                    </span>
+                  ) : sending ? (
+                    <span className="relative flex items-center">
+                      <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
+                      <span className="sr-only">sending</span>
+                    </span>
+                  ) : (
+                    'send'
+                  )}
+                </Button>
+              </Tooltip>
             </div>
           </>
         )}
