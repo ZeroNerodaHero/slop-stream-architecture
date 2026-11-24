@@ -56,10 +56,12 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
   const x = edge === 'right' ? at.column.left - GAP - CARD_W : at.column.right + GAP;
   const pressable = !!actions && actions.length > 0;
   const least = GAP + (pressable ? ACTIONS_W : 0);
+  const left = Math.max(least, Math.min(x, w - CARD_W - GAP));
+  const over = left < at.column.right && left + CARD_W > at.column.left;
   const style: CSSProperties = {
     width: CARD_W,
-    left: Math.max(least, Math.min(x, w - CARD_W - GAP)),
-    ...(at.row.top < h / 2 ? { top: at.row.top } : { bottom: h - at.row.bottom })
+    left,
+    ...(at.row.top < h / 2 ? { top: over ? at.row.bottom + GAP : at.row.top } : { bottom: over ? h - at.row.top + GAP : h - at.row.bottom })
   };
   return createPortal(
     <div
