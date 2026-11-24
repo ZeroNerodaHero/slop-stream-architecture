@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::io::Cursor;
 use std::sync::OnceLock;
 
 use axum::body::Bytes;
@@ -10,6 +11,10 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -30,6 +35,10 @@ const MAX_NOTE_CHARS: usize = 140;
 const MAX_THUMBS: i64 = 6;
 const AVATAR_CACHE: &str = "public, max-age=86400";
 const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
+const AVATAR_SIDE: u32 = 96;
+const AVATAR_QUALITY: u8 = 85;
+const AVATAR_MAX_SOURCE_SIDE: u32 = 8192;
+const NOT_A_JPEG: &str = "not a jpeg";
 const MAX_ASSET_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ASSETS: i64 = 24;
 const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
@@ -243,6 +252,29 @@ fn jpeg_body(body: Result<Bytes, BytesRejection>, max: usize, too_big: fn() -> A
     Ok(body)
 }
 
+fn shrink_avatar(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(AVATAR_MAX_SOURCE_SIDE);
+    limits.max_image_height = Some(AVATAR_MAX_SOURCE_SIDE);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().map_err(|_| NOT_A_JPEG)?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|_| NOT_A_JPEG)?;
+    img.apply_orientation(orientation);
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return Err(NOT_A_JPEG);
+    }
+    let side = w.min(h);
+    let square = img.crop_imm((w - side) / 2, (h - side) / 2, side, side);
+    let drawn = square.resize_exact(AVATAR_SIDE, AVATAR_SIDE, FilterType::Lanczos3).to_rgb8();
+    let mut out = Vec::new();
+    JpegEncoder::new_with_quality(&mut out, AVATAR_QUALITY).encode_image(&drawn).map_err(|_| NOT_A_JPEG)?;
+    Ok(out)
+}
+
 async fn put_avatar(
     State(s): State<AppState>,
     Name(name): Name,
@@ -254,6 +286,10 @@ async fn put_avatar(
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
+    let body = tokio::task::spawn_blocking(move || shrink_avatar(&body))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not read the picture"))?
+        .map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
     let id = ensure_row(&s.db, &name).await?;
     look(&s, &me, id, &headers, UploadKind::Avatar, "image/jpeg", Some(&avatar_key(id)), &body).await?;
     if let Err(e) = s3::put(&s.s3, &avatar_key(id), &body, "image/jpeg").await {
@@ -1335,6 +1371,18 @@ mod tests {
         assert_eq!(offline_key(id), "offline/7f3a1b2c-0000-4000-8000-000000000001.jpg");
         assert_eq!(asset_key(id, 7, "gif"), "assets/7f3a1b2c-0000-4000-8000-000000000001/7.gif");
         assert_eq!(picture_keys(id, &[7, 9], &[(3, "image/png".into()), (4, "image/svg+xml".into())]).len(), 5);
+    }
+
+    #[test]
+    fn an_avatar_is_kept_as_a_small_square_jpeg() {
+        let img = image::RgbImage::from_fn(400, 240, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90]));
+        let mut jpeg = Vec::new();
+        DynamicImage::ImageRgb8(img).write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg).unwrap();
+        let small = shrink_avatar(&jpeg).unwrap();
+        assert!(small.starts_with(&JPEG_MAGIC));
+        let back = image::load_from_memory_with_format(&small, ImageFormat::Jpeg).unwrap();
+        assert_eq!((back.width(), back.height()), (AVATAR_SIDE, AVATAR_SIDE));
+        assert_eq!(shrink_avatar(&[0xFF, 0xD8, 0xFF, 0x00]), Err(NOT_A_JPEG));
     }
 
     #[test]
