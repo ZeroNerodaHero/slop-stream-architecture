@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 
-import { openInspector } from '@/infra/atoms/inspector-atoms';
+import { openInspector, openProfiler } from '@/infra/atoms/inspector-atoms';
 import { inspectorEnabledAtom, setInspectorEnabled } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
 import { Block, CHECKBOX, Info } from '@/shared-components/user-modal/parts';
@@ -19,6 +19,9 @@ export function AdvancedTab() {
             <input id="inspector" type="checkbox" checked={inspectorOn} onChange={(e) => setInspectorEnabled(e.target.checked)} className={CHECKBOX} />
             <Button id="inspector-open-settings" size="sm" disabled={!inspectorOn} onClick={openInspector}>
               open
+            </Button>
+            <Button id="profiler-open-settings" size="sm" disabled={!inspectorOn} onClick={openProfiler}>
+              profiler
             </Button>
           </span>
         </div>

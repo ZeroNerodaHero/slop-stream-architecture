@@ -1,12 +1,13 @@
 import type { DebugSink } from '../debug-flag.ts';
 import type { StreamStats } from '../stream-stats.ts';
-import { QualityRing, timedRun, Timings } from './rings.ts';
+import { QualityRing, Timings } from './rings.ts';
+import { SessionLog } from './timeline.ts';
 
 export interface CollectorDeps {
   slot: { sink: DebugSink | null };
   watch: (fn: (stats: StreamStats | null) => void) => () => void;
+  name: () => string;
   now: () => number;
-  origin: number;
   schedule: (fn: () => void) => void;
 }
 
@@ -15,6 +16,7 @@ const num = (v: number | null) => v ?? Number.NaN;
 export class Collector {
   timings: Timings | null = null;
   quality: QualityRing | null = null;
+  sessions: SessionLog | null = null;
   stats: StreamStats | null = null;
   version = 0;
   private readonly deps: CollectorDeps;
@@ -36,8 +38,9 @@ export class Collector {
     const timings = new Timings();
     this.timings = timings;
     this.quality = new QualityRing();
-    this.sink = (kind, label, start, phases) => {
-      timings.add(kind, timedRun(label, start, phases, this.deps.origin));
+    this.sessions = new SessionLog();
+    this.sink = (kind, _label, start, phases) => {
+      timings.add(kind, start, phases);
       this.bump();
     };
     this.deps.slot.sink = this.sink;
@@ -52,8 +55,10 @@ export class Collector {
     this.sink = null;
     this.timings?.clear();
     this.quality?.clear();
+    this.sessions?.clear();
     this.timings = null;
     this.quality = null;
+    this.sessions = null;
     this.stats = null;
     this.bump();
   }
@@ -67,11 +72,19 @@ export class Collector {
 
   private sample(stats: StreamStats | null): void {
     this.stats = stats;
-    if (stats && this.quality) {
+    const sessions = this.sessions;
+    const now = this.deps.now();
+    if (!stats) {
+      sessions?.end(now);
+    } else if (sessions && this.quality) {
+      const name = this.deps.name();
+      const current = sessions.current;
+      const session = current && current.name === name ? current : sessions.begin(name, now);
       const v = stats.video;
       this.quality.push(
         {
-          t: this.deps.now(),
+          t: now,
+          session: session.id,
           width: v.width,
           height: v.height,
           fps: v.fps,

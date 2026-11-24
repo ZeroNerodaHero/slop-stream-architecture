@@ -1,6 +1,6 @@
 import { RiCloseLine, RiDeleteBinLine, RiFileCopyLine, RiPauseLine, RiPlayLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type PointerEvent as ReactPointerEvent, type UIEvent, useLayoutEffect, useRef, useState } from 'react';
+import { type UIEvent, useLayoutEffect, useRef, useState } from 'react';
 
 import {
   clearFrames,
@@ -21,36 +21,18 @@ import {
 import { eventsPhaseAtom, eventsTransportAtom } from '@/infra/events';
 import type { FrameEntry } from '@/infra/frames';
 import { useIsMobile } from '@/infra/mobile';
-import { Quality } from '@/shared-components/debug/Quality';
-import { Timings } from '@/shared-components/debug/Timings';
+import { FRAME, GRIP, useDialogBox } from '@/shared-components/debug/useDialogBox';
 import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
-const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
-const MIN_W = 320;
-const MIN_H = 200;
 const STUCK_PX = 40;
-const TABS = ['messages', 'timings', 'quality'] as const;
-
-type Tab = (typeof TABS)[number];
 
 const DIR_TONE: Record<FrameEntry['dir'], string> = {
   out: 'border-primaryBlue text-primaryBlue',
   in: 'border-secondaryStroke text-textSecondary',
   link: 'border-increase text-increase'
 };
-
-interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 
 function clock(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour12: false });
@@ -70,14 +52,11 @@ export function Inspector() {
 }
 
 function InspectorPanel() {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const { dialogRef, box, press } = useDialogBox();
   const listRef = useRef<HTMLUListElement | null>(null);
   const stuck = useRef(true);
-  const stop = useRef<(() => void) | null>(null);
-  const [box, setBox] = useState<Box | null>(null);
   const [expanded, setExpanded] = useState<FrameEntry | null>(null);
   const [copied, setCopied] = useState(false);
-  const [tab, setTab] = useState<Tab>('messages');
   const tick = useAtomValue(framesTickAtom);
   const filter = useAtomValue(inspectorFilterAtom);
   const dirs = useAtomValue(inspectorDirsAtom);
@@ -93,58 +72,14 @@ function InspectorPanel() {
   const since = frozen ? count - frozen.count : 0;
 
   useLayoutEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.open) dialog.show();
-    return () => {
-      stop.current?.();
-      if (dialog?.open) dialog.close();
-    };
-  }, []);
-
-  useLayoutEffect(() => {
     const el = listRef.current;
     if (el && stuck.current) el.scrollTop = el.scrollHeight;
-  }, [tick, filter, dirs, paused, tab]);
+  }, [tick, filter, dirs, paused]);
 
   function onScroll(e: UIEvent<HTMLUListElement>) {
     const el = e.currentTarget;
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
   }
-
-  const press = (e: ReactPointerEvent, kind: 'move' | 'resize') => {
-    const el = dialogRef.current;
-    if (e.button !== 0 || stop.current || !el) return;
-    if ((e.target as Element).closest('button, input')) return;
-    const rect = el.getBoundingClientRect();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const pointerId = e.pointerId;
-    const move = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointerId) return;
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      const r = room();
-      if (kind === 'move') {
-        setBox({ x: clamp(rect.left + dx, 0, r.w - rect.width), y: clamp(rect.top + dy, 0, r.h - rect.height), w: rect.width, h: rect.height });
-      } else {
-        const w = clamp(rect.width + dx, MIN_W, r.w - rect.left);
-        const h = clamp(rect.height + dy, MIN_H, r.h - rect.top);
-        setBox({ x: rect.left, y: rect.top, w, h });
-      }
-    };
-    const end = (ev: PointerEvent) => {
-      if (ev.pointerId === pointerId) stop.current?.();
-    };
-    stop.current = () => {
-      stop.current = null;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
-  };
 
   const copy = () => {
     void navigator.clipboard
@@ -180,66 +115,48 @@ function InspectorPanel() {
         }}
         title={mobile ? undefined : 'drag to move'}
       >
-        <span id="inspector-tabs" role="tablist" aria-label="views" className="flex gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t}
-              id={`inspector-tab-${t}`}
-              type="button"
-              role="tab"
-              aria-selected={tab === t}
-              onClick={() => setTab(t)}
-              className={cn('border px-2 py-0.5 text-xs uppercase tracking-wide', tab === t ? DIR_TONE.out : 'border-primaryStroke text-textTertiary')}
-            >
-              {t}
-            </button>
-          ))}
-        </span>
+        <span className="font-semibold">messages</span>
         <span className="text-xs text-textTertiary">
           /events {phase} · {transport === 'worker' ? 'one socket for the browser' : transport === 'tab' ? 'a socket for this tab' : 'no socket'}
         </span>
         <span className="ml-auto flex items-center gap-1">
-          {tab === 'messages' && (
-            <>
-              <Tooltip content={paused ? 'resume' : 'pause the view (the recorder goes on)'}>
-                <button
-                  id="inspector-pause"
-                  type="button"
-                  aria-pressed={paused}
-                  aria-label={paused ? 'resume' : 'pause'}
-                  onClick={toggleInspectorPaused}
-                  className={cn(
-                    'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
-                    paused && 'border-primaryBlue text-primaryBlue'
-                  )}
-                >
-                  {paused ? <RiPlayLine aria-hidden size={16} /> : <RiPauseLine aria-hidden size={16} />}
-                </button>
-              </Tooltip>
-              <Tooltip content={copied ? 'copied' : 'copy the shown rows as json'}>
-                <button
-                  id="inspector-copy"
-                  type="button"
-                  aria-label="copy as json"
-                  onClick={copy}
-                  className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-                >
-                  <RiFileCopyLine aria-hidden size={16} />
-                </button>
-              </Tooltip>
-              <Tooltip content="clear">
-                <button
-                  id="inspector-clear"
-                  type="button"
-                  aria-label="clear"
-                  onClick={clearFrames}
-                  className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-                >
-                  <RiDeleteBinLine aria-hidden size={16} />
-                </button>
-              </Tooltip>
-            </>
-          )}
+          <Tooltip content={paused ? 'resume' : 'pause the view (the recorder goes on)'}>
+            <button
+              id="inspector-pause"
+              type="button"
+              aria-pressed={paused}
+              aria-label={paused ? 'resume' : 'pause'}
+              onClick={toggleInspectorPaused}
+              className={cn(
+                'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
+                paused && 'border-primaryBlue text-primaryBlue'
+              )}
+            >
+              {paused ? <RiPlayLine aria-hidden size={16} /> : <RiPauseLine aria-hidden size={16} />}
+            </button>
+          </Tooltip>
+          <Tooltip content={copied ? 'copied' : 'copy the shown rows as json'}>
+            <button
+              id="inspector-copy"
+              type="button"
+              aria-label="copy as json"
+              onClick={copy}
+              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+            >
+              <RiFileCopyLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip content="clear">
+            <button
+              id="inspector-clear"
+              type="button"
+              aria-label="clear"
+              onClick={clearFrames}
+              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+            >
+              <RiDeleteBinLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
           <Tooltip content="close">
             <button
               id="inspector-close"
@@ -254,7 +171,7 @@ function InspectorPanel() {
         </span>
       </header>
 
-      <div className={cn('flex flex-wrap items-center gap-2 border-b border-primaryStroke px-3 py-2', tab !== 'messages' && 'hidden')}>
+      <div className="flex flex-wrap items-center gap-2 border-b border-primaryStroke px-3 py-2">
         <input
           id="inspector-filter"
           value={filter}
@@ -291,7 +208,7 @@ function InspectorPanel() {
         id="inspector-frames"
         role="log"
         aria-live="off"
-        className={cn('min-h-0 flex-1 overflow-y-auto px-3 py-1 font-mono text-xs leading-5', tab !== 'messages' && 'hidden')}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-1 font-mono text-xs leading-5"
       >
         {rows.length === 0 && (
           <li id="inspector-notice" className="py-2 font-sans text-textTertiary">
@@ -329,9 +246,6 @@ function InspectorPanel() {
           );
         })}
       </ul>
-
-      {tab === 'timings' && <Timings />}
-      {tab === 'quality' && <Quality />}
 
       {!mobile && (
         <div
