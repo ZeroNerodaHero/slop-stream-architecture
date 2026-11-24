@@ -1,8 +1,10 @@
+import { RiArrowRightUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
 import { openInspector, openQuality, openTimings } from '@/infra/atoms/inspector-atoms';
 import { inspectorEnabledAtom, setInspectorEnabled } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { Block, CHECKBOX, Info } from '@/shared-components/user-modal/parts';
 
 const ROWS = [
@@ -31,9 +33,11 @@ export function AdvancedTab() {
               {row.id === 'inspector' && (
                 <input id="inspector" type="checkbox" checked={inspectorOn} onChange={(e) => setInspectorEnabled(e.target.checked)} className={CHECKBOX} />
               )}
-              <Button id={`${row.id}-open-settings`} size="sm" disabled={!inspectorOn} onClick={row.open}>
-                open
-              </Button>
+              <Tooltip content={`open ${row.word}`}>
+                <Button id={`${row.id}-open-settings`} size="sm" aria-label={`open ${row.word}`} disabled={!inspectorOn} onClick={row.open} className="h-7 w-7 p-0">
+                  <RiArrowRightUpLine aria-hidden size={16} />
+                </Button>
+              </Tooltip>
             </span>
           </div>
         ))}
