@@ -12,7 +12,7 @@ import {
   inspectorOpenAtom,
   inspectorPausedAtom,
   closeInspector,
-  ring,
+  frameRing,
   setInspectorFilter,
   shownEntries,
   toggleInspectorDir,
@@ -82,8 +82,9 @@ function InspectorPanel() {
   const mobile = useIsMobile();
   useSheetBack(closeInspector);
 
+  const count = frameRing()?.count ?? 0;
   const rows = frozen?.rows ?? shownEntries(filter, dirs);
-  const since = frozen ? ring.count - frozen.count : 0;
+  const since = frozen ? count - frozen.count : 0;
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -255,7 +256,7 @@ function InspectorPanel() {
           ))}
         </span>
         <span id="inspector-count" className="text-xs text-textTertiary">
-          {rows.length} of the last {ring.count}
+          {rows.length} of the last {count}
           {since > 0 && ` · ${since} more since the pause`}
         </span>
       </div>
@@ -270,7 +271,7 @@ function InspectorPanel() {
       >
         {rows.length === 0 && (
           <li id="inspector-notice" className="py-2 font-sans text-textTertiary">
-            {ring.count === 0 ? 'nothing yet. the frames show up here as they come.' : 'nothing matches the filter.'}
+            {count === 0 ? 'nothing yet. the frames show up here as they come.' : 'nothing matches the filter.'}
           </li>
         )}
         {rows.map((e, i) => {

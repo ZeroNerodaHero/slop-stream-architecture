@@ -220,6 +220,7 @@ function redact(frame: unknown): unknown {
   if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return frame;
   const out: Record<string, unknown> = { ...(frame as Record<string, unknown>) };
   if ('token' in out) out.token = '…';
+  if ('ticket' in out) out.ticket = '…';
   if (typeof out.sdp === 'string' && out.sdp.length > 120) out.sdp = `${out.sdp.slice(0, 120)}… (${out.sdp.length} chars)`;
   return out;
 }

@@ -56,8 +56,17 @@ function setPhase(next: LinkPhase) {
   broadcast({ kind: 'link', phase: next });
 }
 
+function inspected(): boolean {
+  for (const tab of tabs) if (tab.inspector) return true;
+  return false;
+}
+
+function forgetIfUnwatched() {
+  if (!inspected()) ring.clear();
+}
+
 function record(dir: FrameEntry['dir'], frame: unknown) {
-  if (![...tabs].some((t) => t.inspector)) return;
+  if (!inspected()) return;
   keep(makeEntry(SOURCE, dir, frame));
 }
 
@@ -163,6 +172,7 @@ function drop(tab: Tab) {
   const names = Array.from(tab.watching);
   for (const name of names) unwatch(tab, name);
   tab.port.close();
+  forgetIfUnwatched();
   if (tabs.size === 0) connect();
 }
 
@@ -201,9 +211,10 @@ scope.onconnect = (e: MessageEvent) => {
         break;
       case 'inspector':
         tab.inspector = msg.on;
+        forgetIfUnwatched();
         break;
       case 'record':
-        keep(msg.entry);
+        if (tab.inspector) keep(msg.entry);
         break;
       case 'snapshot':
         post(tab, { kind: 'entries', entries: ring.toArray() });
