@@ -135,8 +135,27 @@
   .eps th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
   .eps th button:hover, .eps th[aria-sort] button { color: var(--t1); }
   .eps tr.ep { cursor: pointer; } .eps tr.ep:hover td, .eps tr.ep.open td { background: var(--bg3); }
-  .eps .detail td { background: var(--bg); padding: 10px; cursor: default; white-space: normal; }
-  .eps .detail pre { margin-top: 0; }
+  .eps tr.ep.open td { background: rgb(30 38 56); color: var(--t1); }
+  .twrap { position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .twrap > .pane { flex: 1 1 auto; }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 50%; min-width: 540px; max-width: 100%; z-index: 4; display: flex; flex-direction: column; background: var(--bg2); border-left: 1px solid var(--t3); transform: translateX(100%); visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s; }
+  .drawer.on { transform: none; visibility: visible; transition: transform .18s ease; }
+  .dr-head { flex: none; display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--stroke); }
+  .dr-title { flex: 1 1 auto; min-width: 0; }
+  .dr-name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; user-select: text; }
+  .dr-sub { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 3px; font-size: 12px; color: var(--t2); }
+  .dr-nav { flex: none; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--t3); }
+  .dr-nav button { background: var(--bg3); border: 1px solid var(--stroke); padding: 1px 8px; color: var(--t2); }
+  .dr-nav button:hover:not(:disabled) { color: var(--t1); border-color: var(--t3); }
+  .dr-nav button:disabled { opacity: .4; cursor: default; }
+  .dr-stats { flex: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 1px; background: var(--stroke); border-bottom: 1px solid var(--stroke); }
+  .dr-stats div { background: var(--bg2); padding: 5px 10px; min-width: 0; }
+  .dr-stats b { display: block; font-size: 10px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  .dr-stats span { display: block; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dr-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 10px; align-content: start; }
+  .dr-body .tile.wide { grid-column: 1 / -1; }
+  .dr-body .tile canvas { flex: none; height: 110px; }
+  .dr-body .tile.wide canvas { height: 180px; }
   .g-ok { color: var(--up); } .g-warn { color: var(--warn); } .g-bad { color: var(--down); }
   .share { position: relative; display: inline-block; width: 40px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
   .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
@@ -402,6 +421,9 @@
       const s = p.get('sort') || '';
       v.sort = s.replace(/^-/, '') || DEFAULT_SORT;
       v.dir = s && !s.startsWith('-') ? 1 : -1;
+      const row = p.get('row'), rowbox = p.get('rowbox');
+      const next = row && rowbox ? `${rowbox}\u0000${row}` : null;
+      if (next !== v.open) { v.open = next; v.detail = null; }
     }
     syncSearch();
   }
@@ -418,6 +440,11 @@
       if (v.errs) p.set('err', v.errs);
       if (v.q) p.set('q', v.q);
       if (v.sort !== DEFAULT_SORT || v.dir !== -1) p.set('sort', `${v.dir < 0 ? '-' : ''}${v.sort}`);
+      if (v.open) {
+        const [rowbox, row] = v.open.split('\u0000');
+        p.set('rowbox', rowbox);
+        p.set('row', row);
+      }
     }
     history.replaceState(null, '', p.toString() ? `#${p}` : location.pathname);
   }
@@ -458,6 +485,16 @@
     if (e.key === 'Escape') {
       if ($q.value) { $q.value = ''; $q.dispatchEvent(new Event('input')); } else $q.blur();
     }
+  });
+  document.addEventListener('keydown', (e) => {
+    const v = views[sel.tab];
+    if (!v || !v.open || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if ($box.contains(t)) return;
+    if (e.key === 'Escape') { e.preventDefault(); openRow(v, null); }
+    else if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); stepRow(v, 1); }
+    else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); stepRow(v, -1); }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1254,14 +1291,41 @@
     sec.style.cssText = 'display: flex; flex-direction: column; gap: 6px; min-height: 0;';
     const strip = el('div', 'strip');
     const info = el('div', 'tbar');
-    const pane = el('div', 'pane grow');
+    const wrap = el('div', 'twrap grow');
+    const pane = el('div', 'pane');
+    pane.dataset.scroll = `${v.name}-table`;
     const table = el('table', 'eps');
     const thead = el('thead');
     const tbody = el('tbody');
     table.append(thead, tbody);
     pane.append(table);
-    sec.append(strip, info, pane);
-    v.ui = { sec, info, thead, tbody, strip };
+    const drawer = el('aside', 'drawer');
+    drawer.setAttribute('role', 'dialog');
+    drawer.setAttribute('aria-modal', 'false');
+    drawer.setAttribute('aria-label', 'line details');
+    wrap.append(pane, drawer);
+    sec.append(strip, info, wrap);
+    v.ui = { sec, info, thead, tbody, strip, pane, drawer };
+  }
+
+  function openRow(v, id) {
+    if (v.open === id) return;
+    v.open = id;
+    v.detail = null;
+    writeHash();
+    timingRender(v);
+    if (id) loadDetail(v).then(() => timingRender(v));
+  }
+
+  function stepRow(v, by) {
+    const order = v.order || [];
+    if (!order.length) return;
+    const i = order.indexOf(v.open);
+    const j = i < 0 ? (by > 0 ? 0 : order.length - 1) : i + by;
+    if (j < 0 || j >= order.length) return;
+    openRow(v, order[j]);
+    const tr = v.ui.tbody.querySelector(`tr.ep.open`);
+    if (tr) tr.scrollIntoView({ block: 'nearest' });
   }
 
   function timingNow() {
@@ -1515,7 +1579,7 @@
       const lim = limitsOf(r);
       const tr = el('tr', `ep${v.open === id ? ' open' : ''}`);
       tr.tabIndex = 0;
-      tr.setAttribute('aria-expanded', String(v.open === id));
+      tr.setAttribute('aria-selected', String(v.open === id));
       for (const c of cols) {
         if (c.id === 'share') {
           const td = el('td', 'num mono');
@@ -1543,18 +1607,14 @@
         if (r.kind === 'session' && (c.id === 'n' || c.graded)) td.title = c.id === 'n' ? 'sessions ended' : 'how long a session lasted';
         tr.append(td);
       }
-      const toggle = () => {
-        v.open = v.open === id ? null : id;
-        v.detail = null;
-        timingRender(v);
-        if (v.open) loadDetail(v).then(() => timingRender(v));
-      };
+      const toggle = () => openRow(v, v.open === id ? null : id);
       tr.addEventListener('click', toggle);
       tr.addEventListener('keydown', (e) => { if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } });
       body.push(tr);
-      if (v.open === id) body.push(timingDetail(v, r, cols.length, now));
     }
+    v.order = shownRows.map((r) => `${r.target}\u0000${r.key}`);
     ui.tbody.replaceChildren(...body);
+    timingDrawer(v, now);
     for (const c of tcharts) draw(c);
     ui.sig = timingSig(v);
   }
@@ -1563,54 +1623,147 @@
     return `${tm.data ? tm.data.received : 0}|${tm.error}|${boxShown()}|${v.open}|${v.detail ? `${v.detail.id}|${v.detail.received || v.detail.error}` : ''}`;
   }
 
-  function timingDetail(v, r, span, now) {
-    const tr = el('tr', 'detail');
-    const td = el('td');
-    td.colSpan = span;
-    const S = r.kind === 'session';
-    const head = `${rowTag(r)}${r.method && !S ? ' ' + r.method : ''} ${r.name} · ${DIR_NAME[r.dir]}\n${r.target} · ${r.src}`;
-    const body = S
-      ? `${count(r.n)} ended over ${tm.data.range} · ${count(r.open)} open now · ${count(r.open_peak)} at most · ${count(r.msgs)} messages · ${bytes(r.bytes)} · dropped ${r.err}\nlasted: avg ${spent(r.mean)} · p50 ${spent(r.p50)} · p95 ${spent(r.p95)} · p99 ${spent(r.p99)} · longest ${spent(r.max)}`
-      : `${count(r.n)} over ${tm.data.range} · ${rate(r.rate)}/s · ${spent(r.sum_ms)} in all, ${share(r.share)} of its kind\navg ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · ${r.kind === 'http' ? `4xx ${r.e4} · 5xx ${r.e5} · ` : ''}all errors ${r.err}`;
-    td.append(el('pre', 'mono', `${head}\n${body}`));
-    const D = v.detail;
-    const id = `${r.target}\u0000${r.key}`;
-    if (!D || D.id !== id) td.append(el('div', 'empty', 'loading'));
-    else if (D.error) td.append(el('div', 'note', D.error));
-    else {
-      const src = { t: D.t, bucket_secs: D.bucket_secs };
-      const tiles = el('div', 'tiles');
-      const fmt = S ? spent : ms;
-      const lat = [
-        { name: 'avg', v: D.avg, color: COLORS.white },
-        { name: 'p50', v: D.p50, color: COLORS.green },
-        { name: 'p95', v: D.p95, color: COLORS.blue },
-        { name: 'p99', v: D.p99, color: COLORS.violet },
-        { name: 'max', v: D.max, color: COLORS.red },
-      ];
-      const big = chart({ label: `${S ? 'session length' : 'latency'} per ${per(D.bucket_secs)}, ms, log scale`, now, read: fmt, src, store: tcharts, value: `p99 ${fmt(r.p99)} · max ${fmt(r.max)}`, log: true, lines: lat,
-        tip: (i) => [...lat.map((l) => [l.name, l.color, fmt(l.v[i])]), ['count', null, has(D.n[i]) ? count(D.n[i]) : '—']] });
-      big.classList.add('wide');
-      tiles.append(big);
-      if (S) {
-        tiles.append(
-          chart({ label: `open, per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${count(r.open)} now`, lines: [{ name: 'open', v: D.open, color: COLORS.blue }] }),
-          chart({ label: `messages per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: count(r.msgs), lines: [{ name: 'messages', v: D.msgs, color: COLORS.violet }] }),
-          chart({ label: `bytes per ${per(D.bucket_secs)}`, now, read: bytes, src, store: tcharts, value: bytes(r.bytes), lines: [{ name: 'bytes', v: D.bytes, color: COLORS.green }] }),
-          chart({ label: `ended and dropped per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${count(r.n)} · ${count(r.err)}`, lines: [{ name: 'ended', v: D.n, color: COLORS.blue }, { name: 'dropped', v: D.err, color: COLORS.red }] })
-        );
-      } else {
-        tiles.append(
-          chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: count(r.n), lines: [{ name: 'count', v: D.n, color: COLORS.blue }] }),
-          chart({ label: `time spent per ${per(D.bucket_secs)}`, now, read: spent, src, store: tcharts, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }),
-          chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${r.err + r.e4}`,
-            lines: [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }] })
-        );
-      }
-      td.append(tiles);
+  function findRow(id) {
+    if (!id || !tm.data) return null;
+    const [target, key] = id.split('\u0000');
+    return tm.data.rows.find((r) => r.target === target && r.key === key) || null;
+  }
+
+  function pairOf(r) {
+    if (!r || r.kind !== 'session' || !tm.data) return null;
+    return tm.data.rows.find((x) => x.target === r.target && x.kind === 'session' && x.method === r.method && x.name === r.name && x.src === r.src && x.dir !== r.dir) || null;
+  }
+
+  function timingDrawer(v, now) {
+    const dr = v.ui.drawer;
+    const keep = dr.querySelector('.dr-body');
+    const scroll = keep ? keep.scrollTop : 0;
+    if (!v.open) {
+      dr.classList.remove('on');
+      return;
     }
-    tr.append(td);
-    return tr;
+    const r = findRow(v.open);
+    const [target, key] = v.open.split('\u0000');
+    const order = v.order || [];
+    const at = order.indexOf(v.open);
+    const head = el('div', 'dr-head');
+    const title = el('div', 'dr-title');
+    const sub = el('div', 'dr-sub');
+    if (r) {
+      title.append(el('div', 'dr-name mono', `${r.method && r.kind !== 'session' ? r.method + ' ' : ''}${r.name}`));
+      sub.append(el('span', `k-${cardKey(r)}`, kindLabel(cardKey(r))), el('span', null, DIR_NAME[r.dir]), el('span', 'dim', `${r.target} · ${r.src}`));
+    } else {
+      title.append(el('div', 'dr-name mono', key));
+      sub.append(el('span', 'dim', tm.data ? `${target}: no calls over ${tm.data.range}` : 'loading'));
+    }
+    title.append(sub);
+    const nav = el('div', 'dr-nav');
+    const prev = button(null, '↑', () => stepRow(v, -1));
+    prev.title = 'previous line (↑ or k)';
+    prev.setAttribute('aria-label', 'previous line');
+    prev.disabled = at <= 0 && order.length > 0 && at !== -1;
+    const next = button(null, '↓', () => stepRow(v, 1));
+    next.title = 'next line (↓ or j)';
+    next.setAttribute('aria-label', 'next line');
+    next.disabled = at >= order.length - 1 && at !== -1;
+    const close = button(null, '✕', () => openRow(v, null));
+    close.title = 'close (esc)';
+    close.setAttribute('aria-label', 'close');
+    nav.append(el('span', null, at >= 0 ? `${at + 1} of ${order.length}` : ''), prev, next, close);
+    head.append(title, nav);
+
+    const stats = el('div', 'dr-stats');
+    const stat = (k, val, cls, tip) => {
+      const d = el('div');
+      d.append(el('b', null, k), el('span', cls, val));
+      if (tip) d.title = tip;
+      stats.append(d);
+    };
+    const S = r && r.kind === 'session';
+    const pair = S ? pairOf(r) : null;
+    const I = S ? (r.dir === 'out' ? pair : r) : null;
+    const O = S ? (r.dir === 'out' ? r : pair) : null;
+    if (r && S) {
+      stat('open now', count(I ? I.open : 0));
+      stat('most open', count(I ? I.open_peak : 0));
+      stat('ended', count(I ? I.n : 0));
+      stat('dropped', count(I ? I.err : 0), I && I.err ? 'no' : null);
+      for (const k of ['mean', 'p50', 'p95', 'p99', 'max']) stat(k === 'mean' ? 'avg' : k, spent(I ? I[k] : null), null, 'how long a session lasted');
+      stat('msg/s in', rate(I ? I.msgs_rate : 0));
+      stat('msg/s out', rate(O ? O.msgs_rate : 0));
+      stat('in', Bps(I ? I.bytes_rate : 0));
+      stat('out', Bps(O ? O.bytes_rate : 0));
+    } else if (r) {
+      const lim = limitsOf(r);
+      stat('count', count(r.n));
+      stat('rate', `${rate(r.rate)}/s`);
+      stat('total time', spent(r.sum_ms));
+      stat('share', share(r.share), null, 'of its kind\u2019s time');
+      for (const k of ['mean', 'p50', 'p95', 'p99', 'max']) {
+        const g = grade(r[k], lim);
+        stat(k === 'mean' ? 'avg' : k, ms(r[k]), g ? `g-${g}` : null);
+      }
+      stat('errors', count(r.err), r.err ? 'no' : null);
+      if (r.kind === 'http') {
+        stat('4xx', count(r.e4), r.e4 ? 'note' : null);
+        stat('5xx', count(r.e5), r.e5 ? 'no' : null);
+      }
+    }
+
+    const body = el('div', 'dr-body');
+    body.dataset.scroll = `${v.name}-drawer`;
+    const D = v.detail;
+    if (!r) body.append(el('div', 'empty', tm.data ? 'this line has no calls over the range' : 'loading'));
+    else if (!D || D.id !== v.open) body.append(el('div', 'empty', 'loading'));
+    else if (D.error) body.append(el('div', 'note', D.error));
+    else {
+      const DI = S ? (r.dir === 'out' ? D.pair : D) : D;
+      const DO = S ? (r.dir === 'out' ? D : D.pair) : null;
+      const base = DI || D;
+      const src = { t: base.t, bucket_secs: base.bucket_secs };
+      const secs = base.bucket_secs || 60;
+      const ps = (a) => (a || []).map((x) => (has(x) ? x / secs : null));
+      const each = (lines, read) => (i) => lines.map((l) => [l.name, l.color, read((l.v || [])[i])]);
+      const tile = (o, wide) => {
+        const t = chart({ now, src, store: tcharts, ...o, tip: o.tip || each(o.lines, o.read) });
+        if (wide) t.classList.add('wide');
+        body.append(t);
+      };
+      if (DI) {
+        const fmt = S ? spent : ms;
+        const lat = [
+          { name: 'avg', v: DI.avg, color: COLORS.white },
+          { name: 'p50', v: DI.p50, color: COLORS.green },
+          { name: 'p95', v: DI.p95, color: COLORS.blue },
+          { name: 'p99', v: DI.p99, color: COLORS.violet },
+          { name: 'max', v: DI.max, color: COLORS.red },
+        ];
+        const ref = S ? I : r;
+        tile({ label: `${S ? 'session length' : 'latency'} per ${per(secs)}, ms, log scale`, read: fmt, value: ref ? `p99 ${fmt(ref.p99)} · max ${fmt(ref.max)}` : '', log: true, lines: lat,
+          tip: (i) => [...lat.map((l) => [l.name, l.color, fmt(l.v[i])]), [S ? 'ended' : 'count', null, has(DI.n[i]) ? count(DI.n[i]) : '—']] }, true);
+      }
+      if (S) {
+        if (DI) {
+          tile({ label: 'open connections', read: count, value: `${count(I.open)} now`, lines: [{ name: 'open', v: DI.open, color: COLORS.blue }] });
+          tile({ label: `ended and dropped per ${per(secs)}`, read: count, value: `${count(I.n)} · ${count(I.err)}`, lines: [{ name: 'ended', v: DI.n, color: COLORS.blue }, { name: 'dropped', v: DI.err, color: COLORS.red }] });
+        }
+        tile({ label: 'messages per second', read: rate, value: `in ${rate(I ? I.msgs_rate : 0)} · out ${rate(O ? O.msgs_rate : 0)}`,
+          lines: [{ name: 'in', v: ps(DI && DI.msgs), color: COLORS.green }, { name: 'out', v: ps(DO && DO.msgs), color: COLORS.violet }] });
+        tile({ label: 'bytes per second', read: Bps, value: `in ${Bps(I ? I.bytes_rate : 0)} · out ${Bps(O ? O.bytes_rate : 0)}`,
+          lines: [{ name: 'in', v: ps(DI && DI.bytes), color: COLORS.green }, { name: 'out', v: ps(DO && DO.bytes), color: COLORS.violet }] });
+      } else {
+        tile({ label: 'requests per second', read: rate, value: `${rate(r.rate)}/s`, lines: [{ name: 'per second', v: ps(D.n), color: COLORS.blue }],
+          tip: (i) => [['per second', COLORS.blue, rate(ps(D.n)[i])], ['count', null, has(D.n[i]) ? count(D.n[i]) : '—']] });
+        tile({ label: `errors per ${per(secs)}`, read: count, value: `${count(r.err)}${r.kind === 'http' ? ` · 4xx ${count(r.e4)}` : ''}`,
+          lines: r.kind === 'http'
+            ? [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }]
+            : [{ name: 'errors', v: D.err, color: COLORS.red }] });
+        tile({ label: `time spent per ${per(secs)}`, read: spent, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }, true);
+      }
+    }
+    dr.replaceChildren(head, stats, body);
+    body.scrollTop = scroll;
+    dr.classList.add('on');
   }
 
   function renderPicker(shown) {
@@ -1879,9 +2032,11 @@
     const id = v.open;
     if (!id) return;
     const [target, key] = id.split('\u0000');
+    const get = (k) => getJson(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(k)}&range=${sel.range}`);
+    const pair = pairOf(findRow(id));
     try {
-      const d = await getJson(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(key)}&range=${sel.range}`);
-      if (v.open === id) v.detail = { ...normDetail(d), id };
+      const [d, p] = await Promise.all([get(key), pair ? get(pair.key).catch(() => null) : null]);
+      if (v.open === id) v.detail = { ...normDetail(d), id, pair: p ? normDetail(p) : null };
     } catch (e) {
       if (v.open === id) v.detail = { id, error: `could not load the graphs: ${e.message}` };
     }

@@ -170,7 +170,10 @@ async function stateWhen(api, ready, what, ms = 40000) {
       await page.locator('table.eps th', { hasText: 'p99' }).first().click();
       expect(/sort=-p99/.test(page.url()), `the url does not carry the sort: ${page.url()}`);
       await page.locator('table.eps tr.ep', { hasText: '/api/streamers/{name}' }).first().click();
-      await page.waitForSelector('table.eps tr.detail canvas', { timeout: 15000 });
+      await page.waitForSelector('.drawer.on .dr-body canvas', { timeout: 15000 });
+      expect(/row=/.test(page.url()), `the url does not carry the open row: ${page.url()}`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.drawer:not(.on)', { state: 'attached', timeout: 5000 });
     } finally {
       await browser.close();
     }
