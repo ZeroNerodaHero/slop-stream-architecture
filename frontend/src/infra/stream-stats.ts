@@ -1,22 +1,9 @@
-/**
- * How the stream is doing, read from the peer connection once a second. Two pipes, read apart:
- * a watcher measures the copy arriving here (loss, freezes, the picture on screen); a publisher
- * measures the upload to the box (the encoder's limit, the loss the box reports). The box copies
- * one picture, so a watcher's bad link never shows up on the publisher's numbers.
- *
- * The peer connection stays a module handle. `startSampler` is the timer; it writes a snapshot
- * the page renders, and nothing renders from the connection itself.
- */
-
 const SAMPLE_MS = 1000;
-/** A sample further apart than this was a hidden tab, not a frozen picture. */
 const STALL_DT_MAX = 2.5;
-/** Under this for a stretch, with the mic open, is a dead mic rather than a pause in talking. */
 const SILENT_LEVEL = 0.005;
 const SILENT_SAMPLES = 8;
 const HIST = 10;
 const SMOOTH = 3;
-/** Freezes counted across this long a window. */
 const FREEZE_WINDOW_MS = 10_000;
 
 export type QualityWord = 'clear' | 'rough' | 'breaking' | 'sending' | 'upload limited' | 'cpu limited';
@@ -24,57 +11,45 @@ type Reason = 'none' | 'cpu' | 'bandwidth' | 'other';
 type Stat = Record<string, unknown>;
 
 export interface VideoLine {
-  /** Set on the pictures that are not the big one (a shared screen, the camera beside it). */
   label: string | null;
   width: number;
   height: number;
   fps: number;
-  /** Bits per second over the last few samples. */
   bitrate: number;
   lossPct: number | null;
   nackPerSec: number | null;
   pliPerSec: number | null;
   droppedPerSec: number | null;
   keyframesPerSec: number | null;
-  /** This picture's own encoder limit. Null for a watcher, and when the encoder didn't say. */
   reason: Reason | null;
   jitterMs: number | null;
 }
 
 export interface AudioLine {
-  /** 0..1. Null when the browser didn't report a level. */
   level: number | null;
   bitrate: number;
   lossPct: number | null;
-  /** Share of samples the player invented to cover a hole. Watchers only. */
   concealmentPct: number | null;
   muted: boolean;
-  /** The mic has sat near zero long enough that it isn't someone pausing. Publishers only. */
   silent: boolean;
 }
 
 export interface StreamStats {
   word: QualityWord;
-  /** The picture on the big video: the one the watcher is showing, or the publisher's camera. */
   video: VideoLine;
   others: VideoLine[];
   audio: AudioLine | null;
   rttMs: number | null;
-  /** Publisher: room the congestion controller says the upload has. Null when it didn't say. */
   availableBps: number | null;
   path: 'direct' | 'relay' | null;
-  /** The cap the camera was given. Null for a watcher, and when this line isn't the camera. */
   capBps: number | null;
-  /** Why the word says limited. Null when it doesn't, or when the limit is the loss by itself. */
   reason: Reason | null;
 }
 
 export interface SamplerSource {
   role: 'watch' | 'publish';
   pc: () => RTCPeerConnection | null;
-  /** The big picture's track. The word is about that one; the other live pictures are `others`. */
   videoTrackId: () => string | undefined;
-  /** The mic (publisher) or the incoming track (watcher) is muted. No track is not muted. */
   audioMuted: () => boolean;
   capBps: () => number | null;
   labelOf: (trackId: string) => string | undefined;
@@ -104,9 +79,7 @@ interface Memory {
   fps: number[];
   bitrate: number[];
   loss: number[];
-  /** Worst encoder reason each sample, so one blip doesn't stick and one good sample doesn't clear it. */
   reasons: Reason[];
-  /** Worst loss the box reported, each sample. */
   remoteLoss: number[];
   stall: number;
   silent: number;
@@ -359,11 +332,6 @@ function audioOf(
   };
 }
 
-/**
- * Watcher: a stalled picture, heavy loss, or a run of freezes is breaking; a little loss or a
- * picture well under what it just was is rough. Publisher: the encoder saying cpu or bandwidth,
- * or the box losing the upload, and it has to hold for more than one sample.
- */
 function watchWord(m: Memory, freezeSec: number): QualityWord {
   const loss = mean(m.loss, SMOOTH);
   const fps = mean(m.fps, SMOOTH);
@@ -396,8 +364,6 @@ function nextStats(m: Memory, report: RTCStatsReport, source: SamplerSource): St
   const rtpType = source.role === 'watch' ? 'inbound-rtp' : 'outbound-rtp';
   const counters = collect(all, direction);
   const dt = m.at === 0 ? 0 : (now - m.at) / 1000;
-  // The first sample has no rate yet. A hidden tab, or a gap from a throttled timer, is not a stall
-  // and must not land in the averages: keep the counters current and leave the last snapshot up.
   if (m.at === 0 || dt < 0.2 || dt > STALL_DT_MAX || document.hidden) {
     m.at = now;
     m.counters = counters;
@@ -492,7 +458,6 @@ function nextStats(m: Memory, report: RTCStatsReport, source: SamplerSource): St
   };
 }
 
-/** Sample `source` until the returned function runs. The first sample only arms the rates; the next one writes. */
 export function startSampler(source: SamplerSource): () => void {
   const memory = emptyMemory();
   let stopped = false;

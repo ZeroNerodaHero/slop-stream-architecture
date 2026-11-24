@@ -1,14 +1,3 @@
-/**
- * Groups: the list from `GET /api/groups`, which of them are mine, and the actions on them.
- * See docs/groups.md. The user modal's groups tab edits them and the profile tab shows mine;
- * the sidebar lists the ones I am in as servers (`GET /api/explore`'s `yours`, which has each
- * one's picture and who in it is live) and its search box finds those and the public ones
- * (`discover`). The chat needs little from here: the server puts each
- * speaker's badges on the line itself, and a badge only reads the freshest picture version
- * from these (`groupIconsAtom`). Same shape as the other atom modules: atoms for what
- * renders, action functions to change it.
- */
-
 import { atom } from 'jotai';
 
 import { api, type Explore, type Group, type NewGroup, type Server, messageOf } from '@/infra/api';
@@ -20,29 +9,17 @@ import { queryClient } from '@/infra/query-client';
 import { store } from '@/infra/store';
 
 export const groupsAtom = atom<Group[]>([]);
-/** `undefined` until the first answer, then whether the list is the server's. */
 export const groupsLoadedAtom = atom<boolean | undefined>(undefined);
 export const groupsBusyAtom = atom(false);
-/** What the last action did: `joined vip`, or `not joined: <why>`. */
 export const groupsStatusAtom = atom('');
-/** The groups the login is in, in the list's order: the badges its chat lines wear. */
 export const myGroupsAtom = atom((get) => get(groupsAtom).filter((g) => g.mine));
-/** The badges my name wears in chat, as the api picks them (groups.rs `badges_of`): one only: my primary group's when I picked one, else the first of mine. */
 export const myBadgesAtom = atom((get) => {
   const mine = get(myGroupsAtom);
   const primary = mine.find((g) => g.primary);
   return primary ? [primary] : mine.slice(0, 1);
 });
-/** The servers the login is in, as the sidebar lists them (docs/follows.md). `undefined` until asked once this page load; `[]` for nobody. */
 export const myServersAtom = atom<Server[] | undefined>(undefined);
-/** The public servers the login is not in, the explorer's `discover`: what the sidebar's box finds past the ones you are in. `undefined` until asked once this page load. */
 export const publicServersAtom = atom<Server[] | undefined>(undefined);
-/**
- * Each group's picture version the page has already heard of, by name: the groups list, the
- * explorer's servers and the room on screen. A badge reads it before the version its chat line
- * carried, which is a copy from when the line was said (and absent on an older line). Nothing
- * here is asked for: it only gathers what is loaded anyway.
- */
 export const groupIconsAtom = atom((get) => {
   const icons = new Map<string, number | null>();
   const heard = (name: string, icon: number | null | undefined) => {
@@ -55,10 +32,6 @@ export const groupIconsAtom = atom((get) => {
   if (room) heard(room.name, room.icon);
   return icons;
 });
-/**
- * Each group's colour the page has heard of, by name, the same way: what a chat line's badge
- * reads before the colour the line carried, so a recolour reaches lines already said.
- */
 export const groupColorsAtom = atom((get) => {
   const colors = new Map<string, string>();
   for (const group of get(groupsAtom)) colors.set(group.name, group.color);
@@ -69,11 +42,6 @@ export const groupColorsAtom = atom((get) => {
   return colors;
 });
 
-/**
- * A group's colour changed (the room's `color` fact, room-atoms.ts): the lists the page holds
- * take it, the sidebar's, the groups list and the explorer's answer (home's and `/groups`'
- * squares), so they repaint without asking the api again.
- */
 function recolor(name: string, color: string) {
   const paint = <T extends { name: string; color: string }>(list: T[]): T[] =>
     list.some((g) => g.name === name && g.color !== color) ? list.map((g) => (g.name === name ? { ...g, color } : g)) : list;
@@ -85,7 +53,6 @@ function recolor(name: string, color: string) {
   queryClient.setQueryData<Explore>(['explore'], (found) => found && { ...found, yours: paint(found.yours), discover: paint(found.discover) });
 }
 
-// the room on screen is the one that hears the facts: when its colour moves, so do the lists
 let roomColor: { name: string; color: string } | null = null;
 store.sub(roomAtom, () => {
   const room = store.get(roomAtom);
@@ -95,14 +62,10 @@ store.sub(roomAtom, () => {
 });
 
 let askingServers: Promise<void> | null = null;
-/** Bumped by `forgetMyServers`: an ask carries the stamp it was made under and lands only while that is still the current one. */
 let serversStamp = 0;
-/** When the explorer last answered, ms; 0 for never (or for a login since forgotten). */
 let serversAt = 0;
-/** An answer younger than this is good enough for the search: the open that came before the first letter asked already. */
 export const SERVERS_FRESH_MS = 10_000;
 
-/** Cheap, so every mount asks: `mine` depends on who is logged in, and others make groups too. */
 export async function loadGroups(): Promise<void> {
   try {
     store.set(groupsAtom, await api.groups());
@@ -113,12 +76,6 @@ export async function loadGroups(): Promise<void> {
   }
 }
 
-/**
- * The explorer's answer again, for anyone: the servers you are in and the public ones you are
- * not, with who is live in each now. One ask at a time; a second caller waits for the first. An
- * answer for a login since forgotten is dropped. `maxAgeMs`: an answer this young is kept
- * instead of asking, for a caller that wants the lists complete rather than new.
- */
 export function loadServers(maxAgeMs = 0): Promise<void> {
   if (maxAgeMs > 0 && serversAt > 0 && Date.now() - serversAt < maxAgeMs) return Promise.resolve();
   if (!askingServers) {
@@ -135,18 +92,15 @@ export function loadServers(maxAgeMs = 0): Promise<void> {
         );
       })
       .catch(() => {
-        // the api is away: what is shown stays (nothing, for a first ask that failed: the column must not wait on it), the next open asks again
         if (stamp === serversStamp && store.get(myServersAtom) === undefined) store.set(myServersAtom, []);
       })
       .finally(() => {
-        // a later login's ask may be in flight by now: only this stamp's own is cleared
         if (stamp === serversStamp) askingServers = null;
       });
   }
   return askingServers;
 }
 
-/** The sidebar's list again (`loadServers`). Nobody: an empty list, no request; the column lists nothing for them. */
 export function loadMyServers(): Promise<void> {
   if (!store.get(meAtom)) {
     store.set(myServersAtom, []);
@@ -155,7 +109,6 @@ export function loadMyServers(): Promise<void> {
   return loadServers();
 }
 
-/** The login changed (in, out, renamed): the servers shown were theirs, and so is an ask still in flight: its answer is dropped and the next ask is a fresh one. */
 export function forgetMyServers() {
   serversStamp += 1;
   askingServers = null;
@@ -164,11 +117,6 @@ export function forgetMyServers() {
   store.set(publicServersAtom, undefined);
 }
 
-/**
- * One action, then the list as the server has it now (counts, `mine`), then the status.
- * When my badges changed, the open chat says hello again so its lines wear them at once:
- * the server reads a socket's groups once, at the hello. The sidebar's servers follow too.
- */
 async function act(doing: string, call: () => Promise<unknown>, done: string, wearing: boolean): Promise<boolean> {
   store.set(groupsBusyAtom, true);
   store.set(groupsStatusAtom, '');
@@ -177,7 +125,6 @@ async function act(doing: string, call: () => Promise<unknown>, done: string, we
     await loadGroups();
     void loadMyServers();
     store.set(groupsStatusAtom, done);
-    // in or out of a group: the badge on my lines, and the emotes I may use (emotes.ts)
     if (wearing) {
       reconnectChat();
       void loadMyEmotes();
@@ -191,7 +138,6 @@ async function act(doing: string, call: () => Promise<unknown>, done: string, we
   }
 }
 
-/** The group as made, its `name` the address with the digits, or null when the api refused (the status says why). */
 export async function createGroup(group: NewGroup): Promise<Group | null> {
   let made = null as Group | null;
   const ok = await act(
@@ -205,7 +151,6 @@ export async function createGroup(group: NewGroup): Promise<Group | null> {
   return ok ? made : null;
 }
 
-/** Public is on the lists. Private is on the lists only for someone in it. */
 export function setGroupListed(name: string, isPublic: boolean, label: string): Promise<boolean> {
   return act(isPublic ? 'public' : 'private', () => api.setGroupPublic(name, isPublic), isPublic ? `${label} is public` : `${label} is private`, false);
 }
@@ -218,7 +163,6 @@ export function leaveGroup(name: string): Promise<boolean> {
   return act('left', () => api.leaveGroup(name), `left ${name}`, true);
 }
 
-/** `on`: my name wears this group's badge alone. Off: every group's again. My lines follow at once. */
 export function setPrimaryGroup(name: string, on: boolean): Promise<boolean> {
   return act(
     on ? 'set' : 'cleared',
@@ -228,7 +172,6 @@ export function setPrimaryGroup(name: string, on: boolean): Promise<boolean> {
   );
 }
 
-/** `mine`: I was in it, so my lines lose its badge. */
 export function deleteGroup(name: string, mine: boolean): Promise<boolean> {
   return act('deleted', () => api.deleteGroup(name), `deleted ${name}`, mine);
 }

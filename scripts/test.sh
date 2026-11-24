@@ -116,7 +116,7 @@ BASE=""
 ONLY=""
 for a in "$@"; do
   case "$a" in
-    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     --all) ALL=1 ;;
     http://*|https://*) BASE="${a%/}" ;;
     [a-z]*) [ -f "test/$a.js" ] || die "no suite '$a' (test/$a.js). see ./scripts/test.sh --help"; ONLY="$ONLY $a " ;;
@@ -126,41 +126,30 @@ done
 
 have node || die "node is not installed. https://nodejs.org"
 
-# local stack unless a url was given
 LOCAL=0
 if [ -z "$BASE" ]; then
   LOCAL=1
   ip="$(sed -n 's/^[[:space:]]*PUBLIC_IP=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \t\r")"
   [ -n "$ip" ] || die "no .env yet. run ./scripts/deploy.sh first"
   BASE="https://$ip"
-  # the errors suite reads reports back through /api/errors when the local stack has a token.
-  # an inline ` # comment` goes, like compose drops it; the api ignores a token under 16 characters
   OPS_TOKEN="${OPS_TOKEN:-$(sed -n 's/^[[:space:]]*OPS_TOKEN=//p' .env 2>/dev/null | tail -n 1 | sed 's/[[:space:]]#.*$//' | tr -d "\"' \t\r")}"
 fi
 
 say "target: $BASE"
-# nothing answering at all is a stack that is not up: start it (locally). a 502 (caddy up,
-# api not) or a 503 (the api says a part is down) is a stack that is up and sick: say so
-# and stop, never deploy over it. a 200 is the way on
 code="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/api/health" 2>/dev/null || true)"
 case "$code" in
   200) ;;
   000|"")
     if [ "$LOCAL" = 1 ]; then
-      # no answer with containers up is a stack that hangs (a wedged database, a box out of
-      # memory), not one to deploy over
       [ -z "$(docker compose ps -q frontend api 2>/dev/null)" ] || die "$BASE/api/health does not answer but the stack's containers are up: look before deploying.  docker compose ps; docker compose logs api"
       say "stack is down, starting it"
-      ./scripts/deploy.sh --build >/dev/null   # the tests are about this checkout, so its own build, not the registry's images
+      ./scripts/deploy.sh --build >/dev/null
     else
       die "$BASE/api/health does not answer"
     fi ;;
   *) die "$BASE/api/health answers $code, not 200: the stack is up but sick. locally:  docker compose ps; docker compose logs api redis database" ;;
 esac
 
-# the monitor suite starts `api monitor` from the image the running api was started from
-# (the registry's name and tag, or stream-api:latest when built here), read off the
-# container, after the deploy above: .env's record is not kept up by a --build
 MONITOR_IMAGE=""
 if [ "$LOCAL" = 1 ]; then
   api_id="$(docker compose ps -q api 2>/dev/null | head -n 1 || true)"
@@ -174,7 +163,6 @@ fi
 
 failed=0
 run() {
-  # named suites only, when any were named
   case "$ONLY" in ""|*" $1 "*) ;; *) return 0 ;; esac
   say "$1"
   if BASE_URL="$BASE" LOCAL="$LOCAL" OPS_TOKEN="${OPS_TOKEN:-}" MONITOR_IMAGE="${MONITOR_IMAGE:-}" node "test/$1.js"; then :; else failed=$((failed + 1)); fi

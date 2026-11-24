@@ -37,7 +37,6 @@ ip="$(sed -n 's/^[[:space:]]*PUBLIC_IP=//p' .env 2>/dev/null | tail -n 1 | tr -d
 BASE="https://$ip"
 curl -sk -o /dev/null --max-time 5 "$BASE/api/health" || die "nothing answers at $BASE. is the stack up?"
 
-# one account is in 8 groups at most, and making one puts the maker in it.
 PER=8
 ADJ=(night late quiet open neon cozy loud slow west east lunar misty polar solar amber crisp dusty velvet)
 NOUN=(owls lobby porch attic den hall yard dock loft crew table room nook bench stoop alley creek)
@@ -61,7 +60,6 @@ JAR="$(mktemp)"
 BODY="$(mktemp)"
 trap 'rm -f "$JAR" "$BODY"' EXIT
 
-# a fresh maker. prints the name. the password is recorded with the groups.
 new_maker() {
   local name pw out code tries=0
   while :; do
@@ -114,7 +112,6 @@ while [ "$made" -lt "$COUNT" ]; do
     warn "$gname got $code $(head -c 200 "$BODY" 2>/dev/null || true)"
     continue
   fi
-  # the address is the words plus four digits. an older api answers with the words.
   slug="$(grep -o '"name":"[^"]*"' "$BODY" | head -n 1 | sed 's/"name":"//; s/"$//')"
   [ -n "$slug" ] || slug="$gname"
   printf '%s %s %s %s\n' "$slug" "$badge" "$maker" "$pw" >> .seeded-groups

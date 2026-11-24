@@ -1,14 +1,5 @@
-/**
- * The about tab's page (docs/about.md), the parts that are not the tab itself (About.tsx): a
- * fake stream's document, the rules for a link, and the cleaning of a text block's html. A text
- * block is a fragment of a few tags, never html from a string: the tab parses it and draws each
- * tag it allows as its element. A picture, a clip and a track are objects the owner put up;
- * the page names them by id. Scripts have no door: there is no block that takes one.
- */
-
 import { api } from '@/infra/api';
 
-/** A fake stream's page, before it is rows: what it says and shows. */
 export type AboutBlock =
   | { kind: 'text'; text: string }
   | { kind: 'image'; src: string }
@@ -19,7 +10,6 @@ export interface AboutDoc {
   blocks: AboutBlock[];
 }
 
-/** A link target, or null: only http and https, absolute or on this origin. `javascript:`, `data:`, `blob:` and the rest are null. */
 export function linkHref(href: unknown): string | null {
   if (typeof href !== 'string' || href.length === 0 || href.length > 2000) return null;
   let url: URL;
@@ -32,7 +22,6 @@ export function linkHref(href: unknown): string | null {
   return url.href;
 }
 
-/** The same origin as the page: a router link, not a new tab. */
 export function isSameOrigin(href: string): boolean {
   try {
     return new URL(href, location.origin).origin === location.origin;
@@ -41,7 +30,6 @@ export function isSameOrigin(href: string): boolean {
   }
 }
 
-/** FNV-1a over the name. A fake stream's page is picked with it, so a reload does not shuffle it. */
 function fnv(name: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < name.length; i++) {
@@ -70,10 +58,6 @@ const DUMMY_WHEN = [
   'saturday long, tuesday short.'
 ];
 
-/**
- * A page for a fake stream, from its name: words that are not the next dummy's, its offline
- * picture when it has one, and the demo media, which is already on this origin. Nothing is saved.
- */
 export function dummyPage(name: string, pictures: { offline: number | null }): AboutDoc {
   const h = fnv(name);
   const who = DUMMY_WHO[h % DUMMY_WHO.length] ?? DUMMY_WHO[0];
@@ -112,7 +96,6 @@ const PAGE_DROP = new Set([
   'form'
 ]);
 
-/** A link the text may keep: http or https, with a host and no password. */
 function pageUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed || trimmed.length > 500) return null;
@@ -162,11 +145,6 @@ function renderPageNode(node: Node, budget: { n: number }): string {
   return `<${tag}>${kids()}</${tag}>`;
 }
 
-/**
- * The text block as it is kept: a fragment of a few tags, or the words with the tags escaped.
- * A `div` (what a text box writes for a new line) becomes a `p`. A script is dropped with what
- * is inside it. Cut at {@link TEXT_MAX} characters of text. The same rules run again at the door.
- */
 export function sanitizeHtml(raw: string): string {
   if (!raw) return '';
   const doc = new DOMParser().parseFromString(raw, 'text/html');
