@@ -107,26 +107,28 @@
   .ctrs td { white-space: nowrap; }
   .ctrs tr.ctr { cursor: pointer; } .ctrs tr.ctr:hover td, .ctrs tr.ctr.on td { background: var(--bg3); }
   .ctrs td.cell canvas { display: block; width: 72px; height: 18px; margin-top: 2px; }
-  .strip { flex: none; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .strip { flex: none; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; --card-w: clamp(142px, 11vw, 190px); --card-h: 82px; }
   .grp { display: flex; flex-direction: column; gap: 4px; flex: none; }
-  .grp-head { align-self: flex-start; background: none; border: 0; padding: 0; font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
-  .grp-head:hover, .grp-head[aria-pressed="true"] { color: var(--t1); }
+  .grp-head { display: block; height: 15px; line-height: 15px; align-self: flex-start; background: none; border: 0; padding: 0; font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  button.grp-head:hover, .grp-head[aria-pressed="true"] { color: var(--t1); }
   .grp-cards { display: flex; gap: 6px; }
-  .card { flex: none; width: clamp(138px, 10.6vw, 190px); background: var(--bg3); border: 1px solid var(--stroke); padding: 6px 9px; text-align: left; min-width: 0; cursor: pointer; }
+  .card { flex: none; width: var(--card-w); height: var(--card-h); display: grid; grid-template-rows: 16px 24px 16px 16px; align-content: center; background: var(--bg3); border: 1px solid var(--stroke); padding: 0 6px; text-align: left; min-width: 0; cursor: pointer; }
   .card:hover { border-color: var(--t3); }
   .card[aria-pressed="true"] { border-color: var(--blue); background: rgb(30 38 56); }
-  .card.allc { flex: none; min-width: 0; width: auto; display: flex; align-items: center; justify-content: center; padding: 6px 10px; align-self: stretch; margin-top: 20px; color: var(--t2); }
+  .card.allc { width: 44px; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--t2); }
   .card.allc[aria-pressed="true"] { color: var(--t1); }
-  .card .c-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
-  .card .c-head .dim { flex: none; font-size: 11px; white-space: nowrap; }
-  .card .c-kind { min-width: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .card .c-big { font-size: 16px; font-weight: 600; line-height: 1.3; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .card .c-big small { font-size: 11px; font-weight: 400; color: var(--t3); margin-left: 5px; }
-  .card .c-row { display: flex; flex-wrap: wrap; gap: 0 8px; font-size: 11px; color: var(--t2); font-variant-numeric: tabular-nums; }
-  .card .c-row b { font-weight: 500; }
-  .card .c-row button { background: none; border: 1px solid transparent; padding: 0 3px; margin-left: -4px; font-size: 11px; color: inherit; }
-  .card .c-row button:hover { border-color: var(--t3); }
-  .card .c-row button[aria-pressed="true"] { border-color: var(--blue); color: var(--t1); }
+  .card > div { display: flex; align-items: baseline; gap: 0 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+  .card .c-head { justify-content: space-between; gap: 6px; }
+  .card .c-head .dim { flex: none; font-size: 11px; }
+  .card .c-kind { min-width: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; }
+  .card .c-big { font-size: 16px; font-weight: 600; line-height: 24px; font-variant-numeric: tabular-nums; }
+  .card .c-big small { font-size: 11px; font-weight: 400; color: var(--t3); margin-left: -3px; }
+  .card .c-line { font-size: 11px; line-height: 16px; color: var(--t2); font-variant-numeric: tabular-nums; }
+  .card .c-line > * { flex: none; }
+  .card .c-line b { font-weight: 500; }
+  .card .c-line button { background: none; border: 1px solid transparent; padding: 0 2px; margin: 0 -3px; font-size: 11px; line-height: 14px; color: inherit; }
+  .card .c-line button:hover { border-color: var(--t3); }
+  .card .c-line button[aria-pressed="true"] { border-color: var(--blue); color: var(--t1); }
   .tbar { flex: none; font-size: 12px; color: var(--t3); display: flex; gap: 10px; align-items: baseline; }
   .eps td { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .eps th.num, .eps td.num { text-align: right; padding-right: 10px; }
@@ -1383,16 +1385,16 @@
     for (const r of rows) {
       if (r.kind !== 'session' || (target && r.target !== target)) continue;
       const id = cardId(r);
-      if (!out.has(id)) out.set(id, { id, dir: r.dir, key: cardKey(r), r: { kind: 'session', method: r.method, dir: r.dir, n: 0, err: 0, open: 0, msgs_rate: 0, bytes_rate: 0, max: null, sum_ms: 0 } });
+      if (!out.has(id)) out.set(id, { id, dir: r.dir, key: cardKey(r), r: { kind: 'session', method: r.method, dir: r.dir, n: 0, err: 0, open: 0, msgs: 0, bytes: 0, msgs_rate: 0, bytes_rate: 0, max: null, sum_ms: 0 } });
       const a = out.get(id).r;
-      a.n += r.n; a.err += r.err; a.open += r.open; a.msgs_rate += r.msgs_rate; a.bytes_rate += r.bytes_rate; a.sum_ms += r.sum_ms;
+      a.n += r.n; a.err += r.err; a.open += r.open; a.msgs += r.msgs; a.bytes += r.bytes; a.msgs_rate += r.msgs_rate; a.bytes_rate += r.bytes_rate; a.sum_ms += r.sum_ms;
       if (has(r.max)) a.max = Math.max(a.max || 0, r.max);
     }
     for (const id of v.pick) {
       if (out.has(id)) continue;
       const [dir, key] = id.split('|');
       if (!inView(v, key.replace(/^session-.*/, 'session'))) continue;
-      out.set(id, { id, dir, key, r: { kind: key.startsWith('session-') ? 'session' : key, dir, n: 0, err: 0, e4: 0, e5: 0, open: 0, msgs_rate: 0, bytes_rate: 0, sum_ms: 0, rate: 0 } });
+      out.set(id, { id, dir, key, r: { kind: key.startsWith('session-') ? 'session' : key, dir, n: 0, err: 0, e4: 0, e5: 0, open: 0, msgs: 0, bytes: 0, msgs_rate: 0, bytes_rate: 0, sum_ms: 0, rate: 0, p99: null, max: null } });
     }
     const order = (k) => { const i = CARD_ORDER.indexOf(k); return i < 0 ? CARD_ORDER.length : i; };
     return [...out.values()].sort((a, b) => order(a.key) - order(b.key) || b.r.sum_ms - a.r.sum_ms || a.key.localeCompare(b.key));
@@ -1423,57 +1425,64 @@
     box.addEventListener('keydown', (e) => { if (e.target === box && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pickCard(v, [c.id], e); } });
     const lim = limitsOf(r);
     const head = el('div', 'c-head');
-    const label = kindLabel(c.key);
-    const row = el('div', 'c-row');
-    const part = (k, val, g) => { const s = el('span'); s.append(document.createTextNode(`${k} `), el('b', g ? `g-${g}` : null, val)); row.append(s); };
-    const errs = el('div', 'c-row');
-    if (r.kind === 'session') {
-      if (c.dir === 'out') {
-        head.append(el('span', `c-kind k-${c.key}`, label), el('span', 'dim', 'sent'));
-        const big = el('div', 'c-big', `${rate(r.msgs_rate)}`);
-        big.append(el('small', null, 'msg/s'));
-        box.append(head, big);
-        part('', Bps(r.bytes_rate));
-        box.append(row);
-        return box;
-      }
-      head.append(el('span', `c-kind k-${c.key}`, label), el('span', 'dim', `${count(r.n)} ended`));
-      const big = el('div', 'c-big', count(r.open));
-      big.append(el('small', null, 'open now'));
-      part('in', `${rate(r.msgs_rate)}/s`);
-      part('', Bps(r.bytes_rate));
-      errs.append(el('span', r.err ? 'no' : null, `dropped ${count(r.err)}`));
-      if (has(r.max)) errs.append(el('span', null, `max ${spent(r.max)}`));
-      box.append(head, big, row, errs);
-      return box;
-    }
-    head.append(el('span', `c-kind k-${c.key}`, label), el('span', 'dim', count(r.n)));
-    head.title = `${count(r.n)} over the range, ${rate(r.rate)}/s`;
-    const big = el('div', 'c-big', spent(r.sum_ms));
-    big.append(el('small', null, 'time spent'));
-    part('p99', ms(r.p99), grade(r.p99, lim));
-    part('max', ms(r.max), grade(r.max, lim));
-    errs.append(el('span', null, `${rate(r.rate)}/s`));
-    if (r.kind === 'http') {
-      for (const [k, cls] of [['e5', 'no'], ['e4', 'note']]) {
-        const b = button(r[k] ? cls : null, `${k === 'e5' ? '5xx' : '4xx'} ${count(r[k])}`, (e) => {
-          e.stopPropagation();
-          if (v.errs === k && v.pick.has(c.id)) v.errs = '';
-          else { v.errs = k; if (!v.pick.has(c.id)) v.pick = new Set([c.id]); }
-          v.open = null;
-          writeHash();
-          timingRender(v);
-        });
-        b.title = `only rows with ${k === 'e5' ? '5xx' : '4xx'} answers`;
-        b.setAttribute('aria-pressed', String(v.errs === k && v.pick.has(c.id)));
-        errs.append(b);
-      }
+    const big = el('div', 'c-big');
+    const one = el('div', 'c-line');
+    const two = el('div', 'c-line');
+    const kv = (k, val, cls) => {
+      const sp = el('span');
+      if (k) sp.append(document.createTextNode(`${k} `));
+      sp.append(el('b', cls || null, val));
+      return sp;
+    };
+    const tight = (x) => (has(x) && x >= 1 && x < 10 ? `${x.toFixed(1)} ms` : has(x) && x >= 10 && x < 1000 ? `${Math.round(x)} ms` : ms(x));
+    const tightSpent = (x) => (has(x) && x >= 600000 && x < 3600000 ? `${Math.round(x / 60000)} min` : spent(x));
+    const fill = (line) => { if (!line.childNodes.length) line.append(el('span', null, '\u00a0')); };
+    head.append(el('span', `c-kind k-${c.key}`, kindLabel(c.key)));
+    if (r.kind === 'session' && c.dir === 'out') {
+      head.append(el('span', 'dim', count(r.msgs)));
+      head.title = `${count(r.msgs)} messages sent over the range`;
+      big.append(el('span', null, rate(r.msgs_rate)), el('small', null, 'msg/s'));
+      one.append(kv('out', Bps(r.bytes_rate)));
+      two.append(kv('sent', bytes(r.bytes)));
+      two.title = 'bytes sent over the range';
+    } else if (r.kind === 'session') {
+      head.append(el('span', 'dim', count(r.n)));
+      head.title = `${count(r.n)} sessions ended over the range`;
+      big.append(el('span', null, count(r.open)), el('small', null, 'open'));
+      one.append(kv('in', `${rate(r.msgs_rate)}/s`), kv('', Bps(r.bytes_rate)));
+      two.append(kv('dropped', count(r.err), r.err ? 'no' : null));
+      if (has(r.max)) two.append(kv('max', tightSpent(r.max)));
     } else {
-      const e = el('span', r.err ? 'no' : null, `${c.key === 'setup' ? 'failed' : 'errors'} ${count(r.err)}`);
-      if (c.key === 'setup') e.title = 'never connected';
-      errs.append(e);
+      head.append(el('span', 'dim', count(r.n)));
+      head.title = `${count(r.n)} over the range, ${rate(r.rate)}/s`;
+      big.append(el('span', null, spent(r.sum_ms)), el('small', null, 'spent'));
+      one.append(kv('p99', tight(r.p99), grade(r.p99, lim) ? `g-${grade(r.p99, lim)}` : null), kv('max', tight(r.max), grade(r.max, lim) ? `g-${grade(r.max, lim)}` : null));
+      one.title = `p99 ${ms(r.p99)} · max ${ms(r.max)}`;
+      two.append(kv('', `${rate(r.rate)}/s`));
+      if (r.kind === 'http') {
+        for (const [k, cls] of [['e5', 'no'], ['e4', 'note']]) {
+          const b = button(null, null, (e) => {
+            e.stopPropagation();
+            if (v.errs === k && v.pick.has(c.id)) v.errs = '';
+            else { v.errs = k; if (!v.pick.has(c.id)) v.pick = new Set([c.id]); }
+            v.open = null;
+            writeHash();
+            timingRender(v);
+          });
+          b.append(kv(k === 'e5' ? '5xx' : '4xx', count(r[k]), r[k] ? cls : null));
+          b.title = `only rows with ${k === 'e5' ? '5xx' : '4xx'} answers`;
+          b.setAttribute('aria-pressed', String(v.errs === k && v.pick.has(c.id)));
+          two.append(b);
+        }
+      } else {
+        const e = kv(c.key === 'setup' ? 'failed' : 'errors', count(r.err), r.err ? 'no' : null);
+        if (c.key === 'setup') e.title = 'never connected';
+        two.append(e);
+      }
     }
-    box.append(head, big, row, errs);
+    fill(one);
+    fill(two);
+    box.append(head, big, one, two);
     return box;
   }
 
@@ -1485,7 +1494,9 @@
     const all = button('card allc', 'all', () => { v.pick = new Set(); v.errs = ''; v.open = null; writeHash(); timingRender(v); });
     all.setAttribute('aria-pressed', String(!v.pick.size && !v.errs));
     all.title = 'every kind and direction';
-    const parts = [all];
+    const first = el('div', 'grp');
+    first.append(el('span', 'grp-head', '\u00a0'), all);
+    const parts = [first];
     for (const [dir, label] of DIRS) {
       const mine = cards.filter((c) => c.dir === dir);
       if (!mine.length) continue;
