@@ -24,6 +24,7 @@ import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { usePeek } from '@/shared-components/peek';
 import { PersonRow, Who } from '@/shared-components/PersonRow';
+import { ProfileLink } from '@/shared-components/ProfileLink';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -406,7 +407,6 @@ function People() {
 
 function RecentCard({ person: p }: { person: Recent }) {
   const peek = usePeek(PEEK_MS);
-  const to = `/watch/${encodeURIComponent(p.name)}`;
   return (
     <article
       id={`recent-${p.name}`}
@@ -415,7 +415,7 @@ function RecentCard({ person: p }: { person: Recent }) {
       onPointerEnter={(e) => peek.show(e, e.currentTarget)}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onPointerDown={(e) => {
-        if (e.target instanceof Element && e.target.closest('button') && !e.target.closest('[data-peek-hold]')) peek.close();
+        if (e.target instanceof Element && e.target.closest('button, a') && !e.target.closest('[data-peek-hold]')) peek.close();
       }}
       onFocus={(e) => {
         if (!e.target.closest('button')) peek.focus(e, e.currentTarget);
@@ -428,13 +428,13 @@ function RecentCard({ person: p }: { person: Recent }) {
         <PresenceSquare status={p.presence} className="border-backgroundSecondary" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <Link
+        <ProfileLink
           id={`recent-link-${p.name}`}
-          to={to}
+          person={{ name: p.name, verified: p.verified, oauth_verified: p.oauth_verified, avatar: p.avatar }}
           className="flex min-w-0 border border-transparent outline-none after:absolute after:inset-0 focus-visible:border-primaryBlue"
         >
           <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
-        </Link>
+        </ProfileLink>
         <div className="flex items-center gap-1.5 text-xs text-textTertiary">
           <RiTimeLine aria-hidden size={12} className="shrink-0" />
           <Tooltip content={new Date(p.ended_at).toLocaleString()}>
