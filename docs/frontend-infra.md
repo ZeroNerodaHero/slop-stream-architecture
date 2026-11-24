@@ -4,8 +4,8 @@ the header comment of each file in `frontend/src/infra`, moved here when the sou
 
 ## `about.ts`
 
-The about tab's page (docs/about.md), the parts that are not the tab itself (About.tsx): a
-fake stream's document, the rules for a link, and the cleaning of a text block's html. A text
+The about tab's page (docs/about.md), the parts that are not the tab itself (About.tsx):
+the rules for a link, and the cleaning of a text block's html. A text
 block is a fragment of a few tags, never html from a string: the tab parses it and draws each
 tag it allows as its element. A picture, a clip and a track are objects the owner put up;
 the page names them by id. Scripts have no door: there is no block that takes one.

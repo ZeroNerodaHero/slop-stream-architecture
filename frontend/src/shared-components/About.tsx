@@ -13,7 +13,7 @@ import {
 } from '@remixicon/react';
 import { type CSSProperties, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
-import { type AboutDoc, BLOCKS_MAX, TEXT_MAX, sanitizeHtml } from '@/infra/about';
+import { BLOCKS_MAX, TEXT_MAX, sanitizeHtml } from '@/infra/about';
 import { type PageWire, api } from '@/infra/api';
 import { ExternalLink } from '@/shared-components/ExternalLink';
 import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable';
@@ -152,24 +152,6 @@ function blocksOf(rows: Row[]): PageWire[] {
     });
   });
   return out;
-}
-
-function dummyRows(doc: AboutDoc): Row[] {
-  const rows: Row[] = [];
-  const media: Cell[] = [];
-  const tracks: Cell[] = [];
-  for (const block of doc.blocks) {
-    if (block.kind === 'text') rows.push({ key: uid(), cells: [makeCell('text', { id: -1, html: paragraphs(block.text) })] });
-    if (block.kind === 'image') media.push(makeCell('image', { id: -1, src: block.src }));
-    if (block.kind === 'video') media.push(makeCell('video', { id: -1, src: block.src, poster: block.poster }));
-    if (block.kind === 'music') for (const t of block.tracks.slice(0, CELLS_MAX)) tracks.push(makeCell('audio', { id: -1, src: t.src }));
-  }
-  for (const group of [media, tracks]) {
-    if (group.length === 0) continue;
-    const cols = Math.max(COLS_MIN, Math.floor(COLS / group.length));
-    rows.push({ key: uid(), cells: group.map((cell) => ({ ...cell, cols })) });
-  }
-  return rows;
 }
 
 function Rich({ html }: { html: string }) {
@@ -462,15 +444,14 @@ interface Pending {
 
 interface AboutProps {
   name: string;
-  doc: AboutDoc | null;
   edit?: boolean;
   id?: string;
 }
 
-export function About({ name, doc, edit = false, id }: AboutProps) {
+export function About({ name, edit = false, id }: AboutProps) {
   const box = id ?? `about-${name}`;
-  const [rows, setRows] = useState<Row[]>(() => (doc ? dummyRows(doc) : []));
-  const [loaded, setLoaded] = useState(doc !== null);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState('');
@@ -488,7 +469,7 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
   }, [rows]);
 
   useEffect(() => {
-    if (doc || failed) return;
+    if (failed) return;
     let dead = false;
     api
       .aboutPage(name)
@@ -503,7 +484,7 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     return () => {
       dead = true;
     };
-  }, [name, doc, failed]);
+  }, [name, failed]);
 
   const persist = (list: Row[]) => {
     if (uploads.current > 0) {

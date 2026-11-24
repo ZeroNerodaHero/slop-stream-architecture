@@ -1,6 +1,6 @@
 import { RiChat3Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import {
@@ -58,9 +58,8 @@ import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared
 import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';
 import { CHAT_MOBILE, keyboardStrip, useIsMobile } from '@/infra/mobile';
 import { KbdDebug } from '@/shared-components/KbdDebug';
-import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
-import { cleanName, isDummyName } from '@/infra/names';
+import { cleanName } from '@/infra/names';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
@@ -83,7 +82,6 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { StreamTile } from '@/shared-components/StreamTile';
-import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -203,11 +201,10 @@ export function WatchPage() {
   const chatOpen = useAtomValue(chatModalOpenAtom);
   const chatTab = !mobile && narrow && chatSide !== 'modal';
   const cornerTaken = useAtomValue(publishPipAtom);
-  const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
   const thumbs = useAtomValue(peeksAtom)[name]?.card.thumbs;
   const [brokenThumb, setBrokenThumb] = useState<string | null>(null);
   useEffect(() => {
-    if (name && !isDummyName(name)) void loadPeek(name);
+    if (name) void loadPeek(name);
   }, [name]);
   const offlineThumb = offline !== null ? api.offlineUrl(name, offline) : thumbs?.[0] !== undefined ? api.streamThumbUrl(name, thumbs[0]) : null;
   const shownThumb = offlineThumb !== brokenThumb ? offlineThumb : null;
@@ -266,7 +263,6 @@ export function WatchPage() {
         </Tooltip>
       )}
       {oauthVerified && <OAuthMark id="watch-oauth-verified" size={16} className="shrink-0" />}
-      {isDummyName(name) && <TestBadge />}
       {bio && (
         <span id="bio" className="sr-only">
           {bio}
@@ -441,13 +437,13 @@ export function WatchPage() {
     <FollowButton id="follow" name={name} small={mobile} className={className} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
   );
   const rowEnd =
-    name && !isDummyName(name) ? (
+    name ? (
       <>
         {followButton(mobile ? 'min-h-11 min-w-11' : undefined)}
         <DmButton name={name} />
       </>
     ) : undefined;
-  const followersCount = name && !isDummyName(name) && followers !== null && (
+  const followersCount = name && followers !== null && (
     <span id="followers">
       {followers} {followers === 1 ? 'follower' : 'followers'}
     </span>
@@ -487,7 +483,7 @@ export function WatchPage() {
         <>
           <div className="[&>div]:mt-0">{status}</div>
           {offlineWords}
-          <About key={name} name={name} doc={about} edit={mine} />
+          <About key={name} name={name} edit={mine} />
         </>
       ) : t === 'calendar' ? (
         <Calendar name={name} />
@@ -505,7 +501,7 @@ export function WatchPage() {
           title={title}
           titleId="who"
           mobileStart={face}
-          mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
+          mobileSub={streamNumbers(name ? followers : null, viewers)}
           mobileEnd={rowEnd}
           wide
           bleed
@@ -570,7 +566,7 @@ export function WatchPage() {
       titleId="who"
       person
       mobileStart={face}
-      mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
+      mobileSub={streamNumbers(name ? followers : null, viewers)}
       mobileEnd={rowEnd}
       wide
     >
@@ -610,7 +606,7 @@ export function WatchPage() {
                 {deskTab === 'about' ? (
                   <>
                     {offlineWords}
-                    <About key={name} name={name} doc={about} edit={mine} />
+                    <About key={name} name={name} edit={mine} />
                   </>
                 ) : deskTab === 'calendar' ? (
                   <Calendar name={name} />

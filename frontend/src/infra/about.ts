@@ -1,15 +1,3 @@
-import { api } from '@/infra/api';
-
-export type AboutBlock =
-  | { kind: 'text'; text: string }
-  | { kind: 'image'; src: string }
-  | { kind: 'video'; src: string; poster?: string }
-  | { kind: 'music'; tracks: { src: string }[] };
-
-export interface AboutDoc {
-  blocks: AboutBlock[];
-}
-
 export function linkHref(href: unknown): string | null {
   if (typeof href !== 'string' || href.length === 0 || href.length > 2000) return null;
   let url: URL;
@@ -28,49 +16,6 @@ export function isSameOrigin(href: string): boolean {
   } catch {
     return false;
   }
-}
-
-function fnv(name: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < name.length; i++) {
-    h ^= name.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-const DUMMY_WHO = [
-  'night streams from a small room. the lamp does most of the work.',
-  'the cat is the co-host. i am the one who talks.',
-  'here for the chat, and whatever was already open.',
-  'one desk, a microphone that mostly behaves, and a long one.'
-];
-const DUMMY_STREAM = [
-  'retro games, then a tangent, then the game again.',
-  'a cozy nothing. lo-fi, long silences, the plant in the corner.',
-  'building a thing live. it has been almost done for a while.',
-  'music i made, played badly, then talked over.'
-];
-const DUMMY_WHEN = [
-  'weeknights after 10. sundays if the coffee works.',
-  'late. later than i said.',
-  'no set time. the title says when.',
-  'saturday long, tuesday short.'
-];
-
-export function dummyPage(name: string, pictures: { offline: number | null }): AboutDoc {
-  const h = fnv(name);
-  const who = DUMMY_WHO[h % DUMMY_WHO.length] ?? DUMMY_WHO[0];
-  const stream = DUMMY_STREAM[(h >>> 4) % DUMMY_STREAM.length] ?? DUMMY_STREAM[0];
-  const when = DUMMY_WHEN[(h >>> 8) % DUMMY_WHEN.length] ?? DUMMY_WHEN[0];
-  return {
-    blocks: [
-      { kind: 'text', text: `${who}\n\n${stream}\n\n${when}` },
-      { kind: 'image', src: pictures.offline !== null ? api.offlineUrl(name, pictures.offline) : '/about-demo/banner.jpg' },
-      { kind: 'video', src: '/about-demo/clip.mp4', poster: '/about-demo/poster.jpg' },
-      { kind: 'music', tracks: [{ src: '/about-demo/track-1.mp3' }, { src: '/about-demo/track-2.mp3' }] }
-    ]
-  };
 }
 
 export const TEXT_MAX = 10_000;
