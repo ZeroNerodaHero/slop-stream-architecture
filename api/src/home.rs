@@ -61,7 +61,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
     let limits = crate::ratelimit::ByIp { redis: crate::connect_redis(redis_url).await, rule: crate::ratelimit::home_rule };
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/api/streams", get(list).layer(axum::middleware::map_response(crate::media::public_cache(crate::media::HOME_CACHE))))
+        .route("/api/streams", get(list))
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .layer(axum::middleware::map_response(crate::media::no_store_by_default))
         .with_state(home);
