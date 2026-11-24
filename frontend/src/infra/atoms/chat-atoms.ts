@@ -56,12 +56,45 @@ const RECONNECT_MS = 3000;
 const OLDER_PAGE = 50;
 const MAX_LOADED = 2000;
 const LEAVE_MS = 100;
+const HISTORY_WAIT_MS = 4000;
+const BOOT_CHAT_MS = 10_000;
+const NO_LINE_YET = '0-0';
 
 function chatPath(room: string): string {
   return room
     .split('/')
     .map((part) => encodeURIComponent(part))
     .join('/');
+}
+
+const latestPath = (name: string) => `/chat/${chatPath(name)}/before`;
+
+declare global {
+  interface Window {
+    __bootChat?: { name: string; born: number; lines: Promise<Response> };
+  }
+}
+
+function takeBootChat(name: string): Promise<ChatLine[]> | null {
+  const boot = window.__bootChat;
+  if (!boot) return null;
+  delete window.__bootChat;
+  if (boot.name !== name || performance.now() - boot.born > BOOT_CHAT_MS) return null;
+  return linesOf(boot.lines).catch(() => chatGet(latestPath(name)));
+}
+
+let takeEarly: (name: string) => Promise<ChatLine[]> | null = () => null;
+
+export function takeHistoryFrom(take: (name: string) => Promise<ChatLine[]> | null) {
+  takeEarly = take;
+}
+
+export function askLatest(name: string): Promise<ChatLine[]> {
+  return chatGet(latestPath(name));
+}
+
+function askHistory(name: string): Promise<ChatLine[]> {
+  return takeBootChat(name) ?? takeEarly(name) ?? askLatest(name);
 }
 const EVERY_CHANNEL = '*';
 const NICK_RE = /^[a-zA-Z0-9_-]{1,24}$/;
@@ -157,6 +190,7 @@ export class ChatRoom {
   readonly behindAtom: PrimitiveAtom<number> = atom(0);
   readonly scrollAtom: PrimitiveAtom<number> = atom(0);
   readonly guestAtom: PrimitiveAtom<boolean> = atom(false);
+  readonly readerAtom: PrimitiveAtom<boolean> = atom(false);
   readonly channelAtom: PrimitiveAtom<string> = atom('');
   readonly replyAtom: PrimitiveAtom<ChatLine | null> = atom<ChatLine | null>(null);
   readonly flashAtom: PrimitiveAtom<string | null> = atom<string | null>(null);
@@ -168,7 +202,12 @@ export class ChatRoom {
 
   private joins = new Map<symbol, Owner | null>();
   private owner: Owner | null = null;
-  private me: string | null = null;
+  private me: string | null | undefined = null;
+  private nick = '';
+  private history: Promise<void> | null = null;
+  private historyRun = 0;
+  private historyHeld = false;
+  private greeted = false;
   private ws: WebSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private leaving: ReturnType<typeof setTimeout> | null = null;
@@ -207,9 +246,10 @@ export class ChatRoom {
     const attached = this.attach.anyAtom;
     const sending = this.sendingAtom;
     const phase = this.phaseAtom;
+    const reader = this.readerAtom;
     this.canSendAtom = atom((get) => {
       const length = chars(get(draft).trim());
-      return !get(sending) && get(phase) === 'open' && length <= MAX_CHAT_CHARS && (length > 0 || get(attached));
+      return !get(sending) && get(phase) === 'open' && !get(reader) && length <= MAX_CHAT_CHARS && (length > 0 || get(attached));
     });
   }
 
@@ -244,13 +284,60 @@ export class ChatRoom {
 
   open() {
     const owner = this.wantedOwner();
-    const me = store.get(meAtom) ?? null;
-    if (this.ws && sameOwner(this.owner, owner) && this.me === me) return;
-    const fresh = !sameOwner(this.owner, owner) || this.me !== me;
+    const me = store.get(meAtom);
+    const nick = me ? '' : store.get(nickAtom).trim();
+    this.loadHistory();
+    const same = sameOwner(this.owner, owner) && this.sameSpeaker(me, nick);
+    if (this.ws && same) {
+      if (!this.greeted && me !== undefined) {
+        this.me = me;
+        this.nick = nick;
+      }
+      return;
+    }
     this.owner = owner;
     this.hangUp();
-    if (fresh) this.bucket = { tokens: this.tier().burst, at: Date.now() };
+    if (!same) this.bucket = { tokens: this.tier().burst, at: Date.now() };
     this.connect();
+  }
+
+  private sameSpeaker(me: string | null | undefined, nick: string): boolean {
+    if (me === undefined || (this.me === undefined && !this.greeted)) return true;
+    if (typeof me === 'string') return this.me === me;
+    return typeof this.me !== 'string' && this.nick === nick;
+  }
+
+  private loadHistory() {
+    if (this.server || this.history) return;
+    const run = ++this.historyRun;
+    this.history = askHistory(this.key).then(
+      (lines) => {
+        if (this.historyRun !== run) return;
+        this.historyHeld = true;
+        this.scrollPlan = 'bottom';
+        store.set(this.linesAtom, mergeLines(lines, store.get(this.linesAtom)));
+        store.set(this.loadedAtom, true);
+      },
+      (err: unknown) => {
+        if (this.historyRun !== run) return;
+        this.history = null;
+        store.set(this.loadedAtom, true);
+        this.showNotice(err instanceof Error ? err.message : 'could not load the chat');
+      }
+    );
+  }
+
+  private settled(): Promise<void> {
+    const history = this.history;
+    if (!history) return Promise.resolve();
+    return Promise.race([history, new Promise<void>((done) => setTimeout(done, HISTORY_WAIT_MS))]);
+  }
+
+  private sinceId(): string | undefined {
+    const tail = this.liveTail();
+    const last = tail[tail.length - 1];
+    if (last) return last.id;
+    return this.historyHeld ? NO_LINE_YET : undefined;
   }
 
   reconnect() {
@@ -292,8 +379,14 @@ export class ChatRoom {
     store.set(this.noticeAtom, '');
     store.set(this.waitAtom, 0);
     store.set(this.guestAtom, false);
+    store.set(this.readerAtom, false);
     this.owner = null;
     this.me = null;
+    this.nick = '';
+    this.greeted = false;
+    this.historyRun += 1;
+    this.history = null;
+    this.historyHeld = false;
     this.tails = new Map();
     this.counts = new Map();
     this.wasOpen = false;
@@ -486,28 +579,49 @@ export class ChatRoom {
   }
 
   private connect() {
-    const nick = store.get(nickAtom).trim();
-    const me = store.get(meAtom) ?? null;
+    const known = store.get(meAtom);
     const owner = this.owner;
-    if (!owner && !me && !isValidNick(nick)) {
+    if (this.server && !owner && known === undefined) {
+      store.set(this.phaseAtom, 'off');
+      return;
+    }
+    const me = known ?? null;
+    const nick = store.get(nickAtom).trim();
+    if (this.server && !owner && !me && !isValidNick(nick)) {
       store.set(this.phaseAtom, 'off');
       return;
     }
 
+    this.loadHistory();
     store.set(this.phaseAtom, 'connecting');
     const ws = new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`));
     this.ws = ws;
-    this.me = me;
+    this.me = known;
+    this.nick = me ? '' : nick;
+    this.greeted = false;
+    store.set(this.readerAtom, false);
     const source = `/chat/${this.key}`;
 
-    ws.onopen = () => {
-      const hello = owner ? { type: 'hello', nick, session: owner.session, token: owner.token } : me ? { type: 'hello' } : { type: 'hello', nick };
+    ws.onopen = async () => {
+      if (!this.server) await this.settled();
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+      const speaker = store.get(meAtom);
+      if (speaker !== undefined) this.me = speaker;
+      const named = owner || typeof this.me === 'string' ? {} : isValidNick(this.nick) ? { nick: this.nick } : {};
+      const since = this.server ? undefined : this.sinceId();
+      const hello = {
+        type: 'hello',
+        ...(owner ? { nick, session: owner.session, token: owner.token } : named),
+        ...(since ? { since } : {})
+      };
       record(source, 'out', hello);
       ws.send(JSON.stringify(hello));
+      this.greeted = true;
       store.set(this.phaseAtom, 'open');
-      store.set(this.asStreamerAtom, owner !== null || me === this.key);
+      store.set(this.asStreamerAtom, owner !== null || this.me === this.key);
       if (this.server) this.sendSince();
       if (this.server && this.wasOpen) void this.refreshReactions();
+      if (!this.server && this.wasOpen) void this.refreshLatest();
       this.wasOpen = true;
     };
     ws.onmessage = (e) => {
@@ -523,6 +637,7 @@ export class ChatRoom {
         who?: string;
         on?: boolean;
         react?: string;
+        reader?: boolean;
       } & Partial<ChatLine>;
       try {
         msg = JSON.parse(String(e.data));
@@ -531,11 +646,8 @@ export class ChatRoom {
       }
       record(source, 'in', msg);
       const tagged = this.server && typeof msg.channel === 'string' ? msg.channel : null;
-      if (msg.type === 'history' && msg.messages) {
-        this.resetHistory();
-        this.scrollPlan = 'bottom';
-        store.set(this.linesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
-        store.set(this.loadedAtom, true);
+      if (msg.type === 'ready') {
+        store.set(this.readerAtom, msg.reader === true);
       } else if (msg.type === 'message' && msg.id) {
         const said = tokensAsTyped(msg.text ?? '');
         const sent = this.inFlight.findIndex(
@@ -560,7 +672,7 @@ export class ChatRoom {
       } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
         this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
       } else if (msg.type === 'error' && msg.error) {
-        this.onError(msg.error, msg.wait, me);
+        this.onError(msg.error, msg.wait, typeof this.me === 'string' ? this.me : null);
       }
     };
     ws.onclose = () => {
@@ -689,6 +801,29 @@ export class ChatRoom {
         if (tail) this.tails.set(channel, wear(tail));
       }
     }
+  }
+
+  private async refreshLatest() {
+    const ws = this.ws;
+    let fresh: ChatLine[];
+    try {
+      fresh = await askLatest(this.key);
+    } catch {
+      return;
+    }
+    const first = fresh[0];
+    const last = fresh[fresh.length - 1];
+    if (this.ws !== ws || !first || !last) return;
+    const byId = new Map(fresh.map((line) => [line.id, line]));
+    const within = (id: string) => compareIds(id, first.id) >= 0 && compareIds(id, last.id) <= 0;
+    const wear = (lines: ChatLine[]) =>
+      lines.flatMap((line) => {
+        const now = byId.get(line.id);
+        if (now) return [{ ...line, reactions: now.reactions }];
+        return within(line.id) ? [] : [line];
+      });
+    store.set(this.linesAtom, wear(store.get(this.linesAtom)));
+    if (this.savedTail) this.savedTail = wear(this.savedTail);
   }
 
   private shelfAppend(name: string, line: ChatLine) {
@@ -961,8 +1096,12 @@ function mergeLines(have: ChatLine[], more: ChatLine[]): ChatLine[] {
   return all.length > KEEP_LINES ? all.slice(all.length - KEEP_LINES) : all;
 }
 
-async function chatGet(path: string): Promise<ChatLine[]> {
-  const res = await fetch(path, { cache: 'no-store' });
+function chatGet(path: string): Promise<ChatLine[]> {
+  return linesOf(fetch(path, { cache: 'no-store' }));
+}
+
+async function linesOf(response: Promise<Response>): Promise<ChatLine[]> {
+  const res = await response;
   let data: { lines?: ChatLine[]; error?: string } | null = null;
   try {
     data = await res.json();

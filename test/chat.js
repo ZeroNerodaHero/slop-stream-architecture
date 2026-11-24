@@ -87,7 +87,7 @@ async function say(page, text) {
           ws.onclose = () => resolve({ type: 'error', error: 'closed' });
           setTimeout(() => resolve({ type: 'timeout' }), 8000);
         });
-        seen.push(first.type === 'history' ? 'in' : first.error || first.type);
+        seen.push(first.type === 'ready' ? 'in' : first.error || first.type);
       }
       for (const ws of open) ws.close();
       return seen;
@@ -184,7 +184,7 @@ async function say(page, text) {
           ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', nick: 'Carol' }));
           ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text: 'carol again' }));
+            if (msg.type === 'ready') ws.send(JSON.stringify({ type: 'say', text: 'carol again' }));
             if (msg.type === 'error' || (msg.type === 'message' && msg.text === 'carol again')) {
               ws.close();
               resolve(msg);

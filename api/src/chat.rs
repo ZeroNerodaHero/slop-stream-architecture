@@ -23,7 +23,7 @@ use crate::auth::{client_ip, is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
 use crate::history;
 use crate::reactions::{self, Reaction};
-use crate::socket::{first_text, id_parts, locked, ping, send, send_within, Beat, Heartbeat, IpSlot, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::socket::{first_text, id_parts, locked, ping, send, Beat, Heartbeat, IpSlot, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
@@ -39,7 +39,6 @@ const SWEEP_EVERY: Duration = Duration::from_secs(60);
 const SLOW_DOWN: &str = "slow down";
 const MAX_SOCKETS_PER_IP: usize = 8;
 const MAX_CHAT_SOCKETS_PER_IP: usize = 32;
-const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
 const EVERY_CHANNEL: &str = "*";
 const FILL_LIMIT: usize = 100;
 
@@ -284,12 +283,17 @@ struct Hello {
     session: Option<i64>,
     token: Option<i64>,
     bot: Option<bool>,
+    #[serde(default)]
+    since: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Out<'a> {
-    History { messages: &'a [Line] },
+    Ready {
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        reader: bool,
+    },
     Message(&'a Line),
     Count { count: usize },
     #[serde(rename = "message")]
@@ -356,16 +360,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         admins,
     };
     let rooms = state.rooms.clone();
-
-    let router = Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .route("/chat/{name}", get(ws))
-        .route("/chat/{server}/{channel}", get(ws_channel))
-        .merge(history::routes())
-        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
-        .layer(axum::middleware::map_response(crate::media::no_store_by_default))
-        .layer(axum::middleware::from_fn(crate::timings::http))
-        .with_state(state);
+    let router = router(state, limits);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("chat on {addr}");
@@ -382,6 +377,18 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
+}
+
+fn router(state: ChatState, limits: crate::ratelimit::ByIp) -> Router {
+    Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/chat/{name}", get(ws))
+        .route("/chat/{server}/{channel}", get(ws_channel))
+        .merge(history::routes())
+        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
+        .layer(axum::middleware::map_response(crate::media::no_store_by_default))
+        .layer(axum::middleware::from_fn(crate::timings::http))
+        .with_state(state)
 }
 
 pub(crate) fn socket_slot(slots: &IpSlots, headers: &HeaderMap) -> Result<Option<IpSlot>, Response> {
@@ -468,7 +475,11 @@ impl Who {
 enum Unknown {
     Refused(&'static str),
     Busy,
+    Reader,
 }
+
+const BAD_NICK: &str = "bad nick. 1 to 24 letters, digits, _ -";
+pub(crate) const READING_ONLY: &str = "reading only. pick a name to talk";
 
 async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello) -> Result<Who, Unknown> {
     let me = match whoami(&s.db, headers).await {
@@ -494,9 +505,13 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     } else if let Some(me) = &me {
         me.name.clone()
     } else {
-        let Some(nick) = hello.nick.as_deref().map(clean_nick).filter(|n| valid_nick(n)) else {
-            return Err(Unknown::Refused("bad nick. 1 to 24 letters, digits, _ -"));
-        };
+        let nick = hello.nick.as_deref().map(clean_nick).unwrap_or_default();
+        if nick.is_empty() {
+            return Err(Unknown::Reader);
+        }
+        if !valid_nick(&nick) {
+            return Err(Unknown::Refused(BAD_NICK));
+        }
         let lower = nick.to_lowercase();
         if lower.starts_with(&s.dummy_prefix) {
             return Err(Unknown::Refused("that nick belongs to the fake streams. pick another"));
@@ -630,13 +645,14 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
         return;
     };
-    let mut who = match identify(&s, &name, &headers, &hello).await {
-        Ok(who) => Some(who),
+    let (mut who, reader) = match identify(&s, &name, &headers, &hello).await {
+        Ok(who) => (Some(who), false),
         Err(Unknown::Refused(why)) => {
             let _ = send(&mut socket, &Out::Error { error: why }).await;
             return;
         }
-        Err(Unknown::Busy) => None,
+        Err(Unknown::Busy) => (None, false),
+        Err(Unknown::Reader) => (None, true),
     };
     if let Some(server) = &server {
         let channel = name.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
@@ -659,13 +675,31 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
         return;
     };
-    let history = history(&s, &name, viewer_of(&who)).await.unwrap_or_default();
-    let mut last_seen = history.last().map(|l| id_parts(&l.id)).unwrap_or((0, 0));
-    if send_within(&mut socket, &Out::History { messages: &history }, HISTORY_TIMEOUT).await.is_err() {
+    if send(&mut socket, &Out::Ready { reader }).await.is_err() {
         return;
+    }
+    let mut last_seen = (0, 0);
+    if let Some(since) = hello.since.as_deref().filter(|id| is_stream_id(id)) {
+        last_seen = id_parts(since);
+        let mut failed = false;
+        for line in after(&s, &name, since, viewer_of(&who)).await {
+            let id = id_parts(&line.id);
+            if id <= last_seen {
+                continue;
+            }
+            last_seen = id;
+            if send(&mut socket, &Out::Message(&line)).await.is_err() {
+                failed = true;
+                break;
+            }
+        }
+        if failed {
+            return;
+        }
     }
     let shown = |who: &Option<Who>| match who {
         Some(w) => format!("{}{}{}", w.from, if w.streamer { " (streamer)" } else { "" }, if w.is_bot() { " (bot)" } else { "" }),
+        None if reader => "a reader".to_owned(),
         None => "somebody (database down, reading only)".to_owned(),
     };
     log::info!("{name}: {} joined", shown(&who));
@@ -718,7 +752,15 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     _ => continue,
                 };
                 let (text, image, images, video, reply) = match serde_json::from_str::<In>(&text) {
+                    Ok(In::Say { .. }) if reader => {
+                        let _ = send(&mut socket, &Out::Error { error: READING_ONLY }).await;
+                        continue;
+                    }
                     Ok(In::Say { text, image, images, video, reply, .. }) => (text, image, images, video, reply),
+                    Ok(In::React { id, .. }) if reader => {
+                        let _ = send(&mut socket, &Out::ReactRefused { error: reactions::LOG_IN, react: &id, wait: None }).await;
+                        continue;
+                    }
                     Ok(In::React { id, emoji, on, .. }) => {
                         let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip, test_room), (&id, &emoji, on)).await;
                         if let Err((error, wait)) = reacted {
@@ -753,6 +795,10 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                         }
                         Err(Unknown::Busy) => {
                             let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
+                            continue;
+                        }
+                        Err(Unknown::Reader) => {
+                            let _ = send(&mut socket, &Out::Error { error: READING_ONLY }).await;
                             continue;
                         }
                     }
@@ -1350,6 +1396,10 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
             let _ = send(&mut socket, &Out::Error { error: why }).await;
             return;
         }
+        Err(Unknown::Reader) => {
+            let _ = send(&mut socket, &Out::Error { error: BAD_NICK }).await;
+            return;
+        }
         Err(Unknown::Busy) => None,
     };
     let shown = |who: &Option<Who>| match who {
@@ -1496,6 +1546,10 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                                     let _ = send(&mut socket, &Out::Error { error: why }).await;
                                     break;
                                 }
+                                Err(Unknown::Reader) => {
+                                    let _ = send(&mut socket, &Out::Error { error: BAD_NICK }).await;
+                                    break;
+                                }
                                 Err(Unknown::Busy) => {
                                     let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
                                     continue;
@@ -1629,13 +1683,12 @@ fn viewer_of(who: &Option<Who>) -> Option<Uuid> {
     who.as_ref().and_then(|w| w.user_id.filter(|_| w.verified))
 }
 
-async fn history(s: &ChatState, name: &str, viewer: Option<Uuid>) -> Result<Vec<Line>, redis::RedisError> {
+pub(crate) async fn latest(s: &ChatState, name: &str) -> Result<Vec<Line>, redis::RedisError> {
     let mut r = s.redis.clone();
     let reply: StreamRangeReply = r.xrevrange_count(room_key(name), "+", "-", HISTORY_LINES).await?;
     let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
     lines.reverse();
     with_faces(&s.db, &mut lines).await;
-    reactions::with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (name, l))).await;
     Ok(lines)
 }
 
@@ -2106,7 +2159,7 @@ mod tests {
         let alice = Speaker::Nick("1.2.3.4".into(), "alice".into());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
-        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None }, "1.2.3.4", false), "room", now).is_err());
+        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None, since: None }, "1.2.3.4", false), "room", now).is_err());
         assert!(limiter.take_at(&alice, "other", now).is_ok());
         assert!(limiter.take_at(&Speaker::Nick("1.2.3.4".into(), "bob".into()), "room", now).is_ok());
         let bob = Speaker::Account(Uuid::nil());
@@ -2137,7 +2190,7 @@ mod tests {
 
     #[test]
     fn who_draws_on_which_bucket() {
-        let hello = Hello { nick: Some(" Bob ".into()), session: None, token: None, bot: None };
+        let hello = Hello { nick: Some(" Bob ".into()), session: None, token: None, bot: None, since: None };
         let id = Uuid::nil();
         let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
         assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4", false), Speaker::Account(id));
@@ -2148,7 +2201,7 @@ mod tests {
         let nick = Who { from: "Bob".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
         assert_eq!(Speaker::of(Some(&nick), &hello, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), "bob".into()));
         assert_eq!(Speaker::of(None, &hello, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), "bob".into()));
-        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None }, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), String::new()));
+        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None, since: None }, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), String::new()));
         assert_eq!(Speaker::Account(id).tier(), LOGIN_TIER);
         assert_eq!(Speaker::Streamer("room".into()).tier(), LOGIN_TIER);
         assert_eq!(Speaker::Nick("1.2.3.4".into(), "bob".into()).tier(), ANON_TIER);
@@ -2156,7 +2209,7 @@ mod tests {
 
     #[test]
     fn only_a_test_streams_own_session_chats_fast() {
-        let hello = Hello { nick: Some("pixelfan".into()), session: Some(1), token: Some(2), bot: Some(true) };
+        let hello = Hello { nick: Some("pixelfan".into()), session: Some(1), token: Some(2), bot: Some(true), since: None };
         let id = Uuid::nil();
         let owner = Who { from: "dummy-mango".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
         let guest = Who { from: "pixelfan".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
@@ -2423,5 +2476,232 @@ mod tests {
         lines[0].avatar = Some(1690000000);
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, None, "a stranger on the freed name is nobody's picture on the account's words");
+    }
+
+    #[test]
+    fn a_socket_opens_with_ready_and_a_hello_can_name_its_last_line() {
+        assert_eq!(serde_json::to_string(&Out::Ready { reader: false }).unwrap(), r#"{"type":"ready"}"#);
+        assert_eq!(serde_json::to_string(&Out::Ready { reader: true }).unwrap(), r#"{"type":"ready","reader":true}"#);
+        match serde_json::from_str::<In>(r#"{"type":"hello","nick":"bob","since":"1729000000000-3"}"#).unwrap() {
+            In::Hello(hello) => assert_eq!(hello.since.as_deref(), Some("1729000000000-3")),
+            _ => panic!("not a hello"),
+        }
+        match serde_json::from_str::<In>(r#"{"type":"hello"}"#).unwrap() {
+            In::Hello(hello) => assert!(hello.since.is_none() && hello.nick.is_none()),
+            _ => panic!("not a hello"),
+        }
+    }
+
+    struct Rig {
+        pool: PgPool,
+        redis: Redis,
+        addr: SocketAddr,
+        _stop: watch::Sender<bool>,
+    }
+
+    async fn rig() -> Rig {
+        let pool = crate::auth::tests::test_db().await;
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/15".into());
+        let redis = crate::connect_redis(&url).await;
+        let (stop, shutdown) = watch::channel(false);
+        let state = ChatState {
+            db: pool.clone(),
+            redis: redis.clone(),
+            client: redis::Client::open(url.as_str()).unwrap(),
+            rooms: Rooms::default(),
+            sockets: IpSlots::new(MAX_CHAT_SOCKETS_PER_IP),
+            limiter: Arc::new(Limiter::new()),
+            reacts: Arc::new(Limiter::for_reactions()),
+            shutdown,
+            dummy_prefix: "dummy-".into(),
+            hide_test: false,
+            persist: false,
+            admins: Vec::new(),
+        };
+        let limits = crate::ratelimit::ByIp { redis: redis.clone(), rule: crate::ratelimit::chat_rule };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(state, limits);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Rig { pool, redis, addr, _stop: stop }
+    }
+
+    async fn say_in(redis: &Redis, room: &str, fields: &[(&str, &str)]) -> String {
+        let id: String = redis.clone().xadd(room_key(room), "*", fields).await.unwrap();
+        id
+    }
+
+    async fn cookie_of(pool: &PgPool, id: Uuid, name: &str) -> String {
+        let token = crate::auth::open_login(pool, &crate::auth::Account { id, name: name.to_owned() }).await.unwrap();
+        format!("login={token}")
+    }
+
+    async fn latest_of(rig: &Rig, path: &str, cookie: Option<&str>) -> (u16, String, serde_json::Value) {
+        let mut ask = reqwest::Client::new().get(format!("http://{}{path}", rig.addr));
+        if let Some(cookie) = cookie {
+            ask = ask.header("cookie", cookie);
+        }
+        let res = ask.send().await.unwrap();
+        let status = res.status().as_u16();
+        let cache = res.headers().get("cache-control").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
+        (status, cache, res.json().await.unwrap_or(serde_json::Value::Null))
+    }
+
+    fn ids_of(answer: &serde_json::Value) -> Vec<String> {
+        answer["lines"].as_array().map(|lines| lines.iter().map(|l| l["id"].as_str().unwrap_or("").to_owned()).collect()).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn the_latest_lines_come_over_http_with_the_sockets_rules() {
+        use crate::auth::tests::row;
+
+        let rig = rig().await;
+        let run = std::process::id();
+        let room = format!("hist{run}");
+        let ann_name = format!("ann{run}");
+        let ann = row(&rig.pool, &ann_name, Some("ann-hash")).await;
+        sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(ann).execute(&rig.pool).await.unwrap();
+        let uid = ann.to_string();
+        let one = say_in(&rig.redis, &room, &[("from", ann_name.as_str()), ("text", "one"), ("streamer", "0"), ("v", "1"), ("uid", uid.as_str())]).await;
+        let gone = say_in(&rig.redis, &room, &[("from", "bob"), ("text", "deleted"), ("streamer", "0"), ("v", "0")]).await;
+        let two = say_in(&rig.redis, &room, &[("from", "bob"), ("text", "two"), ("streamer", "0"), ("v", "0")]).await;
+        remove_line(&rig.pool, &mut rig.redis.clone(), &room, &gone).await.unwrap();
+        reactions::set_line(&rig.pool, &room, &one, ann, "🔥", true).await.unwrap();
+
+        let (status, cache, answer) = latest_of(&rig, &format!("/chat/{room}/before"), None).await;
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(cache, crate::media::PRIVATE_CACHE, "no shared cache may keep a line a moderator then deletes");
+        assert_eq!(ids_of(&answer), vec![one.clone(), two.clone()], "oldest first, the deleted line not among them");
+        let first = &answer["lines"][0];
+        assert_eq!(first["avatar"], 1690000000, "the faces ride along");
+        assert_eq!(first["reactions"][0]["emoji"], "🔥");
+        assert_eq!(first["reactions"][0]["count"], 1);
+        assert!(first["reactions"][0].get("me").is_none(), "nobody asked, so nothing is theirs");
+        assert!(first.get("user_id").is_none(), "an account's id never leaves");
+
+        let ann_cookie = cookie_of(&rig.pool, ann, &ann_name).await;
+        let (_, _, theirs) = latest_of(&rig, &format!("/chat/{room}/before"), Some(&ann_cookie)).await;
+        assert_eq!(theirs["lines"][0]["reactions"][0]["me"], true, "the login's own reaction is marked as the socket marked it");
+
+        let (status, _, older) = latest_of(&rig, &format!("/chat/{room}/before?id={two}"), None).await;
+        assert_eq!((status, ids_of(&older)), (200, vec![one.clone()]), "an id still pages back");
+        assert_eq!(latest_of(&rig, &format!("/chat/{room}/before?id=garbage"), None).await.0, 400);
+        assert_eq!(latest_of(&rig, "/chat/No!Such/before", None).await.0, 400, "the name is checked");
+        let (status, _, empty) = latest_of(&rig, &format!("/chat/empty{run}/before"), None).await;
+        assert_eq!((status, ids_of(&empty).len()), (200, 0), "a room with nothing said is empty, not missing");
+
+        let server = format!("srv{run}");
+        sqlx::query("INSERT INTO groups (name, badge, color, created_by_id) VALUES ($1, 'S', '#ffffff', $2)").bind(&server).bind(ann).execute(&rig.pool).await.unwrap();
+        for (i, channel) in ["general", "staff"].iter().enumerate() {
+            sqlx::query("INSERT INTO channels (server, name, created_by_id, position, kind, home) VALUES ($1, $2, $3, $4, 'text', $5)")
+                .bind(&server)
+                .bind(channel)
+                .bind(ann)
+                .bind(i as i32)
+                .bind(i == 0)
+                .execute(&rig.pool)
+                .await
+                .unwrap();
+        }
+        let staffers: Uuid = sqlx::query_scalar("INSERT INTO roles (group_name, name, color) VALUES ($1, 'staffers', '#ffffff') RETURNING id")
+            .bind(&server)
+            .fetch_one(&rig.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO channel_roles (server, channel, role_id) VALUES ($1, 'staff', $2)").bind(&server).bind(staffers).execute(&rig.pool).await.unwrap();
+        let cy_name = format!("cy{run}");
+        let cy = row(&rig.pool, &cy_name, Some("cy-hash")).await;
+        sqlx::query("INSERT INTO memberships (name, group_name, user_id) VALUES ($1, $2, $3)").bind(&cy_name).bind(&server).bind(cy).execute(&rig.pool).await.unwrap();
+        let cy_cookie = cookie_of(&rig.pool, cy, &cy_name).await;
+        let secret = say_in(&rig.redis, &format!("{server}/staff"), &[("from", ann_name.as_str()), ("text", "staff only"), ("streamer", "0"), ("v", "1"), ("uid", uid.as_str())]).await;
+        let open = say_in(&rig.redis, &format!("{server}/general"), &[("from", "bob"), ("text", "hi all"), ("streamer", "0"), ("v", "0")]).await;
+
+        let (status, _, answer) = latest_of(&rig, &format!("/chat/{server}/general/before"), None).await;
+        assert_eq!((status, ids_of(&answer)), (200, vec![open]), "an open channel is anyone's to read, logged in or not");
+        let (status, _, answer) = latest_of(&rig, &format!("/chat/{server}/staff/before"), None).await;
+        assert_eq!((status, answer["error"].as_str()), (404, Some("no such channel")), "a kept channel is not there for a stranger");
+        assert!(ids_of(&answer).is_empty());
+        let (status, _, answer) = latest_of(&rig, &format!("/chat/{server}/staff/before"), Some(&cy_cookie)).await;
+        assert_eq!((status, answer["error"].as_str()), (404, Some("no such channel")), "nor for a member without the role");
+        sqlx::query("INSERT INTO role_members (user_id, role_id) VALUES ($1, $2)").bind(cy).bind(staffers).execute(&rig.pool).await.unwrap();
+        let (status, _, answer) = latest_of(&rig, &format!("/chat/{server}/staff/before"), Some(&cy_cookie)).await;
+        assert_eq!((status, ids_of(&answer)), (200, vec![secret]), "with the role it reads as the socket would");
+        assert_eq!(latest_of(&rig, &format!("/chat/{server}/nope/before"), None).await.0, 404);
+    }
+
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    async fn socket(rig: &Rig, room: &str, hello: serde_json::Value) -> Client {
+        use futures_util::SinkExt;
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{}/chat/{room}", rig.addr)).await.unwrap();
+        ws.send(tokio_tungstenite::tungstenite::Message::text(hello.to_string())).await.unwrap();
+        ws
+    }
+
+    async fn heard(ws: &mut Client, within: Duration) -> Vec<serde_json::Value> {
+        use futures_util::StreamExt;
+        let mut frames = Vec::new();
+        let until = tokio::time::Instant::now() + within;
+        while let Ok(Some(Ok(frame))) = tokio::time::timeout_at(until, ws.next()).await {
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = frame {
+                let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if frame["type"] != "count" {
+                    frames.push(frame);
+                }
+            }
+        }
+        frames
+    }
+
+    fn texts(frames: &[serde_json::Value]) -> Vec<&str> {
+        frames.iter().filter(|f| f["type"] == "message").map(|f| f["text"].as_str().unwrap_or("")).collect()
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_socket_sends_no_history_and_fills_the_gap_after_its_since() {
+        use futures_util::SinkExt;
+
+        let rig = rig().await;
+        let run = std::process::id();
+        let room = format!("gap{run}");
+        let line = |text: &'static str| [("from", "bob"), ("text", text), ("streamer", "0"), ("v", "0")];
+        let a = say_in(&rig.redis, &room, &line("a")).await;
+        say_in(&rig.redis, &room, &line("b")).await;
+        say_in(&rig.redis, &room, &line("c")).await;
+
+        let mut plain = socket(&rig, &room, serde_json::json!({ "type": "hello", "nick": "plain" })).await;
+        let first = heard(&mut plain, Duration::from_millis(500)).await;
+        assert_eq!(first, vec![serde_json::json!({ "type": "ready" })], "no history on the socket: the lines are the http answer's");
+
+        let mut caught = socket(&rig, &room, serde_json::json!({ "type": "hello", "nick": "late", "since": a })).await;
+        let frames = heard(&mut caught, Duration::from_millis(500)).await;
+        assert_eq!(frames[0]["type"], "ready");
+        assert!(frames.iter().all(|f| f["type"] != "history"));
+        assert_eq!(texts(&frames), vec!["b", "c"], "what came after the snapshot's last line, once each and in order");
+
+        let mut reader = socket(&rig, &room, serde_json::json!({ "type": "hello" })).await;
+        assert_eq!(heard(&mut reader, Duration::from_millis(500)).await, vec![serde_json::json!({ "type": "ready", "reader": true })], "no nick and no login reads");
+
+        say_in(&rig.redis, &room, &line("d")).await;
+        assert_eq!(texts(&heard(&mut caught, Duration::from_millis(1500)).await), vec!["d"], "a live line after the fill comes once");
+        assert_eq!(texts(&heard(&mut plain, Duration::from_millis(500)).await), vec!["d"]);
+        assert_eq!(texts(&heard(&mut reader, Duration::from_millis(500)).await), vec!["d"], "a reader hears the room live");
+
+        reader.send(tokio_tungstenite::tungstenite::Message::text(r#"{"type":"say","text":"hi"}"#)).await.unwrap();
+        let refused = heard(&mut reader, Duration::from_millis(500)).await;
+        assert_eq!(refused, vec![serde_json::json!({ "type": "error", "error": READING_ONLY })], "a reader cannot talk");
+        reader.send(tokio_tungstenite::tungstenite::Message::text(format!(r#"{{"type":"react","id":"{a}","emoji":"🔥","on":true}}"#))).await.unwrap();
+        let refused = heard(&mut reader, Duration::from_millis(500)).await;
+        assert_eq!(refused[0]["error"], reactions::LOG_IN, "nor react");
+        let kept: Vec<StreamId> = rig.redis.clone().xrange_all::<_, StreamRangeReply>(room_key(&room)).await.unwrap().ids;
+        assert_eq!(kept.len(), 4, "the reader's say was never kept");
+
+        let mut bad = socket(&rig, &room, serde_json::json!({ "type": "hello", "nick": "b b" })).await;
+        assert_eq!(heard(&mut bad, Duration::from_millis(500)).await[0]["error"], BAD_NICK, "a nick that is there but bad is still refused");
+
+        let mut odd = socket(&rig, &room, serde_json::json!({ "type": "hello", "nick": "odd", "since": "garbage" })).await;
+        assert_eq!(heard(&mut odd, Duration::from_millis(500)).await, vec![serde_json::json!({ "type": "ready" })], "a since that is no id fills nothing");
     }
 }

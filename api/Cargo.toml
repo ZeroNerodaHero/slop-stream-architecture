@@ -24,8 +24,11 @@ unicode-normalization = "0.1"
 url = "2"
 uuid = { version = "1", features = ["serde"] }
 
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
+tokio = { version = "1", features = ["test-util"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
-[dev-dependencies]
-tokio = { version = "1", features = ["test-util"] }

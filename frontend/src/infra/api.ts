@@ -607,6 +607,7 @@ export interface PageWire {
 
 export const api = {
   me: () => request<MeInfo>('GET', '/api/me'),
+  meAsked: (response: Promise<Response>) => answerOf<MeInfo>('GET', '/api/me', response),
   signup: (name: string, password: string, turnstile_token?: string) =>
     request<{ name: string }>('POST', '/api/signup', { name, password, turnstile_token }),
   login: (name: string, password: string, turnstile_token?: string) =>
