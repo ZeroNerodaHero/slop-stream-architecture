@@ -1,5 +1,3 @@
-// The fake streams: home shows them, one plays with video and audio, and the dummy- names are password-gated.
-// Needs DUMMY_STREAMS >= 1 in .env. Run through ./scripts/test.sh --all, or: BASE_URL=https://<ip> node dummy.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const ARGS = ['--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
@@ -20,7 +18,6 @@ const stats = (page) => page.evaluate(async () => { const out = {}; for (const p
   await home.screenshot({ path: require('os').tmpdir() + '/stream-e2e-dummy-home.png' });
   console.log('home cards:', await home.locator('#list article').count());
 
-  // whichever dummy- name is live: with DUMMY_STREAMS=1 that is only the first default, dummy-mango
   const live = await (await api.get('/api/streams')).json();
   const dummy = live.find((s) => /^dummy-/.test(s.name));
   if (!dummy) { console.log(`FAIL  no dummy- stream in /api/streams (DUMMY_STREAMS >= 1 and default names?): ${JSON.stringify(live)}`); await browser.close(); await api.dispose(); process.exit(1); }
@@ -31,7 +28,6 @@ const stats = (page) => page.evaluate(async () => { const out = {}; for (const p
   console.log(`watch ${dummy.name}:`, JSON.stringify(a), '->', JSON.stringify(b));
   await w.screenshot({ path: require('os').tmpdir() + '/stream-e2e-dummy-watch.png' });
 
-  // password gate
   const noPw = await api.post('/api/streams/dummy-evil/go-live');
   const badPw = await api.post('/api/streams/dummy-evil/go-live?password=wrong');
   const wsReply = await w.evaluate(() => new Promise((resolve) => {

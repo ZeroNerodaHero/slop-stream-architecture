@@ -1,21 +1,4 @@
 #!/usr/bin/env node
-// Scroll-escape probe (../SKILL.md). Opens the site in headless chromium and, on every surface
-// it is pointed at, looks for the three shapes of the bug that blanked the user modal:
-//
-//   escaped   an `absolute` box whose containing block is outside its scroll container. It does
-//             not scroll with the pane, and it hangs out of whatever holds the scroller
-//   overflow  an overflow-hidden box with scrollable overflow and a focusable inside: a focus
-//             can scroll it, and nothing scrolls it back. What sticks out is listed
-//   focus     a focusable whose focus() did scroll an overflow-hidden ancestor. The proof
-//
-// usage:  node probe.cjs [url] [step ...]
-//   url             default http://localhost:42069 (`npm run dev` in frontend), or BASE_URL
-//   step            a css selector to click (a js click, so a control hidden until hover works too),
-//                   goto:<path>, or wait:<ms>. The page is audited at the start and after every step
-//   LOGIN=name:pw   log in first through /login, the way test/*.js does, for the logged-in surfaces
-//
-// exit 1 when an escaped or focus finding came up. Playwright comes from test/node_modules
-// (cd test && npm install).
 
 const path = require('path');
 
@@ -25,7 +8,6 @@ const args = process.argv.slice(2);
 const base = (args[0] && /^https?:\/\//.test(args[0]) ? args.shift() : process.env.BASE_URL || 'http://localhost:42069').replace(/\/$/, '');
 const steps = args;
 
-/** Runs in the page. Self-contained: nothing from this file is in scope there. */
 function audit() {
   const describe = (el) => {
     if (!el) return '(none)';
@@ -51,7 +33,6 @@ function audit() {
     const cs = style(el);
     return cs.overflowX === 'hidden' || cs.overflowY === 'hidden';
   };
-  // what an absolute box is placed in: the nearest positioned ancestor, or one that transforms, filters, or contains
   const anchors = (el) => {
     const cs = style(el);
     return (
@@ -68,14 +49,12 @@ function audit() {
     return null;
   };
   const containingBlock = (el) => up(el, anchors) || document.documentElement;
-  // tailwind's sr-only: absolute, 1px square, clipped away
   const srOnly = (el) => {
     const cs = style(el);
     return cs.position === 'absolute' && cs.width === '1px' && cs.height === '1px' && cs.clip === 'rect(0px, 0px, 0px, 0px)';
   };
   const FOCUSABLE = 'a[href], area[href], button, input, select, textarea, summary, [tabindex], [contenteditable]';
   const focusable = (el) => el.matches(FOCUSABLE) && !el.disabled && !el.closest('[inert]') && !el.closest('dialog:not([open])');
-  // a descendant `d` of `p` is clipped by `p`'s overflow unless it is absolute and placed above `p`
   const clippedBy = (d, p) => {
     if (!clips(p)) return false;
     if (style(d).position !== 'absolute') return true;

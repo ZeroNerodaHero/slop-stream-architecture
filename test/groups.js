@@ -1,24 +1,3 @@
-// Groups: the list (bot built in), a login makes one (and up to the cap on owning, which
-// explore says: GROUPS_PER_OWNER, 2 unless .env says otherwise; one more is 403), another
-// joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them,
-// only the maker deletes, the create dialog on /groups and the groups tab.
-// The pictures are the owner's whatever the roles say (no remove), and a role reaches only the
-// powers its holder has. A role is known by a uuid, and the manage dialog changes one in place:
-// add role makes one and opens it, a save renames it, the row opens it again, delete is in there.
-// The room: one answer with the channels, who is live, the roster (anyone's on a public group, the members' on a private one) and the bans,
-// and the last lines of every channel; a watcher of `group:<name>` on the events socket hears a
-// channel added, the channels put in order (the channels power; the whole order on the fact)
-// and one deleted; the `*` chat socket carries every channel's lines with the channel on them
-// and fills from `since`; the page switches channels with no reload, no refetch and no new
-// socket, and a channel deleted under it is said on the page. A channel is added from the
-// row under the list through a dialog, and the manage dialog's channels tab moves and deletes.
-// A click on a member, or on a name in the chat, shows them over the room (the profile popup,
-// docs/follows.md), unless the chat tab's people cards turned that off for the browser.
-// The sidebar's search box finds the group by its letters, its row above the people's, and
-// the row goes to its page. The channels power pins a channel's lines (50 at most), anyone
-// who sees the channel lists them, a watcher hears `pin` / `unpin`, and they go with the channel.
-// The roster and the lines come in pages: `limit`, the cursor (`after` / `before`) and the end.
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -28,11 +7,9 @@ const RUN = Date.now().toString(36).slice(-5);
 const MAKER = 'maker' + RUN;
 const MEMBER = 'member' + RUN;
 const GROUP = 'grp' + RUN;
-// the address, once the group exists: the title plus four digits. later steps use this.
 let slug = GROUP;
 const ROOM = 'grouproom' + RUN;
 const PW = 'correct horse battery 9!';
-/** A role's id: a uuid the api made, never a counter. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
 const results = [];
@@ -50,7 +27,6 @@ async function step(name, fn) {
 const expect = (cond, what) => {
   if (!cond) throw new Error(what);
 };
-/** the text channels' names in order. every group has a voice channel too (docs/voice.md), which these steps leave alone */
 const textNames = (channels) => channels.filter((c) => c.kind !== 'voice').map((c) => c.name).join(' ');
 const body = async (res) => {
   try {
@@ -60,9 +36,7 @@ const body = async (res) => {
   }
 };
 const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === name) : undefined);
-// how many groups one login may own, as explore says it. read once the api has answered.
 let cap = 1;
-/** Groups made so `ctx` owns as many as the cap allows, on top of the `owned` it has. Their addresses, to delete after. */
 const fillToCap = async (ctx, owned, word) => {
   const made = [];
   for (let i = owned; i < cap; i++) {
@@ -80,7 +54,6 @@ const dropAll = async (ctx, names) => {
 };
 
 (async () => {
-  // three http clients: the one who makes the group, the one who joins it, and nobody
   const maker = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const member = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const anon = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
@@ -114,7 +87,6 @@ const dropAll = async (ctx, names) => {
     const digits = String(made.tag).padStart(4, '0');
     expect(made.title === GROUP && made.tag === Number(digits) && made.name === `${GROUP}-${digits}` && made.badge === 'vip' && made.color === '#f2cc60' && made.about === 'the test group' && made.made_by === MAKER && made.members === 1 && made.mine === true && made.automatic === false && made.public === true, `made = ${JSON.stringify(made)}`);
     slug = made.name;
-    // the cap on owning is the box's (GROUPS_PER_OWNER), and explore says it: up to it 201, one more 403, whatever the name
     const found = await body(await maker.get('/api/explore'));
     expect(found && Number.isInteger(found.groups_per_owner) && found.groups_per_owner >= 1, `explore's cap ${JSON.stringify(found && found.groups_per_owner)}`);
     cap = found.groups_per_owner;
@@ -122,7 +94,6 @@ const dropAll = async (ctx, names) => {
     const again = await maker.post('/api/groups', { data: { name: 'another' + RUN, badge: 'two', color: '#f2cc60' } });
     const refused = await body(again);
     expect(again.status() === 403 && /you own .*already/.test(refused && refused.error), `group ${cap + 1} got ${again.status()} ${JSON.stringify(refused)}`);
-    // the maker owns one from here on
     await dropAll(maker, extra);
     const mine = find(await body(await maker.get('/api/groups')), slug);
     const theirs = find(await body(await anon.get('/api/groups')), slug);
@@ -149,7 +120,6 @@ const dropAll = async (ctx, names) => {
   await step('another login makes the same title (another address), joins: 204, two members, again 204; bot 403, no such group 404', async () => {
     const up = await member.post('/api/signup', { data: { name: MEMBER, password: PW } });
     expect(up.status() === 201, `signup got ${up.status()}`);
-    // the same title from somebody else is another group, with other digits
     const same = await member.post('/api/groups', { data: { name: GROUP, badge: 'vip', color: '#f2cc60' } });
     const other = await body(same);
     expect(same.status() === 201 && other.title === GROUP && other.name !== slug && other.name.startsWith(`${GROUP}-`), `the same title again got ${same.status()} ${JSON.stringify(other)}`);
@@ -157,7 +127,6 @@ const dropAll = async (ctx, names) => {
     expect(join.status() === 204, `join got ${join.status()} ${JSON.stringify(await body(join))}`);
     const listed = find(await body(await member.get('/api/groups')), slug);
     expect(listed && listed.mine === true && listed.members === 2, `after join: ${JSON.stringify(listed)}`);
-    // the cap the other way too: owning as many as it allows, they cannot be named an owner here
     const extra = await fillToCap(member, 1, 'theirs');
     const named = await maker.post(`/api/groups/${slug}/owners`, { data: { name: MEMBER } });
     expect(named.status() === 403 && new RegExp(`${MEMBER} owns .*already`).test((await body(named)).error), `naming an owner at the cap got ${named.status()} ${JSON.stringify(await body(named))}`);
@@ -183,7 +152,6 @@ const dropAll = async (ctx, names) => {
     const made = await body(yes);
     expect(yes.status() === 201 && made.name === 'mod' && made.perms && made.perms.kick === true && made.perms.ban === false, `role ${yes.status()} ${JSON.stringify(made)}`);
     expect(typeof made.id === 'string' && UUID.test(made.id), `a role's id is ${JSON.stringify(made.id)}, not a uuid`);
-    // the id is what the role is known by: a rename is a save, and the id stays
     const renamed = await maker.put(`/api/groups/${slug}/roles/${made.id}`, { data: { name: 'mods', color: '#f85149', perms: { kick: true } } });
     const after = await body(renamed);
     expect(renamed.status() === 200 && after.id === made.id && after.name === 'mods', `renaming got ${renamed.status()} ${JSON.stringify(after)}`);
@@ -209,11 +177,9 @@ const dropAll = async (ctx, names) => {
   });
 
   await step('the pictures are the owner\'s whatever the roles say; a role reaches only the powers its holder has', async () => {
-    // a jpeg by its first bytes: the api checks the magic and the size, nothing more
     const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9]);
     const put = (ctx, kind, data) => ctx.put(`/api/groups/${slug}/${kind}`, { data, headers: { 'content-type': 'image/jpeg' } });
     const role = (ctx, perms, name) => ctx.post(`/api/groups/${slug}/roles`, { data: { name, color: '#3fb950', perms } });
-    // every power there is, on the member: still not the pictures
     const everything = await body(await role(maker, { appearance: true, roles: true, channels: true, kick: true, ban: true }, 'everything'));
     expect(everything && everything.id, `the everything role ${JSON.stringify(everything)}`);
     const given = await maker.post(`/api/groups/${slug}/roles/${everything.id}/members`, { data: { name: MEMBER } });
@@ -230,7 +196,6 @@ const dropAll = async (ctx, names) => {
     expect(notJpeg.status() === 400 && remove.status() === 405, `not a jpeg ${notJpeg.status()}, remove ${remove.status()} (there is no remove)`);
     const room = await body(await anon.get(`/api/groups/${slug}`));
     expect(Number.isInteger(room.icon) && Number.isInteger(room.banner), `the room's versions ${JSON.stringify([room.icon, room.banner])}`);
-    // the member holds the roles power and nothing else: a role that carries more is out of reach
     const took = await maker.delete(`/api/groups/${slug}/roles/${everything.id}/members/${MEMBER}`);
     const roler = await body(await role(maker, { roles: true }, 'roler'));
     const held = await maker.post(`/api/groups/${slug}/roles/${roler.id}/members`, { data: { name: MEMBER } });
@@ -248,7 +213,6 @@ const dropAll = async (ctx, names) => {
     const ok = await member.put(`/api/groups/${slug}/roles/${helper.id}`, { data: { name: 'helper', color: '#f85149', perms: { roles: true } } });
     const gone = await member.delete(`/api/groups/${slug}/roles/${helper.id}`);
     expect(ok.status() === 200 && gone.status() === 204, `the member's own role: change ${ok.status()}, delete ${gone.status()}`);
-    // the member as they were, with no roles, for the steps after
     for (const id of [everything.id, roler.id]) {
       const cleared = await maker.delete(`/api/groups/${slug}/roles/${id}`);
       expect(cleared.status() === 204, `clearing role ${id} got ${cleared.status()}`);
@@ -269,12 +233,10 @@ const dropAll = async (ctx, names) => {
     expect(Array.isArray(mine.bans) && mine.bans.length === 0, `the maker's bans ${JSON.stringify(mine.bans)}`);
     const theirs = await body(await member.get(`/api/groups/${slug}`));
     expect(Array.isArray(theirs.roster) && theirs.roster.length === 2 && theirs.bans === null, `the member's roster ${JSON.stringify(theirs.roster)} bans ${JSON.stringify(theirs.bans)}`);
-    // the group is public: who is in it is anyone's, the lines say who talks there anyway. the bans stay the ban power's
     const guest = await body(await anon.get(`/api/groups/${slug}`));
     expect(Array.isArray(guest.roster) && guest.roster.length === 2 && guest.bans === null && Array.isArray(guest.channels) && guest.members === 2, `a guest's room ${JSON.stringify(guest)}`);
     const guestList = await anon.get(`/api/groups/${slug}/members`);
     expect(guestList.status() === 200 && (await body(guestList)).length === 2, `a guest's GET members on a public group got ${guestList.status()}`);
-    // private: the members chose not to be listed, so the roster is theirs alone (and a site admin's); nobody is sent to log in
     const hidden = await maker.put(`/api/groups/${slug}/access`, { data: { public: false } });
     expect(hidden.status() === 200, `making it private got ${hidden.status()}`);
     const privateGuest = await body(await anon.get(`/api/groups/${slug}`));
@@ -296,30 +258,25 @@ const dropAll = async (ctx, names) => {
 
   await step('the roster comes in pages: limit, the cursor, the end, the words; the room brings the first page when asked', async () => {
     const members = (query) => anon.get(`/api/groups/${slug}/members?${query}`);
-    // two in: the owner, then the member
     const first = await body(await members('limit=1'));
     expect(first && Array.isArray(first.members) && first.members.length === 1 && first.members[0].name === MAKER && typeof first.next === 'string', `the first page ${JSON.stringify(first)}`);
     const second = await body(await members(`limit=1&after=${encodeURIComponent(first.next)}`));
     expect(second && second.members.length === 1 && second.members[0].name === MEMBER && second.next === null, `the second page, the last ${JSON.stringify(second)}`);
-    // a page as long as the roster is the end at once; limit is held to 1..100
     const whole = await body(await members('limit=500'));
     expect(whole.members.length === 2 && whole.next === null, `limit 500 ${JSON.stringify(whole)}`);
     const zero = await body(await members('limit=0'));
     expect(zero.members.length === 1 && zero.members[0].name === MAKER, `limit 0 is one ${JSON.stringify(zero)}`);
-    // the words find a member past the pages loaded: by name, a role's name too, and a % is no wildcard
     const words = await body(await members(`q=${encodeURIComponent(MEMBER.toUpperCase())}&limit=5`));
     expect(words.members.length === 1 && words.members[0].name === MEMBER && words.next === null, `q ${JSON.stringify(words)}`);
     const wild = await body(await members('q=%25'));
     expect(wild.members.length === 0, `q=% ${JSON.stringify(wild)}`);
     const badCursor = await members('after=nonsense');
     expect(badCursor.status() === 400 && (await body(badCursor)).error === 'bad cursor', `a bad cursor got ${badCursor.status()}`);
-    // the order is the group's: newest puts the member (who joined last) right after the owner, and the cursor follows it
     expect((await maker.put(`/api/groups/${slug}/order`, { data: { order: 'newest' } })).status() === 200, 'newest order');
     const newest = await body(await members('limit=1'));
     const newestNext = await body(await members(`limit=1&after=${encodeURIComponent(newest.next)}`));
     expect(newest.members[0].name === MAKER && newestNext.members[0].name === MEMBER && newestNext.next === null, `newest pages ${JSON.stringify([newest, newestNext])}`);
     expect((await maker.put(`/api/groups/${slug}/order`, { data: { order: 'name' } })).status() === 200, 'name order again');
-    // bare is the whole array, as before there were pages; the room's ?roster= is its first page and where the next starts
     const bare = await body(await members(''));
     expect(Array.isArray(bare) && bare.length === 2, `bare members ${JSON.stringify(bare)}`);
     const paged = await body(await anon.get(`/api/groups/${slug}?roster=1`));
@@ -331,7 +288,6 @@ const dropAll = async (ctx, names) => {
     return 'two pages of one, the end, q, newest, and the room\'s first page';
   });
 
-  // the pages: a member's lines wear the badge, a bot's wear BOT, and the panel hides the bots
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
   let p;
@@ -363,7 +319,6 @@ const dropAll = async (ctx, names) => {
     expect(grant && grant.badge && grant.badge.name === card.badge.name && grant.badge.badge === card.badge.badge, `the grant's badge ${JSON.stringify(grant && grant.badge)}, the card's ${JSON.stringify(card && card.badge)}`);
     const free = await body(await anon.post(`/api/streams/${ROOM}/watch`));
     expect(free && free.badge === null, `a free name's grant says badge ${JSON.stringify(free && free.badge)}`);
-    // a page of its own: the next step listens on the member's page as it is
     const w = await fresh();
     await w.goto(`${BASE}/watch/${MEMBER}`, { waitUntil: 'domcontentloaded' });
     await w.waitForSelector('#who #watch-badge', { timeout: 10000 });
@@ -379,7 +334,6 @@ const dropAll = async (ctx, names) => {
   });
 
   await step('a socket that says bot: true wears BOT, and the member\'s page sees it', async () => {
-    // from a context with no login: the cookie would name the socket after the account instead of its nick
     const b = await fresh();
     await b.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     const outcome = await b.evaluate(
@@ -411,7 +365,6 @@ const dropAll = async (ctx, names) => {
   });
 
   await step('hide bots: the settings switch takes the line away, a reload keeps the choice, show brings it back', async () => {
-    // the switch is the chat tab's two cards (the header has no button): the gear, the tab, a card, close
     const pickBots = async (id) => {
       await p.hover('#user-panel');
       await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
@@ -430,7 +383,6 @@ const dropAll = async (ctx, names) => {
     expect((await p.evaluate(() => localStorage.getItem('settings.hideBots'))) === 'true', 'the choice was not kept in the browser');
     const memberLine = await p.$(`#chat-lines p[data-groups="${slug}"]`);
     expect(memberLine, 'the member\'s line went too');
-    // the choice is this browser's: a reload (history again) still hides the bot
     await p.reload({ waitUntil: 'domcontentloaded' });
     await p.waitForSelector('#chat-text', { timeout: 15000 });
     await p.waitForFunction((group) => document.querySelector(`#chat-lines p[data-groups="${group}"]`), slug, { timeout: 10000 });
@@ -441,7 +393,6 @@ const dropAll = async (ctx, names) => {
   });
 
   await step('a watcher of group:<name> on the events socket hears a channel added, the channels put in order, one renamed, and one deleted', async () => {
-    // a raw /events socket from a context with no login: hello as nobody, then watch the room's topic
     const w = await fresh();
     await w.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     const ready = await w.evaluate(
@@ -470,8 +421,6 @@ const dropAll = async (ctx, names) => {
     await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'channel' && f.channel && f.channel.name === 'clips'), null, { timeout: 10000 });
     const heard = await w.evaluate(() => window.__groupFrames.find((f) => f.what === 'channel'));
     expect(heard.group === slug && heard.channel.made_by === MAKER, `the channel frame ${JSON.stringify(heard)}`);
-    // the new channel is last; the channels power puts them in order, and everyone hears the whole order.
-    // a member without the power cannot, nobody cannot, and a name that is not a channel or named twice is 400
     const before = await body(await anon.get(`/api/groups/${slug}`));
     expect(textNames(before.channels) === 'general clips', `before the move: ${textNames(before.channels)}`);
     const noPower = await member.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'general'] } });
@@ -479,7 +428,6 @@ const dropAll = async (ctx, names) => {
     const notOne = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'nosuch'] } });
     const twice = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'clips'] } });
     expect(noPower.status() === 403 && nobodyMoves.status() === 401 && notOne.status() === 400 && twice.status() === 400, `moving: member ${noPower.status()}, nobody ${nobodyMoves.status()}, not a channel ${notOne.status()}, twice ${twice.status()}`);
-    // the named ones first in that order; one not named (general here) keeps its place after them
     const moved = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips'] } });
     const order = await body(moved);
     expect(moved.status() === 200 && order.order.join(' ') === 'clips general', `the move got ${moved.status()} ${JSON.stringify(order)}`);
@@ -491,9 +439,6 @@ const dropAll = async (ctx, names) => {
     const explored = await body(await maker.get('/api/explore'));
     const mine = explored.yours.find((g) => g.name === slug);
     expect(mine && textNames(mine.channels) === 'clips general', `explore lists ${JSON.stringify(mine && mine.channels.map((c) => c.name))}`);
-    // the name changes: the member mutes clips and says a line in it first, so both can be seen to follow the name.
-    // a member without the power cannot rename, nobody cannot, a history word and a name the server has are
-    // refused; then clips is highlights (typed any way), its place kept, and everyone hears channel_renamed
     const muted = await member.put(`/api/groups/${slug}/channels/clips/mute`);
     expect(muted.status() === 204, `muting clips got ${muted.status()}`);
     const said = await p.evaluate(
@@ -532,7 +477,6 @@ const dropAll = async (ctx, names) => {
     const asMember = await body(await member.get(`/api/groups/${slug}`));
     expect(textNames(asMember.channels) === 'highlights general', `after the rename the room lists ${textNames(asMember.channels)}`);
     expect(asMember.muted.join(' ') === 'highlights', `the mute followed the name: ${JSON.stringify(asMember.muted)}`);
-    // the home channel renames too, and keeps being home: its line with it (channel_about), not deleted, then back
     const lobby = await maker.put(`/api/groups/${slug}/channels/general`, { data: { name: 'lobby', about: 'say hi' } });
     const lobbyView = await body(lobby);
     expect(lobby.status() === 200 && lobbyView.name === 'lobby' && lobbyView.home === true && lobbyView.about === 'say hi' && lobbyView.can_delete === false, `the home rename got ${lobby.status()} ${JSON.stringify(lobbyView)}`);
@@ -558,7 +502,6 @@ const dropAll = async (ctx, names) => {
   });
 
   await step('the server socket: every channel on one socket, a line with its channel, and the fill after since', async () => {
-    // the member's page is logged in: a raw /chat/<server>/* socket from it speaks as the member
     const outcome = await p.evaluate(
       ({ server, text }) =>
         new Promise((resolve) => {
@@ -566,7 +509,6 @@ const dropAll = async (ctx, names) => {
           const seen = [];
           ws.onopen = () => {
             ws.send(JSON.stringify({ type: 'hello' }));
-            // no channel: refused with words that do not close the socket
             ws.send(JSON.stringify({ type: 'say', text: 'where?' }));
             ws.send(JSON.stringify({ type: 'say', text, channel: 'general' }));
           };
@@ -586,7 +528,6 @@ const dropAll = async (ctx, names) => {
     expect(outcome.line.channel === 'general' && outcome.line.from === MEMBER && outcome.line.verified === true, `the line ${JSON.stringify(outcome.line)}`);
     expect(outcome.errors.includes('say which channel'), `a say with no channel got ${JSON.stringify(outcome.errors)}`);
     expect(outcome.history === false, 'a server socket sent a history frame');
-    // a second socket says what it has (nothing: id 0-0) and is sent the line it missed
     const filled = await p.evaluate(
       ({ server, text }) =>
         new Promise((resolve) => {
@@ -617,15 +558,12 @@ const dropAll = async (ctx, names) => {
   await step('messages come in pages: limit per channel, a channel\'s page before a line, and the end', async () => {
     const all = (await body(await anon.get(`/api/groups/${slug}/messages`))).general;
     expect(Array.isArray(all) && all.length >= 1, `general has ${JSON.stringify(all)}`);
-    // the newest one of each channel, oldest first as always
     const one = await body(await anon.get(`/api/groups/${slug}/messages?limit=1`));
     expect(one.general.length === 1 && one.general[0].id === all[all.length - 1].id, `limit 1 ${JSON.stringify(one.general)}`);
-    // one channel, older than the newest: the line before it, or nothing at the start
     const before = await body(await anon.get(`/api/groups/${slug}/messages?channel=general&limit=1&before=${encodeURIComponent(all[all.length - 1].id)}`));
     expect(Object.keys(before).join(' ') === 'general', `a channel's page has only it: ${Object.keys(before).join(' ')}`);
     const want = all.length >= 2 ? [all[all.length - 2].id] : [];
     expect(before.general.map((l) => l.id).join(' ') === want.join(' '), `before the newest ${JSON.stringify(before.general)}, wanted ${want}`);
-    // before the oldest is the end: a short page, here an empty one
     const end = await body(await anon.get(`/api/groups/${slug}/messages?channel=general&before=${encodeURIComponent(all[0].id)}`));
     expect(Array.isArray(end.general) && end.general.length === 0, `before the oldest ${JSON.stringify(end)}`);
     const noChannel = await anon.get(`/api/groups/${slug}/messages?before=${encodeURIComponent(all[0].id)}`);
@@ -636,7 +574,6 @@ const dropAll = async (ctx, names) => {
   });
 
   await step('a channel kept to a role: its holders, the owners and the channels power see it, nobody else does, anywhere', async () => {
-    // the maker adds #staff and a role that keeps it. general cannot be kept; a channel that is not there cannot be named
     const staff = await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'staff', about: 'staff only' } });
     expect(staff.status() === 201, `adding staff got ${staff.status()}`);
     const generalKept = await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'nope', color: '#f2cc60', channels: ['general'] } });
@@ -645,7 +582,6 @@ const dropAll = async (ctx, names) => {
     const made = await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'staffers', color: '#f2cc60', channels: [' Staff '] } });
     const staffers = await body(made);
     expect(made.status() === 201 && staffers.channels.join(' ') === 'staff', `the role got ${made.status()} ${JSON.stringify(staffers)}`);
-    // the member holds no role: not in their room (the role still says what it keeps), explore or messages; nobody's either; the owner's, yes
     const asMember = await body(await member.get(`/api/groups/${slug}`));
     expect(!asMember.channels.some((c) => c.name === 'staff'), `the member's room lists ${textNames(asMember.channels)}`);
     expect(asMember.roles.find((r) => r.id === staffers.id).channels.join(' ') === 'staff', `the member's room says the role keeps ${JSON.stringify(asMember.roles)}`);
@@ -661,7 +597,6 @@ const dropAll = async (ctx, names) => {
     expect(!('staff' in memberLines) && 'general' in memberLines && 'staff' in ownerLines, `messages: member ${Object.keys(memberLines).join(' ')}, owner ${Object.keys(ownerLines).join(' ')}`);
     const memberSearch = await member.get(`/chat/${slug}/staff/search?q=staff`);
     expect(memberSearch.status() === 404, `the member's search in staff got ${memberSearch.status()}`);
-    // the member's sockets: the single channel's says no such channel; the server's does not follow it, so a say in it is refused
     const asMemberPage = await (await browser.newContext({ ignoreHTTPSErrors: true, storageState: await member.storageState() })).newPage();
     await asMemberPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     const single = await asMemberPage.evaluate(
@@ -701,7 +636,6 @@ const dropAll = async (ctx, names) => {
       slug
     );
     expect(onServer.error === 'say which channel', `the server socket said ${JSON.stringify(onServer)}`);
-    // the owner says a line in staff: no inbox row for the member, who does not see it
     const asOwnerPage = await (await browser.newContext({ ignoreHTTPSErrors: true, storageState: await maker.storageState() })).newPage();
     await asOwnerPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     const say = (text) =>
@@ -728,7 +662,6 @@ const dropAll = async (ctx, names) => {
     await new Promise((r) => setTimeout(r, 1500));
     const inboxBefore = await body(await member.get('/api/notifications'));
     expect(!inboxBefore.items.some((i) => i.kind === 'chat' && i.room === `${slug}/staff`), `the member got a row for a channel they do not see: ${JSON.stringify(inboxBefore.items.filter((i) => i.kind === 'chat'))}`);
-    // given the role, the member sees it: the room, the messages with the line said before, the single socket's history, and a row for the next line
     const given = await maker.post(`/api/groups/${slug}/roles/${staffers.id}/members`, { data: { name: MEMBER } });
     expect(given.status() === 204, `giving the role got ${given.status()}`);
     const nowSees = await body(await member.get(`/api/groups/${slug}`));
@@ -757,8 +690,6 @@ const dropAll = async (ctx, names) => {
     await new Promise((r) => setTimeout(r, 1500));
     const inboxAfter = await body(await member.get('/api/notifications'));
     expect(inboxAfter.items.some((i) => i.kind === 'chat' && i.room === `${slug}/staff` && /staff again/.test(i.text)), `with the role no row came: ${JSON.stringify(inboxAfter.items.filter((i) => i.kind === 'chat'))}`);
-    // the search is the group's: every channel this viewer sees at once, each hit saying its channel, unless `channel:` names one.
-    // asked of the channel on screen (general here); with history not kept there is nothing to search, and the rest is not tried
     const search = async (ctx, q) => {
       const res = await ctx.get(`/chat/${slug}/general/search?q=${encodeURIComponent(q)}`);
       const answer = await body(res);
@@ -784,10 +715,8 @@ const dropAll = async (ctx, names) => {
       const stream = await anon.get(`/chat/${ROOM}/search?q=${encodeURIComponent('hi channel:general')}`);
       expect(stream.status() === 400 && /group/.test((await body(stream))?.error || ''), `channel: on a stream's room got ${stream.status()} ${JSON.stringify(await body(stream))}`);
     }
-    // the roles power cannot unlock what it cannot see: the role taken back, a role with the roles power cannot name staff
     const taken = await maker.delete(`/api/groups/${slug}/roles/${staffers.id}/members/${MEMBER}`);
     expect(taken.status() === 204, `taking the role got ${taken.status()}`);
-    // and without the role the search leaves staff out, named or not
     if (searchable) {
       const withoutRole = await search(member, RUN);
       expect(withoutRole.lines.length >= 1 && withoutRole.lines.every((l) => l.channel !== 'staff'), `without the role the member's search found ${JSON.stringify(withoutRole.lines.map((l) => l.channel))} (staff must be out)`);
@@ -799,12 +728,10 @@ const dropAll = async (ctx, names) => {
     expect((await maker.post(`/api/groups/${slug}/roles/${shapers.id}/members`, { data: { name: MEMBER } })).status() === 204, 'giving shapers failed');
     const unlock = await member.put(`/api/groups/${slug}/roles/${shapers.id}`, { data: { name: 'shapers', color: '#f2cc60', perms: { roles: true }, channels: ['staff'] } });
     expect(unlock.status() === 404, `the roles power unlocking a hidden channel got ${unlock.status()} ${JSON.stringify(await body(unlock))}`);
-    // the owner lets the channel go: everyone's again
     const freed = await maker.put(`/api/groups/${slug}/roles/${staffers.id}`, { data: { name: 'staffers', color: '#f2cc60', channels: [] } });
     expect(freed.status() === 200 && (await body(freed)).channels.length === 0, `letting staff go got ${freed.status()}`);
     const freeRoom = await body(await anon.get(`/api/groups/${slug}`));
     expect(freeRoom.channels.some((c) => c.name === 'staff'), `after letting go nobody's room lists ${freeRoom.channels.map((c) => c.name).join(' ')}`);
-    // who sees it from the channel's side: one call, the whole list. nobody 401, the roles power alone 403; general and a role not of the group refused
     const seers = (ctx, channel, roles) => ctx.put(`/api/groups/${slug}/channels/${channel}/roles`, { data: { roles } });
     const keptBy = async (channel) =>
       (await body(await maker.get(`/api/groups/${slug}`))).roles
@@ -853,7 +780,6 @@ const dropAll = async (ctx, names) => {
     expect(renamed.status() === 200 && (await body(renamed)).name === 'Boss', `the rename got ${renamed.status()} ${JSON.stringify(await body(renamed))}`);
     const after = await body(await member.get(`/api/groups/${slug}`));
     expect(after.owner_role === 'Boss', `after the rename the room says ${JSON.stringify(after.owner_role)}`);
-    // the word owner is free now, and the new name is the reserved one
     const ownerFree = await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'owner', color: '#f2cc60' } });
     const bossTaken = await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'boss', color: '#f2cc60' } });
     expect(ownerFree.status() === 201 && bossTaken.status() === 400, `after the rename a role called owner got ${ownerFree.status()}, one called boss ${bossTaken.status()}`);
@@ -868,7 +794,6 @@ const dropAll = async (ctx, names) => {
     const self = await maker.post(`/api/groups/${slug}/transfer`, { data: { name: MAKER } });
     const stranger = await maker.post(`/api/groups/${slug}/transfer`, { data: { name: 'nosuch' + RUN } });
     expect(nobody.status() === 401 && notOwner.status() === 403 && self.status() === 400 && stranger.status() === 404, `transfer: nobody ${nobody.status()}, member ${notOwner.status()}, self ${self.status()}, stranger ${stranger.status()}`);
-    // the maker's page, on the members tab: no box to name an owner; transfer ownership on the member's row asks, no leaves it, yes hands it on
     const o = await fresh();
     await o.goto(`${BASE}/login?next=/groups/${slug}`, { waitUntil: 'domcontentloaded' });
     await o.fill('#auth-name', MAKER);
@@ -899,7 +824,6 @@ const dropAll = async (ctx, names) => {
     expect(handed.owner === true && left.owner === false && left.mine === true, `after the transfer the member owns: ${handed.owner}, the maker: ${left.owner}, still in: ${left.mine}`);
     expect((await maker.post(`/api/groups/${slug}/transfer`, { data: { name: MEMBER } })).status() === 403, 'the old owner can still hand the group on');
     await o.close();
-    // and back, so the rest of the run finds the maker owning it
     const back = await member.post(`/api/groups/${slug}/transfer`, { data: { name: MAKER } });
     expect(back.status() === 204 && (await body(await maker.get(`/api/groups/${slug}`))).owner === true, `handing it back got ${back.status()}`);
     return `${MAKER} → ${MEMBER} → ${MAKER}`;
@@ -910,7 +834,6 @@ const dropAll = async (ctx, names) => {
     const asOwnerPage = await (await browser.newContext({ ignoreHTTPSErrors: true, storageState: await maker.storageState() })).newPage();
     await asMemberPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await asOwnerPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    /** A line said in general over a raw channel socket from `page`: `{ ok }`, or the refusal `{ error, wait }`. */
     const say = (page, text) =>
       page.evaluate(
         ({ server, text }) =>
@@ -933,7 +856,6 @@ const dropAll = async (ctx, names) => {
           }),
         { server: slug, text }
       );
-    // the timeout: the kick power, not yourself, ten seconds at least, a member; then the member is quiet and the roster says until when
     const noPower = await member.post(`/api/groups/${slug}/timeout`, { data: { name: MAKER, seconds: 60 } });
     const self = await maker.post(`/api/groups/${slug}/timeout`, { data: { name: MAKER, seconds: 60 } });
     const tooShort = await maker.post(`/api/groups/${slug}/timeout`, { data: { name: MEMBER, seconds: 5 } });
@@ -952,7 +874,6 @@ const dropAll = async (ctx, names) => {
     expect(lifted.status() === 204 && (await body(await maker.get(`/api/groups/${slug}`))).roster.find((m) => m.name === MEMBER).timeout === null, `lifting got ${lifted.status()}`);
     const freed = await say(asMemberPage, 'free again ' + RUN);
     expect(freed.ok, `the lifted member's line: ${JSON.stringify(freed)}`);
-    // the cooldown: a role with 30s given to the member spaces their lines; the owner holding it waits for nobody
     const slow = await body(await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'slow', color: '#f2cc60', cooldown: 30 } }));
     expect(UUID.test(slow.id) && slow.cooldown === 30, `the slow role ${JSON.stringify(slow)}`);
     const tooLong = await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'slower', color: '#f2cc60', cooldown: 3601 } });
@@ -965,7 +886,6 @@ const dropAll = async (ctx, names) => {
     const ownerSecond = await say(asOwnerPage, 'owner two ' + RUN);
     expect(ownerFirst.ok && ownerSecond.ok, `the owner's two lines: ${JSON.stringify(ownerFirst)} then ${JSON.stringify(ownerSecond)}`);
     expect((await maker.delete(`/api/groups/${slug}/roles/${slow.id}`)).status() === 204, 'deleting slow failed');
-    // the channel's own cooldown: the channels power sets it; the member's second line in general is refused, the owner's go; 0 lifts it
     const memberSets = await member.put(`/api/groups/${slug}/channels/general/cooldown`, { data: { seconds: 30 } });
     const tooLongChannel = await maker.put(`/api/groups/${slug}/channels/general/cooldown`, { data: { seconds: 3601 } });
     const noChannel = await maker.put(`/api/groups/${slug}/channels/nosuch/cooldown`, { data: { seconds: 30 } });
@@ -989,7 +909,6 @@ const dropAll = async (ctx, names) => {
     const asMemberPage = await (await browser.newContext({ ignoreHTTPSErrors: true, storageState: await member.storageState() })).newPage();
     await asOwnerPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await asMemberPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    /** `texts` said in `channel` over one raw socket from `page`, one after another, each waiting out the chat's rate when refused: their ids, in order. */
     const sayAll = (page, channel, texts) =>
       page.evaluate(
         ({ server, channel, texts }) =>
@@ -1023,7 +942,6 @@ const dropAll = async (ctx, names) => {
     expect(said.ids.length === 2, `the owner's lines in board: ${JSON.stringify(said)}`);
     const [first, second] = said.ids;
 
-    // a watcher of the group hears the pins and the unpin, the line's id alone
     await asMemberPage.evaluate(
       (topic) =>
         new Promise((resolve) => {
@@ -1043,7 +961,6 @@ const dropAll = async (ctx, names) => {
       `group:${slug}`
     );
 
-    // nobody 401, the member (no channels power) 403, no such channel 404, a junk id 400, a line that is not there 404
     const nobody = await pin(anon, 'board', first);
     const noPower = await pin(member, 'board', first);
     const noChannel = await pin(maker, 'nosuch', first);
@@ -1053,32 +970,27 @@ const dropAll = async (ctx, names) => {
       nobody.status() === 401 && noPower.status() === 403 && noChannel.status() === 404 && junk.status() === 400 && noLine.status() === 404,
       `pinning: nobody ${nobody.status()}, member ${noPower.status()}, missing channel ${noChannel.status()}, junk ${junk.status()}, missing line ${noLine.status()}`
     );
-    // the owner pins: the line back as the list has it; again is the same, not a second
     const pinned = await pin(maker, 'board', first);
     const pinnedBody = await body(pinned);
     expect(pinned.status() === 200 && pinnedBody.id === first && pinnedBody.text === 'pin me ' + RUN && pinnedBody.from === MAKER && pinnedBody.pinned_by === MAKER && pinnedBody.pinned_at > 0, `the pin got ${pinned.status()} ${JSON.stringify(pinnedBody)}`);
     expect((await pin(maker, 'board', first)).status() === 200, 'pinning it again was refused');
     expect((await pin(maker, 'board', second)).status() === 200, 'pinning the second failed');
-    // the list: anyone who sees the channel, newest pin first; the room says the ids
     const listed = await pins(member, 'board');
     const list = (await body(listed)).pins;
     expect(listed.status() === 200 && list.map((p) => p.id).join(' ') === `${second} ${first}` && list[1].text === 'pin me ' + RUN, `the member's list got ${listed.status()} ${JSON.stringify(list)}`);
     expect((await pins(anon, 'board')).status() === 200 && (await pins(anon, 'nosuch')).status() === 404, 'nobody reads the pins of a channel they see, and 404 for none');
     expect((await body(await member.get(`/api/groups/${slug}`))).pins.board.join(' ') === `${second} ${first}`, 'the room does not say what is pinned');
-    // unpin: the member cannot, the owner can; 204 again when it is not pinned
     const memberUnpins = await unpin(member, 'board', second);
     const ownerUnpins = await unpin(maker, 'board', second);
     const again = await unpin(maker, 'board', second);
     expect(memberUnpins.status() === 403 && ownerUnpins.status() === 204 && again.status() === 204, `unpinning: member ${memberUnpins.status()}, owner ${ownerUnpins.status()}, again ${again.status()}`);
     expect((await body(await pins(maker, 'board'))).pins.map((p) => p.id).join(' ') === first, 'the unpinned line is still listed');
-    // one fact a change: the pin said again told nobody, and neither did the unpin of nothing
     const want = [`pin board ${first}`, `pin board ${second}`, `unpin board ${second}`].join(', ');
     await asMemberPage.waitForFunction((n) => window.__pinFacts.length >= n, 3, { timeout: 10000 }).catch(() => {});
     await new Promise((r) => setTimeout(r, 500));
     const facts = await asMemberPage.evaluate(() => window.__pinFacts);
     expect(facts.join(', ') === want, `the watcher heard ${JSON.stringify(facts)}`);
 
-    // a channel kept to a role the member does not hold: its pins are not theirs to read
     expect((await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'vault' } })).status() === 201, 'adding vault failed');
     const vaulters = await body(await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'vaulters', color: '#f2cc60', channels: ['vault'] } }));
     expect(UUID.test(vaulters.id), `the vaulters role ${JSON.stringify(vaulters)}`);
@@ -1090,7 +1002,6 @@ const dropAll = async (ctx, names) => {
     expect((await maker.delete(`/api/groups/${slug}/roles/${vaulters.id}`)).status() === 204, 'deleting vaulters failed');
     expect((await maker.delete(`/api/groups/${slug}/channels/vault`)).status() === 204, 'deleting vault failed');
 
-    // the cap: 50 a channel. two speakers fill it faster, each on their own bucket
     const texts = (who, n) => Array.from({ length: n }, (_, i) => `${who} ${i} ${RUN}`);
     const [mine, theirs] = await Promise.all([sayAll(asOwnerPage, 'board', texts('o', 25)), sayAll(asMemberPage, 'board', texts('m', 25))]);
     const more = [...mine.ids, ...theirs.ids];
@@ -1101,7 +1012,6 @@ const dropAll = async (ctx, names) => {
     expect((await body(await pins(maker, 'board'))).pins.length === 50, 'the cap does not hold at 50');
     expect((await unpin(maker, 'board', first)).status() === 204 && (await pin(maker, 'board', more[49])).status() === 200, 'one out did not make room for one in');
 
-    // the channel goes, and its pins with it
     expect((await maker.delete(`/api/groups/${slug}/channels/board`)).status() === 204, 'deleting board failed');
     expect((await pins(maker, 'board')).status() === 404 && !('board' in ((await body(await maker.get(`/api/groups/${slug}`))).pins || {})), 'board\'s pins outlived it');
     await asOwnerPage.context().close();
@@ -1120,9 +1030,7 @@ const dropAll = async (ctx, names) => {
     const count = await q.$$eval('#group-channels > li', (rows) => rows.length);
     expect(count === 1, `the channel list has ${count} row(s)`);
     expect(await q.$('#group-members'), 'a member has no roster');
-    // the api's lines are on the page before anything else is said
     await q.waitForFunction((t) => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes(t)), 'hello general ' + RUN, { timeout: 10000 });
-    // from here: no ask of the room, and no new chat socket, whatever the page does
     let roomAsks = 0;
     let sockets = 0;
     q.on('request', (r) => {
@@ -1146,7 +1054,6 @@ const dropAll = async (ctx, names) => {
     await q.fill('#chat-text', 'first in clips');
     await q.click('#chat-send');
     await q.waitForFunction(() => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes('first in clips')), null, { timeout: 10000 });
-    // back to general: its lines, not these; and back again: the shelf kept them
     await q.click('#group-channel-general');
     await q.waitForFunction(() => document.querySelector('#channel')?.textContent === '#general', null, { timeout: 10000 });
     await q.waitForFunction((t) => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes(t)), 'hello general ' + RUN, { timeout: 10000 });
@@ -1154,7 +1061,6 @@ const dropAll = async (ctx, names) => {
     await q.click('#group-channel-clips');
     await q.waitForFunction(() => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes('first in clips')), null, { timeout: 10000 });
     expect(roomAsks === 0 && sockets === 0, `switching asked the room ${roomAsks} time(s) and opened ${sockets} chat socket(s)`);
-    // the maker deletes the channel under the page
     const gone = await maker.delete(`/api/groups/${slug}/channels/clips`);
     expect(gone.status() === 204, `deleting clips got ${gone.status()}`);
     await q.waitForFunction(() => document.body.textContent.includes('no such channel'), null, { timeout: 10000 });
@@ -1171,11 +1077,9 @@ const dropAll = async (ctx, names) => {
     await q.click('#auth-submit');
     const row = `#group-members li[data-member="${MAKER}"] a`;
     await q.waitForSelector(row, { timeout: 15000 });
-    // the popup is what a click does unless this browser said otherwise: the room stays under it
     await q.click(row);
     await q.waitForSelector(`#profile-popup[open][data-name="${MAKER}"]`, { timeout: 10000 });
     expect(new URL(q.url()).pathname === `/groups/${slug}`, `the click left the room for ${q.url()}`);
-    // their page without the chat: the head, the follow button with the count, the page's three tabs each with its own read
     await q.waitForSelector('#profile-popup-tabs', { timeout: 15000 });
     const title = (await q.textContent('#profile-popup-title')) || '';
     expect(title.includes(MAKER), `the popup's head reads "${title}"`);
@@ -1185,12 +1089,10 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#profile-popup-calendar[data-phase="ready"]', { timeout: 15000 });
     await q.click('#profile-popup-tab-socials');
     await q.waitForSelector('#profile-popup-socials', { timeout: 10000 });
-    // escape closes it, and the focus is back on the row that was clicked
     await q.keyboard.press('Escape');
     await q.waitForSelector('#profile-popup', { state: 'detached', timeout: 5000 });
     const back = await q.evaluate(() => document.activeElement?.closest('li')?.dataset.member || '');
     expect(back === MAKER, `after escape the focus is on ${back || 'nothing in the roster'}`);
-    // a name in the chat opens it too, with the way to that account's lines there (what the click did before the popup)
     const name = '#chat-lines [data-verified="true"] [data-from]';
     await q.waitForSelector(name, { timeout: 15000 });
     const speaker = await q.getAttribute(name, 'data-from');
@@ -1199,13 +1101,11 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#profile-popup-lines', { timeout: 5000 });
     await q.click('#profile-popup-close');
     await q.waitForSelector('#profile-popup', { state: 'detached', timeout: 5000 });
-    // the button goes to their page, and the popup goes with the room
     await q.click(row);
     await q.waitForSelector('#profile-popup-page', { timeout: 10000 });
     await q.click('#profile-popup-page');
     await q.waitForURL((u) => u.pathname === `/watch/${MAKER}`, { timeout: 10000 });
     await q.waitForSelector('#profile-popup', { state: 'detached', timeout: 5000 });
-    // the chat tab's people cards turn it off (kept in the browser): then a member's row is the link to their page it was
     await q.goto(`${BASE}/groups/${slug}`, { waitUntil: 'domcontentloaded' });
     await q.waitForSelector(row, { timeout: 15000 });
     await q.hover('#user-panel');
@@ -1234,13 +1134,11 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#user-panel', { timeout: 15000 });
     await q.hover('#user-panel');
     await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
-    // the run's letters are in the group's title and in both logins' names: the group comes first all the same
     await q.fill('#friends-search', RUN);
     await q.waitForSelector(`#result-group-${slug}`, { timeout: 10000 });
     await q.waitForSelector(`#result-${MAKER}`, { timeout: 10000 });
     const first = await q.$eval('#friends-results > li', (el) => el.querySelector('a')?.id || '');
     expect(first === `result-group-${slug}`, `first in the results is ${first}`);
-    // the panel is open, so the row has its words: the title with the digits
     const words = (await q.textContent(`#result-group-${slug}`)) || '';
     expect(words.includes(GROUP) && words.includes(`#${slug.slice(-4)}`), `the group's row reads "${words}"`);
     await q.click(`#result-group-${slug}`);
@@ -1287,8 +1185,6 @@ const dropAll = async (ctx, names) => {
     await q.fill('#auth-password', PW);
     await q.click('#auth-submit');
     await q.waitForSelector('#you', { timeout: 10000 });
-    // the login page moves to home. the maker owns nothing now (the group went when they left), so
-    // home offers create beside the groups heading, and the heading itself opens /groups
     await q.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
     await q.waitForSelector('#home-groups-create', { timeout: 10000 });
     await q.click('#groups-home');
@@ -1301,29 +1197,22 @@ const dropAll = async (ctx, names) => {
     await q.fill('#groups-make-name', name);
     await q.fill('#groups-make-badge', 'ui');
     await q.click('#groups-make-submit');
-    // made: the page is the new room, its address the title and four digits
     await q.waitForURL((u) => u.pathname.startsWith(`/groups/${name}-`), { timeout: 10000 });
     const madeName = decodeURIComponent(new URL(q.url()).pathname.split('/')[2]);
     expect(new RegExp(`^${name}-\\d{4}$`).test(madeName), `landed on ${q.url()}`);
     await q.waitForSelector('#group-banner', { timeout: 10000 });
-    // public or private is under manage, not in the header. the owner switches it there, and the pressed word follows the socket
     expect(!(await q.$('#room-private')), 'the header still has the public/private switch');
     await q.click('#group-manage-open');
-    // the dialog is a rail of tabs; an owner lands on about, which holds the listing
     await q.waitForSelector('#group-manage[open] #manage-tab-about[aria-selected="true"]', { timeout: 5000 });
     await q.waitForSelector('#manage-panel-about #room-public[aria-pressed="true"]', { timeout: 5000 });
-    // the pictures are the owner's, so about offers them too: the square and the banner, each the click for a new one
     expect(await q.$('#manage-panel-about #manage-icon-pick'), 'about has no picture pick for the owner');
     expect(await q.$('#manage-panel-about #manage-banner-pick'), 'about has no banner pick for the owner');
     await q.click('#room-private');
     await q.waitForSelector('#group-manage[open] #room-private[aria-checked="true"]', { timeout: 10000 });
     const room = await body(await maker.get(`/api/groups/${madeName}`));
     expect(room && room.public === false, `after private the room says ${JSON.stringify(room && room.public)}`);
-    // roles are changed in place, under their tab. add role makes one called new role and opens it with the name
-    // selected; a name, a power and save rename it; its row is the click to open it again; delete is in there
     await q.click('#manage-tab-roles');
     await q.waitForSelector('#manage-panel-roles #role-add', { timeout: 5000 });
-    // the owner role is the first row, a crown and the word owner; for an owner it opens as the name alone, and the crowns follow the rename
     const ownerRow = await q.textContent('#group-roles li:first-child[data-owner][data-role="owner"]');
     expect(/owner/.test(ownerRow) && /every power/.test(ownerRow), `the owner row reads "${ownerRow}"`);
     expect(await q.$('#group-members li[data-owner] [data-owner-mark][aria-label="owner"]'), 'the roster has no crown on the owner');
@@ -1335,7 +1224,6 @@ const dropAll = async (ctx, names) => {
     await q.click('#owner-role-save');
     await q.waitForSelector('#group-roles li:first-child[data-owner][data-role="boss"]:not([data-open])', { timeout: 10000 });
     await q.waitForSelector('#group-members li[data-owner] [aria-label="boss"]', { timeout: 10000 });
-    // the header's crown (the viewer owns the group) and the roster's both say boss now
     expect((await q.$$('[data-owner-mark][aria-label="boss"]')).length >= 2, 'the header crown did not follow the rename');
     expect((await body(await maker.get(`/api/groups/${madeName}`))).owner_role === 'boss', 'the api does not say boss');
     await q.click('#role-add');
@@ -1344,10 +1232,8 @@ const dropAll = async (ctx, names) => {
     const started = await q.inputValue('#role-name');
     expect(started === 'new role', `a new role is called "${started}"`);
     await q.fill('#role-name', 'helpers');
-    // the powers are a list under the colours, a row each, pressed when on
     await q.click('#role-perm-kick');
     expect((await q.getAttribute('#role-perm-kick', 'aria-pressed')) === 'true', 'kick did not press');
-    // the cooldown is off until a word is pressed
     expect((await q.getAttribute('#role-cooldown-0', 'aria-pressed')) === 'true', 'a new role has a cooldown');
     await q.click('#role-cooldown-30');
     expect((await q.getAttribute('#role-cooldown-30', 'aria-pressed')) === 'true', '30s did not press');
@@ -1359,8 +1245,6 @@ const dropAll = async (ctx, names) => {
     const roles = await body(await maker.get(`/api/groups/${madeName}/roles`));
     const helpers = Array.isArray(roles) && roles.find((r) => r.name === 'helpers');
     expect(helpers && UUID.test(helpers.id) && helpers.perms.kick === true && helpers.cooldown === 30 && !roles.some((r) => r.name === 'new role'), `the api's roles ${JSON.stringify(roles)}`);
-    // the members tab: the roles a member holds after the name, the owner role first as the crown and its name; the plus
-    // opens the roles to give as a menu on hover, a click on one gives it, and the word's × takes it back
     await q.click('#manage-tab-members');
     await q.waitForSelector(`#manage-members li[data-member="${MAKER}"]`, { timeout: 5000 });
     expect(!(await q.$('#manage-members select')), 'the members tab still has a select');
@@ -1383,8 +1267,6 @@ const dropAll = async (ctx, names) => {
     await q.waitForFunction(() => !document.querySelector('#group-roles li[data-role="helpers"]'), null, { timeout: 10000 });
     await q.click('#group-manage-close');
     await q.waitForFunction(() => !document.querySelector('#group-manage'), null, { timeout: 5000 });
-    // a channel is added from the row under the list, not a box in it: the dialog takes the name (typed to the
-    // name rule) and a line about it, and the page is the new channel, which goes under general
     expect(!(await q.$(`#channel-name-${madeName}`)), 'the channel list still has a name box');
     await q.click('#group-channel-add');
     await q.waitForSelector('#channel-make[open]', { timeout: 5000 });
@@ -1399,16 +1281,11 @@ const dropAll = async (ctx, names) => {
     expect((await channelNames()).join(' ') === 'general clips', `the list reads ${(await channelNames()).join(' ')}`);
     const clips = (await body(await maker.get(`/api/groups/${madeName}`))).channels.find((c) => c.name === 'clips');
     expect(clips && clips.about === 'the best bits', `the api's clips ${JSON.stringify(clips)}`);
-    // the channels tab of manage: the rows in the list's order; the arrow key on the handle moves clips to the top,
-    // the api is told and the list on the left follows; the pencil by the name opens it as a box in its place, enter
-    // renames it, the api is told, and the page's address and the list follow; delete asks first, and the channel
-    // on screen going moves the page to general
     await q.click('#group-manage-open');
     await q.waitForSelector('#group-manage[open] #manage-tab-channels', { timeout: 5000 });
     await q.click('#manage-tab-channels');
     await q.waitForSelector('#manage-panel-channels #manage-channels li[data-channel="clips"]', { timeout: 5000 });
     const rowsBefore = await q.$$eval('#manage-channels li', (rows) => rows.map((row) => row.dataset.channel));
-    // the text channels are a list of their own; the group's own `voice` is in the voice list under it, made with it
     expect(rowsBefore.join(' ') === 'general clips', `the tab's rows read ${rowsBefore.join(' ')}`);
     const voiceRows = await q.$$eval('#manage-voice-channels li', (rows) => rows.map((row) => row.dataset.channel));
     expect(voiceRows.join(' ') === 'voice', `the voice list reads ${voiceRows.join(' ')}`);
@@ -1416,7 +1293,6 @@ const dropAll = async (ctx, names) => {
     expect(!(await q.$('#channel-remove-general')) && (await q.$('#channel-rename-general')), 'general (the home channel) has a delete, or no pencil');
     expect(!(await q.$('#channel-up-clips')) && !(await q.$('#channel-down-clips')), 'the row still has up and down');
     const put = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels`, { timeout: 10000 });
-    // the handle's keys: space picks the row up, the arrow moves it, space drops it and the api is told
     await q.focus('#channel-drag-clips');
     await q.keyboard.press('Space');
     await q.keyboard.press('ArrowUp');
@@ -1432,7 +1308,6 @@ const dropAll = async (ctx, names) => {
     await q.click('#channel-rename-clips');
     await q.waitForSelector('#channel-name-clips', { timeout: 5000 });
     expect((await q.inputValue('#channel-name-clips')) === 'clips', `the box opened reading "${await q.inputValue('#channel-name-clips')}"`);
-    // escape leaves the name as it was, and the dialog up
     await q.keyboard.press('Escape');
     await q.waitForFunction(() => !document.querySelector('#channel-name-clips'), null, { timeout: 5000 });
     expect(await q.$('#group-manage[open]'), 'escape in the box closed the dialog');
@@ -1451,9 +1326,6 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#manage-channels li[data-channel="highlights"]', { timeout: 10000 });
     expect(!(await q.$('#channel-name-clips')) && !(await q.$('#channel-name-highlights')), 'the box is still open');
     expect((await channelNames()).join(' ') === 'highlights general', `after the rename the list reads ${(await channelNames()).join(' ')}`);
-    // who sees a channel is the channels tab's: a role made in the roles tab (whose editor has no channels any more), then on
-    // the channel's row `selected roles` (owner-only, nothing sent, until a role is picked) and the role's chip, one call.
-    // the roles row says what it keeps and the channel wears a lock on both lists; the role deleted, the lock goes
     await q.click('#manage-tab-roles');
     await q.waitForSelector('#manage-panel-roles #role-add', { timeout: 5000 });
     await q.click('#role-add');
@@ -1488,7 +1360,6 @@ const dropAll = async (ctx, names) => {
     await q.click('#manage-tab-roles');
     const staffersRow = await q.textContent('#group-roles li[data-role="staffers"]');
     expect(/keeps #highlights/.test(staffersRow), `the row reads "${staffersRow}"`);
-    // a save of the role leaves what it keeps alone
     await q.click('#group-roles li[data-role="staffers"] button');
     await q.waitForSelector('#group-roles li[data-role="staffers"][data-open] #role-save', { timeout: 5000 });
     await q.click('#role-save');
@@ -1496,7 +1367,6 @@ const dropAll = async (ctx, names) => {
     expect((await body(await maker.get(`/api/groups/${madeName}`))).roles.find((r) => r.name === 'staffers').channels.join(' ') === 'highlights', 'a role save let its channel go');
     await q.click('#manage-tab-channels');
     await q.waitForSelector('#manage-channels li[data-channel="highlights"] [aria-label="only staffers"]', { timeout: 5000 });
-    // the channel's cooldown from the clock on its row: a menu of the choices; 30s wears it on the row and the page's list; off takes it back
     expect((await q.textContent('#manage-channels li[data-channel="highlights"] [data-cooldown="0"]')).trim() === 'off', 'the channel row does not read off');
     await q.hover('[aria-label="cooldown of #highlights"]');
     await q.waitForSelector('[role="menu"] [data-pick="30"]', { timeout: 5000 });
@@ -1526,7 +1396,6 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#group-manage[open]', { timeout: 5000 });
     await q.click('#group-manage-close');
     await q.waitForFunction(() => !document.querySelector('#group-manage'), null, { timeout: 5000 });
-    // the maker owns one. under the cap home still offers create; owning as many as the cap allows, it does not
     await q.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await q.waitForSelector('#groups-count', { timeout: 10000 });
     if (cap > 1) {
@@ -1537,7 +1406,6 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#groups-count', { timeout: 10000 });
     expect(!(await q.$('#home-groups-create')), `home still offers create to a login owning ${cap} of ${cap}`);
     await dropAll(maker, extra);
-    // the gear at the end of your line in the panel opens the modal; the tab lists the group as yours
     await q.hover('#user-panel');
     await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
     await q.click('#settings');
@@ -1548,15 +1416,12 @@ const dropAll = async (ctx, names) => {
     expect(!(await q.$(`#group-delete-${madeName}`)), 'the tab still has a delete: that is the group page\'s');
     const row = await q.textContent(`#group-${madeName}`);
     expect(/1 member/.test(row) && row.includes(name), `the square reads "${row}"`);
-    // a click makes it the primary, a second click unsets it
     await q.click(`#group-primary-${madeName}`);
     await q.waitForSelector(`#group-${madeName}[data-primary="true"]`, { timeout: 10000 });
     await q.click(`#group-primary-${madeName}`);
     await q.waitForFunction((n) => !document.querySelector(`#group-${n}`)?.hasAttribute('data-primary'), madeName, { timeout: 10000 });
-    // the profile card wears it too
     await q.click('#tab-profile');
     await q.waitForSelector(`#panel-profile [data-group="${madeName}"]`, { timeout: 5000 });
-    // deleting is the group page's now; the api drops it, and the tab follows on its next open
     await dropAll(maker, [madeName]);
     await q.click('#tab-groups');
     await q.waitForFunction((n) => !document.querySelector(`#group-${n}`), madeName, { timeout: 10000 });
@@ -1566,8 +1431,6 @@ const dropAll = async (ctx, names) => {
   });
 
   if (LOCAL) {
-    // this run's signups count against this machine's ip for an hour. forget them, like auth.js
-    // does, so running the suite in a loop never locks the developer out. only those keys.
     execSync(`docker compose exec -T redis sh -c "redis-cli --scan --pattern 'rl:signup:*' | xargs -r redis-cli del"`, { cwd: REPO, stdio: 'ignore' });
   }
 

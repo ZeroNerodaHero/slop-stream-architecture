@@ -1,4 +1,3 @@
-// Regressions for the adversarial findings. Run: BASE_URL=https://<ip> node regress.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -46,7 +45,6 @@ function recordPcs() {
   const api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true, timeout: 5000 });
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const ctx = async () => { const c = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] }); await c.addInitScript(recordPcs); return c; };
-  // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
   const asNick = (page, name) => page.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), name);
   const publisher = async (name) => {
     const page = await (await ctx()).newPage();
@@ -63,7 +61,6 @@ function recordPcs() {
     return page;
   };
 
-  // 1. third-party stop is refused; stream keeps going
   await step('stop without token -> 403, stream unaffected', async () => {
     const p = await publisher('r1');
     const w = await watcher('/watch/r1');
@@ -78,7 +75,6 @@ function recordPcs() {
     return `no-token ${res.status()}, bad-token ${bad.status()}`;
   });
 
-  // 2. publisher reloads -> watcher recovers on its own
   await step('publisher reload -> watcher auto-recovers', async () => {
     const p = await publisher('r2');
     const w = await watcher('/watch/r2');
@@ -95,7 +91,6 @@ function recordPcs() {
     return `back to watching ${Date.now() - t0} ms after reload, frames ${f}`;
   });
 
-  // 3. trailing slash
   await step('/watch/<name>/ with trailing slash works', async () => {
     const p = await publisher('r3');
     const w = await watcher('/watch/r3/');
@@ -104,12 +99,6 @@ function recordPcs() {
     return `status "${s}"`;
   });
 
-  // 4. video restart is fast and both pages react at once. A second, bare watcher socket records
-  //    every frame video sends: the watch page shows the same text whether it got `ended` or the
-  //    socket just dropped, so the SIGTERM promise ("every watcher gets ended") is asserted here.
-  //    Only r4 is ours to assert on: dummies and other people's streams reconnect on their own.
-  //    compose restart gives video 10s to leave on SIGTERM before SIGKILL, so a budget under
-  //    that still proves video exits at once; 6s was wall-clock luck on a busy box.
   await step('docker restart video is quick, pages react, watchers get ended', async () => {
     const p = await publisher('r4');
     const w = await watcher('/watch/r4');
@@ -150,7 +139,6 @@ function recordPcs() {
     return `restart ${restartMs} ms, pub "${ps}", watch "${ws}", raw socket got ended, health ${health}`;
   });
 
-  // 5. start, stop fast, start again
   await step('start/stop/start race is clean', async () => {
     const page = await (await ctx()).newPage();
     await asNick(page, 'r5');
@@ -172,7 +160,6 @@ function recordPcs() {
     return `"${s}" and stayed live`;
   });
 
-  // 6. heartbeat ownership
   await step('heartbeat: wrong token 404, lapsed key reclaimed', async () => {
     const grant = await (await api.post('/api/streams/r6/go-live')).json();
     const wrong = await api.post(`/api/streams/r6/heartbeat?session=${grant.session}&token=1`);
@@ -185,7 +172,6 @@ function recordPcs() {
     return `wrong ${wrong.status()}, ok ${okRes.status()}, reclaimed, stop ${stopRes.status()}`;
   });
 
-  // 7. oversized / garbage offer is refused without touching the room
   await step('oversized offer refused, name still free', async () => {
     const page = await (await ctx()).newPage();
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
@@ -203,8 +189,6 @@ function recordPcs() {
     return `reply ${reply}, live ${JSON.stringify(live)}, then r7 went live fine`;
   });
 
-  // 8. a publish frame needs the go-live session and token: video asks the api. A valid offer
-  //    without them, or with a made-up pair, is refused and the name stays free.
   await step('publish without the go-live grant -> not your stream', async () => {
     const page = await (await ctx()).newPage();
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
@@ -230,14 +214,12 @@ function recordPcs() {
     return `no grant ${replies.none}, wrong grant ${replies.wrong}, then r8 went live fine`;
   });
 
-  // 9. a go-live whose publisher has not reached video yet still owns the name
   await step('second go-live inside the connect window -> 409, owner keeps it', async () => {
     const first = await api.post('/api/streams/r9/go-live');
     const grant = await first.json();
     const second = await api.post('/api/streams/r9/go-live');
     const secondBody = await second.json().catch(() => null);
     const beat = await api.post(`/api/streams/r9/heartbeat?session=${grant.session}&token=${grant.token}`);
-    // errors keep the { error } shape even when the query string is missing
     const noQuery = await api.post('/api/streams/r9/stop');
     const noQueryBody = await noQuery.json().catch(() => null);
     const stop = await api.post(`/api/streams/r9/stop?session=${grant.session}&token=${grant.token}`);
@@ -251,7 +233,6 @@ function recordPcs() {
     return `second ${second.status()} "${secondBody && secondBody.error}", heartbeat ${beat.status()}, after stop ${again.status()}, no-query stop ${noQuery.status()} {error}`;
   });
 
-  // 10. without video the api refuses to hand out names, and lists from redis
   await step('video down: go-live 503, list and watch fall back to redis', async () => {
     const grant = await (await api.post('/api/streams/r10/go-live')).json();
     execSync('docker compose stop video', { cwd: REPO, env: DOCKER_ENV, stdio: 'ignore' });

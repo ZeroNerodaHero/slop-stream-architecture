@@ -1,9 +1,3 @@
-// The watch document and the profile pictures: /watch/<name> is html from the api with a
-// <title>, og:* tags and the profile filled in (offline, with a picture, with the offline
-// picture, live with the thumbnail), the pictures round-trip and are the owner's only, the
-// offline picture and the line under the word show on the page and in the profile tab, the
-// shared link carries ?s=<session>, and the spa still boots on the page the api served.
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node preview.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const RUN = Date.now().toString(36).slice(-5);
@@ -30,13 +24,11 @@ async function waitStatus(page, re, timeout = 20000) {
   await page.waitForFunction((src) => new RegExp(src, 'i').test(document.querySelector('#status').textContent), re.source, { timeout });
   return status(page);
 }
-/** content="..." of the og:/twitter: tag, or null. */
 const meta = (html, prop) => {
   const m = html.match(new RegExp(`<meta (?:property|name)="${prop}" content="([^"]*)"`));
   return m ? m[1] : null;
 };
 const title = (html) => (html.match(/<title>([^<]*)<\/title>/g) || []).map((t) => t.slice(7, -8));
-/** The api put the card inside #root (the template starts with whitespace). */
 const hasCard = (html) => /<div id="root">\s*<main/.test(html);
 
 (async () => {
@@ -45,7 +37,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] })).newPage();
 
-  // a real jpeg, made by the browser, like the live page makes one
   const scratch = await fresh();
   const dataUrl = await scratch.evaluate(() => {
     const c = document.createElement('canvas');
@@ -116,7 +107,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     return meta(html, 'og:image');
   });
 
-  // ---- the offline picture and the line under the word: what the page shows while they are not live ----
   let offlineVersion;
   const NOTE = 'back tuesday at 8';
   const putOffline = (ctx, name, data) => ctx.put(`/api/streamers/${name}/offline`, { data, headers: { 'content-type': 'image/jpeg' } });
@@ -127,7 +117,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     expect(text.status() === 400, `text got ${text.status()}`);
     const big = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(1200 * 1024)]));
     expect(big.status() === 413, `1200 kb got ${big.status()}`);
-    // past the avatar's 256 kb and under this picture's 1 mb: the wider one has a ceiling of its own
     const wide = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(700 * 1024)]));
     expect(wide.status() === 200, `700 kb got ${wide.status()}`);
     const ok = await putOffline(anon, NAME, JPEG);
@@ -164,11 +153,9 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     return meta(html, 'og:image');
   });
 
-  /** The profile tab's page and the offline picture's bytes as last put up: the crop step after reuses both. */
   let profile;
   let offlineBytes;
   let PNG;
-  /** The pixel ten in from the bottom right corner of a jpeg, decoded in the page. */
   const cornerOf = (page, buf) =>
     page.evaluate(async (b64) => {
       const i = new Image();
@@ -191,7 +178,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     await p.waitForSelector('#username', { timeout: 15000 });
     await p.fill('#username', NAME);
     await p.press('#username', 'Enter');
-    // the profile tab: the gear at the end of your line opens the modal (the picture is your page now), then the tab
     await p.hover('#user-panel');
     await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
     await p.click('#settings');
@@ -199,7 +185,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     await p.click('#tab-profile');
     await p.waitForFunction((v) => (document.querySelector('#profile-offline-preview')?.getAttribute('src') || '').endsWith(`/offline?v=${v}`), offlineVersion, { timeout: 10000 });
     expect((await p.inputValue('#profile-offline-note')) === NOTE, `the box holds "${await p.inputValue('#profile-offline-note')}"`);
-    // a 2000x1000 png with a gradient: not a jpeg, not 16:9, far over the ceiling as it is
     const png = await p.evaluate(() => {
       const c = document.createElement('canvas');
       c.width = 2000;
@@ -214,7 +199,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     });
     PNG = Buffer.from(png.split(',')[1], 'base64');
     await p.setInputFiles('#profile-offline-file', { name: 'banner.png', mimeType: 'image/png', buffer: PNG });
-    // the crop dialog opens over the modal, the 16:9 box as big as fits in the middle; used as it is, that is the old middle cut
     await p.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
     const goes = ((await p.textContent('#crop-size')) || '').trim();
     expect(goes === 'goes up as a 1920×1080 jpeg', `the dialog says "${goes}"`);
@@ -244,12 +228,10 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     const p = profile;
     await p.setInputFiles('#profile-offline-file', { name: 'banner.png', mimeType: 'image/png', buffer: PNG });
     await p.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
-    // the slider to 2×: the box is half as tall as the picture (500 of 1000, so 889 of 2000 wide). through the native setter, so react sees the input
     await p.$eval('#crop-zoom', (el) => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '2');
       el.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    // dragged far past the top left: it stops in the corner
     const box = await (await p.$('#crop-box')).boundingBox();
     await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await p.mouse.down();
@@ -260,7 +242,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     expect(Math.abs(after.x - picture.x) < 2 && Math.abs(after.y - picture.y) < 2, `the box sits ${(after.x - picture.x).toFixed(0)},${(after.y - picture.y).toFixed(0)} from the picture's corner`);
     expect(Math.abs(after.height / picture.height - 0.5) < 0.03, `the box is ${(after.height / picture.height).toFixed(2)} of the picture tall, not half`);
     await p.click('#crop-use');
-    // the version is in seconds and this save can land in the same one as the last: new bytes, not a new number, say it arrived
     let bytes = offlineBytes;
     for (let i = 0; i < 50 && bytes.equals(offlineBytes); i++) {
       await sleep(300);
@@ -268,8 +249,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     }
     expect(!bytes.equals(offlineBytes), 'the offline picture did not change');
     expect(bytes.length <= 1024 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 1 mb`);
-    // the gradient runs orange at the top left to blue at the bottom right. the middle cut ends deep in the blue;
-    // the top left quarter ends near the picture's centre, still more orange than blue
     const middle = await cornerOf(p, offlineBytes);
     const corner = await cornerOf(p, bytes);
     expect(middle.b > middle.r + 100, `the middle cut's far corner is rgb(${middle.r},${middle.g},${middle.b}), not blue`);
@@ -303,7 +282,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
   let publisher;
   await step('live: the share link has ?s=<session>', async () => {
     publisher = await fresh();
-    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
     await publisher.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await publisher.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await publisher.waitForFunction(() => !document.querySelector('#start').disabled);
@@ -326,7 +304,6 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     expect(meta(html, 'twitter:card') === 'summary_large_image', `twitter:card ${meta(html, 'twitter:card')}`);
     expect(meta(html, 'og:description') === 'live now', `og:description ${meta(html, 'og:description')}`);
     expect((meta(html, 'og:url') || '').endsWith(`/watch/${NAME}`), `og:url keeps the query: ${meta(html, 'og:url')}`);
-    // the word beside the name is the presence word (docs/status.md): `streaming`, the title alone says live
     expect(html.includes('>streaming</p>'), 'the card does not say streaming');
     expect(hasCard(html) && !html.includes('background-image:url('), 'the player box wears the offline picture while live');
     return `thumbnail after ${Date.now() - t0} ms`;

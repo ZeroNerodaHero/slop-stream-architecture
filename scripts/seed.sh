@@ -33,7 +33,7 @@ want_pics=0
 for a in "$@"; do
   if [ "$want_pics" = 1 ]; then PICS="$a"; want_pics=0; continue; fi
   case "$a" in
-    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     --pictures) want_pics=1 ;;
     --pictures=*) PICS="${a#--pictures=}" ;;
     --dummies) DUMMIES=1 ;;
@@ -48,22 +48,19 @@ docker info >/dev/null 2>&1 || die "docker is not answering. is it running?"
 [ -n "$(docker compose ps -q api 2>/dev/null)" ] || die "the api container is not up. ./scripts/deploy.sh first"
 [ -d "$PICS" ] || die "no pictures folder at $PICS"
 PICS="$(cd "$PICS" && pwd)"
-FILES=()   # a read loop, not mapfile: a mac's bash is 3.2
+FILES=()
 while IFS= read -r f; do FILES+=("$f"); done < <(find "$PICS" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) | sort)
 [ ${#FILES[@]} -ge 1 ] || die "no jpg, png, gif or webp in $PICS"
 
-# the api as the browser sees it. the cert is the box's own, so -k, like test.sh
 ip="$(sed -n 's/^[[:space:]]*PUBLIC_IP=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \t\r")"
 [ -n "$ip" ] || die "no PUBLIC_IP in .env yet. run ./scripts/deploy.sh first"
 BASE="https://$ip"
 curl -sk -o /dev/null --max-time 5 "$BASE/api/health" || die "nothing answers at $BASE. is the stack up?"
 
-FFMPEG_IMAGE="mwader/static-ffmpeg:7.1"   # the same static ffmpeg the video images carry
+FFMPEG_IMAGE="mwader/static-ffmpeg:7.1"
 
 ADJ=(quiet neon rusty velvet sleepy brave cosmic dusty gentle hollow lunar misty nimble polar rapid solar tidal witty amber crisp)
 NOUN=(otter heron fox lynx moth owl pike raven seal tern wren yak bison crane dingo egret finch gecko ibis koala)
-# a bio is three random pieces: how they stream, what it is like, a last word (often none). a
-# few hundred combinations; two alike is fine, nobody reads two bios side by side
 OPENERS=(
   "streams whenever the coffee kicks in."
   "night owl."
@@ -106,16 +103,13 @@ random_bio() {
   local a="${OPENERS[$(rand ${#OPENERS[@]})]}" b="${MIDDLES[$(rand ${#MIDDLES[@]})]}" c="${CLOSERS[$(rand ${#CLOSERS[@]})]}"
   if [ -n "$c" ]; then printf '%s %s %s' "$a" "$b" "$c"; else printf '%s %s' "$a" "$b"; fi
 }
-# a bio as a json string: the pieces above hold quotes (don't) and nothing else that json minds
 json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
 JAR="$(mktemp)"; TMP="$(mktemp -d)"
 trap 'rm -rf "$JAR" "$TMP"' EXIT
 
-rand() { echo $(( RANDOM % $1 )); }   # 0 to n-1. a box's bash RANDOM is plenty for picking pictures
+rand() { echo $(( RANDOM % $1 )); }
 
-# one picture, cut to WxH (filled, centred, cropped) as a jpeg under the api's 256 kb, into $3.
-# the first frame of a gif. ffmpeg runs in docker so nothing has to be installed on the box.
 cut_picture() {
   local src="$1" size="$2" out="$3" q=4
   while :; do
@@ -124,14 +118,12 @@ cut_picture() {
       -vf "scale=${size}:force_original_aspect_ratio=increase,crop=${size},format=yuvj420p" \
       -q:v "$q" "/out/$(basename "$out")" || return 1
     [ "$(wc -c < "$out")" -le 250000 ] && return 0
-    q=$((q + 4)); [ "$q" -le 20 ] || return 1   # smaller and smaller until it fits
+    q=$((q + 4)); [ "$q" -le 20 ] || return 1
   done
 }
 
-# http status of a call, body thrown away
 status() { curl -sk -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
 
-# a value as a query string carries it. bash 3.2 has no better way, and curl's --data-urlencode wants -G
 urlencode() {
   local s="$1" out="" c i
   for (( i = 0; i < ${#s}; i++ )); do
@@ -141,17 +133,12 @@ urlencode() {
   printf '%s' "$out"
 }
 
-# this box's login counter (100 per 15 minutes) would stop a long run halfway: the test
-# suite clears it the same way after a run, so this is nothing it does not already do
 clear_login_limit() {
   docker compose exec -T redis sh -c "for p in 'rl:login:*' 'rl:route:*'; do redis-cli --scan --pattern \"\$p\" | xargs -r redis-cli del; done" >/dev/null 2>&1 || true
 }
 
 docker image inspect "$FFMPEG_IMAGE" >/dev/null 2>&1 || { note "getting $FFMPEG_IMAGE once"; docker pull -q "$FFMPEG_IMAGE" >/dev/null || die "could not pull $FFMPEG_IMAGE"; }
 
-# ---- the fake streams' faces ------------------------------------------------------------------
-# reserved names are write-gated by the dummy box's password, not a login (docs/accounts.md), so
-# the pictures go up with `?password=` and no cookie. the rows exist once the dummy has run.
 if [ "$DUMMIES" = 1 ]; then
   dpw="$(sed -n 's/^[[:space:]]*DUMMY_PASSWORD=//p' .env 2>/dev/null | tail -n 1 | sed 's/[[:space:]]#.*$//' | tr -d "\"' \t\r")"
   [ -n "$dpw" ] || die "no DUMMY_PASSWORD in .env: the fake streams' names are written with it"
@@ -184,16 +171,13 @@ made=0; tries=0
 while [ "$made" -lt "$COUNT" ]; do
   tries=$((tries + 1)); [ "$tries" -le $((COUNT * 6)) ] || die "ran out of free names after $tries tries. made $made"
   name="${ADJ[$(rand ${#ADJ[@]})]}-${NOUN[$(rand ${#NOUN[@]})]}"
-  [ "$tries" -gt 40 ] && name="$name$(rand 100)"   # the plain pairs are running out: a number on the end
-  # a name with an account is somebody's: never touched. (a held name is refused by passwd below)
+  [ "$tries" -gt 40 ] && name="$name$(rand 100)"
   if curl -sk --max-time 10 "$BASE/api/streamers/$name" | grep -q '"verified":true'; then continue; fi
 
-  # the account. RUST_LOG=warn: without it the schema's "already exists" notices come first
   out="$(docker compose exec -T -e RUST_LOG=warn api api passwd "$name" 2>&1)" || { note "skip $name: ${out##*$'\n'}"; continue; }
   pw="$(printf '%s\n' "$out" | sed -n 's/.*new password is[[:space:]]*//p' | head -n 1 | tr -d '[:space:]')"
   [ -n "$pw" ] || { warn "no password in: $out"; continue; }
 
-  # log in as them: the pictures and the bio go through the api like anyone's
   : > "$JAR"
   code="$(status -c "$JAR" -X POST "$BASE/api/login" -H 'content-type: application/json' -d "{\"name\":\"$name\",\"password\":\"$pw\"}")"
   if [ "$code" = 429 ]; then clear_login_limit; code="$(status -c "$JAR" -X POST "$BASE/api/login" -H 'content-type: application/json' -d "{\"name\":\"$name\",\"password\":\"$pw\"}")"; fi
@@ -203,7 +187,6 @@ while [ "$made" -lt "$COUNT" ]; do
   code="$(status -b "$JAR" -X PUT "$BASE/api/streamers/$name" -H 'content-type: application/json' -d "{\"bio\":$(json_string "$bio")}")"
   [ "$code" = 200 ] || warn "$name: bio got $code"
 
-  # two different pictures when there are two: one for the face, one for the card
   a="${FILES[$(rand ${#FILES[@]})]}"; b="${FILES[$(rand ${#FILES[@]})]}"
   [ ${#FILES[@]} -gt 1 ] && while [ "$b" = "$a" ]; do b="${FILES[$(rand ${#FILES[@]})]}"; done
   if cut_picture "$a" 256:256 "$TMP/avatar.jpg"; then

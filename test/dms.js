@@ -1,13 +1,3 @@
-// Direct messages (docs/dms.md): a login writes a line to a friend. Nobody gets 401; a stranger
-// 403 until both follows are there; the line is kept, listed with its count of what is new, read;
-// a line carries pictures the room chat's way (a picture alone is kept, a bad, unknown or eleventh
-// id is refused); a thread is searched with the room chat's words and filters (nobody 401, an empty
-// box and a bad filter 400); the window in a browser gets the line pushed over the events socket and
-// sends one back, searches from the glass on its header (no presence word there) and a hit pages
-// back to its line, draws a pushed picture and sends one picked from its picture button; a line that
-// comes while the window is hidden counts on the sidebar; two tabs of one login agree; a friend's
-// watch page has the line button beside the chat button, a stranger's does not.
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node dms.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const RUN = Date.now().toString(36).slice(-5);
@@ -37,9 +27,7 @@ const body = async (res) => {
     return null;
   }
 };
-/** A jpeg by its first bytes: the upload checks the magic and the size, nothing more (chat_images.rs `kind`). */
 const JPEG_HEAD = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9]);
-/** A picture for a line, the page's way: the bytes to `POST /api/chat-images`, the id back. */
 const upload = (ctx, bytes) => ctx.post('/api/chat-images', { data: bytes, headers: { 'content-type': 'image/jpeg' } });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -102,9 +90,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect(read.status() === 204, `read got ${read.status()}`);
     const list = await body(await ben.get('/api/dms'));
     expect(list[0].unread === 0, `after reading: ${JSON.stringify(list)}`);
-    // 29 from ann, then 25 from ben: 55 lines, so the thread pages at 50 and the oldest page holds
-    // the first six. ben's own lines read ann's for him (you are in the thread when you write);
-    // ann has not looked since, so ben's 25 are new to her
     for (let i = 0; i < 29; i++) {
       const r = await ann.post(`/api/dm/${BEN}`, { data: { text: `ann ${i}` } });
       expect(r.status() === 201, `ann's line ${i} got ${r.status()}`);
@@ -155,7 +140,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     return `"hi" is line ${firstId}; 25 of ben's, 29 of ann's`;
   });
 
-  /** The api's side of pictures. After the window's steps: a line of yours reads the thread for you, and those steps count on the 25 above. */
   const picturesOverTheApi = async () => {
     const up = await upload(ann, JPEG_HEAD);
     expect(up.status() === 200, `the upload got ${up.status()}: ${JSON.stringify(await body(up))}`);
@@ -173,10 +157,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect(plain && plain.images.length === 0, `a line with no picture must say images: [], got ${JSON.stringify(plain)}`);
     const list = await body(await ben.get('/api/dms'));
     expect(list[0].last.id === line.id && list[0].last.images[0] === pictureId, `ben's list ends with ${JSON.stringify(list[0].last)}`);
-    // words with it, the picture named the say's old way (`image` alone)
     const both = await body(await ann.post(`/api/dm/${BEN}`, { data: { text: 'see', image: pictureId } }));
     expect(both && both.text === 'see' && both.images[0] === pictureId, `words and a picture: ${JSON.stringify(both)}`);
-    // the search's has: filters, now that the thread has pictures, and a link and a video to find
     const linkLine = await body(await ann.post(`/api/dm/${BEN}`, { data: { text: 'read https://example.com/page then' } }));
     const videoLine = await body(await ann.post(`/api/dm/${BEN}`, { data: { text: 'and watch https://youtu.be/abc123' } }));
     const found = async (q) => (await body(await ben.get(`/api/dm/${ANN}/search?q=${encodeURIComponent(q)}`))).lines;
@@ -200,13 +182,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect(unknown.status() === 400 && /no such picture/.test(await said(unknown)), `an unknown id got ${unknown.status()} ${JSON.stringify(await body(unknown))}`);
     expect(many.status() === 400 && /too many pictures/.test(await said(many)), `eleven got ${many.status()} ${JSON.stringify(await body(many))}`);
     expect(nothing.status() === 400 && /nothing to say/.test(await said(nothing)), `no words and no picture got ${nothing.status()} ${JSON.stringify(await body(nothing))}`);
-    // a direct message's picture is for the two of them (media.rs): ben reads it, uncached and never sniffed; nobody does not
     const bytes = await ben.get(`/api/chat-images/${pictureId}`);
     expect(bytes.status() === 200 && /image\/jpeg/.test(bytes.headers()['content-type'] || ''), `the picture reads back ${bytes.status()} ${bytes.headers()['content-type']}`);
     expect(bytes.headers()['cache-control'] === 'private, no-store' && bytes.headers()['x-content-type-options'] === 'nosniff', `a dm picture's headers ${JSON.stringify(bytes.headers())}`);
     const peek = await anon.get(`/api/chat-images/${pictureId}`);
     expect(peek.status() === 401, `nobody reading a dm picture got ${peek.status()}`);
-    // only the uploader may put an upload on a line: ben may not send ann's picture on
     const theirs = await ben.post(`/api/dm/${ANN}`, { data: { text: '', images: [pictureId] } });
     expect(theirs.status() === 400 && /not your picture/.test(await said(theirs)), `ben sending ann's picture got ${theirs.status()} ${JSON.stringify(await body(theirs))}`);
     return `picture ${pictureId.slice(0, 8)} on lines ${line.id} and ${both.id}`;
@@ -224,16 +204,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const openChats = async (p) => {
     await p.hover('#user-panel');
     await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
-    // ben's chat button on his friends row: the sidebar's way into the window
     await p.waitForSelector(`#friend-chat-${BEN}`, { state: 'visible', timeout: 10000 });
-    // what the button said before the click: its name carries ben's count of new lines
     const label = await p.getAttribute(`#friend-chat-${BEN}`, 'aria-label');
     await p.click(`#friend-chat-${BEN}`);
     await p.waitForSelector('#friend-chat', { timeout: 10000 });
     await p.mouse.move(700, 300);
     return label;
   };
-  // the sidebar opened, until ben's chat button on his friends row is named `want`: the one place outside the window the count of new lines shows
   const chatButtonSays = async (p, want) => {
     await p.hover('#user-panel');
     await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
@@ -244,20 +221,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   await step('the window: the thread loads with the count, reading clears it, a pushed line lands, a sent one is kept', async () => {
     annPage = await context.newPage();
     await login(annPage, ANN);
-    // ben's chat button says 25 new before the window opens
     await chatButtonSays(annPage, `chat with ${BEN}, 25 new`);
     await openChats(annPage);
     await annPage.waitForSelector(`#friend-chat-tab-${BEN}`, { timeout: 10000 });
-    // the thread with ben is the shown one (the newest), its lines on screen, and it is read now
     await annPage.waitForFunction(() => document.querySelectorAll('#friend-chat-log p[data-id]').length === 50, null, { timeout: 10000 });
     await annPage.waitForFunction((n) => !document.querySelector(`#friend-chat-unread-${n}`), BEN, { timeout: 10000 });
     const list = await body(await ann.get('/api/dms'));
     expect(list[0].unread === 0, `after the window showed the thread the api says ${list[0].unread} new`);
-    // ben writes: the line is pushed into the open window, and is not new (it is on screen)
     const pushed = await body(await ben.post(`/api/dm/${ANN}`, { data: { text: 'are you there' } }));
     await annPage.waitForSelector(`#friend-chat-log p[data-id="${pushed.id}"]`, { timeout: 10000 });
     expect(!(await annPage.$(`#friend-chat-unread-${BEN}`)), 'a line on screen must not count as new');
-    // ann answers from the box
     await annPage.fill('#friend-chat-text', 'yes, hi');
     await annPage.press('#friend-chat-text', 'Enter');
     await annPage.waitForFunction(() => [...document.querySelectorAll('#friend-chat-log p[data-mine]')].some((p) => p.textContent.includes('yes, hi')), null, { timeout: 10000 });
@@ -269,7 +242,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   });
 
   await step('search in the window: the glass left of the ×, no presence word; the box with its filter words; a hit pages back to its line', async () => {
-    // the header: the name, then the glass, then the ×, and nothing about how they are (the face's square has that)
     const header = await annPage.evaluate(() => {
       const h = document.querySelector('#friend-chat header');
       const glass = h.querySelector('#friend-chat-search-open');
@@ -285,7 +257,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect((await annPage.evaluate(() => document.activeElement?.id)) === 'friend-chat-search', 'the box takes the focus');
     const filters = await annPage.$$eval('#friend-chat-search-filters button', (bs) => bs.map((b) => b.dataset.filter));
     expect(filters.join(' ') === 'from: has:image has:link has:video before: after:', `the filter words are ${filters.join(' ')}`);
-    // what a filter's word could be, offered as it is typed: `from:` is one of the two, and a pick puts the whole word in the typed one's place
     await annPage.type('#friend-chat-search', 'from:');
     await annPage.waitForSelector('#friend-chat-search-list', { timeout: 5000 });
     const offered = await annPage.$$eval('#friend-chat-search-list [data-suggestion]', (bs) => bs.map((b) => b.dataset.suggestion));
@@ -295,7 +266,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect((await annPage.inputValue('#friend-chat-search')) === `from:${BEN} `, `the pick put ${JSON.stringify(await annPage.inputValue('#friend-chat-search'))} in the box`);
     expect(!(await annPage.$('#friend-chat-search-list')), 'the list goes once the word is whole');
     expect(!(await annPage.$('#friend-chat-results')), 'enter on the list picks, it does not search');
-    // "hi ben" is the thread's first line, on the page before the 50 on screen
     expect(!(await annPage.$(`#friend-chat-log p[data-id="${firstId}"]`)), 'the first line must not be among the 50 drawn yet');
     await annPage.fill('#friend-chat-search', '"hi ben"');
     await annPage.press('#friend-chat-search', 'Enter');
@@ -312,18 +282,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
       return { lines: log.querySelectorAll('p[data-id]').length, inView: r.top >= l.top && r.bottom <= l.bottom };
     }, firstId);
     expect(placed.lines > 50 && placed.inView, `after the click: ${JSON.stringify(placed)} (want the older page in and the line in view)`);
-    // a filter word into the box, and nothing found: the list says so
     await annPage.click('#friend-chat-search-filters button[data-filter="has:image"]');
     expect((await annPage.inputValue('#friend-chat-search')) === '"hi ben" has:image ', `the word went in as ${JSON.stringify(await annPage.inputValue('#friend-chat-search'))}`);
     await annPage.press('#friend-chat-search', 'Enter');
     await annPage.waitForSelector('#friend-chat-results-empty', { timeout: 10000 });
-    // escape takes the box, its words and the hits down, the window stays, and the text box has the focus again
     await annPage.press('#friend-chat-search', 'Escape');
     await annPage.waitForFunction(() => !document.querySelector('#friend-chat-search-form') && !document.querySelector('#friend-chat-results'), null, { timeout: 5000 });
     expect(await annPage.$('#friend-chat'), 'escape in the search box must not hide the window');
     expect((await annPage.getAttribute('#friend-chat-search-open', 'aria-pressed')) === 'false', 'the glass is not pressed once the box is down');
     expect((await annPage.evaluate(() => document.activeElement?.id)) === 'friend-chat-text', 'the focus goes back to the text box');
-    // back on the newest line for the steps after this
     await annPage.evaluate(() => {
       const log = document.querySelector('#friend-chat-log');
       log.scrollTop = log.scrollHeight;
@@ -332,7 +299,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   });
 
   await step('pictures in the window: a pushed picture line draws its <img>; a file picked goes up, waits in the strip, and goes alone as a line', async () => {
-    // real pictures, made by the browser: a jpeg for ben's upload over the api, a png for ann's pick (the page has to decode it to shrink it)
     const [jpegUrl, pngUrl] = await annPage.evaluate(() => {
       const c = document.createElement('canvas');
       c.width = 64;
@@ -346,11 +312,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     });
     const JPEG = Buffer.from(jpegUrl.split(',')[1], 'base64');
     const PNG = Buffer.from(pngUrl.split(',')[1], 'base64');
-    // ben sends a picture with a word: the frame carries the id, and the open window draws it under the words, read at once
     const bensPicture = (await body(await upload(ben, JPEG))).id;
     const pushed = await body(await ben.post(`/api/dm/${ANN}`, { data: { text: 'look', images: [bensPicture] } }));
     expect(pushed && pushed.images && pushed.images[0] === bensPicture, `ben's line: ${JSON.stringify(pushed)}`);
-    // the <img> on the line, and the bytes decoded in it: the frame carried the id and the picture reads back through the page
     const drawn = (sel) => {
       const img = document.querySelector(sel);
       return !!img && img.complete && img.naturalWidth > 0;
@@ -361,7 +325,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect((src || '').endsWith(`/api/chat-images/${bensPicture}`), `the pushed picture is drawn from ${src}`);
     expect(((await annPage.textContent(`#friend-chat-log p[data-id="${pushed.id}"]`)) || '').includes('look'), 'the words stand with the picture');
     expect(!(await annPage.$(`#friend-chat-unread-${BEN}`)), 'a picture line on screen must not count as new');
-    // ann picks a file from the window: it goes up at once and waits in the strip, and send comes on with nothing typed
     expect(await annPage.isDisabled('#friend-chat-send'), 'send must be off with nothing typed and no picture');
     await annPage.setInputFiles('#friend-chat-picture-file', { name: 'square.png', mimeType: 'image/png', buffer: PNG });
     await annPage.waitForSelector('#friend-chat-picture-preview img', { state: 'attached', timeout: 15000 });
@@ -369,11 +332,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await annPage.waitForFunction(() => !document.querySelector('#friend-chat-send')?.disabled, null, { timeout: 5000 });
     const annsPicture = ((await annPage.getAttribute('#friend-chat-picture-preview img', 'src')) || '').split('/').pop();
     expect(UUID.test(annsPicture || ''), `the strip shows ${annsPicture}`);
-    // not posted yet: ann's alone (media.rs), read with the page's own cookie
     const bytes = await annPage.request.get(`${BASE}/api/chat-images/${annsPicture}`);
     expect((await anon.get(`/api/chat-images/${annsPicture}`)).status() === 401, 'an upload not posted yet is not for nobody');
     expect(bytes.status() === 200 && /^image\/(webp|jpeg)$/.test(bytes.headers()['content-type'] || ''), `the picked picture reads back ${bytes.status()} ${bytes.headers()['content-type']}`);
-    // enter in the empty box: the picture goes alone, the strip empties, and the api has the line with the id and no words
     await annPage.press('#friend-chat-text', 'Enter');
     await annPage.waitForFunction(() => !document.querySelector('#friend-chat-picture-preview'), null, { timeout: 10000 });
     await annPage.waitForFunction(
@@ -397,7 +358,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await chatButtonSays(annPage, `chat with ${BEN}, 2 new`);
     const list = await body(await ann.get('/api/dms'));
     expect(list[0].unread === 2, `the api says ${list[0].unread} new (want 2)`);
-    // a second tab of ann: the count is there too, from the api, and drops when the first tab reads
     const second = await context.newPage();
     await second.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await chatButtonSays(second, `chat with ${BEN}, 2 new`);
@@ -413,11 +373,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   });
 
   await step("a friend's page: beside the chat button a line button opens their thread, lit while it shows, and hides it again", async () => {
-    // a fresh load of ben's page: the window is down, and ben is not live, so the chat button is on his profile
     await annPage.goto(`${BASE}/watch/${BEN}`, { waitUntil: 'domcontentloaded' });
     await annPage.waitForFunction((n) => document.querySelector('#me')?.textContent === n, ANN, { timeout: 10000 });
     await annPage.waitForSelector('#profile #chat-open', { timeout: 10000 });
-    // the line button comes once the list has said ben follows back
     await annPage.waitForSelector('#dm-open', { timeout: 10000 });
     expect(!(await annPage.$('#friend-chat')), 'the window must be down on a fresh page');
     const label = await annPage.getAttribute('#dm-open', 'aria-label');
@@ -428,7 +386,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await annPage.waitForFunction(() => document.querySelectorAll('#friend-chat-log p[data-id]').length === 50, null, { timeout: 10000 });
     await annPage.waitForFunction(() => document.querySelector('#dm-open')?.getAttribute('aria-pressed') === 'true', null, { timeout: 5000 });
     expect((await annPage.getAttribute('#dm-open', 'aria-label')) === `hide the chat with ${BEN}`, 'lit, the button says it hides the chat');
-    // lit, it hides the window and keeps the tab; pressed again, the thread is back
     await annPage.click('#dm-open');
     await annPage.waitForFunction(() => !document.querySelector('#friend-chat'), null, { timeout: 5000 });
     expect((await annPage.getAttribute('#dm-open', 'aria-pressed')) === null, 'hidden, the button is not lit');
@@ -441,19 +398,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   await step("the shape of the lines: bubbles to start, yours right of theirs; the chat tab's cards make every chat a log or blocks, kept in the browser", async () => {
     const shape = () => annPage.evaluate(() => document.querySelector('#friend-chat-log')?.getAttribute('data-style'));
     expect((await shape()) === 'bubbles', `the log starts as ${await shape()}`);
-    // one setting for every chat: the room's lines on the page behind the window wear the same shape
     const roomShape = () => annPage.evaluate(() => document.querySelector('#chat-lines')?.getAttribute('data-style'));
     expect((await roomShape()) === 'bubbles', `the room's lines start as ${await roomShape()}`);
-    // a box of yours sits to the right of a box of ben's (a line is the time at the left, then the box's row)
     const [mine, theirs] = await annPage.evaluate(() => {
       const box = (p) => p?.lastElementChild?.firstElementChild?.getBoundingClientRect().toJSON();
       return [box(document.querySelector('#friend-chat-log p[data-mine]')), box(document.querySelector('#friend-chat-log p[data-id]:not([data-mine])'))];
     });
     expect(mine && theirs && mine.left > theirs.left && mine.right > theirs.right, `yours ${JSON.stringify(mine)} must sit right of theirs ${JSON.stringify(theirs)}`);
-    // the first line on screen starts a minute, so its time stands at the left, HH:MM
     const clock = await annPage.evaluate(() => document.querySelector('#friend-chat-log p[data-id]')?.firstElementChild?.textContent);
     expect(/^\d\d:\d\d$/.test(clock || ''), `the first line's time reads ${JSON.stringify(clock)}`);
-    // the gear opens the settings; the chat tab has the three cards, bubbles the one on
     await annPage.hover('#user-panel');
     await annPage.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
     await annPage.click('#settings');
@@ -470,7 +423,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect((await roomShape()) === 'blocks', `the room's lines followed to ${await roomShape()}`);
     const kept = await annPage.evaluate(() => localStorage.getItem('settings.chatStyle'));
     expect(kept === '"blocks"', `the browser keeps ${kept}`);
-    // every line is still there in its shape, and it is still one <p> a line
     expect((await annPage.$$('#friend-chat-log p[data-id]')).length === 50, 'the lines must all be there in the new shape');
     await annPage.click('label[for="chat-style-bubbles"]');
     await annPage.waitForFunction(() => document.querySelector('#friend-chat-log')?.getAttribute('data-style') === 'bubbles', null, { timeout: 5000 });
@@ -490,7 +442,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await annPage.press('#friend-chat-text', 'Enter');
     await annPage.waitForFunction(() => /not friends/.test(document.querySelector('#friend-chat-notice')?.textContent || ''), null, { timeout: 10000 });
     expect((await annPage.inputValue('#friend-chat-text')) === 'still there?', 'a refused line stays in the box');
-    // ben's page again: the list now has him among the rest ann follows, not the friends, and the line button is not beside the chat button
     await annPage.goto(`${BASE}/watch/${BEN}`, { waitUntil: 'domcontentloaded' });
     await annPage.waitForSelector('#profile #chat-open', { timeout: 10000 });
     await annPage.waitForSelector(`#friends-list #friend-${BEN}`, { state: 'attached', timeout: 10000 });
