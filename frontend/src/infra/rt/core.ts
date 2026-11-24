@@ -125,6 +125,9 @@ export class RtCore {
   private union: string[] = [];
   private peek: string[] = [];
   private subbed: Subbed | null = null;
+  private me: RtFrame | null = null;
+  private readonly presences = new Map<string, RtFrame>();
+  private readonly counts = new Map<string, RtFrame>();
   private readonly latest = new Map<string, string>();
   private readonly fresh = new Set<string>();
   private readonly pending = new Map<string, Pending>();
@@ -155,6 +158,7 @@ export class RtCore {
         this.nick = msg.nick;
         port.post({ kind: 'phase', phase: this.phase });
         if (this.subbed && this.ready) port.post({ kind: 'frame', frame: this.subbed as unknown as RtFrame });
+        if (this.me) port.post({ kind: 'frame', frame: this.me });
         if (this.linger !== null) {
           this.clock.clearTimeout(this.linger);
           this.linger = null;
@@ -166,10 +170,12 @@ export class RtCore {
       tab.heard = this.clock.now();
       switch (msg.kind) {
         case 'set': {
+          const before = tab.topics;
           const topics = new Set(msg.topics.map(normalTopic));
           tab.topics = topics;
           tab.peek = new Set((msg.peek ?? []).map(normalTopic).filter((t) => topics.has(t)));
           if (!this.changed() && this.subbed && this.ready) tab.port.post({ kind: 'frame', frame: this.subbed as unknown as RtFrame });
+          this.retell(tab, [...topics].filter((t) => !before.has(t)));
           break;
         }
         case 'ping':
@@ -249,6 +255,8 @@ export class RtCore {
     this.peek = peek;
     const held = new Set(next);
     for (const topic of this.latest.keys()) if (!covers(held, topic)) this.latest.delete(topic);
+    for (const topic of this.counts.keys()) if (!covers(held, topic)) this.counts.delete(topic);
+    for (const name of this.presences.keys()) if (!held.has(`presence:${name}`)) this.presences.delete(name);
     for (const topic of this.fresh) if (!held.has(topic)) this.fresh.delete(topic);
     this.sendSub(false);
     return true;
@@ -320,6 +328,8 @@ export class RtCore {
     this.ws = null;
     this.ready = false;
     this.subbed = null;
+    this.presences.clear();
+    this.counts.clear();
     if (this.watchdog !== null) this.clock.clearTimeout(this.watchdog);
     this.watchdog = null;
     if (this.mismatch !== null) this.clock.clearTimeout(this.mismatch);
@@ -386,11 +396,35 @@ export class RtCore {
     }
     const topic = typeof frame.topic === 'string' ? frame.topic : null;
     if (topic === null) {
+      this.remember(frame);
       this.toAll(frame);
       return;
     }
     if (frame.type === 'message' && isLineId(frame.id)) this.saw(topic, frame.id);
+    if (frame.type === 'count') this.counts.set(normalTopic(topic), frame);
     for (const tab of this.tabs.values()) if (covers(tab.topics, topic)) tab.port.post({ kind: 'frame', frame });
+  }
+
+  private remember(frame: RtFrame) {
+    const name = typeof frame.name === 'string' ? frame.name.toLowerCase() : null;
+    if (frame.type === 'me') this.me = frame;
+    else if (frame.type === 'presence' && name !== null) this.presences.set(name, frame);
+    else if (frame.type === 'renamed' && name !== null) {
+      this.presences.delete(name);
+      if (this.me && typeof this.me.name === 'string' && this.me.name.toLowerCase() === name) this.me = { ...this.me, name: frame.to };
+    }
+  }
+
+  private retell(tab: Tab, added: string[]) {
+    if (!this.ready || added.length === 0) return;
+    for (const topic of added) {
+      if (topic.startsWith('presence:')) {
+        const said = this.presences.get(topic.slice('presence:'.length));
+        if (said) tab.port.post({ kind: 'frame', frame: said });
+      }
+      const one = new Set([topic]);
+      for (const [counted, frame] of this.counts) if (covers(one, counted)) tab.port.post({ kind: 'frame', frame });
+    }
   }
 
   private toAll(frame: RtFrame) {

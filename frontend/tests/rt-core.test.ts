@@ -340,11 +340,15 @@ test('topic helpers', () => {
     setItem: (k: string, v: string) => void store.set(k, v),
     removeItem: (k: string) => void store.delete(k)
   };
-  assert.equal(rtWanted('https://x/watch/a', storage), false);
-  assert.equal(rtWanted('https://x/watch/a?rt=1', storage), true);
-  assert.equal(rtWanted('https://x/', storage), true, 'remembered');
+  assert.equal(rtWanted('https://x/watch/a', storage), true, 'on by default');
   assert.equal(rtWanted('https://x/?rt=0', storage), false);
-  assert.equal(rtWanted('https://x/', storage), false);
+  assert.equal(rtWanted('https://x/', storage), false, 'the opt-out is remembered');
+  assert.equal(rtWanted('https://x/watch/a?rt=1', storage), true);
+  assert.equal(rtWanted('https://x/', storage), true, 'and ?rt=1 forgets it');
+  storage.setItem('rt', '1');
+  assert.equal(rtWanted('https://x/', storage), true, 'the old opt-in still reads as on');
+  assert.equal(rtWanted('https://x/?rt=0', null), false);
+  assert.equal(rtWanted('https://x/', null), true);
 });
 
 test('a tab that asks for a topic the worker already holds is told the current subbed at once', () => {
