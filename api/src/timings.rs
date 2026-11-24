@@ -19,7 +19,6 @@ pub(crate) const BUCKETS: usize = 240;
 const MAX_KEYS: usize = 500;
 const MAX_NAME: usize = 200;
 const MAX_LINES: usize = 400;
-const SLOTS: i64 = 40;
 const PORT: u16 = 9300;
 pub(crate) const TIERS: [(&str, i64, usize); 3] = [("1h", 60, 60), ("24h", 900, 96), ("7d", 3600, 168)];
 
@@ -605,6 +604,10 @@ impl Agg {
     }
 }
 
+fn blocking(name: &str) -> bool {
+    name.ends_with(" BLOCK")
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct Totals {
     kinds: BTreeMap<String, (Agg, f64)>,
@@ -716,10 +719,8 @@ impl History {
         for (key, line) in &self.lines {
             let Some(pts) = line.tiers.get(tier) else { continue };
             let mut total = Agg::default();
-            let mut slots: Vec<Agg> = vec![Agg::default(); SLOTS as usize];
-            for (t, a) in pts.iter().filter(|(t, _)| *t + width > from) {
+            for (_, a) in pts.iter().filter(|(t, _)| *t + width > from) {
                 total.merge(a);
-                slots[(((*t - from).max(0) * SLOTS) / range).clamp(0, SLOTS - 1) as usize].merge(a);
             }
             if total.n == 0 {
                 continue;
@@ -732,10 +733,10 @@ impl History {
             row.insert("name".into(), json!(line.name));
             row.insert("src".into(), json!(line.src));
             row.insert("rate".into(), json!(crate::agent::round(total.n as f64 / span, 3)));
-            row.insert("spark".into(), json!(slots.iter().map(|s| s.quantile(0.95)).collect::<Vec<_>>()));
-            row.insert("spark_n".into(), json!(slots.iter().map(|s| s.n).collect::<Vec<_>>()));
             out.push(Value::Object(row));
-            totals.add(&line.kind, &total, total.n as f64 / span);
+            if !blocking(&line.name) {
+                totals.add(&line.kind, &total, total.n as f64 / span);
+            }
         }
         (out, totals)
     }
@@ -885,7 +886,7 @@ mod tests {
     fn totals_merge_lines_and_boxes_per_kind() {
         let t = |kind: &str, name: &str, n: u64, us: u64| Timing { kind: kind.into(), name: name.into(), src: "api".into(), n, sum_us: n * us, max_us: us, b: vec![(bucket(us) as u16, n)], ..Default::default() };
         let mut h = History::default();
-        h.add(1_000_020, &[t("db", "SELECT ?", 90, 1000), t("db", "UPDATE t", 10, 50_000), t("redis", "GET", 5, 100)]);
+        h.add(1_000_020, &[t("db", "SELECT ?", 90, 1000), t("db", "UPDATE t", 10, 50_000), t("redis", "GET", 5, 100), t("redis", "XREAD BLOCK", 3, 5_000_000)]);
         let (rows, totals) = h.table(0, 1_000_030, "a");
         let db = totals.rows(Some("a")).into_iter().find(|r| r["kind"] == "db").unwrap();
         assert_eq!((db["target"].as_str(), db["n"].as_u64(), db["sum_ms"].as_f64()), (Some("a"), Some(100), Some(590.0)));
@@ -896,7 +897,8 @@ mod tests {
         all.merge(&totals);
         let both = all.rows(None);
         assert_eq!(both.len(), 2);
-        assert_eq!(both.iter().find(|r| r["kind"] == "redis").unwrap()["n"], 10);
+        assert_eq!(both.iter().find(|r| r["kind"] == "redis").unwrap()["n"], 10, "a blocking read is waiting, not work, and stays out of the total");
+        assert_eq!(rows.len(), 4);
         assert!(both.iter().all(|r| r["target"].is_null()));
         let key = rows.iter().find(|r| r["name"] == "UPDATE t").unwrap()["key"].as_str().unwrap().to_owned();
         let hist = h.detail(&key, 0, 1_000_030).unwrap()["hist"].clone();
