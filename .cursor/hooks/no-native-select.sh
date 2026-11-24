@@ -1,9 +1,4 @@
 #!/bin/sh
-# Refuses an edit that would put one of the browser's own pickers into the pages
-# (.cursor/skills/no-native-select/SKILL.md): the check `npm run build` makes
-# (frontend/scripts/no-native-select.sh), heard at the edit instead of at the build. Only the
-# files the build checks: the docs and the skill may show the tag.
-# Anything it cannot read (another tool's shape, no jq) is allowed through; the build still catches it.
 input=$(cat)
 path=$(printf '%s' "$input" | jq -r '.tool_input.path // .tool_input.file_path // .tool_input.target_file // empty' 2>/dev/null)
 case "$path" in

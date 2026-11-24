@@ -28,7 +28,7 @@ DIR="random-media/vrms"
 DRY=0; IF_CHANGED=0
 for a in "$@"; do
   case "$a" in
-    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     --dry-run) DRY=1 ;;
     --if-changed) IF_CHANGED=1 ;;
     -*) die "don't know what '$a' is. it is --dry-run or --if-changed, or a folder. see ./scripts/models.sh --help" ;;
@@ -37,13 +37,11 @@ for a in "$@"; do
 done
 [ -d "$DIR" ] || die "no folder at $DIR"
 
-# the models and the pictures beside them, by name. a read loop, not mapfile: a mac's bash is 3.2
 FILES=()
 while IFS= read -r f; do FILES+=("$f"); done < <(
   cd "$DIR" && find . -maxdepth 1 -type f \( -iname '*.vrm' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) | sed 's|^\./||' | sort
 )
 
-# what the folder holds, as one line: every file's checksum, size and name, summed again
 fingerprint() {
   if [ ${#FILES[@]} -eq 0 ]; then printf 'empty'; return 0; fi
   (cd "$DIR" && cksum "${FILES[@]}") | cksum | awk '{ print $1 "-" $2 }'
@@ -54,7 +52,6 @@ if [ "$IF_CHANGED" = 1 ] && [ -f "$RECORD" ] && [ "$(tr -d '[:space:]' < "$RECOR
   exit 0
 fi
 
-# docker, as deploy.sh found it (DOCKER_CMD), else as this user reaches it
 if [ -z "${DOCKER_CMD:-}" ]; then
   if docker info >/dev/null 2>&1; then DOCKER_CMD=docker
   elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then DOCKER_CMD="sudo docker"
@@ -65,9 +62,6 @@ fi
 dc() { $DOCKER_CMD compose "$@"; }
 [ -n "$(dc ps -q api 2>/dev/null)" ] || die "the api container is not up. ./scripts/deploy.sh first"
 
-# an api from before the demo models has no `models` word: it would start a second server instead.
-# its own route says which this is (200 with a list, or 404 `no such route`), asked from inside
-# the container the way its health check asks
 if ! dc exec -T api bash -c "exec 3<>/dev/tcp/127.0.0.1/4000 && printf 'GET /api/models HTTP/1.0\r\n\r\n' >&3 && head -n1 <&3 | grep -q ' 200 '" >/dev/null 2>&1; then
   die "the api here does not have the demo models yet (GET /api/models is not a 200). ./scripts/deploy.sh api first, then this"
 fi
@@ -78,16 +72,13 @@ cleanup() { dc exec -T api rm -rf "$IN" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 dc exec -T api sh -c "rm -rf $IN && mkdir -p $IN" || die "could not make $IN in the api container"
 if [ ${#FILES[@]} -gt 0 ]; then
-  # COPYFILE_DISABLE: a mac's tar would send its ._ twins along
   (cd "$DIR" && COPYFILE_DISABLE=1 tar -cf - "${FILES[@]}") | dc exec -T api tar -C "$IN" -xf - || die "could not copy $DIR into the api container"
 fi
 
 ARGS=("$IN"); [ "$DRY" = 0 ] || ARGS+=(--dry-run)
-# RUST_LOG=warn: without it the bucket's "is there" lines come first
 if dc exec -T -e RUST_LOG=warn api api models "${ARGS[@]}"; then
   if [ "$DRY" = 0 ]; then printf '%s\n' "$NOW" > "$RECORD"; note "recorded in $RECORD"; fi
 else
   rc=$?
-  # what could go up went up, but the folder is not all in the bucket: not recorded, so the next run tries again
   die "the demo models did not all go up (exit $rc, above). fix the folder and run ./scripts/models.sh again"
 fi

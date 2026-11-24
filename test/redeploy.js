@@ -1,4 +1,3 @@
-// Partial redeploys while a stream is live. Run: BASE_URL=https://<ip> node redeploy.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -28,7 +27,6 @@ function deploy(target) {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const ctx = async () => { const c = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] }); await c.addInitScript(recordPcs); return c; };
   const pub = await (await ctx()).newPage();
-  // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
   await pub.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), 'rd1');
   await pub.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
   await pub.waitForFunction(() => !document.querySelector('#start').disabled);

@@ -1,25 +1,4 @@
 #!/usr/bin/env node
-// The picker probe (../SKILL.md). Mounts the site's Select alone on a page (harness.tsx) and
-// walks it in every browser engine playwright has: chromium (chrome, edge, brave), webkit
-// (safari) and firefox. In each: the box and its list are the page's own, the list opens where
-// it should (under the box, over it at the window's foot, inside the window at its edge, in the
-// dialog when the box is in one, out of a pane that scrolls), the pointer and every key do what
-// a select's do, and the focus never leaves the box. Then once more as a small phone has it: a
-// window 360px wide and a finger.
-//
-// usage:  node .cursor/skills/no-native-select/scripts/probe.mjs [chromium] [webkit] [firefox]
-//   all three unless some are named. `chrome` and `safari` are taken for their engines
-//   SHOTS=<dir>   a picture of the open picker from each engine, into <dir>
-//   HEADED=1      watch the browsers
-//   VERBOSE=1     hear vite too, when the page does not come up
-//
-// It starts a vite of its own on a free port, with its own optimizer cache (two servers sharing
-// one reload each other's pages), so `npm run dev` neither has to be up nor is disturbed. No
-// backend is asked for anything. Playwright comes from test/node_modules (cd test && npm
-// install). An engine that is not installed fails the run, with the command that installs it:
-// a picker nobody saw in safari's engine has not been checked.
-//
-// exit 1 when a step failed or an engine could not run.
 
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -35,7 +14,6 @@ const playwright = createRequire(import.meta.url)(join(repo, 'test', 'node_modul
 const { createServer } = await import(pathToFileURL(join(frontend, 'node_modules', 'vite', 'dist', 'node', 'index.js')).href);
 
 const ENGINES = ['chromium', 'webkit', 'firefox'];
-/** A browser's name for its engine's. */
 const ALIAS = { chrome: 'chromium', edge: 'chromium', safari: 'webkit' };
 const asked = process.argv.slice(2).map((name) => ALIAS[name] ?? name);
 const unknown = asked.filter((name) => !ENGINES.includes(name));
@@ -47,10 +25,7 @@ const engines = asked.length ? [...new Set(asked)] : ENGINES;
 const shots = process.env.SHOTS ? resolve(process.env.SHOTS) : '';
 if (shots) mkdirSync(shots, { recursive: true });
 
-// ---- the page: vite, serving the harness and the site's own css ----
-// tailwind reads its content globs, and vite its postcss config, from the frontend
 process.chdir(frontend);
-// the frontend's config, which says where its backend is as it loads. nothing here asks a backend
 process.env.BACKEND = 'http://127.0.0.1:1';
 process.env.SHOW_DOCS = '0';
 const scratch = mkdtempSync(join(tmpdir(), 'select-probe-'));
@@ -63,7 +38,6 @@ try {
     root: frontend,
     cacheDir: join(scratch, 'vite'),
     logLevel: process.env.VERBOSE ? 'info' : 'error',
-    // the harness is outside the frontend: its react is the frontend's, and so is everything it reaches
     resolve: { dedupe: ['react', 'react-dom'] },
     optimizeDeps: { entries: [harness] },
     server: { host: '127.0.0.1', port: 42390, strictPort: false, watch: null, fs: { allow: [frontend, here, scratch] } },
@@ -72,7 +46,6 @@ try {
         name: 'select-probe',
         configureServer(vite) {
           vite.middlewares.use(PAGE, async (_req, res) => {
-            // an empty icon: a browser that goes looking for one finds a 404, which the last step would count
             const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>select probe</title><link rel="icon" href="data:,"></head><body><div id="probe"></div><script type="module" src="/@fs${harness}"></script></body></html>`;
             res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             res.end(await vite.transformIndexHtml(PAGE, page));
@@ -88,8 +61,7 @@ try {
 const address = server.httpServer.address();
 const base = `http://127.0.0.1:${address.port}`;
 
-// ---- the checks ----
-const results = []; // 'pass' | 'fail'
+const results = [];
 async function step(engine, name, fn) {
   try {
     const info = await fn();
@@ -106,7 +78,6 @@ const expect = (cond, what) => {
 const near = (a, b, by = 1.5) => Math.abs(a - b) <= by;
 const j = (v) => JSON.stringify(v);
 
-/** Everything about the picker `id` the checks read, as the page has it now. */
 const look = (page, id) =>
   page.evaluate((id) => {
     const box = document.getElementById(id);
@@ -116,8 +87,6 @@ const look = (page, id) =>
       return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
     };
     const rows = list ? [...list.children] : [];
-    // how much wider an option's span is than its words (under 0: the words are cut short). the words' own
-    // width is a range's: scrollWidth is never less than the span's
     const spare = (li) => {
       const words = document.createRange();
       words.selectNodeContents(li.firstElementChild);
@@ -151,15 +120,11 @@ const look = (page, id) =>
         cannot: rows.filter((li) => li.getAttribute('aria-disabled') === 'true').map((li) => li.dataset.value),
         active: list.querySelector('[data-active]')?.dataset.value ?? null,
         activeId: list.querySelector('[data-active]')?.id ?? null,
-        // an option's words cut short: they are wider than the span that holds them
         cut: rows.filter((li) => spare(li) < -0.5).map((li) => li.dataset.value),
-        // the room the longest option's words have to spare: none, in a list as wide as its longest option
         spare: Math.round(Math.min(...rows.map(spare)) * 10) / 10,
-        // the rows wholly inside the list's own box
         inView: rows.filter((li) => rect(li).top >= rect(list).top - 0.5 && rect(li).bottom <= rect(list).bottom + 0.5).map((li) => li.dataset.value),
         scrolls: list.scrollHeight > list.clientHeight,
         scrollTop: list.scrollTop,
-        // what a pointer at the middle of the last row would hit: the list, when nothing is drawn over it
         topmost: !!last && list.contains(document.elementFromPoint((mid.left + mid.right) / 2, (mid.top + mid.bottom) / 2))
       }
     };
@@ -167,9 +132,7 @@ const look = (page, id) =>
 const option = (id, value) => `#${id}-list [data-value="${value}"]`;
 const shut = (page, id) => page.waitForSelector(`#${id}-list`, { state: 'detached', timeout: 3000 });
 const opened = (page, id) => page.waitForSelector(`#${id}-list`, { state: 'visible', timeout: 3000 });
-/** Two frames: a scroll's listeners have run and the page has been laid out again. */
 const settle = (page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
-/** Longer than the half second typed letters count as one word. */
 const forgetTyping = (page) => page.waitForTimeout(650);
 
 async function probe(engine, page, errors) {
@@ -320,7 +283,6 @@ async function probe(engine, page, errors) {
     await opened(page, 'keys');
     expect((await on()) === 'echo', `e went to ${j(await on())}`);
     await forgetTyping(page);
-    // the one letter again: the next that starts with it, round and round
     await page.keyboard.press('d');
     expect((await on()) === 'delta', `d went to ${j(await on())}`);
     await page.keyboard.press('d');
@@ -334,7 +296,6 @@ async function probe(engine, page, errors) {
     await shut(page, 'keys');
     const k = await look(page, 'keys');
     expect(k.value === 'desk' && k.changes === 3, `it is ${j(k.value)} after ${k.changes} picks`);
-    // and from shut, a letter opens it there
     await forgetTyping(page);
     await page.keyboard.press('c');
     await opened(page, 'keys');
@@ -349,10 +310,8 @@ async function probe(engine, page, errors) {
     let p = await look(page, 'long');
     expect(p.list.height <= 240.5 && p.list.scrolls, `${p.list.height}px tall, scrolls: ${p.list.scrolls}`);
     expect(p.list.active === 'n20' && p.list.inView.includes('n20'), `opened on ${j(p.list.active)}, in view ${j(p.list.inView)}`);
-    // as wide as its longest option and its bar, where the bar takes room: no wider, and no row cut short for the bar
     expect(p.list.cut.length === 0 && p.list.spare <= 1, `words cut short ${j(p.list.cut)}, ${p.list.spare}px to spare`);
     const height = p.list.height;
-    // the pointer moves the highlight too, and scrolls nothing
     const row = await page.locator(option('long', p.list.inView[1])).boundingBox();
     await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2, { steps: 4 });
     const pointed = await look(page, 'long');
@@ -360,7 +319,6 @@ async function probe(engine, page, errors) {
       pointed.list.active === p.list.inView[1] && pointed.list.scrollTop === p.list.scrollTop,
       `the pointer on ${p.list.inView[1]}: the keys on ${j(pointed.list.active)}, scrolled ${p.list.scrollTop} -> ${pointed.list.scrollTop}`
     );
-    // then the keys win: the list scrolls under a pointer that rests, and the highlight stays where the keys put it
     await page.keyboard.press('End');
     await page.waitForTimeout(250);
     p = await look(page, 'long');
@@ -446,11 +404,9 @@ async function probe(engine, page, errors) {
       await shut(page, 'dialoged');
       p = await look(page, 'dialoged');
       expect(p.value === 'echo' && p.changes === 1 && p.focused, `it is ${j(p.value)} after ${p.changes} picks, the focus on ${p.focusOn}`);
-      // the list is shut: this escape is the dialog's
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.getElementById('dialog').open, null, { timeout: 3000 });
     } finally {
-      // whatever went wrong, the steps after this one get the page back
       await page.evaluate(() => document.getElementById('dialog').close());
     }
   });
@@ -480,7 +436,6 @@ async function probe(engine, page, errors) {
   });
 }
 
-/** The same page as a small phone has it: a window 360px wide, and a finger for a pointer. */
 async function finger(engine, page) {
   await step(engine, 'under a finger, in a window as wide as a phone: a tap opens it, picks, and shuts it', async () => {
     await page.tap('#plain');
@@ -492,7 +447,6 @@ async function finger(engine, page) {
     );
     const row = await page.locator(option('plain', 'mac')).boundingBox();
     const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
-    // where the browser says the pointer is a finger, a row is tall enough for one
     expect(!coarse || row.height >= 30, `a row is ${row.height}px tall under a finger`);
     await page.tap(option('plain', 'mac'));
     await shut(page, 'plain');
@@ -502,7 +456,6 @@ async function finger(engine, page) {
     await opened(page, 'plain');
     await page.touchscreen.tap(300, 560);
     await shut(page, 'plain');
-    // a list wider than the window stops at its edges, and the option too long for it ends in dots
     await page.tap('#long');
     await opened(page, 'long');
     p = await look(page, 'long');
@@ -518,7 +471,6 @@ try {
   for (const engine of engines) {
     let browser;
     try {
-      // playwright hides chromium's scrollbars when nobody is watching. the site's own bar takes 6px of a list that scrolls, in chrome as in safari: with it
       browser = await playwright[engine].launch({ headless: !process.env.HEADED, ...(engine === 'chromium' && { ignoreDefaultArgs: ['--hide-scrollbars'] }) });
     } catch (e) {
       results.push('fail');
@@ -527,7 +479,6 @@ try {
     }
     try {
       const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
-      // a step that fails leaves the page as it was: the ones after it say so quickly
       page.setDefaultTimeout(5000);
       const errors = [];
       page.on('pageerror', (e) => errors.push(e.message));

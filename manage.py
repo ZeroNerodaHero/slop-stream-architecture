@@ -26,16 +26,13 @@ DB = os.environ.get("MANAGE_DB", "stream")
 TO = os.environ.get("MANAGE_TO", "")
 DIR = os.environ.get("MANAGE_DIR", "slop-stream-architecture")
 
-PAGE = 200          # rows a table view asks for at a time
-MAX_COL = 40        # a cell wider than this is cut with …
-NULL = "∅"          # what psql prints for null (-P null)
+PAGE = 200
+MAX_COL = 40
+NULL = "∅"
 
 
 class ManageError(Exception):
     pass
-
-
-# ---- reaching the containers -----------------------------------------------------------------
 
 
 class Runner:
@@ -128,7 +125,6 @@ class Postgres:
     def rows(self, table, where, offset):
         base = f"SELECT * FROM {sql_ident(table)}" + (f" WHERE {where}" if where else "")
         tail = f" LIMIT {PAGE} OFFSET {offset}"
-        # by the first column when it can be; a type that cannot be sorted gets the table's own order
         try:
             return self.query(base + " ORDER BY 1" + tail)
         except ManageError:
@@ -209,9 +205,6 @@ def format_value(kind, data):
     return json.dumps(data, indent=2).splitlines()
 
 
-# ---- the screen ------------------------------------------------------------------------------
-
-
 def cell(text, width):
     """One cell: one line, cut to width with an ellipsis. Newlines show as ⏎ so a row stays a row."""
     text = str(text).replace("\r", "").replace("\n", "⏎")
@@ -240,12 +233,11 @@ class Screen:
         self.rows = []
         self.cursor = 0
         self.top = 0
-        self.left = 0          # first column shown
+        self.left = 0
         self.filter = ""
         self.error = ""
         self.note = ""
 
-    # what to show
     def load(self):
         raise NotImplementedError
 
@@ -262,13 +254,12 @@ class Screen:
         """A key this screen handles itself. True when it did."""
         return False
 
-    # drawing
     def draw(self, win):
         win.erase()
         h, w = win.getmaxyx()
         rows = self.shown()
         self.cursor = max(0, min(self.cursor, len(rows) - 1))
-        body = h - 3  # title, header, status
+        body = h - 3
         if self.cursor < self.top:
             self.top = self.cursor
         if self.cursor >= self.top + body:
@@ -295,7 +286,6 @@ class Screen:
             parts.append(cell(v, ws[i]).ljust(ws[i]))
         return cell("  ".join(parts), w - 1)
 
-    # moving
     def move(self, k, h):
         rows = self.shown()
         n = len(rows)
@@ -304,9 +294,9 @@ class Screen:
             self.cursor = min(n - 1, self.cursor + 1)
         elif k in (curses.KEY_UP, ord("k")):
             self.cursor = max(0, self.cursor - 1)
-        elif k in (curses.KEY_NPAGE, 4):          # ctrl-d
+        elif k in (curses.KEY_NPAGE, 4):
             self.cursor = min(n - 1, self.cursor + page)
-        elif k in (curses.KEY_PPAGE, 21):         # ctrl-u
+        elif k in (curses.KEY_PPAGE, 21):
             self.cursor = max(0, self.cursor - page)
         elif k in (curses.KEY_HOME, ord("g")):
             self.cursor = 0
@@ -350,7 +340,7 @@ class App:
                 return None
             if k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
                 text = text[:-1]
-            elif k == "\x15":  # ctrl-u: clear
+            elif k == "\x15":
                 text = ""
             elif isinstance(k, str) and k.isprintable():
                 text += k
@@ -404,9 +394,6 @@ class App:
                 rows = screen.shown()
                 if rows:
                     screen.open(rows[screen.cursor])
-
-
-# ---- postgres screens ------------------------------------------------------------------------
 
 
 class Tables(Screen):
@@ -525,9 +512,6 @@ class Query(Screen):
             self.headers = ["(no rows)"]
 
 
-# ---- redis screens ---------------------------------------------------------------------------
-
-
 class Keys(Screen):
     help = "enter: what is in the key  / pattern (scan)  r again  q quit  ? keys"
 
@@ -570,9 +554,6 @@ class Key(Screen):
         self.title = f"redis · {self.k} · {self.kind} · ttl {'∞' if ttl == '-1' else ttl}"
         self.headers = [self.kind]
         self.rows = [[line] for line in self.redis.value(self.k, self.kind)]
-
-
-# ---- main ------------------------------------------------------------------------------------
 
 
 def main(stdscr):

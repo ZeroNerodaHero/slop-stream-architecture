@@ -1,73 +1,17 @@
 #!/usr/bin/env bash
-#
-# deploy.sh — bring the stream lab up on this machine, or redeploy part of it.
-#
-#   ./scripts/deploy.sh                   everything. first time, or any time. the images come from the
-#                                 registry (ghcr.io/<you>/, from the git remote), named after the
-#                                 last commit that touched what they are built from (./image-paths):
-#                                 what the github action pushed. nothing is compiled here
-#   ./scripts/deploy.sh --pull            git pull, then the images for the tree just pulled
-#   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy, voice): get its image, swap it
-#   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
-#   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
-#                                 a box without a registry). goes with --pull and services
-#   ./scripts/deploy.sh --prune-deploy    first give the disk back what it can spare (docker's build cache,
-#                                 untagged and unused images, the system's rotated and oversized logs,
-#                                 apt's cache), then deploy as asked. for the small box that says
-#                                 "only 2664MB free". volumes, containers and the swapfile stay
-#   ./scripts/deploy.sh 203.0.113.7       everything, with this ip
-#   ./scripts/deploy.sh passwd billy      a new password for an account (there is no email reset)
-#   PUBLIC_IP=10.0.0.5 ./scripts/deploy.sh
-#
-# Full run, Linux (Ubuntu 22.04/24.04, Debian 12): installs docker if missing,
-# refuses if 80/443 are taken, opens ufw ports, writes .env (PUBLIC_IP,
-# CARGO_BUILD_JOBS, and ENV_NAME = this machine's hostname unless you set one),
-# gets the pages image and the three rust images (api, video, dummy), starts
-# everything, waits for /api/health. Exits non-zero if the health check fails.
-# With --build the images are compiled here one at a time (several minutes, a
-# 2G swapfile is added on small boxes). The images carry BUILD (the commit they
-# are named after), so a full deploy restarts video whenever that moved since the
-# last one: every live stream ends, and the script says so before `up`. macOS (Docker
-# Desktop): same, minus install / swap / ufw; PUBLIC_IP comes from en0/en1.
-#
-# Partial run: keeps PUBLIC_IP from .env, gets (or builds) the named services'
-# images, swaps only their containers. frontend = the pages; caddy keeps
-# running, so live streams survive. api = a few seconds of 502, streams
-# survive, and the s3 container is created first when it is missing (never
-# recreated). video = every live stream ends (the script says so first).
-# Afterwards the swapped containers are checked: running, healthy where the
-# image has a check, or the script exits non-zero (no rollback).
-#
-# Every run that ends well writes the commit it deployed to .deployed (gitignored).
-# --pull diffs from there, not from HEAD, so a --pull that died in a build is
-# picked up whole by the next one instead of reporting "nothing changed".
-# After the health check, the demo models in random-media/vrms go into the bucket when the
-# folder changed since they last did (scripts/models.sh; .models remembers the folder).
-#
-# It also records the release it put up: the highest v<n> tag reaching HEAD (the
-# github action numbers every push to main it built images for: v1, v2, ..., and
-# tags the commit and the four images with it; v<n>+<commit> when the images are
-# newer than the tag), written into the database through `api release` once the
-# health check passed, so /api/health says it under `version`. --images v13 deploys
-# that release's four images by name.
-#
-# Stop everything later with:  docker compose down
-#
 set -euo pipefail
 
-# ---- knobs -------------------------------------------------------------------
 ENV_FILE=".env"
-DEPLOYED_FILE=".deployed"                 # the commit the last run that ended well deployed
+DEPLOYED_FILE=".deployed"
 HEALTH_PATH="/api/health"
-HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"   # seconds
-TCP_PORTS="80 443"                        # keep in sync with docker-compose.yml
-UDP_PORTS="7882 7883"                     # video, voice
-MIN_RAM_MB=2048                           # less than this and no swap -> add a swapfile
-BIG_RAM_MB=3500                           # at least this -> let cargo use every core
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+TCP_PORTS="80 443"
+UDP_PORTS="7882 7883"
+MIN_RAM_MB=2048
+BIG_RAM_MB=3500
 SWAP_FILE="/swapfile"
 SWAP_SIZE_MB=2048
 
-# ---- helpers -----------------------------------------------------------------
 say()  { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 warn() { printf '\nWARN: %s\n' "$*" >&2; }
@@ -89,7 +33,7 @@ as_root() {
   fi
 }
 
-DOCKER=(docker)   # becomes (sudo docker) if the user can't reach the socket
+DOCKER=(docker)
 
 is_ipv4() {
   local ip="$1" re='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' octet IFS='.'
@@ -113,18 +57,16 @@ cpu_count() {
   fi
 }
 
-swap_mb() {   # linux only; 0 elsewhere
+swap_mb() {
   [ "$OS" = linux ] || { echo 0; return 0; }
   awk '/^SwapTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0
 }
 
-# ---- 1. PUBLIC_IP ------------------------------------------------------------
 env_file_value() {
   [ -f "$ENV_FILE" ] || return 0
   sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" | tail -n 1 | tr -d "\"' \t\r"
 }
 
-# KEY=VALUE into .env: the existing line replaced in place, else appended. nothing else moves.
 set_env_key() {
   local key="$1" value="$2" tmp; tmp="$(mktemp)"
   [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
@@ -137,18 +79,15 @@ set_env_key() {
   rm -f "$tmp"
 }
 
-# the compose image name of a service, the way docker-compose.yml spells it:
-# ${IMAGES:-}stream-<service>:${TAG:-latest}. local builds: stream-video:latest.
 image_name() { printf '%sstream-%s:%s' "${IMAGES:-}" "$1" "${TAG:-latest}"; }
-# the names the four images have this run, one per line: what a prune must keep
 target_images() { local s; for s in pages api video dummy; do image_name "$s"; printf '\n'; done; }
 
-lan_ip() {   # linux: the address the default route leaves from, else nothing
+lan_ip() {
   [ "$OS" = linux ] && have ip || return 0
   ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}' || true
 }
 
-detect_ip() {   # sets DETECTED_IP / DETECTED_VIA
+detect_ip() {
   DETECTED_IP=""; DETECTED_VIA=""
   local c="" iface
   if [ "$OS" = linux ]; then
@@ -191,17 +130,12 @@ pick_public_ip() {
   if [ "$PUBLIC_IP" = "127.0.0.1" ]; then
     warn "127.0.0.1 only works for a browser on this exact machine, and video may not connect. prefer the lan ip."
   fi
-  # an old .env can outlive a cloud ip change
   if [ "$IP_SOURCE" = "existing $ENV_FILE" ]; then
     detect_ip
     if [ "$DETECTED_IP" != "$PUBLIC_IP" ] && [ "$DETECTED_IP" != "127.0.0.1" ]; then
       warn "$ENV_FILE says $PUBLIC_IP but this machine looks like $DETECTED_IP ($DETECTED_VIA). ip changed? run: ./scripts/deploy.sh $DETECTED_IP"
     fi
   fi
-  # a public ip that is not on any interface is right behind cloud 1:1 nat, wrong on a
-  # home lan: ipify answers with the router's address there, video advertises it, and
-  # every watcher on the lan gets a black picture while /api/health says fine. the cloud
-  # is the target, so the pick stands; but say it loud, with the way out.
   if [ "$OS" = linux ] && have ip && ! ip -4 -o addr 2>/dev/null | grep -q " $PUBLIC_IP/"; then
     local lan; lan="$(lan_ip)"
     if is_ipv4 "$lan" && [ "$lan" != "$PUBLIC_IP" ]; then
@@ -214,7 +148,6 @@ pick_public_ip() {
   fi
 }
 
-# ---- 2. docker ---------------------------------------------------------------
 wait_for_apt() {
   have fuser || return 0
   local n=0
@@ -270,7 +203,7 @@ EOF
   fi
 }
 
-pick_docker_cmd() {   # sets DOCKER
+pick_docker_cmd() {
   DOCKER=(docker)
   if docker info >/dev/null 2>&1; then
     check_credential_helper
@@ -288,8 +221,6 @@ pick_docker_cmd() {   # sets DOCKER
   die "can't reach the docker daemon. Is it running?   (systemctl status docker)"
 }
 
-# Docker Desktop's credential helper sometimes hangs (keychain prompt). Then
-# every image pull stalls forever with no message. Catch it before the build.
 check_credential_helper() {
   [ "$OS" = mac ] || return 0
   have docker-credential-desktop || return 0
@@ -301,7 +232,6 @@ check_credential_helper() {
   fi
 }
 
-# Builds take longer than sudo's timestamp. Refresh it in the background.
 keep_sudo_alive() {
   sudo -v || die "sudo is needed for docker"
   ( while kill -0 $$ 2>/dev/null; do sudo -n true 2>/dev/null; sleep 60; done ) &
@@ -317,7 +247,6 @@ ensure_compose() {
     || die "'docker compose' v2 is not available (the old 'docker-compose' v1 won't do). See https://docs.docker.com/compose/install/linux/"
 }
 
-# ---- 3. ports and disk free? -------------------------------------------------
 check_ports() {
   local p holders
   for p in $TCP_PORTS; do
@@ -336,8 +265,6 @@ check_ports() {
 
 free_mb_here() { df -Pm . 2>/dev/null | awk 'NR==2 {print $4}' || echo 0; }
 
-# "./scripts/deploy.sh --prune-deploy <the arguments as given>", the flag once: the message
-# that suggests it must not grow by a flag every time it is taken
 prune_hint() {
   local a rest=()
   for a in ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}; do
@@ -346,9 +273,6 @@ prune_hint() {
   printf './scripts/deploy.sh --prune-deploy%s' "${rest[@]+ ${rest[*]}}"
 }
 
-# the disk's big places, biggest first, for the message when the prune was not enough: on a
-# small box that is the os, docker and its images (/var/lib/containerd with the containerd
-# snapshotter), and the logs. what the prune could not spare is in this list
 where_the_disk_went() {
   [ "$OS" = linux ] || return 0
   printf '  where the disk is:\n' >&2
@@ -359,7 +283,6 @@ check_disk() {
   local free_mb need=4000 total
   free_mb="$(free_mb_here)"
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
-    # no build here: the four images are ~800 MB to pull, and docker wants room to unpack them
     if [ "${free_mb:-0}" -lt 1500 ]; then
       if [ "${PRUNE:-0}" = 1 ]; then
         where_the_disk_went
@@ -369,7 +292,6 @@ check_disk() {
     fi
     return 0
   fi
-  # ensure_swap is about to dd a swapfile, most likely out of this same disk
   total="$(mem_mb)"
   if [ "$OS" = linux ] && [ ! -e "$SWAP_FILE" ] && [ "${total:-0}" -lt "$MIN_RAM_MB" ] && [ "$(swap_mb)" -eq 0 ]; then
     need=$(( need + SWAP_SIZE_MB ))
@@ -388,30 +310,15 @@ check_disk() {
   fi
 }
 
-# ---- 3b. prune (--prune-deploy) ------------------------------------------------
-# give the disk back what it can spare, then deploy as asked. docker's first: the build
-# cache is the big one on a box that compiles (buildkit keeps every cargo target dir it
-# ever made, and a few builds hold 10GB+), untagged images the small one, then every
-# image no container has and this run is not about to start (other projects' too, and
-# the build stages a --build pulled, like ffmpeg's: each is pulled again when wanted).
-# then the system's logs, which is where a box that only pulls images fills up: the
-# journal's archives, rotated logs, live logs past 50MB cut to nothing, and apt's cache.
-# nothing that holds data goes: no volumes, no containers, not the swapfile (the build
-# needs it on a small box), not the lines since boot (`journalctl -b` has them). the
-# build cache belongs to docker, not to this project, so every project's goes.
 prune_for_deploy() {
   local before after old n
   before="$(free_mb_here)"
   say "giving the disk back what it can spare (--prune-deploy). ${before}MB free now"
   note "build cache:      $("${DOCKER[@]}" builder prune -af 2>&1 | tail -n 1 || echo "could not prune it")"
   note "untagged images:  $("${DOCKER[@]}" image prune -f 2>&1 | tail -n 1 || echo "could not prune them")"
-  # every tagged image no container has, and not the four this run is about to start:
-  # nothing runs them yet, and the ones ./scripts/ship.sh --to just sent exist nowhere
-  # else. rmi without -f refuses an image a container still has, so none of theirs goes
   old="$(comm -23 <("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -v '<none>' | sort -u) \
                  <({ "${DOCKER[@]}" ps -a --format '{{.Image}}' 2>/dev/null; target_images; } | sort -u) || true)"
   if [ -n "$old" ]; then
-    # what actually went: rmi names each tag it untagged (and the digest form of it, skipped)
     # shellcheck disable=SC2086
     old="$("${DOCKER[@]}" rmi $old 2>/dev/null | sed -n 's/^Untagged: //p' | grep -v '@sha256:' || true)"
     if [ -n "$old" ]; then
@@ -422,13 +329,9 @@ prune_for_deploy() {
   fi
   if [ "$OS" = linux ]; then
     ! have journalctl || note "journal:          $(as_root journalctl --vacuum-size=100M 2>&1 | tail -n 1 || echo "could not vacuum it")"
-    # rotated logs: syslog.1, anything gzipped, an agent's dated files. the journal's own
-    # files are never touched, and neither are the login records
     n="$(as_root find /var/log -xdev -type f \( -name '*.[0-9]' -o -name '*.gz' -o -name '*-20[0-9][0-9]-*' \) \
           -not -path '/var/log/journal/*' -not -name 'wtmp*' -not -name 'btmp*' -not -name 'lastlog*' -print -delete 2>/dev/null | wc -l | tr -d ' ')"
     note "rotated logs:     ${n:-0} removed"
-    # the live ones past 50MB, cut to nothing in place (what logrotate's copytruncate does):
-    # the writer keeps its handle, the disk gets the blocks back
     n="$(as_root find /var/log -xdev -type f -size +50M \
           -not -path '/var/log/journal/*' -not -name 'wtmp*' -not -name 'btmp*' -not -name 'lastlog*' -print -exec truncate -s 0 {} + 2>/dev/null | wc -l | tr -d ' ')"
     note "live logs:        ${n:-0} over 50MB cut to nothing"
@@ -440,10 +343,9 @@ prune_for_deploy() {
   note "${after}MB free, $(( after - before ))MB back. the next build of every project compiles from scratch"
 }
 
-# ---- 4. swap -----------------------------------------------------------------
 ensure_swap() {
   [ "$OS" = linux ] || return 0
-  [ "${IMAGES_MODE:-0}" = 0 ] || return 0   # swap is for the rust build; nothing is built here
+  [ "${IMAGES_MODE:-0}" = 0 ] || return 0
   local total swap
   total="$(mem_mb)"
   swap="$(swap_mb)"
@@ -452,7 +354,6 @@ ensure_swap() {
   if ! can_root; then warn "no root/sudo; skipping swap. The build may run out of memory."; return 0; fi
   local made=0
   if [ ! -e "$SWAP_FILE" ]; then
-    # dd, not fallocate: btrfs and old xfs refuse fallocated swapfiles
     as_root touch "$SWAP_FILE"
     as_root chattr +C "$SWAP_FILE" 2>/dev/null || true
     as_root dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$SWAP_SIZE_MB" status=none
@@ -464,11 +365,6 @@ ensure_swap() {
     note "swap is on for this session only (not in /etc/fstab; gone after reboot)."
     note "remove it now with:  sudo swapoff $SWAP_FILE && sudo rm $SWAP_FILE"
   else
-    # what this run made goes. a file that was already here goes only when it is not a
-    # swapfile at all (a dd cut short by a ctrl-c or a full disk: no signature), else the
-    # next run would find it, fail the same way and build without swap for good; a real
-    # one is somebody's (swapped off by hand, in fstab for the next boot) and stays
-    # (the signature sits in the last 10 bytes of the first page, whatever the page size)
     if [ "$made" = 1 ] || [ "$(as_root dd if="$SWAP_FILE" bs=1 skip=$(( $(getconf PAGESIZE 2>/dev/null || echo 4096) - 10 )) count=10 2>/dev/null)" != SWAPSPACE2 ]; then
       warn "swapon $SWAP_FILE failed (container/VPS without swap support?); removed it. Continuing without swap."
       as_root rm -f "$SWAP_FILE"
@@ -478,7 +374,6 @@ ensure_swap() {
   fi
 }
 
-# ---- 5. firewall -------------------------------------------------------------
 open_firewall() {
   local p ufw_out=""
   if [ "$OS" = linux ] && have ufw && can_root; then
@@ -487,8 +382,6 @@ open_firewall() {
   case "$ufw_out" in
   "Status: active"*)
     say "ufw is active, adding the ports the site needs"
-    # docker publishes ports through its own iptables chain, ahead of ufw's rules, so
-    # these are reachable either way. the rules make `ufw status` tell the truth.
     for p in $TCP_PORTS; do as_root ufw allow "$p/tcp" >/dev/null; note "ufw allow $p/tcp"; done
     for p in $UDP_PORTS; do as_root ufw allow "$p/udp" >/dev/null; note "ufw allow $p/udp"; done
     note "(docker-published ports bypass ufw anyway; this keeps 'ufw status' honest, it is not what opens them)"
@@ -501,7 +394,6 @@ open_firewall() {
   note "AWS: security group.  GCP: VPC firewall rule.  Hetzner / DigitalOcean / Vultr: the cloud firewall on the server."
 }
 
-# ---- 6. .env -----------------------------------------------------------------
 write_env() {
   local tmp; tmp="$(mktemp)"
   if [ -f "$ENV_FILE" ]; then
@@ -517,15 +409,12 @@ write_env() {
   else
     printf 'PUBLIC_IP=%s\nCARGO_BUILD_JOBS=%s\n' "$PUBLIC_IP" "$CARGO_BUILD_JOBS" > "$tmp"
   fi
-  cat "$tmp" > "$ENV_FILE"   # keeps owner/mode; avoids `sed -i` (GNU vs BSD)
+  cat "$tmp" > "$ENV_FILE"
   rm -f "$tmp"
   say "wrote PUBLIC_IP=$PUBLIC_IP and CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS to $ENV_FILE"
   sync_env_keys
 }
 
-# New knobs arrive in .env.example with a pull (DUMMY_*, ENV_NAME, ADMIN_NAMES, ...).
-# Append the ones this .env does not have yet, comments and default included, so
-# they are there to find and edit. Lines already in .env are never touched.
 sync_env_keys() {
   [ -f .env.example ] && [ -f "$ENV_FILE" ] || return 0
   local tmp added; tmp="$(mktemp)"
@@ -552,19 +441,12 @@ sync_env_keys() {
   rm -f "$tmp"
 }
 
-# a pull may bring new knobs in .env.example and a first ENV_NAME; land them even
-# when nothing needs a rebuild. no .env yet: nothing to land in, a full deploy writes it.
 refresh_env() {
   [ -f "$ENV_FILE" ] || return 0
   sync_env_keys
   pick_env_name
 }
 
-# ---- 6b. ENV_NAME --------------------------------------------------------------
-# what this box calls itself in /api/health and in every stored error. empty or
-# missing in .env: this machine's hostname goes in, once (lowercase, a-z 0-9 -, 32
-# chars at most). a value already in .env is never touched; ENV_NAME in the shell
-# only seeds an empty one. an empty value left by hand makes the api say "unnamed".
 pick_env_name() {
   local in_file; in_file="$(env_file_value ENV_NAME)"
   if [ -n "$in_file" ]; then
@@ -594,13 +476,12 @@ pick_env_name() {
   else
     printf 'ENV_NAME=%s\n' "$ENV_NAME" > "$tmp"
   fi
-  cat "$tmp" > "$ENV_FILE"   # keeps owner/mode, like write_env
+  cat "$tmp" > "$ENV_FILE"
   rm -f "$tmp"
   export ENV_NAME
   say "wrote ENV_NAME=$ENV_NAME to $ENV_FILE ($via. prefer prod, dev, ...? edit that line)"
 }
 
-# one rust compile job wants about 1.5GB. never more jobs than cores.
 pick_build_jobs() {
   if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; return 0; fi
   local total cpus
@@ -612,18 +493,12 @@ pick_build_jobs() {
   export CARGO_BUILD_JOBS
 }
 
-# ---- 7. build + start --------------------------------------------------------
-# with --images this is a pull instead: the one place every path gets an image from,
-# so the full deploy and the partial ones work the same either way.
 build_one() {
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
-    # already here under that exact name and tag (./scripts/ship.sh --to sent it, or an earlier
-    # run pulled it): a tag is a commit, so there is nothing newer to fetch.
     if "${DOCKER[@]}" image inspect "$(image_name "$1")" >/dev/null 2>&1; then
       note "$(image_name "$1") is here already"
       return 0
     fi
-    # a subshell, so the platform override is only on this pull, not on the `up` that follows
     ( [ -z "${PULL_PLATFORM:-}" ] || export DOCKER_DEFAULT_PLATFORM="$PULL_PLATFORM"; "${DOCKER[@]}" compose pull "$1" ) && return 0
     die "pulling $(image_name "$1") failed.
   'not found' / 'manifest unknown': nothing is pushed under tag $TAG yet. the github action builds it after a push to main
@@ -636,14 +511,10 @@ build_one() {
   have here:  $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E "^([^/]+/)*stream-$1:" | tr '\n' ' ' || true)
   or compile here instead:  ./scripts/deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
   fi
-  # BUILD on the command line as well as exported: `sudo docker` resets the
-  # environment, and compose would then bake "dev" while this script prints the sha.
   "${DOCKER[@]}" compose build --build-arg BUILD="${BUILD:-dev}" "$1" && return 0
   die "building $1 failed. 'signal: 9, SIGKILL' in the output means out of memory: add RAM or swap, or set CARGO_BUILD_JOBS=1."
 }
 
-# `up -d` builds a service whose image is missing. in images mode a miss must fail
-# loudly (wrong TAG), not quietly start a 30-minute compile.
 UP_FLAGS=()
 
 compose_up() {
@@ -656,8 +527,6 @@ compose_up() {
   build_one video
   build_one dummy
   build_one api
-  # `up -d` swaps every container whose image changed, video included: that ends
-  # every live stream. say so first, the way redeploy_service does.
   local cid running built
   cid="$("${DOCKER[@]}" compose ps -q --status running video 2>/dev/null || true)"
   if [ -n "$cid" ]; then
@@ -670,35 +539,22 @@ compose_up() {
   fi
   say "${DOCKER[*]} compose up -d ${UP_FLAGS[*]:-}"
   "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
-  # voice runs the video image under a profile, so the `up` above never touches it
   up_voice
-  # the Caddyfile is a bind mount, so compose never notices it changed. the reload is
-  # graceful and free when nothing changed, so always do it.
   reload_caddy
   prune_images
 }
 
-# the image a container ran before the swap has no tag now (the new build took it),
-# and every deploy leaves one more of those. remove them, and only them: not volumes,
-# not tagged images, not the build cache (that one is yours to drop, and it is what
-# makes the next build fast).
 prune_images() {
   local out
   out="$("${DOCKER[@]}" image prune -f 2>/dev/null | tail -n 1 || true)"
   note "untagged images from earlier builds removed (${out:-nothing to remove}). the build cache stays; ./scripts/deploy.sh --prune-deploy drops it first next time"
 }
 
-# ---- did the swap take? --------------------------------------------------------
-# "<status> <health> <restarts> <exit code>", e.g. "running healthy 0 0", "running
-# none 0 0" (no healthcheck), "exited none 0 1". "missing" when there is no such
-# container. the names are fixed by container_name in docker-compose.yml.
 container_state() {
   "${DOCKER[@]}" inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.RestartCount}} {{.State.ExitCode}}' "$1" 2>/dev/null \
     || echo "missing none 0 1"
 }
 
-# a one-shot (pages): wait up to 2 minutes for it to finish. prints its exit code,
-# or "running" when it never did.
 wait_one_shot() {
   local status health restarts code n=0
   while :; do
@@ -709,12 +565,6 @@ wait_one_shot() {
   done
 }
 
-# wait_for_health proves the api answers, and it answers 200 with video down. so a
-# partial run looks at the containers it swapped: running, no restart since we first
-# looked, and healthy where the image has a check (api, video, chat, events, home, database, redis, s3;
-# dummy and caddy have none, so 5s of running is what there is to see). 60s each,
-# then exit non-zero. no rollback: the old image lost its tag to the new build, so
-# the way back is a fix and another deploy.
 check_swapped() {
   local c status health restarts code base settled deadline
   say "checking the swapped containers"
@@ -729,7 +579,6 @@ check_swapped() {
           [ -n "$settled" ] || settled=$(( $(date +%s) + 5 ))
           if [ "$(date +%s)" -ge "$settled" ]; then note "$c: running"; break; fi
         fi
-        # health "starting": the check has not spoken yet
       elif [ "$status" != created ]; then
         swap_failed "$c" "$c is $status (health $health, $(( restarts - base )) restart(s) since the swap, exit code $code)"
       fi
@@ -739,42 +588,24 @@ check_swapped() {
   done
 }
 
-swap_failed() {   # service, what happened. prints its log, exits non-zero
+swap_failed() {
   printf '\n'
   "${DOCKER[@]}" compose logs --no-log-prefix --tail 30 "$1" 2>/dev/null || true
   die "redeploy failed: $2. above: the last 30 lines of its log. more: ${DOCKER[*]} compose logs $1"
 }
 
-# ---- partial redeploy --------------------------------------------------------
-# `frontend` means the pages: rebuild them and run the one-shot copy. caddy is
-# left alone, so nobody's websocket drops. the Caddyfile is a bind mount; when it
-# changed, caddy reloads it in place.
 redeploy_frontend() {
   build_one pages
   say "publishing the new pages (caddy keeps running)"
   "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} pages
-  # the one-shot's exit code is the only word on whether the copy worked (a full
-  # disk, say). `compose wait` would hand it over, but is too new for some installs.
   local code; code="$(wait_one_shot pages)"
   "${DOCKER[@]}" compose logs --no-log-prefix --tail 1 pages 2>/dev/null || true
   [ "$code" = 0 ] || swap_failed pages "publishing the pages failed (pages exit code: $code)"
 }
 
-# the Caddyfile is a bind mount of a single file, and such a mount is of the file's
-# inode, not its path: `git pull` (an editor, sed -i) writes a new file and renames it
-# over the old one, so inside the container /etc/caddy/Caddyfile stays the file caddy
-# started with. `caddy reload --config /etc/caddy/Caddyfile` in there reads that old
-# copy, finds nothing new and exits 0, and a route added to the Caddyfile is not served
-# until the container is next (re)started, which is when the path is looked up again.
-# so the host's file is handed to the running caddy on stdin instead: graceful, free
-# when nothing changed, no websocket drops. a caddy that will not take the file keeps
-# the config it has (recreated on a broken Caddyfile it would be down, and the site
-# with it); one that does not answer at all is recreated, and the open websockets drop
-# (browsers reconnect). the mount stays stale until the next start, which reads the
-# host's file as well; just never `caddy reload` on the in-container path by hand.
 reload_caddy() {
   local out n status
-  for n in 1 2 3; do   # a caddy that `up` just started may not have its admin socket yet
+  for n in 1 2 3; do
     if out="$("${DOCKER[@]}" compose exec -T frontend caddy reload --config - --adapter caddyfile < frontend/Caddyfile 2>&1)"; then
       return 0
     fi
@@ -791,16 +622,13 @@ reload_caddy() {
   "${DOCKER[@]}" compose up -d --no-deps --force-recreate frontend
 }
 
-redeploy_service() {   # api | video
+redeploy_service() {
   if [ "$1" = video ]; then
     warn "redeploying video ends every live stream right now. watchers reconnect on their own; streamers press start again."
   fi
   build_one "$1"
   if [ "$1" = api ]; then
-    # the api waits for the bucket at boot, and --no-deps below never creates s3 on a box
-    # deployed before it existed. --no-recreate: one that is here is left alone, never bounced
     "${DOCKER[@]}" compose up -d --no-deps --no-recreate s3
-    # chat, events and home are the same image run as `api chat`, `api events` and `api home`, so they move with the api
     say "swapping the api, chat, events and home containers"
     "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events home
   else
@@ -809,13 +637,7 @@ redeploy_service() {   # api | video
   fi
 }
 
-# the fake streams. video and api read the same password, so they are included:
-# compose only recreates them if that env actually changed.
-# one value from a running container's environment. empty when it is not running.
-# would an `up` swap this service for its image alone: the image its container runs (by
-# id: a re-sent -dirty tag has the same name and other bits) is not the one wanted. false
-# with no container (an up just starts it) and when the wanted image is not here yet.
-image_moved() {   # service (its container_name is the service name)
+image_moved() {
   local running wanted
   running="$("${DOCKER[@]}" inspect -f '{{.Image}}' "$1" 2>/dev/null || true)"
   [ -n "$running" ] || return 1
@@ -823,11 +645,6 @@ image_moved() {   # service (its container_name is the service name)
   [ -n "$wanted" ] && [ "$running" != "$wanted" ]
 }
 
-# the fake streams. video and api read the same password, so they go in the `up` and
-# compose recreates them if it changed: compose's own comparison, which reads .env the
-# way the containers were given it. in images mode only while the image they run is the
-# one wanted: once the images moved, the `up` would swap them for that as well, video
-# with every live stream and no warning; then a changed password is a ./scripts/deploy.sh api video.
 redeploy_dummy() {
   build_one dummy
   local -a also=() moved=()
@@ -844,13 +661,8 @@ redeploy_dummy() {
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
 }
 
-# voice is the video image run as `video voice`, under the compose profile `voice` (so a plain
-# `up -d` never starts it), and on only with a VOICE_SECRET in .env. the secret is only tested
-# for being there, never printed.
 voice_on() { [ -n "$(env_file_value VOICE_SECRET)" ]; }
 
-# `up` the voice container on the video image there is now: recreated when that image (or its
-# compose config) moved, left alone otherwise. every voice call drops when it is recreated.
 up_voice() {
   if ! voice_on; then note "voice is off (no VOICE_SECRET in $ENV_FILE), leaving it alone"; return 0; fi
   say "bringing voice up to the video image (a swap drops every voice call; pages rejoin)"
@@ -868,46 +680,35 @@ redeploy_targets() {
       caddy) say "Caddyfile changed, reloading caddy in place"; reload_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
-    # voice never lags the video image (or the compose file): once, after the rest
     case "$t" in video|voice|compose) voice=1 ;; esac
   done
   [ "$voice" = 0 ] || up_voice
 }
 
-# the long-running containers the targets swapped (or may have), for check_swapped.
-# pages is a one-shot and is checked where it runs, in redeploy_frontend.
 swapped_containers() {
   local t out=""
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
       api) out="$out api chat events home" ;;
       video) out="$out video" ;;
-      dummy) out="$out dummy video api" ;;   # video and api only move when DUMMY_PASSWORD changed; checking is free
+      dummy) out="$out dummy video api" ;;
       caddy) out="$out frontend" ;;
       compose) out="$out frontend api chat events home database redis video dummy s3" ;;
     esac
-    # up_voice follows these, and only when voice is on
     case "$t" in video|voice|compose) ! voice_on || out="$out voice" ;; esac
   done
   printf '%s\n' $out | awk 'NF && !seen[$0]++' | tr '\n' ' '
 }
 
-# ---- git pull ----------------------------------------------------------------
-pull_repo() {   # sets OLD_HEAD NEW_HEAD
+pull_repo() {
   have git || die "git not found"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "this folder is not a git checkout, nothing to pull"
   git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
     || die "this branch has no upstream to pull from. on your machine: git push -u origin <branch>"
   local head; head="$(git rev-parse HEAD)"
-  # diff from the last commit a run deployed in full, not from HEAD: a --pull that died
-  # in a build moved HEAD and deployed nothing, and HEAD alone would call the next
-  # --pull "nothing changed". DEPLOY_PULLED_FROM: handed over by reexec_if_updated.
   OLD_HEAD="${DEPLOY_PULLED_FROM:-$(last_deployed "$head")}"
   say "git pull --ff-only"
   git pull --ff-only || die "pull failed. local edits in the way? see: git status"
-  # the tags as well: the action puts v<n> on the commit minutes after the push, and a
-  # pull that already had the commit does not follow it on its own. not fatal (a tag
-  # moved by hand is refused): the release then reads as the one before
   GIT_TERMINAL_PROMPT=0 git fetch --tags --quiet origin 2>/dev/null || note "could not fetch the tags; the release may read older than it is"
   TAGS_FETCHED=1
   NEW_HEAD="$(git rev-parse HEAD)"
@@ -917,33 +718,21 @@ pull_repo() {   # sets OLD_HEAD NEW_HEAD
   fi
 }
 
-# the commit in .deployed, when this branch has it; else the fallback given.
 last_deployed() {
   local d=""
   [ ! -f "$DEPLOYED_FILE" ] || d="$(tr -d '[:space:]' < "$DEPLOYED_FILE")"
   if [ -n "$d" ] && git merge-base --is-ancestor "$d" HEAD 2>/dev/null; then echo "$d"
   else
-    # stderr: callers capture stdout
     [ -z "$d" ] || note "$DEPLOYED_FILE says $d, which is not on this branch; going by HEAD instead" >&2
     echo "$1"
   fi
 }
 
-# the commit this run deployed, for the next --pull. only after a run that ended well,
-# and only in a git checkout (a tarball has nothing to diff against anyway).
 record_deployed() {
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   git rev-parse HEAD > "$DEPLOYED_FILE" 2>/dev/null || true
 }
 
-# ---- the release -------------------------------------------------------------
-# the release this run puts up, for /api/health (`version`; api/src/release.rs): the one
-# named with --images v<n>, else the highest v<n> tag reachable from HEAD — the action puts
-# one on every push to main it built images for. a tree whose images are newer than that
-# tag (the action still running, --build of unpushed work, a laptop's ship) is
-# "v<n>+<commit>": past v<n>, at that commit. the tags are fetched first unless --pull just
-# did, quietly and not fatally: a box with no way to git still deploys what it has. ""
-# before the first release, or outside a git checkout: nothing is recorded then.
 pick_release() {
   RELEASE=""
   if [[ "${TAG:-}" =~ ^v[0-9]+$ ]]; then RELEASE="$TAG"; export RELEASE; return 0; fi
@@ -954,17 +743,11 @@ pick_release() {
   local n; n="$(git tag --merged HEAD --list 'v[0-9]*' 2>/dev/null | grep -E '^v[0-9]+$' | sed 's/^v//' | sort -n | tail -n 1 || true)"
   [ -n "$n" ] || return 0
   RELEASE="v$n"
-  # the images are named after the last commit touching image-paths: one the tag does not reach is newer than the release
   local ic; ic="$(image_commit)"
   if [ -n "$ic" ] && ! git merge-base --is-ancestor "$ic" "v$n" 2>/dev/null; then RELEASE="v$n+$ic"; fi
   export RELEASE
 }
 
-# the release into the database: `api release` (api/src/release.rs) in the api container, one
-# row in `deploys`, the newest of which /api/health says under `version`. after the health
-# check passed, so the row never names a release that did not come up. in the database and
-# not in .env on purpose: a release that moved only the pages is reported without the api
-# container being recreated for it. an api image from before the table cannot write it: a warn
 record_release() {
   if [ -z "${RELEASE:-}" ]; then
     note "no release to record: no v<n> tag reaches HEAD (the action makes one per push to main it builds). /api/health says \"version\": null"
@@ -979,32 +762,22 @@ record_release() {
   fi
 }
 
-# The pull may have replaced this very script. bash reads a script while it runs,
-# and the new one may know about services this one does not, so hand over to it.
 reexec_if_updated() {
   [ -z "${DEPLOY_REEXEC:-}" ] || return 0
-  # asked of git directly, not through `| grep -q`: under pipefail a grep that quits
-  # early on a long list makes git exit 141, and `|| return 0` would then skip this
   [ -n "$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- scripts/deploy.sh)" ] || return 0
   say "deploy.sh itself changed in the pull, continuing with the new one"
   DEPLOY_REEXEC=1 DEPLOY_PULLED_FROM="$OLD_HEAD" exec bash ./scripts/deploy.sh ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
 }
 
-# which services the files changed between two commits belong to, one per line,
-# sorted (main puts them in deploy order). docs, tests, monitor/ and this script
-# map to nothing: they run somewhere else. .env.example maps to nothing to build,
-# its new keys land in .env through refresh_env on every run.
-# the demo models are in no image (scripts/models.sh puts them in the bucket): `models`
-# says the folder moved, for the line that says why nothing is redeployed.
 changed_services() {
   git diff --name-only "$1" "$2" | while IFS= read -r f; do
     case "$f" in
       Cargo.toml|Cargo.lock) printf 'api\nvideo\ndummy\n' ;;
-      .dockerignore) printf 'api\nvideo\ndummy\n' ;;       # the rust build context is the repo root
-      frontend/.dockerignore) echo frontend ;;              # the pages build context is frontend/
+      .dockerignore) printf 'api\nvideo\ndummy\n' ;;
+      frontend/.dockerignore) echo frontend ;;
       api/*) echo api ;;
       video/*) printf 'video\ndummy\n' ;;
-      random-media/gifs/*) echo dummy ;;                   # the gifs are baked into the dummy image
+      random-media/gifs/*) echo dummy ;;
       random-media/vrms/*) echo models ;;
       frontend/Caddyfile) echo caddy ;;
       frontend/*) echo frontend ;;
@@ -1013,30 +786,17 @@ changed_services() {
   done | sort -u
 }
 
-# ---- the demo models ---------------------------------------------------------------
-# random-media/vrms into the bucket, for the go live page's picker (scripts/models.sh,
-# docs/vtuber.md), when the folder is not as the last run left it (.models): a pull that brought
-# a model brings it to the page. after the health check: it works through
-# the api container. never this deploy's failure: the stack is up either way, the reason is
-# said, and ./scripts/models.sh by hand does it again.
 sync_models() {
   [ -f scripts/models.sh ] && [ -d random-media/vrms ] || return 0
   DOCKER_CMD="${DOCKER[*]-}" bash ./scripts/models.sh --if-changed || warn "the demo models did not go up (above). the stack is fine; ./scripts/models.sh tries again"
 }
 
-# ---- password reset ------------------------------------------------------------
-# `./scripts/deploy.sh passwd <name>`: a new random password for an account, printed once,
-# every login of that name out. On a name with no account it makes one.
 passwd_account() {
   pick_docker_cmd
   [ -n "$("${DOCKER[@]}" compose ps -q api 2>/dev/null)" ] || die "the api container is not up. ./scripts/deploy.sh first"
-  # RUST_LOG=warn: without it the schema's "already exists, skipping" notices come first
   "${DOCKER[@]}" compose exec -T -e RUST_LOG=warn api api passwd "$1"
 }
 
-# ---- args --------------------------------------------------------------------
-# bold on a terminal, plain when piped (./scripts/deploy.sh --help | less). the escape codes
-# take no width, so the columns below are lined up by their visible text.
 usage() {
   local B="" N=""
   if [ -t 1 ]; then
@@ -1097,12 +857,11 @@ ${B}notes${N}
 EOF
 }
 
-parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PASSWD_NAME
+parse_args() {
   IP_ARG=""; PULL=0; PRUNE=0; IMAGES_MODE=0; BUILD_MODE=0; TAG="${TAG:-}"; TARGETS=(); PASSWD_NAME=""
   local a want_name=0 want_tag=0
   for a in "$@"; do
     if [ "$want_name" = 1 ]; then PASSWD_NAME="$a"; want_name=0; continue; fi
-    # the word after --images is the tag, unless it is clearly something else (a service, a flag, an ip)
     if [ "$want_tag" = 1 ]; then
       want_tag=0
       case "$a" in
@@ -1143,15 +902,10 @@ load_public_ip_from_env() {
   export PUBLIC_IP
 }
 
-# images are the default; --build is the option. the box gets the four images built
-# elsewhere (the github action on every push to main, or ./scripts/ship.sh from a laptop) and
-# compiles nothing. --build compiles them here, the old way.
 decide_mode() {
   [ "$BUILD_MODE" = 1 ] || IMAGES_MODE=1
 }
 
-# the registry the images live in, from the git remote: github.com/<owner>/… means
-# ghcr.io/<owner>/ (lowercased, ghcr wants that). ship.sh derives the same one.
 registry_from_remote() {
   local url owner
   url="$(git remote get-url origin 2>/dev/null || true)"
@@ -1160,32 +914,19 @@ registry_from_remote() {
   printf 'ghcr.io/%s/' "$owner"
 }
 
-# what the four images are built from: the pathspecs in ./image-paths, the one list
-# deploy.sh, ship.sh and the action share. a commit that touches none of them has no
-# images of its own (the action does not build it), so the box must not ask for its tag.
 IMAGE_PATHSPECS=()
 load_image_paths() {
   [ ${#IMAGE_PATHSPECS[@]} -eq 0 ] || return 0
   local p
-  # comments and blanks out, a stray CR or trailing blank off: either would make a
-  # pathspec that matches nothing, silently
   while IFS= read -r p; do IMAGE_PATHSPECS+=("$p"); done < <(tr -d '\r' < image-paths 2>/dev/null | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)' || true)
 }
 
-# the commit the images are named after: the last one that touched image-paths, which is
-# the rule the action and ship.sh tag with, so a docs-only or deploy.sh-only commit runs
-# the images of the one before it, and nothing is recreated for it. always 7 characters,
-# on every side, whatever the repo's size (git's default abbreviation grows with it).
-# empty when this is not a git checkout. (a shallow clone would answer with its boundary
-# commit, docs or not: resolve_images refuses one before asking.)
 image_commit() {
   load_image_paths
   [ ${#IMAGE_PATHSPECS[@]} -gt 0 ] || return 0
   git log -1 --format=%h --abbrev=7 -- "${IMAGE_PATHSPECS[@]}" 2>/dev/null || true
 }
 
-# uncommitted edits or new files in what the images are built from: the images for the
-# commit are not this tree's. BUILD says -dirty then, and images mode warns.
 images_dirty() {
   load_image_paths
   [ ${#IMAGE_PATHSPECS[@]} -gt 0 ] && [ -n "$(git status --porcelain -- "${IMAGE_PATHSPECS[@]}" 2>/dev/null)" ]
@@ -1193,14 +934,6 @@ images_dirty() {
 
 is_shallow() { [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; }
 
-# where the images come from, and which. IMAGES: the environment, else .env, else the
-# registry the git remote implies (a missing trailing / is added). TAG: the command
-# line, else the environment, else image_commit above (after --pull: of the tree just
-# pulled). the TAG in .env is only the record of the last run, never a default: after a
-# pull it would name the old images. both are exported so compose resolves
-# ${IMAGES:-}stream-x:${TAG:-latest} to those names. resolved before the prune, which
-# must know these names to keep them; setup_images_mode then writes them to .env so a
-# `docker compose up -d` by hand later starts the same images and not a build.
 resolve_images() {
   [ -z "${IMAGES_RESOLVED:-}" ] || return 0
   IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
@@ -1210,15 +943,11 @@ resolve_images() {
   fi
   IMAGES="${IMAGES%/}/"
   if [ -z "$TAG" ]; then
-    # a shallow clone shows its boundary commit as having touched everything, so the
-    # answer would be wrong whenever that commit is a docs one. the whole history, once.
     ! is_shallow || die "this is a shallow checkout, so the commit the images are named after cannot be found. once:  git fetch --unshallow"
     TAG="$(image_commit)"
     [ -n "$TAG" ] || die "cannot tell which images: not a git checkout. name them:  ./scripts/deploy.sh --images <tag>"
     ! images_dirty || warn "api/ video/ frontend/ or Cargo.* have uncommitted edits: the images for $TAG are the commit's, not this tree's. ./scripts/deploy.sh --build compiles this tree"
   fi
-  # the images are built for the cloud box, linux/amd64. another machine (an arm laptop)
-  # pulls that variant anyway and runs it under emulation: slower, but it runs.
   PULL_PLATFORM=""
   case "$(uname -m)" in
     x86_64|amd64) ;;
@@ -1237,14 +966,10 @@ setup_images_mode() {
   say "images: ${IMAGES}stream-<x>:$TAG   (nothing is built here; ./scripts/deploy.sh --build would. written to $ENV_FILE for a compose by hand)"
 }
 
-# --build: the images are made on this machine, as stream-<x>:latest, whatever .env
-# names (compose would otherwise put the registry's name on a local build). a stray
-# IMAGES or TAG in the shell is ignored the same way. .env is left as it is.
 setup_build_mode() {
   export IMAGES="" TAG=""
 }
 
-# ---- 8. health ---------------------------------------------------------------
 http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 5 "$1" 2>/dev/null || true; }
 
 wait_for_health() {
@@ -1256,7 +981,6 @@ wait_for_health() {
   while :; do
     code="$(http_code "$url")"
     if [ "$code" = "200" ]; then printf '\n'; note "healthy: HTTP 200 from $url"; return 0; fi
-    # clouds with 1:1 nat never answer on their own public ip. after 30s, 127.0.0.1 is proof enough.
     if [ $(( $(date +%s) - started )) -ge 30 ] && [ "$(http_code "$local_url")" = "200" ]; then break; fi
     if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
     printf '.'
@@ -1306,7 +1030,6 @@ EOF
   fi
 }
 
-# ---- main --------------------------------------------------------------------
 full_deploy() {
   ensure_curl
   pick_public_ip "$IP_ARG"
@@ -1314,15 +1037,15 @@ full_deploy() {
   pick_docker_cmd
   ensure_compose
   check_ports
-  [ "$IMAGES_MODE" = 0 ] || resolve_images   # the prune keeps this run's images, so it needs their names first
-  [ "$PRUNE" = 0 ] || prune_for_deploy   # before the disk check, so a full box can pass it
+  [ "$IMAGES_MODE" = 0 ] || resolve_images
+  [ "$PRUNE" = 0 ] || prune_for_deploy
   check_disk
   ensure_swap
   pick_build_jobs
   open_firewall
   write_env
   pick_env_name
-  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi   # after write_env, which rewrites .env
+  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
   compose_up
   local ok=1
   wait_for_health || ok=0
@@ -1339,7 +1062,7 @@ partial_deploy() {
   ensure_compose
   [ "$IMAGES_MODE" = 0 ] || resolve_images
   [ "$PRUNE" = 0 ] || prune_for_deploy
-  check_disk     # the same multi-GB builds as a full run, and swap is gone after a reboot
+  check_disk
   ensure_swap
   pick_build_jobs
   refresh_env
@@ -1347,7 +1070,7 @@ partial_deploy() {
   say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "building, BUILD=$BUILD"))"
   redeploy_targets
   local -a swapped=(); read -r -a swapped <<< "$(swapped_containers)" || true
-  [ ${#swapped[@]} -eq 0 ] || check_swapped "${swapped[@]}"   # exits non-zero when one is not up
+  [ ${#swapped[@]} -eq 0 ] || check_swapped "${swapped[@]}"
   prune_images
   local ok=1
   wait_for_health || ok=0
@@ -1358,10 +1081,6 @@ partial_deploy() {
   [ "$ok" -eq 1 ]
 }
 
-# the commit the images are built from, baked in as BUILD (see docs/debugging.md): the
-# same commit the images are named after (image_commit), so /api/health says the tag.
-# -dirty when what the images are built from has edits or new files; docs, tests and
-# this script do not count. "dev" when this is not a git checkout.
 pick_build() {
   if [ -n "${BUILD:-}" ]; then export BUILD; return 0; fi
   BUILD="$(image_commit)"
@@ -1387,20 +1106,16 @@ main() {
   if [ "$PULL" = 1 ]; then
     pull_repo
     reexec_if_updated
-    # with --images, "what changed in the repo" is not the question: the new TAG is. pull it all.
     if [ ${#TARGETS[@]} -eq 0 ] && [ "$IMAGES_MODE" = 0 ]; then
       if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
         say "nothing changed since the last deploy, nothing to redeploy"
         refresh_env
         sync_models
-        # nothing to build, but the prune was asked for: still give the disk back
         [ "$PRUNE" = 0 ] || { pick_docker_cmd; prune_for_deploy; }
         exit 0
       fi
       local changed svc
       changed="$(changed_services "$OLD_HEAD" "$NEW_HEAD")"
-      # deploy order, not alphabetical: pages and images first, compose last, so its
-      # `up -d` starts the new images instead of the old ones (and a second swap)
       for svc in frontend api video dummy caddy compose; do
         if grep -qx "$svc" <<< "$changed"; then TARGETS+=("$svc"); fi
       done
@@ -1409,9 +1124,7 @@ main() {
         ! grep -qx models <<< "$changed" || what="demo models"
         say "$(git rev-parse --short "$OLD_HEAD") -> $(git rev-parse --short "$NEW_HEAD") changed no service files ($what), nothing to redeploy"
         refresh_env
-        # a model the pull brought goes into the bucket
         sync_models
-        # the new head runs the same containers the old one did, so it is as deployed
         if [ -f "$DEPLOYED_FILE" ] && [ "$(tr -d '[:space:]' < "$DEPLOYED_FILE")" = "$OLD_HEAD" ]; then record_deployed; fi
         [ "$PRUNE" = 0 ] || { pick_docker_cmd; prune_for_deploy; }
         exit 0
@@ -1420,8 +1133,8 @@ main() {
     fi
   fi
 
-  pick_build   # after the pull, so BUILD is the commit that is actually built
-  pick_release # and the release that tree is, for the record after the health check
+  pick_build
+  pick_release
   if [ ${#TARGETS[@]} -gt 0 ]; then
     partial_deploy
   else
@@ -1429,6 +1142,4 @@ main() {
   fi
 }
 
-# one line on purpose: bash parses it whole before running it, so a pull that
-# rewrites this file mid-run can never feed the old process half a new line.
 main "$@"; exit $?
