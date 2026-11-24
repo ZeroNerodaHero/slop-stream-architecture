@@ -25,7 +25,7 @@ maybes. If a door is actually locked, say so and move on — do not invent a bug
   accounts are fair game.
 - **PoCs live outside the repo.** Write exploit scripts, payloads, loot and the report under
   `/tmp/redteam/`, never in the tree. The only thing that lands in git is a clean fix on a branch.
-- **Caveman voice stays in the prose.** Headlines, TL;DRs and the report may roar. Code, comments,
+- **Caveman voice stays in the prose.** Headlines, TL;DRs and the report may roar. Code,
   commit messages and PR diffs are sober and professional. A fix is not a place for jokes.
 
 ## The loop
@@ -60,10 +60,10 @@ it before hunting. The short version of where the meat is:
   `format!`-into-SQL sites (`group_mod.rs`, `notify.rs`, `history.rs`) interpolate *hardcoded
   constants*; user values are bound params. The rule to apply, not a bug to report: an
   interpolated identifier is a vuln **only if its value can come from a request**. Trace it.
-- **Frontend / XSS** (`frontend/src/infra/about.ts`) — the hand-rolled CSS/media/link sanitizer
-  (`safeCss`, `mediaPath`, `linkHref`, `splitSelectors`) is the juiciest client target. There is
-  no `dangerouslySetInnerHTML` in the tree, so React escaping is holding the line — attack the
-  sanitizer's parser-vs-render gaps instead.
+- **Frontend / XSS** (`frontend/src/infra/about.ts`, `About.tsx`, `api/src/about_page.rs`) — the
+  hand-rolled html fragment sanitizer (`sanitizeHtml` in the page, `sanitize_html` in the api) and
+  `linkHref` are the juiciest client target. The about editor writes `innerHTML` from cleaned
+  html; attack the gaps between the api's cleaning, the browser's parser and what renders.
 - **Data layer** (`api/src/s3.rs`, uploads in `group_mod.rs` / `profile.rs`, api→video calls) —
   key path traversal (`check_key`), magic-byte-only "is it a jpeg" checks, content-type confusion,
   SSRF through operator-config endpoints.
@@ -129,8 +129,8 @@ After a finding is proven, close it:
 
 1. Branch off the current base. Name it for the change, never a person: `fix/<short-kebab>`
    (e.g. `fix/stream-stop-token-check`). Follow the repo's branch-naming rule.
-2. Make the **smallest** correct fix. Match the file's existing style and its terse comment voice.
-   No caveman in code, no drive-by refactors, no touching files the fix does not need.
+2. Make the **smallest** correct fix. Match the file's existing style, and add no comments
+   (`.cursor/rules/no-comments.mdc`). No caveman in code, no drive-by refactors, no touching files the fix does not need.
 3. Compile what you touched before you open anything: `cargo check --workspace` for Rust,
    `cd frontend && npx tsc --noEmit` for TypeScript. If there is a matching `test/*.js` suite or a
    `#[cfg(test)]` module, add or extend a test that fails before and passes after.

@@ -2,6 +2,8 @@
 
 Why the picture in picture window showed a group's `#general` under the stream `testingstuff`, and why your own stream's chat was missing from the player while you watched someone else. What every chat surface uses, the bugs found, and what changed.
 
+The names below (atoms and functions such as `chatLinesAtom`, `openChat`, `leaveChat`) are the ones the code had on that day; the chat code has been reworked since and most of them no longer exist. Read it as a record of the bugs, not as a map of the current code.
+
 ## the surfaces
 
 | surface | where | state | transport |

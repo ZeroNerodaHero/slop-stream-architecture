@@ -89,7 +89,7 @@ Css only, in `style.css`, reached by class. A page is words and boxes. No `<img>
 
 The only `style=` a page carries is one custom property for one of these: `style="--n: 21"`, `style="--t: 5s"`, `style="--to: 30"`. Anything else is a class in `style.css`.
 
-Everything stops under `prefers-reduced-motion: reduce`, and the end state must still read: the dots gone, the bar full, the words there. A new animation goes into `style.css` next to its kind with a two-line comment saying what fact it shows, and into this table.
+Everything stops under `prefers-reduced-motion: reduce`, and the end state must still read: the dots gone, the bar full, the words there. A new animation goes into `style.css` next to its kind, with no comment (`.cursor/rules/no-comments.mdc`), and into this table with the fact it shows.
 
 ## Write
 

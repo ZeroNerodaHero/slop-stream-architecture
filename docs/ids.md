@@ -30,7 +30,7 @@ flowchart LR
 ## the rules
 
 - **the id never changes.** not at a rename, not at a password reset, not when a free name is claimed (the row was there; the claim fills in the hash).
-- **a rename is the login's, with its password**, like a password change: a stolen cookie must not walk off with the name. the same login limiter counts the guess (`auth.rs:296`, the `old` of `/api/password`).
+- **a rename is the login's, with its password**, like a password change: a stolen cookie must not walk off with the name. the same login limiter counts the guess (`auth.rs`, the `old` of `/api/password`).
 - **the new name** follows the name rule, is not reserved (`dummy-`), is not yours already (400 `that is your name`), is not another account's and not held by another account (409 `name taken`, the same words for both: a hold is a claim in waiting).
 - **once every 30 days**: 403 `you changed your name on <date>. again from <date>`. the first rename is always allowed.
 - **not while live**: 409 `stop the stream first`. a stream's url is its name, the `live:` key and video's room are the name, and the watchers' chat room is the name. the stream ends, then the name changes.

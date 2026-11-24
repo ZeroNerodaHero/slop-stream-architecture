@@ -16,4 +16,4 @@ ssh -L 3002:127.0.0.1:3002 <this-box>
 
 the page has no login of its own; ssh forwarding is the door. state is `/data/monitor.json` in a volume.
 
-`docs/debugging.md` is the long doc. it also mentions `./status.sh`; that file is not in the repo today. the monitor *box* itself is still something you stand up (the code is here; the machine is not provided).
+`docs/debugging.md` is the long doc. the monitor *box* itself is still something you stand up (the code is here; the machine is not provided).

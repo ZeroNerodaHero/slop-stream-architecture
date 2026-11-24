@@ -14,7 +14,7 @@ The browser draws its own `<select>`: a round glossy box on a mac, and an open l
 - at the edit, by `.cursor/hooks/no-native-select.sh` (a `preToolUse` hook in `.cursor/hooks.json`). It names the lines.
 - at `npm run lint` and `npm run build`, by `frontend/scripts/no-native-select.sh`, so it fails the docker build too.
 
-Do not go round it. Not a select restyled with `appearance-none` (the box takes css, the open list never does), not one written through `dangerouslySetInnerHTML` or a string of html, not a select out of a package. Prose and comments name the tag without its bracket ("the browser's select"), since the check reads lines, not syntax.
+Do not go round it. Not a select restyled with `appearance-none` (the box takes css, the open list never does), not one written through `dangerouslySetInnerHTML` or a string of html, not a select out of a package. Prose and docs name the tag without its bracket ("the browser's select"), since the check reads lines, not syntax.
 
 ## Use `Select`
 
@@ -43,7 +43,7 @@ import { Select } from '@/shared-components/Select';
 | `disabled` | dim, takes no focus |
 | `className` | the box's width (`w-full`, `min-w-0 flex-1`) and, for a bigger one, its padding (`px-3 py-2`). It wears the type size of what it sits in, and so does its list |
 
-What it already does, so no caller adds it: opens under the box (over it at the window's foot), stays in the window, is as wide as its longest option, scrolls past 240px, follows its box through a scroll, draws into the modal `<dialog>` it is in; arrows, home, end, page keys, enter, space, escape (the list's alone: a dialog stays open), tab, letters typed; the focus never leaves the box. `Select.tsx`'s own comment has the why of each.
+What it already does, so no caller adds it: opens under the box (over it at the window's foot), stays in the window, is as wide as its longest option, scrolls past 240px, follows its box through a scroll, draws into the modal `<dialog>` it is in; arrows, home, end, page keys, enter, space, escape (the list's alone: a dialog stays open), tab, letters typed; the focus never leaves the box. The why of each is in `docs/frontend-shared-components.md`, under `Select.tsx`.
 
 In a test: `page.click('#face-camera')`, then `page.click('#face-camera-list [data-value="…"]')`; what is on is `#face-camera`'s `data-value`. There is no `selectOption`.
 
@@ -54,7 +54,7 @@ In a test: `page.click('#face-camera')`, then `page.click('#face-camera-list [da
 | one of a list that is long, or as long as the data makes it (the cameras a face can be read from) | `Select` |
 | one of a few fixed things, each worth seeing | all of them on show: `OptionCard`, a radio as a card (`user-modal/parts.tsx`), or words pressed (`aria-pressed`, the role editor's cooldown) |
 | something to do, off a list (give a role, add a source) | a menu, `role="menu"`: `HoverMenu` in `ServerRoom.tsx`, `AddMenu` in `Sources.tsx` |
-| words typed, finished from a list | `comboProps` and `SearchSuggestions` in `ChatSearch.tsx`. That is what a datalist would have been |
+| words typed, finished from a list | `SearchField` and `SearchSuggestions` in `ChatSearch.tsx`. That is what a datalist would have been |
 
 ## Replace one
 

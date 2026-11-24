@@ -786,18 +786,6 @@ the last try's reason, '' for none; `retry` is which retry this is, 0 for the fi
 `export async function joinVoice`: Into `channel` of `server`: a run of up to 5 tries (fail). Already in it or joining it: nothing;
 failed there, a fresh run. In another: out of that one first.
 
-`export interface HeardLevel`: Your own level for someone you hear: their volume in percent (0 to HEARD_MAX, 100 as they come) and whether you muted them for yourself. Nobody else hears a difference.
-
-`export const HEARD_MAX`: The loudest a person can be turned up to, in percent: past 100 is a gain, which an element's volume cannot do.
-
-`export const voiceHeardAtom`: Read: the kept levels, by user id, what was kept checked over.
-
-`export const voiceUidsAtom`: Name to user id for whoever is in voice in the room on the page (room-atoms.ts keeps it): the seats frame says names, the levels are kept by id.
-
-`export function heardLevelOf`: `uid`'s level: what is kept, else the default.
-
-`export function setHeardLevel`: Moves `uid`'s level, live on the call. Back at the default, nothing is kept for them.
-
 `export interface StatsEntry`: The fields of a getStats report this file reads: every report is one of these, most of them absent.
 
 `export interface VoiceStats`: How the call is getting through. A number is null when the browser did not say or there is no window yet (the first read).
@@ -855,6 +843,20 @@ kept pick cannot be told from a gone one.
 `export function readVoiceMicLevel`: The mic's loudness for the tab's meter, 0..1 on the meter's scale; 0 with no mic or no web audio.
 
 `export function gateFraction`: The gate's threshold on the meter's 0..1 scale: 0 is always open.
+
+## `atoms/voice-state.ts`
+
+`export interface HeardLevel`: Your own level for someone you hear: their volume in percent (0 to HEARD_MAX, 100 as they come) and whether you muted them for yourself. Nobody else hears a difference.
+
+`export const HEARD_MAX`: The loudest a person can be turned up to, in percent: past 100 is a gain, which an element's volume cannot do.
+
+`export const voiceHeardAtom`: Read: the kept levels, by user id, what was kept checked over.
+
+`export const voiceUidsAtom`: Name to user id for whoever is in voice in the room on the page (room-atoms.ts keeps it): the seats frame says names, the levels are kept by id.
+
+`export function heardLevelOf`: `uid`'s level: what is kept, else the default.
+
+`export function setHeardLevel`: Moves `uid`'s level, live on the call. Back at the default, nothing is kept for them.
 
 ## `chat-video.ts`
 

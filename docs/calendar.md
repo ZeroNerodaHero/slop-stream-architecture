@@ -12,23 +12,25 @@ flowchart LR
   closed -->|"GET /api/streamers/:name/sessions?from=&to="| grid["the grid · 7 days × 24 hours · the week's line"]
 ```
 
+**the design, kept for its reasons.** the sections below were written before the build. the names in them (files, functions, atoms, fields, routes) are the ones planned then; some shipped under other names and some were never made, and line numbers were dropped because they drift. what is in the repo is the code; check a name there before relying on it.
+
 ## the short answer
 
-**a block is a session row.** `sessions(id, name, user_id, verified, started_at, ended_at, token)` (`api/schema.sql`, `user_id` from `schema.sql:20`). go-live inserts the row with `started_at = now()` and `ended_at` null (`api/src/main.rs:606`): the block opens. the block closes when `ended_at` is set, and three things set it, whichever gets there first:
+**a block is a session row.** `sessions(id, name, user_id, verified, started_at, ended_at, token)` (`api/schema.sql`, `user_id` from `schema.sql`). go-live inserts the row with `started_at = now()` and `ended_at` null (`api/src/main.rs`): the block opens. the block closes when `ended_at` is set, and three things set it, whichever gets there first:
 
 | closer | when | how late `ended_at` is |
 |---|---|---|
-| the page's `stop` (`main.rs:677`): the button, `×` on the corner player, the tab closing (`stopOnLeave`'s beacon, `publish-atoms.ts:539`) | at once | exact |
-| video's `end_session` (`video/src/main.rs:705`): the publisher's peer or socket went. ice says disconnected at 5s and failed at 15s (`main.rs:963`), the publish task exits and posts the api's own `stop` with the grant it was given (`:727`) | 5–15s after the last packet | ≤ 15s |
-| the sweeper (`main.rs:350`): once a minute, every open row older than 180s whose name has no live key and that video does not list | when video was not there to say so (the api or video down past the key's 90s ttl) | up to 4 minutes (`ZOMBIE_AFTER_SECS` + `SWEEP_EVERY`), and `ended_at = now()` is the sweep's time, not the drop's |
+| the page's `stop` (`main.rs`): the button, `×` on the corner player, the tab closing (`stopOnLeave`'s beacon, `publish-atoms.ts`) | at once | exact |
+| video's `end_session` (`video/src/main.rs`): the publisher's peer or socket went. ice says disconnected at 5s and failed at 15s (`main.rs`), the publish task exits and posts the api's own `stop` with the grant it was given | 5–15s after the last packet | ≤ 15s |
+| the sweeper (`main.rs`): once a minute, every open row older than 180s whose name has no live key and that video does not list | when video was not there to say so (the api or video down past the key's 90s ttl) | up to 4 minutes (`ZOMBIE_AFTER_SECS` + `SWEEP_EVERY`), and `ended_at = now()` is the sweep's time, not the drop's |
 
-so "a connection gets dropped, we create a block" is right with one word moved: the block was created at go-live, the drop *closes* it. and the page does not reconnect on its own: a lost peer is `connection failed` (`publish-atoms.ts:353`), a lost socket is `connection lost` (`:330`), a heartbeat answered 403 after video ended the row is `session lost. press start again` (`:346`). the person presses start, go-live inserts a new row, and that is a new block. two blocks a minute apart are two rows in the table; the grid may draw them as one, below.
+so "a connection gets dropped, we create a block" is right with one word moved: the block was created at go-live, the drop *closes* it. and the page does not reconnect on its own: a lost peer is `connection failed` (`publish-atoms.ts`), a lost socket is `connection lost`, a heartbeat answered 403 after video ended the row is `session lost. press start again`. the person presses start, go-live inserts a new row, and that is a new block. two blocks a minute apart are two rows in the table; the grid may draw them as one, below.
 
-the data, then, is there and has been. what is not: a route that returns a month of it (`GET /api/streamers/:name/sessions` is the last 20, `main.rs:505`), an end that is honest in the sweeper's case, and the grid.
+the data, then, is there and has been. what is not: a route that returns a month of it (`GET /api/streamers/:name/sessions` is the last 20, `main.rs`), an end that is honest in the sweeper's case, and the grid.
 
 ## what for
 
-- **a watcher on `/watch/alice` while she is off.** today the page says `not streaming right now` and whatever she typed as her `offline_note` (`back tuesday at 8`, `WatchPage.tsx:208`). the calendar answers from the record: the last four weeks of blocks, and the line derived from them. the note stays; it is what she *says*, the calendar is what she *did*.
+- **a watcher on `/watch/alice` while she is off.** today the page says `not streaming right now` and whatever she typed as her `offline_note` (`back tuesday at 8`, `WatchPage.tsx`). the calendar answers from the record: the last four weeks of blocks, and the line derived from them. the note stays; it is what she *says*, the calendar is what she *did*.
 - **alice herself.** how many hours this month, the longest one, the night the connection dropped three times. the profile tab, with the totals.
 - **later, the other half.** a block in the future is a schedule, and followers can be told before it starts. not in the first cut; under *later*.
 
@@ -41,7 +43,7 @@ the data, then, is there and has been. what is not: a route that returns a month
 - **short blocks.** a go-live whose negotiation failed is a row of a few seconds: the key is claimed and the row opened before video has the publisher. they stay in the table (the log is the log) and the grid hides blocks under 60s unless the owner asks (`show everything`). the open block under a name that is live is never hidden: it is drawn from its first second, at the least height, and grows.
 - **gaps.** two blocks with under 5 minutes between them are one stream that dropped. drawn as one block from the first's start to the second's end, the gap inside it and counted: twenty minutes, three down, twenty more is one block that says `43m`. nothing marks the drop. a rule for the eye, in the page, never in the table.
 - **a block starts at go-live**, a few seconds before the first frame reaches anyone (`status.md`: `GET /live` lists a name from the claim, before negotiation). accepted; nobody reads a calendar to the second.
-- **public.** who is streaming is on home for anyone while it happens; the record of it is as public as the bio. the token never leaves the api (`spec.md:213`'s rule for the route today).
+- **public.** who is streaming is on home for anyone while it happens; the record of it is as public as the bio. the token never leaves the api (`spec.md`'s rule for the route today).
 
 ## the dropped connection
 
@@ -97,11 +99,11 @@ three writes change, each by a few words:
 
 | where | today | then |
 |---|---|---|
-| `heartbeat` (`main.rs:646`): `owns_session`, a `SELECT id … WHERE id, token, name, ended_at IS NULL` | the check | `UPDATE sessions SET last_beat_at = now() WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL RETURNING id`: the same check, and the beat written, in the one round trip the heartbeat already makes |
-| `stop` (`main.rs:683`) | `SET ended_at = now()` | `SET ended_at = now(), ended_by = $4`, where `$4` is `?by=video` from video's call and `stop` otherwise. anything else in `by` is `stop`: it is a word for the log, not a right. video says `stop` itself when the page closed its socket with a close frame (a deliberate stop, whose own call is still on its way and loses the race on a fast box) and `video` when the socket or the peer just went: so `video` means a drop, not a press |
-| `sweep_once` (`main.rs:358`) | `SET ended_at = now()` | `SET ended_at = COALESCE(last_beat_at, started_at), ended_by = 'sweep'`: the stream ended within 15s of its last beat, so that is where the block ends. the `RETURNING name, id` and the `ended` fact stay |
+| `heartbeat` (`main.rs`): `owns_session`, a `SELECT id … WHERE id, token, name, ended_at IS NULL` | the check | `UPDATE sessions SET last_beat_at = now() WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL RETURNING id`: the same check, and the beat written, in the one round trip the heartbeat already makes |
+| `stop` (`main.rs`) | `SET ended_at = now()` | `SET ended_at = now(), ended_by = $4`, where `$4` is `?by=video` from video's call and `stop` otherwise. anything else in `by` is `stop`: it is a word for the log, not a right. video says `stop` itself when the page closed its socket with a close frame (a deliberate stop, whose own call is still on its way and loses the race on a fast box) and `video` when the socket or the peer just went: so `video` means a drop, not a press |
+| `sweep_once` (`main.rs`) | `SET ended_at = now()` | `SET ended_at = COALESCE(last_beat_at, started_at), ended_by = 'sweep'`: the stream ended within 15s of its last beat, so that is where the block ends. the `RETURNING name, id` and the `ended` fact stay |
 
-`go_live`'s own cleanup (`main.rs:623`, "anything older that still looks open is over") sets `ended_by = 'sweep'` too: it is the same judgement, a row nobody holds.
+`go_live`'s own cleanup (`main.rs`, "anything older that still looks open is over") sets `ended_by = 'sweep'` too: it is the same judgement, a row nobody holds.
 
 the range, the one query the calendar is for. an account's:
 
@@ -121,7 +123,7 @@ a free name's is the same with `name = $1` on the other index. postgres walks th
 
 | | route | does |
 |---|---|---|
-| GET | `/api/streamers/:name/sessions?from=&to=` | with `from` and `to` (iso 8601, `to` after `from`, at most 93 days apart, else 400 `bad range`): every block of the name overlapping `[from, to)`, oldest first, at most 1000. without them: the last 20, newest first, as today (`spec.md:213`, so nothing that reads it breaks). each `{ id, name, started_at, ended_at, last_beat_at, ended_by }`, never the token. `ended_at` null is a block still open: the page draws it to now if the name's word is `streaming`, and to `last_beat_at`, marked, if not. for anybody. a name with no row is `[]` |
+| GET | `/api/streamers/:name/sessions?from=&to=` | with `from` and `to` (iso 8601, `to` after `from`, at most 93 days apart, else 400 `bad range`): every block of the name overlapping `[from, to)`, oldest first, at most 1000. without them: the last 20, newest first, as today (`spec.md`, so nothing that reads it breaks). each `{ id, name, started_at, ended_at, last_beat_at, ended_by }`, never the token. `ended_at` null is a block still open: the page draws it to now if the name's word is `streaming`, and to `last_beat_at`, marked, if not. for anybody. a name with no row is `[]` |
 | POST | `/api/streams/:name/stop?session=&token=&by=` | `by` is new and optional: `video` from video's `end_session`, anything else or absent is `stop`. the grant is still what is checked |
 
 nothing else. `GET /api/streamers/:name` does not gain a count or a usual line; the page has the blocks and does the arithmetic, below. the api speaks instants and rows.
@@ -136,7 +138,7 @@ nothing else. `GET /api/streamers/:name` does not gain a count or a usual line; 
 
 **where.**
 
-- `/watch/<name>` while not live (`WatchPage.tsx:190`, the `waiting` branch): under the word and the note, above the bio. the strip and the line. the page already gets `live` and `ended` for the name on screen (`watch-atoms.ts`, `status.md`), so on either it re-fetches the current range: the block appears when she starts and closes when she stops, with no reload.
+- `/watch/<name>` while not live (`WatchPage.tsx`, the `waiting` branch): under the word and the note, above the bio. the strip and the line. the page already gets `live` and `ended` for the name on screen (`watch-atoms.ts`, `status.md`), so on either it re-fetches the current range: the block appears when she starts and closes when she stops, with no reload.
 - `/watch/<name>` while live: the line only, under the bio. the player does not get shorter (`posts.md`'s rule).
 - the profile tab, your own: the strip, the line, and the totals under it: `12h 40m this month · 9 streams · longest 4h 12m · 2 dropped`. `‹ ›` steps a month at a time (one request each), `today` comes back, `show everything` shows the blocks under 60s.
 - the person card (`PersonCard.tsx`): nothing. it said `last live 3 hr ago` once, from the profile read it makes when it shows (`last_live` is still on `GET /api/streamers/:name`, `follows.md`), and is the face, the name and the status now. not the strip, and not the usual line: open question 5.

@@ -18,17 +18,17 @@ flowchart LR
 
 - **postgres, yes.** a post is the record: it has to survive a restart, be paged backwards for years, and be joined to the author's row for the name as it is *now*. that is a table. redis carries the fact that a post happened, never the posts (`status.md`'s rule: redis has no volume).
 - **one table, yes.** `posts`. a reply is a row in it with `reply_to` set. a repost or a quote, when wanted, is a row with one more pointer; no table. the one thing that does not fit in it is a **like**: who liked what is an edge, `follows`' shape exactly, and an edge is its own table. so: one table for the posts, and a second the day there are hearts. the ddl below has both, the second marked optional.
-- **the websocket, yes, and the shape is already built.** the api writes the row, then puts one fact on the `events` stream (`presence::publish`, `presence.rs:159`); the gateway's tail (`events.rs:590`) routes each entry to the sockets that care (`deliver`, `events.rs:407`). a post is one more `type`. the two choices to make are *what the fact carries* (the whole post, below) and *who gets it* (the author's followers, below), and the second one is the half of `follows.md` not built yet.
+- **the websocket, yes, and the shape is already built.** the api writes the row, then puts one fact on the `events` stream (`presence::publish`, `presence.rs`); the gateway's tail (`events.rs`) routes each entry to the sockets that care (`deliver`, `events.rs`). a post is one more `type`. the two choices to make are *what the fact carries* (the whole post, below) and *who gets it* (the author's followers, below), and the second one is the half of `follows.md` not built yet.
 
 ## the rules
 
 - a post is a **login's**. `follows.md`'s reason: it needs an id with a person behind it, and a free nick is anyone's. the author is `streamers.id` (`ids.md`), never the name: a rename keeps the posts, and every read joins the name back.
-- the text: `clean_text` (`chat.rs:678`, the chat line's cleaning), then 1 to **500** characters, the chat's cap, one number for one kind of thing people type. with a picture the text may be empty.
+- the text: `clean_text` (`chat.rs`, the chat line's cleaning), then 1 to **500** characters, the chat's cap, one number for one kind of thing people type. with a picture the text may be empty.
 - the picture: **one** jpeg, the way the profile has one. the page resizes to 1280 on the long side at quality 0.8 and the api takes at most **1 MB** (`MAX_OFFLINE_BYTES`, the offline picture's ceiling; `jpeg_body` checks it the same way). it lives in the bucket at `posts/<id>.jpg`. a post's id is never reused and a post is never edited, so that key is immutable and caches forever.
 - a reply points at a **top-level post**. replying to a reply replies to its post (instagram's comments, not twitter's tree): a thread is one range of one index, and a delete is one level deep. the tree is an open question below.
 - no edits. delete and post again, the groups' rule.
 - the author deletes a post, or an admin (`ADMIN_NAMES`). a deleted post takes its replies and its likes with it (`ON DELETE CASCADE`) and its jpeg out of the bucket.
-- **60 posts an hour** per login (`auth::bump`, `auth.rs:245`, the follow churn's shape): a person, not a script. one post is one row, maybe one object, and one `XADD` that wakes every gateway process.
+- **60 posts an hour** per login (`auth::bump`, `auth.rs`, the follow churn's shape): a person, not a script. one post is one row, maybe one object, and one `XADD` that wakes every gateway process.
 - a reply counts as a post for the hour, and is told to the post's author.
 - a free name's page shows no posts and no composer: a free name cannot post.
 - **no counter columns.** `replies` and `likes` on a post are `count(*)` over an index, `follows.md`'s argument. the day one post has a million likes and the number is on every page, a counter kept in the same transaction is the fix. not before.
@@ -102,7 +102,7 @@ SELECT id FROM posts WHERE (id = $1 OR reply_to = $1) AND image_at IS NOT NULL;
 DELETE FROM posts WHERE id = $1 AND (author_id = $2 OR $3) RETURNING reply_to;   -- $3: the asking login is an admin
 ```
 
-a picture that does not reach the bucket deletes the row and answers 500, `put_thumb`'s shape (`profile.rs:465`): the frame has not gone out yet, so nobody saw a post that is not there. the fact goes to redis only after the row and, if any, the object are both down.
+a picture that does not reach the bucket deletes the row and answers 500, `put_thumb`'s shape (`profile.rs`): the frame has not gone out yet, so nobody saw a post that is not there. the fact goes to redis only after the row and, if any, the object are both down.
 
 ## the push
 
@@ -133,7 +133,7 @@ sequenceDiagram
 ```
 
 - **the fact is the post.** `XADD events MAXLEN ~ 1000 * type post name alice id 123 text <text> at <ms> image <version> reply_to <id> to <parent's author>` (`image`, `reply_to` and `to` absent when there are none). the alternative, an id alone and the page fetches, is one `GET /api/posts/123` from every connected follower at the same instant: a thundering herd the api made for itself, for a frame that is at most 2 KB. the chat does it this way, the line rides the stream; so does this. the stream keeps the last thousand entries (`EVENTS_KEEP`), two megabytes at the worst; it is a bus, not the store.
-- **who gets it.** the union of three sets in the registry (`events.rs:106`), each socket once: `followers[alice]`, `watchers[alice]` (whoever has alice's page open: it already sends `watch alice`), and `own[alice]` (alice's other tabs and her phone, the chat's rule: the sender sees its own post come back through the server like everyone else, so two devices agree with no side channel). a `post` for a name you neither follow, nor watch, nor are, never arrives. for a reply, `own[<to>]` too: the author of the post is told someone answered, on every device.
+- **who gets it.** the union of three sets in the registry (`events.rs`), each socket once: `followers[alice]`, `watchers[alice]` (whoever has alice's page open: it already sends `watch alice`), and `own[alice]` (alice's other tabs and her phone, the chat's rule: the sender sees its own post come back through the server like everyone else, so two devices agree with no side channel). a `post` for a name you neither follow, nor watch, nor are, never arrives. for a reply, `own[<to>]` too: the author of the post is told someone answered, on every device.
 - **`followers`** is the map `follows.md` plans and has not built: filled at hello from one `SELECT` over `follows` for a login, kept current by the `follow` fact, re-keyed by `renamed`. the live toast and this frame are the two things it is for; whichever ships first builds it, about 90 lines in `events.rs`, and the second gets it free. without it, only `watchers` and `own` get posts, which is alice's page and alice: a fine first step, and the feed still fills by http.
 - **delete** is `type unpost name alice id 123` to the same union; a page that shows the id drops it, and a thread page showing its replies drops those too (they are gone with it).
 - **replay.** the tail starts ten seconds back after a restart (`REPLAY_MS`), so a frame may come twice; the page keys rows by `id` and a second one is nothing, the toast's `since` rule. a frame can also land before the page's first `GET /api/feed` has answered; the page merges by id, so the order comes out right either way.

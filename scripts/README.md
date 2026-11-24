@@ -14,4 +14,4 @@ run these from the repo root.
 
 `manage.py` is not invoked on its own. it writes nothing: every sql query is in a transaction that is rolled back.
 
-there is no reset script. to wipe dev data, see the restart runbook in the project context doc, or: `docker compose down -v`, delete `.seeded-users` `.seeded-groups` `.models` `.deployed`, then `./scripts/deploy.sh`.
+there is no reset script. to wipe dev data: `docker compose down -v`, delete `.seeded-users` `.seeded-groups` `.models` `.deployed`, then `./scripts/deploy.sh`.

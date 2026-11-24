@@ -58,7 +58,7 @@ it helps the http side, not the video:
 ## code
 
 - `video/src/main.rs`: `Room.viewers`, `viewers_tx`, `Hub::add_viewer` (the caps), `remove_viewer`, `viewer_counts`, `media_ip`, `tell_viewers`, the `connected` notify in `new_peer`, `GET /viewers`. `X-Forwarded-For` from caddy is the fallback when ICE gives no address. previews: `In.preview`, `Room.previews`, `Hub::add_preview` (its cap), `remove_preview`.
-- `api/src/main.rs`: `video_viewers`, `viewers` in `list_streams`.
+- `api/src/main.rs`: `video_viewers`. `api/src/home.rs` (`api home`, the stream list): `viewers` on each card, from `video_viewers`.
 - `frontend`: `viewersOf` (`relay.ts`), `watchViewersAtom`, `liveViewersAtom`, `ViewerCount.tsx`, the home card chip, `#viewers` on watch and live (`data-viewers` for tests).
 
 ## not here
