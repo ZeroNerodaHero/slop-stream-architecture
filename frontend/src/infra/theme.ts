@@ -92,9 +92,55 @@ export const MIDNIGHT: Palette = {
   decrease: [255, 92, 84]
 };
 
-export const PRESETS = { dark: DARK, light: LIGHT, paper: PAPER, midnight: MIDNIGHT } as const;
+export const BSOD: Palette = {
+  background: [0, 0, 170],
+  backgroundSecondary: [0, 0, 140],
+  backgroundTertiary: [0, 0, 120],
+  textPrimary: [255, 255, 255],
+  textSecondary: [208, 208, 236],
+  textTertiary: [170, 170, 255],
+  primaryColor: [255, 255, 85],
+  primaryColorHover: [255, 255, 170],
+  primaryStroke: [85, 85, 255],
+  secondaryStroke: [170, 170, 255],
+  increase: [85, 255, 85],
+  decrease: [255, 120, 120]
+};
+
+export const YOTSUBA: Palette = {
+  background: [255, 255, 238],
+  backgroundSecondary: [240, 224, 214],
+  backgroundTertiary: [232, 210, 198],
+  textPrimary: [128, 0, 0],
+  textSecondary: [122, 40, 30],
+  textTertiary: [132, 70, 58],
+  primaryColor: [0, 0, 238],
+  primaryColorHover: [221, 0, 0],
+  primaryStroke: [217, 191, 183],
+  secondaryStroke: [184, 146, 136],
+  increase: [17, 119, 67],
+  decrease: [204, 17, 5]
+};
+
+export const STAWBURY: Palette = {
+  background: [255, 244, 249],
+  backgroundSecondary: [253, 230, 241],
+  backgroundTertiary: [249, 214, 234],
+  textPrimary: [74, 28, 58],
+  textSecondary: [118, 58, 98],
+  textTertiary: [134, 78, 114],
+  primaryColor: [201, 34, 113],
+  primaryColorHover: [168, 22, 92],
+  primaryStroke: [242, 196, 222],
+  secondaryStroke: [196, 168, 232],
+  increase: [18, 122, 84],
+  decrease: [200, 28, 60]
+};
+
+export const PRESETS = { dark: DARK, light: LIGHT, paper: PAPER, midnight: MIDNIGHT, bsod: BSOD, yotsuba: YOTSUBA, stawbury: STAWBURY } as const;
 export type PresetName = keyof typeof PRESETS;
 export const PRESET_NAMES = Object.keys(PRESETS) as PresetName[];
+export const PRESET_LABELS: Partial<Record<PresetName, string>> = { bsod: 'BSOD' };
 
 const WHITE: RGB = [255, 255, 255];
 const BLACK: RGB = [0, 0, 0];
