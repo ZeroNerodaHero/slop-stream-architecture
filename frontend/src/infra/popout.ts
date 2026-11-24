@@ -31,9 +31,9 @@ export function onTabLeft(leave: (asked: boolean) => void): () => void {
 
 export async function openPopout(width: number, height: number, onClose: (win: Window) => void): Promise<Window> {
   const api = window.documentPictureInPicture;
-  if (!api) throw new Error('no document picture in picture here');
+  if (!api) throw new Error('browser does not support pic in pic');
   const win = await api.requestWindow({ width, height });
-  if (win.closed) throw new Error('the window closed as it opened');
+  if (win.closed) throw new Error('failed to open window');
   const doc = win.document;
   for (const sheet of document.querySelectorAll('link[rel="stylesheet"], style')) doc.head.appendChild(sheet.cloneNode(true));
   const root = doc.documentElement;
