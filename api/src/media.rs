@@ -9,7 +9,6 @@ use crate::ApiError;
 pub(crate) const PUBLIC_CACHE: &str = "public, max-age=86400";
 pub(crate) const PRIVATE_CACHE: &str = "private, no-store";
 pub(crate) const VERSIONED_CACHE: &str = "public, max-age=31536000, immutable";
-pub(crate) const IMMUTABLE_CACHE: &str = "public, max-age=31536000, s-maxage=31536000, immutable";
 
 pub(crate) fn is_versioned(query: Option<&str>) -> bool {
     query.is_some_and(|q| q.split('&').any(|pair| pair.strip_prefix("v=").is_some_and(|v| !v.is_empty())))
@@ -167,12 +166,8 @@ pub(crate) fn refused(access: &Access) -> Option<ApiError> {
 }
 
 pub(crate) fn headers(out: &mut HeaderMap, public: bool) {
-    headers_cached(out, public, PUBLIC_CACHE);
-}
-
-pub(crate) fn headers_cached(out: &mut HeaderMap, public: bool, cache: &'static str) {
     out.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    out.insert(header::CACHE_CONTROL, HeaderValue::from_static(if public { cache } else { PRIVATE_CACHE }));
+    out.insert(header::CACHE_CONTROL, HeaderValue::from_static(if public { PUBLIC_CACHE } else { PRIVATE_CACHE }));
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -213,10 +208,6 @@ mod tests {
         assert_eq!(h[header::CACHE_CONTROL], PRIVATE_CACHE);
         headers(&mut h, true);
         assert_eq!(h[header::CACHE_CONTROL], PUBLIC_CACHE);
-        headers_cached(&mut h, true, IMMUTABLE_CACHE);
-        assert_eq!(h[header::CACHE_CONTROL], "public, max-age=31536000, s-maxage=31536000, immutable");
-        headers_cached(&mut h, false, IMMUTABLE_CACHE);
-        assert_eq!(h[header::CACHE_CONTROL], PRIVATE_CACHE);
     }
 
     async fn upload(pool: &PgPool, kind: Kind, by: Uuid) -> Uuid {

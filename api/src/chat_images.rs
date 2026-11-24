@@ -131,7 +131,7 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: 
     };
     let mut out = HeaderMap::new();
     out.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")));
-    media::headers_cached(&mut out, access == media::Access::Public, media::IMMUTABLE_CACHE);
+    media::headers(&mut out, access == media::Access::Public);
     Ok((out, bytes).into_response())
 }
 
