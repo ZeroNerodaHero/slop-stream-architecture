@@ -1,6 +1,6 @@
 # slop-stream-architecture
 
-one computer. you open its ip. one person goes live. other people watch.
+one computer. you open its ip. one person goes live. other people watch like fucking cuck lamo
 
 this is a live-stream site for a single machine: a rust api, a rust webrtc box that copies packets, postgres, redis, a local s3, and a react front end behind caddy. accounts are optional. the long docs live in [`docs/`](docs/README.md). start with [`docs/overview.md`](docs/overview.md). the contract is [`docs/spec.md`](docs/spec.md).
 
