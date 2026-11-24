@@ -272,12 +272,13 @@ async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(Value::Array(list.into_iter().map(|(_, _, v)| v).collect())))
 }
 
-type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>, bool);
+type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>, i64, bool);
 
 async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let rows: Vec<RecentRow> = sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at, ",
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at,
+                (SELECT count(*) FROM follows f WHERE f.followed_id = s.id), ",
         crate::oauth::linked_sql!("s"),
         " FROM (
              SELECT s.id, max(se.ended_at) AS ended_at
@@ -296,12 +297,12 @@ async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
     let words = words(&s, &people).await?;
-    let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at, oauth_verified)| {
+    let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at, followers, oauth_verified)| {
         let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
         if live {
             return None;
         }
-        Some(json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "presence": word, "following": following, "ended_at": ended_at }))
+        Some(json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "presence": word, "following": following, "ended_at": ended_at, "followers": followers }))
     });
     Ok(Json(Value::Array(out.take(RECENT_LIMIT).collect())))
 }

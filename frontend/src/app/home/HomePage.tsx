@@ -1,3 +1,4 @@
+import { RiTimeLine, RiUserLine } from '@remixicon/react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -12,6 +13,7 @@ import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStre
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
+import { Face as PersonFace } from '@/shared-components/Face';
 import { Badge } from '@/shared-components/Badge';
 import { GroupSquare } from '@/shared-components/GroupSquare';
 import { Button, buttonClassName } from '@/shared-components/Button';
@@ -19,12 +21,14 @@ import { FollowButton } from '@/shared-components/FollowButton';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { PersonRow } from '@/shared-components/PersonRow';
+import { PersonRow, Who } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { compactCount } from '@/utils/count';
 import { ago, since } from '@/utils/since';
 
 const PEOPLE_POLL_MS = 10_000;
@@ -332,11 +336,12 @@ function People() {
 
 function RecentCard({ person: p, now }: { person: Recent; now: number }) {
   const peek = usePeek(PEEK_MS);
+  const to = `/watch/${encodeURIComponent(p.name)}`;
   return (
     <article
       id={`recent-${p.name}`}
       data-presence={p.presence}
-      className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}
+      className={cn(CARD_LINK, 'flex items-center gap-2.5 p-2.5')}
       onPointerEnter={(e) => peek.show(e, e.currentTarget)}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onPointerDown={(e) => {
@@ -348,22 +353,43 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
       onBlur={peek.blur}
       onKeyDown={peek.keyDown}
     >
-      <PersonRow
-        id={`recent-link-${p.name}`}
-        name={p.name}
-        verified={p.verified}
-        oauthVerified={p.oauth_verified}
-        avatar={p.avatar}
-        bio={p.bio}
-        presence={p.presence}
-        size="card"
-        note={
-          <span id={`recent-when-${p.name}`} title={new Date(p.ended_at).toLocaleString()}>
-            last live {ago(p.ended_at, now)}
-          </span>
-        }
-      />
-      <FollowButton id={`recent-follow-${p.name}`} name={p.name} small className="self-start" />
+      <Link to={to} tabIndex={-1} aria-hidden className="relative flex shrink-0">
+        <PersonFace name={p.name} version={p.avatar} className="h-10 w-10 text-base" />
+        <PresenceSquare status={p.presence} className="border-backgroundSecondary" />
+      </Link>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          <Link
+            id={`recent-link-${p.name}`}
+            to={to}
+            className="flex min-w-0 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+          >
+            <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
+          </Link>
+          <span className="flex-1" />
+          <FollowButton id={`recent-follow-${p.name}`} name={p.name} small className="shrink-0" />
+        </div>
+        <div className="flex items-center gap-2 text-xs text-textTertiary">
+          <Tooltip content={new Date(p.ended_at).toLocaleString()}>
+            <span id={`recent-when-${p.name}`} className="flex items-center gap-1 whitespace-nowrap">
+              <RiTimeLine aria-hidden size={12} />
+              {ago(p.ended_at, now)}
+            </span>
+          </Tooltip>
+          <span className="flex-1" />
+          <Tooltip content={`${p.followers} ${p.followers === 1 ? 'follower' : 'followers'}`}>
+            <span
+              id={`recent-followers-${p.name}`}
+              role="img"
+              aria-label={`${p.followers} ${p.followers === 1 ? 'follower' : 'followers'}`}
+              className="flex items-center gap-1 tabular-nums"
+            >
+              <RiUserLine aria-hidden size={12} />
+              {compactCount(p.followers)}
+            </span>
+          </Tooltip>
+        </div>
+      </div>
       {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} hold={peek.hold} />}
     </article>
   );
