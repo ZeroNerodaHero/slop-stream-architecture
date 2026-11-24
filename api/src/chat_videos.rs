@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -122,7 +122,7 @@ fn too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "video too big. 10 mb at most")
 }
 
-async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
+async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, RawQuery(raw): RawQuery, headers: HeaderMap) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
     };
@@ -134,18 +134,20 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, hea
         return Err(no);
     }
     #[allow(clippy::type_complexity)]
-    let row: Option<(String, i32, Option<Uuid>, bool, bool, Option<bool>)> = sqlx::query_as(
-        "SELECT v.mime, v.bytes, v.created_by, COALESCE(p.nsfw, false), v.posted_kind IS NOT DISTINCT FROM 'group',
+    let row: Option<(String, i32, Option<Uuid>, bool, bool, bool, Option<bool>)> = sqlx::query_as(
+        "SELECT v.mime, v.bytes, v.created_by, COALESCE(p.nsfw, false), COALESCE(p.graphic, false), v.posted_kind IS NOT DISTINCT FROM 'group',
                 (SELECT g.adult_content FROM groups g WHERE g.name = v.posted_group)
          FROM chat_videos v LEFT JOIN chat_images p ON p.id = v.poster WHERE v.id = $1",
     )
     .bind(id)
     .fetch_optional(&s.db)
     .await?;
-    let Some((mime, len, by, nsfw, in_group, adult_now)) = row else {
+    let Some((mime, len, by, nsfw, graphic, in_group, adult_now)) = row else {
         return Err(media::missing(&s.db, Kind::Video, id).await);
     };
-    let exempt = viewer.is_some_and(|v| by == Some(v) || s.admins.iter().any(|a| a.id == v));
+    let uploader = viewer.is_some() && by == viewer;
+    let site_admin = viewer.is_some_and(|v| s.admins.iter().any(|a| a.id == v));
+    let exempt = uploader || site_admin;
     if crate::moderate::hidden(nsfw, in_group, adult_now.unwrap_or(false), exempt) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, crate::moderate::HIDDEN));
     }
@@ -154,7 +156,20 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, hea
     let mut out = HeaderMap::new();
     out.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")));
     out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    media::headers(&mut out, access == media::Access::Public);
+    media::headers(
+        &mut out,
+        media::CacheFacts {
+            access_public: access == media::Access::Public,
+            uploader,
+            site_admin,
+            nsfw,
+            graphic,
+            shown: raw.as_deref().is_some_and(|q| q.split('&').any(|pair| pair == "show=1")),
+            in_group,
+            adult_context: adult_now.unwrap_or(false),
+            extra_query: raw.is_some(),
+        },
+    );
     let asked = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     let range = match range_of(asked, len) {
         Ok(range) => range,
@@ -204,7 +219,7 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     media::remember_removed(&s.db, Kind::Video, id, me.id).await?;
     sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await?;
     if posted.as_deref() == Some("stream") {
-        crate::cf_purge::purge(vec![format!("/api/chat-videos/{id}")]);
+        media::purge(Kind::Video, id);
     }
     if let Some(poster) = poster {
         let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(poster).fetch_optional(&s.db).await?;

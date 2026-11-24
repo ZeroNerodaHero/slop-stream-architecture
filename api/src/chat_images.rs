@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -98,7 +98,7 @@ pub(crate) async fn shown_facts(db: &sqlx::PgPool, id: Uuid) -> Result<Option<Sh
     .await
 }
 
-async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
+async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, RawQuery(raw): RawQuery, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     };
@@ -131,7 +131,20 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: 
     };
     let mut out = HeaderMap::new();
     out.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")));
-    media::headers(&mut out, access == media::Access::Public);
+    media::headers(
+        &mut out,
+        media::CacheFacts {
+            access_public: access == media::Access::Public,
+            uploader,
+            site_admin,
+            nsfw,
+            graphic,
+            shown,
+            in_group,
+            adult_context: adult_now.unwrap_or(false),
+            extra_query: raw.is_some(),
+        },
+    );
     Ok((out, bytes).into_response())
 }
 
@@ -158,7 +171,7 @@ pub(crate) async fn remove(s: &AppState, me: &crate::auth::Account, id: Uuid, mi
     media::remember_removed(&s.db, Kind::Image, id, me.id).await?;
     sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(id).execute(&s.db).await?;
     if posted.as_deref() == Some("stream") {
-        crate::cf_purge::purge(vec![format!("/api/chat-images/{id}")]);
+        media::purge(Kind::Image, id);
     }
     Ok(())
 }

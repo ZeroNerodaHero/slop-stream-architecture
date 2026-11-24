@@ -9,6 +9,7 @@ use crate::ApiError;
 pub(crate) const PUBLIC_CACHE: &str = "public, max-age=86400";
 pub(crate) const PRIVATE_CACHE: &str = "private, no-store";
 pub(crate) const VERSIONED_CACHE: &str = "public, max-age=31536000, immutable";
+pub(crate) const CHAT_MEDIA_CACHE: &str = "public, max-age=3600, s-maxage=3600";
 
 pub(crate) fn is_versioned(query: Option<&str>) -> bool {
     query.is_some_and(|q| q.split('&').any(|pair| pair.strip_prefix("v=").is_some_and(|v| !v.is_empty())))
@@ -61,6 +62,22 @@ impl Kind {
             Kind::Video => "video",
         }
     }
+
+    fn route(self) -> &'static str {
+        match self {
+            Kind::Image => "chat-images",
+            Kind::Video => "chat-videos",
+        }
+    }
+}
+
+pub(crate) fn purge_paths(kind: Kind, id: Uuid) -> Vec<String> {
+    let base = format!("/api/{}/{id}", kind.route());
+    vec![base.clone(), format!("{base}?show=1")]
+}
+
+pub(crate) fn purge(kind: Kind, id: Uuid) {
+    crate::cf_purge::purge(purge_paths(kind, id));
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -165,9 +182,31 @@ pub(crate) fn refused(access: &Access) -> Option<ApiError> {
     }
 }
 
-pub(crate) fn headers(out: &mut HeaderMap, public: bool) {
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CacheFacts {
+    pub(crate) access_public: bool,
+    pub(crate) uploader: bool,
+    pub(crate) site_admin: bool,
+    pub(crate) nsfw: bool,
+    pub(crate) graphic: bool,
+    pub(crate) shown: bool,
+    pub(crate) in_group: bool,
+    pub(crate) adult_context: bool,
+    pub(crate) extra_query: bool,
+}
+
+pub(crate) fn chat_media_cache(f: CacheFacts) -> &'static str {
+    let private = !f.access_public || f.uploader || f.site_admin || f.nsfw || f.graphic || f.shown || f.in_group || f.adult_context || f.extra_query;
+    if private {
+        PRIVATE_CACHE
+    } else {
+        CHAT_MEDIA_CACHE
+    }
+}
+
+pub(crate) fn headers(out: &mut HeaderMap, facts: CacheFacts) {
     out.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    out.insert(header::CACHE_CONTROL, HeaderValue::from_static(if public { PUBLIC_CACHE } else { PRIVATE_CACHE }));
+    out.insert(header::CACHE_CONTROL, HeaderValue::from_static(chat_media_cache(facts)));
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -203,11 +242,48 @@ mod tests {
     #[test]
     fn media_headers() {
         let mut h = HeaderMap::new();
-        headers(&mut h, false);
+        headers(&mut h, CacheFacts::default());
         assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(h[header::CACHE_CONTROL], PRIVATE_CACHE);
-        headers(&mut h, true);
-        assert_eq!(h[header::CACHE_CONTROL], PUBLIC_CACHE);
+        headers(&mut h, CacheFacts { access_public: true, ..CacheFacts::default() });
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(h[header::CACHE_CONTROL], CHAT_MEDIA_CACHE);
+    }
+
+    #[test]
+    fn only_plain_public_chat_media_is_shared() {
+        let public = CacheFacts { access_public: true, ..CacheFacts::default() };
+        let cases = [
+            ("plain public", public, CHAT_MEDIA_CACHE),
+            ("uploader", CacheFacts { uploader: true, ..public }, PRIVATE_CACHE),
+            ("site admin", CacheFacts { site_admin: true, ..public }, PRIVATE_CACHE),
+            ("nsfw", CacheFacts { nsfw: true, ..public }, PRIVATE_CACHE),
+            ("graphic", CacheFacts { graphic: true, ..public }, PRIVATE_CACHE),
+            ("nsfw shown", CacheFacts { nsfw: true, shown: true, extra_query: true, ..public }, PRIVATE_CACHE),
+            ("shown alone", CacheFacts { shown: true, ..public }, PRIVATE_CACHE),
+            ("not public", CacheFacts { access_public: false, ..public }, PRIVATE_CACHE),
+            ("in a group", CacheFacts { in_group: true, ..public }, PRIVATE_CACHE),
+            ("adult group", CacheFacts { adult_context: true, ..public }, PRIVATE_CACHE),
+            ("a query", CacheFacts { extra_query: true, ..public }, PRIVATE_CACHE),
+        ];
+        for (case, facts, want) in cases {
+            assert_eq!(chat_media_cache(facts), want, "{case}");
+        }
+        assert_eq!(PUBLIC_CACHE, "public, max-age=86400");
+        assert!(!CHAT_MEDIA_CACHE.contains("immutable"));
+    }
+
+    #[test]
+    fn a_take_down_purges_both_ways_of_asking() {
+        let id = Uuid::from_u128(7);
+        assert_eq!(
+            purge_paths(Kind::Image, id),
+            vec![format!("/api/chat-images/{id}"), format!("/api/chat-images/{id}?show=1")]
+        );
+        assert_eq!(
+            purge_paths(Kind::Video, id),
+            vec![format!("/api/chat-videos/{id}"), format!("/api/chat-videos/{id}?show=1")]
+        );
     }
 
     async fn upload(pool: &PgPool, kind: Kind, by: Uuid) -> Uuid {
