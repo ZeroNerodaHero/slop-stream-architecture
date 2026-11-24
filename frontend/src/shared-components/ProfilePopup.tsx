@@ -1,6 +1,6 @@
 import { RiArrowRightLine, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { dummyPage } from '@/infra/about';
@@ -20,6 +20,7 @@ import { cleanSocials } from '@/infra/socials';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
 import { Badge } from '@/shared-components/Badge';
+import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
@@ -50,7 +51,7 @@ export function ProfilePopup() {
   return target ? <ProfileDialog key={target.name} target={target} /> : null;
 }
 
-function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
+function LiveStream({ name, onGo, backdrop }: { name: string; onGo: () => void; backdrop: ReactNode }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
   const ref = useRef<HTMLVideoElement | null>(null);
   const [playingStream, setPlayingStream] = useState<MediaStream | null>(null);
@@ -78,7 +79,8 @@ function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
       aria-label={`watch ${name}`}
       className="relative block border border-primaryStroke outline-none transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue"
     >
-      <StreamStill name={name} className="w-full border-0" />
+      {backdrop}
+      <StreamStill name={name} className={cn('w-full border-0', backdrop !== null && 'bg-transparent')} />
       <video
         ref={ref}
         data-preview={name}
@@ -160,6 +162,9 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const oauthVerified = card?.oauth_verified ?? target.oauth_verified;
   const avatar = card ? card.avatar : target.avatar;
   const offline = card?.offline ?? null;
+  const thumb = card?.thumbs?.[0] !== undefined ? api.streamThumbUrl(name, card.thumbs[0]) : null;
+  const backdrop = thumb !== null || avatar !== null ? <BlurredPicture name={name} version={avatar} src={thumb} /> : null;
+  const picture = live || offline !== null || backdrop !== null;
   const socials = useMemo(() => cleanSocials(card?.socials), [card?.socials]);
   const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
   const page = `/watch/${encodeURIComponent(name)}`;
@@ -296,17 +301,23 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         ) : (
           <>
             {live ? (
-              <LiveStream name={name} onGo={close} />
+              <LiveStream name={name} onGo={close} backdrop={backdrop} />
+            ) : offline !== null ? (
+              <OfflinePicture id="profile-popup-offline" src={api.offlineUrl(name, offline)} className="w-full" />
             ) : (
-              offline !== null && <OfflinePicture id="profile-popup-offline" src={api.offlineUrl(name, offline)} className="w-full" />
+              backdrop !== null && (
+                <span id="profile-popup-backdrop" className="relative block aspect-video w-full overflow-hidden border border-primaryStroke bg-black">
+                  {backdrop}
+                </span>
+              )
             )}
             {!live && card.offline_note && (
-              <p id="profile-popup-offline-note" className={cn('[overflow-wrap:anywhere]', offline !== null && 'mt-3')}>
+              <p id="profile-popup-offline-note" className={cn('[overflow-wrap:anywhere]', picture && 'mt-3')}>
                 {card.offline_note}
               </p>
             )}
 
-            <div id="profile-popup-tabs" className={cn((live || offline !== null || card.offline_note) && 'mt-5')}>
+            <div id="profile-popup-tabs" className={cn((picture || card.offline_note) && 'mt-5')}>
               <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke">
                 {POPUP_TABS.map((t) => {
                   const on = t === tab;
