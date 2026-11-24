@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, OriginalUri, Path, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -122,7 +122,7 @@ fn too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "video too big. 10 mb at most")
 }
 
-async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
+async fn show(State(s): State<AppState>, Me(me): Me, OriginalUri(uri): OriginalUri, Path(id): Path<String>, RawQuery(raw): RawQuery, headers: HeaderMap) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
     };
@@ -134,18 +134,21 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, hea
         return Err(no);
     }
     #[allow(clippy::type_complexity)]
-    let row: Option<(String, i32, Option<Uuid>, bool, bool, Option<bool>)> = sqlx::query_as(
-        "SELECT v.mime, v.bytes, v.created_by, COALESCE(p.nsfw, false), v.posted_kind IS NOT DISTINCT FROM 'group',
+    let row: Option<(String, i32, Option<Uuid>, bool, bool, bool, bool, Option<bool>)> = sqlx::query_as(
+        "SELECT v.mime, v.bytes, v.created_by, p.id IS NOT NULL, COALESCE(p.nsfw, false), COALESCE(p.graphic, false), v.posted_kind IS NOT DISTINCT FROM 'group',
                 (SELECT g.adult_content FROM groups g WHERE g.name = v.posted_group)
          FROM chat_videos v LEFT JOIN chat_images p ON p.id = v.poster WHERE v.id = $1",
     )
     .bind(id)
     .fetch_optional(&s.db)
     .await?;
-    let Some((mime, len, by, nsfw, in_group, adult_now)) = row else {
+    let Some((mime, len, by, poster_present, nsfw, graphic, in_group, adult_now)) = row else {
         return Err(media::missing(&s.db, Kind::Video, id).await);
     };
-    let exempt = viewer.is_some_and(|v| by == Some(v) || s.admins.iter().any(|a| a.id == v));
+    let (nsfw, graphic) = poster_flags(poster_present, nsfw, graphic);
+    let uploader = viewer.is_some() && by == viewer;
+    let site_admin = viewer.is_some_and(|v| s.admins.iter().any(|a| a.id == v));
+    let exempt = uploader || site_admin;
     if crate::moderate::hidden(nsfw, in_group, adult_now.unwrap_or(false), exempt) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, crate::moderate::HIDDEN));
     }
@@ -154,12 +157,27 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, hea
     let mut out = HeaderMap::new();
     out.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")));
     out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    media::headers(&mut out, access == media::Access::Public);
+    media::headers(
+        &mut out,
+        media::CacheFacts {
+            access_public: access == media::Access::Public,
+            uploader,
+            site_admin,
+            nsfw,
+            graphic,
+            shown: raw.as_deref().is_some_and(|q| q.split('&').any(|pair| pair == "show=1")),
+            in_group,
+            adult_context: adult_now.unwrap_or(false),
+            extra_query: raw.is_some(),
+            canonical_path: media::is_canonical_path(Kind::Video, id, uri.path()),
+        },
+    );
     let asked = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     let range = match range_of(asked, len) {
         Ok(range) => range,
         Err(()) => {
             out.insert(header::CONTENT_RANGE, HeaderValue::from_str(&format!("bytes */{len}")).unwrap_or(HeaderValue::from_static("bytes */0")));
+            out.insert(header::CACHE_CONTROL, HeaderValue::from_static(media::PRIVATE_CACHE));
             return Ok((StatusCode::RANGE_NOT_SATISFIABLE, out).into_response());
         }
     };
@@ -197,15 +215,7 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     let Some((mime, poster, posted)) = row else {
         return Err(media::missing(&s.db, Kind::Video, id).await);
     };
-    if let Err(e) = s3::delete(&s.s3, &key_of(id, &mime)).await {
-        log::warn!("{}: take down chat video {id}: {e}", me.name);
-        return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not delete the video"));
-    }
-    media::remember_removed(&s.db, Kind::Video, id, me.id).await?;
-    sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await?;
-    if posted.as_deref() == Some("stream") {
-        crate::cf_purge::purge(vec![format!("/api/chat-videos/{id}")]);
-    }
+    remove_without_poster(&s, &me, id, &mime, posted.as_deref()).await?;
     if let Some(poster) = poster {
         let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(poster).fetch_optional(&s.db).await?;
         if let Some(mime) = mime {
@@ -214,6 +224,23 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     }
     log::info!("{}: took down chat video {id}", me.name);
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn remove_without_poster(s: &AppState, me: &crate::auth::Account, id: Uuid, mime: &str, posted: Option<&str>) -> Result<(), ApiError> {
+    if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
+        log::warn!("{}: take down chat video {id}: {e}", me.name);
+        return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not delete the video"));
+    }
+    media::remember_removed(&s.db, Kind::Video, id, me.id).await?;
+    sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await?;
+    if posted == Some("stream") {
+        media::purge(Kind::Video, id);
+    }
+    Ok(())
+}
+
+fn poster_flags(poster_present: bool, nsfw: bool, graphic: bool) -> (bool, bool) {
+    (!poster_present || nsfw, !poster_present || graphic)
 }
 
 fn range_of(asked: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
@@ -1046,6 +1073,21 @@ mod tests {
         let started = Instant::now();
         assert!(matches!(run(&mut cmd, None, Duration::from_millis(200)), Err(RunError::TimedOut)));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_video_whose_poster_is_gone_counts_as_nsfw_and_graphic() {
+        for (present, nsfw, graphic, want) in [
+            (true, false, false, (false, false)),
+            (true, true, false, (true, false)),
+            (true, false, true, (false, true)),
+            (true, true, true, (true, true)),
+            (false, false, false, (true, true)),
+            (false, true, false, (true, true)),
+            (false, false, true, (true, true)),
+        ] {
+            assert_eq!(poster_flags(present, nsfw, graphic), want, "{present} {nsfw} {graphic}");
+        }
     }
 
     #[test]
