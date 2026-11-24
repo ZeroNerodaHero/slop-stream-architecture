@@ -272,6 +272,8 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                 <img
                   src={srcOf(id)}
                   alt=""
+                  loading="lazy"
+                  decoding="async"
                   onError={() => failed(id)}
                   className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')}
                 />
