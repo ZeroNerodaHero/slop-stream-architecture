@@ -23,6 +23,8 @@ flowchart LR
   tabs --> toast["alice went live · watch"]
 ```
 
+**the design, kept for its reasons.** the sections below were written before the build. the names in them (files, functions, atoms, fields, routes) are the ones planned then; some shipped under other names and some were never made, and line numbers were dropped because they drift. what is in the repo is the code; check a name there before relying on it.
+
 ## the short answer
 
 yes: a table of edges. one row per `(follower, followed)` in postgres, both of them the row ids of `ids.md` (never the names: a name can change, an edge must not care), the primary key reading one way and a second index reading the other. that is a directed graph stored as an adjacency list, and it is how every site with follows stores them until the day the table does not fit on one box, which this one will not see.
@@ -47,7 +49,7 @@ yes: a table of edges. one row per `(follower, followed)` in postgres, both of t
 - follow and unfollow are idempotent: a second follow is 204 and writes nothing, not even the fact.
 - **counts are public, lists are yours.** `followers` (the number) is on every profile read, for anybody. who exactly follows a name, and who a name follows, is shown to that login alone: `groups.md`'s rule for memberships (`mine`, never the list).
 - the choice travels in redis as a fact, `follow billy alice 1|0`, never as a list. the gateway and every other tab learn it from the stream, the way `status` travels.
-- churn: 120 follows and unfollows per login per hour (`auth::bump`, `auth.rs:245`, the login limiter's shape). a follow is one row and one `XADD`, and the `XADD` wakes every gateway process; a loop on one button must not.
+- churn: 120 follows and unfollows per login per hour (`auth::bump`, `auth.rs`, the login limiter's shape). a follow is one row and one `XADD`, and the `XADD` wakes every gateway process; a loop on one button must not.
 
 ## the graph, in postgres
 
@@ -62,7 +64,7 @@ CREATE TABLE IF NOT EXISTS follows (
 CREATE INDEX IF NOT EXISTS follows_followed_idx ON follows (followed_id, followed_at DESC);  -- who follows alice, newest first
 ```
 
-after `stream_thumbs` in `SCHEMA` (`main.rs:76`), applied by the api at boot to an empty database; the gateway reads a table the api made, as with `status`. it wants `streamers.id` (`ids.md`, phase 1) and nothing else from there. two indexes, one per direction, each answering its question from the index alone; the names come from one join on `streamers` when a list is shown, and are whatever the names are *now*:
+after `stream_thumbs` in `SCHEMA` (`main.rs`), applied by the api at boot to an empty database; the gateway reads a table the api made, as with `status`. it wants `streamers.id` (`ids.md`, phase 1) and nothing else from there. two indexes, one per direction, each answering its question from the index alone; the names come from one join on `streamers` when a list is shown, and are whatever the names are *now*:
 
 | question | query | reads |
 |---|---|---|
@@ -70,10 +72,10 @@ after `stream_thumbs` in `SCHEMA` (`main.rs:76`), applied by the api at boot to 
 | who does billy follow | `SELECT s.name, f.followed_at FROM follows f JOIN streamers s ON s.id = f.followed_id WHERE f.follower_id = $1 ORDER BY f.followed_at DESC` | the primary key, one range, a row per name |
 | how many follow alice | `SELECT count(*) FROM follows WHERE followed_id = $1` | `follows_followed_idx`, index only |
 | who follows alice, newest first | `SELECT s.name, f.followed_at FROM follows f JOIN streamers s ON s.id = f.follower_id WHERE f.followed_id = $1 ORDER BY f.followed_at DESC LIMIT 100` | `follows_followed_idx`, one range, a row per name |
-| which of these live names does billy follow | `LEFT JOIN follows f ON f.follower_id = $2 AND f.followed_id = st.id` in `list_streams` (`main.rs:551`, which already joins `streamers st`) | the primary key, one probe per live name |
+| which of these live names does billy follow | `LEFT JOIN follows f ON f.follower_id = $2 AND f.followed_id = st.id` in `list_streams` (`main.rs`, which already joins `streamers st`) | the primary key, one probe per live name |
 | billy's mutuals | `SELECT a.followed_id FROM follows a JOIN follows b ON b.follower_id = a.followed_id AND b.followed_id = a.follower_id WHERE a.follower_id = $1` | both indexes. `mutual` on `GET /api/following`, the sidebar's friends |
 
-the follow itself takes the groups' `join` shape (`groups.rs:197`): a login, a valid name, not yourself, `EXISTS` first (already following: 204, nothing written), the cap, then one statement that makes the followed name's row if it has none, reads its id, and writes the edge, the way `create` makes a group and its first member in one (`groups.rs:174`):
+the follow itself takes the groups' `join` shape (`groups.rs`): a login, a valid name, not yourself, `EXISTS` first (already following: 204, nothing written), the cap, then one statement that makes the followed name's row if it has none, reads its id, and writes the edge, the way `create` makes a group and its first member in one (`groups.rs`):
 
 ```sql
 WITH named AS (
@@ -116,11 +118,11 @@ sequenceDiagram
   B->>B: not dnd, not on /watch/alice: a toast
 ```
 
-the gateway already pushes `live` and `ended` to a name's **watchers**, the sockets that sent `watch` for it (`events.rs:266`). a follower is a second kind of watcher, one the server knows about without being asked:
+the gateway already pushes `live` and `ended` to a name's **watchers**, the sockets that sent `watch` for it (`events.rs`). a follower is a second kind of watcher, one the server knows about without being asked:
 
-- **the registry** (`events.rs:98`) gains `followers: name → sockets` beside `watchers`, and each socket entry a `following` set beside `watching`. `live` and `ended` go to the union of the two, so a socket that both watches and follows alice gets each frame once.
+- **the registry** (`events.rs`) gains `followers: name → sockets` beside `watchers`, and each socket entry a `following` set beside `watching`. `live` and `ended` go to the union of the two, so a socket that both watches and follows alice gets each frame once.
 - **at hello**, for a login: one `SELECT s.name FROM follows f JOIN streamers s ON s.id = f.followed_id WHERE f.follower_id = $1` (the gateway already asks postgres at hello, `whoami` and `is_claimed`; `whoami` now hands it the id too, `ids.md`), and the two maps are filled with the names as they are at that moment. a guest's socket follows nothing. nothing is recomputed and nothing is pushed: a follow is not a `watch`, and the words of 500 names are not what a page wants on open.
-- **the `follow` fact** on the `events` stream, read by the tail like `status` (`events.rs:358`): for every socket whose name is the follower, add or remove the followed name in both maps, then `{"type":"follow","name":"alice","on":true}` to those sockets and those alone. the sender sees its own click come back through the server like everyone else, the chat's rule, so the phone agrees with the laptop with no side channel. a replayed entry (the ten-second replay on start) sets what is already set.
+- **the `follow` fact** on the `events` stream, read by the tail like `status` (`events.rs`): for every socket whose name is the follower, add or remove the followed name in both maps, then `{"type":"follow","name":"alice","on":true}` to those sockets and those alone. the sender sees its own click come back through the server like everyone else, the chat's rule, so the phone agrees with the laptop with no side channel. a replayed entry (the ten-second replay on start) sets what is already set.
 - **the `renamed` fact** (`ids.md`) re-keys the maps: `followers[billy]` becomes `followers[bobby]`, and every socket's `following` that said `billy` says `bobby`. the row the edges point at did not change; only the word the gateway files it under did. the maps are by name because the facts on the stream are (`live name alice`), and a `live` must find its followers without a lookup.
 - **presence is not pushed** for followed names. the following tab shows each name's word by asking http once when it opens, below; `live` and `ended` still arrive and move the list while it is open.
 
@@ -130,7 +132,7 @@ the frame to a follower is the plain `live` the watch page already knows, not a 
 
 | key | change |
 |---|---|
-| `events` | one more fact: `XADD events MAXLEN ~ 1000 * type follow name billy followed alice on 1` (`0` for unfollow). written by the api after the row, through `presence.rs`'s `publish` (`presence.rs:159`) as `publish_follow` beside `publish_status`. read by the tail. nothing else: no `following:` keys, no `followers:` sets. redis forgets on restart; the gateway reloads from postgres at every hello anyway |
+| `events` | one more fact: `XADD events MAXLEN ~ 1000 * type follow name billy followed alice on 1` (`0` for unfollow). written by the api after the row, through `presence.rs`'s `publish` (`presence.rs`) as `publish_follow` beside `publish_status`. read by the tail. nothing else: no `following:` keys, no `followers:` sets. redis forgets on restart; the gateway reloads from postgres at every hello anyway |
 | `rl:follow:name:<name>` | the churn counter, `auth::bump`, an hour |
 
 ## api
@@ -161,9 +163,9 @@ every route takes a **name** in the path and the pages only ever see names: the 
 ## pages
 
 - **the watch page**: `#follow` at the right end of the row under the picture, the one with `#status` and `#viewers` (`WatchPage.tsx`): the word `follow`, or `following` when you do (`unfollow` on hover and focus), and `#followers` before it, `12 followers`, always shown, `0` included. pressed, it flips at once and the frame confirms; a failed call puts it back with the api's words. for nobody the button opens the user modal on the security tab, the groups tab's way.
-- **home**: the cards a login follows come first, so they are what fills `#featured` (`HomePage.tsx:325`, the first two), and each wears the word `following` after the name in `textSecondary`. the api carries the flag, the page does the ordering; the 3s poll is untouched, and a pushed `live` for a followed name makes the page refetch at once rather than wait for the tick.
-- **the user modal**: a `following` tab between `groups` and `security` in the `you` group (`USER_TABS`, `user-modal-atoms.ts:13`). two lists: `following` (`N following`; the square and the word of each name, `live` in blue first; `unfollow` on each row) and `followers` (`N followers`; `follow back` where not `mutual`, the word `mutual` where it is; `more` for the next 100). the profile tab's card gets the count beside its `✓`. nobody sees `follow people and they show up here` and the pointer to security.
-- **the toast**: `#went-live`, a stack of at most three in the top right, mounted once by the Shell beside `MiniPlayer` and `Inspector` (`router.tsx:25`), the `FRAME` stroke and no shadow like them (the house rule for a floating box). a row per `live` frame for a followed name: the picture, `alice went live`, one `watch` link (a client-side route to `/watch/alice`), `×`. gone after 20s, on `×`, on `watch`, or on its `ended`. not shown when `myPresenceAtom` is `dnd` (the gate `status.md` built it for; home still reorders), when the page already is `/watch/alice`, and for a `live` whose `since` the page has already shown (the tail replays ten seconds on a gateway restart; the same `since` twice is one toast).
+- **home**: the cards a login follows come first, so they are what fills `#featured` (`HomePage.tsx`, the first two), and each wears the word `following` after the name in `textSecondary`. the api carries the flag, the page does the ordering; the 3s poll is untouched, and a pushed `live` for a followed name makes the page refetch at once rather than wait for the tick.
+- **the user modal**: a `following` tab between `groups` and `security` in the `you` group (`USER_TABS`, `user-modal-atoms.ts`). two lists: `following` (`N following`; the square and the word of each name, `live` in blue first; `unfollow` on each row) and `followers` (`N followers`; `follow back` where not `mutual`, the word `mutual` where it is; `more` for the next 100). the profile tab's card gets the count beside its `✓`. nobody sees `follow people and they show up here` and the pointer to security.
+- **the toast**: `#went-live`, a stack of at most three in the top right, mounted once by the Shell beside `MiniPlayer` and `Inspector` (`router.tsx`), the `FRAME` stroke and no shadow like them (the house rule for a floating box). a row per `live` frame for a followed name: the picture, `alice went live`, one `watch` link (a client-side route to `/watch/alice`), `×`. gone after 20s, on `×`, on `watch`, or on its `ended`. not shown when `myPresenceAtom` is `dnd` (the gate `status.md` built it for; home still reorders), when the page already is `/watch/alice`, and for a `live` whose `since` the page has already shown (the tail replays ten seconds on a gateway restart; the same `since` twice is one toast).
 - **atoms**: `follow-atoms.ts`: `followsAtom`, the `Set` of names the login follows, from `GET /api/following` once per page load, `undefined` until it answers, emptied by `forgetMe`, added to and removed from by the `follow` frame; `wentLiveAtom`, the toasts shown. `events.ts`'s dispatch gains the `follow` frame and, for `live` and `ended`, a call into `follow-atoms` beside the one into `watch-atoms`. the follower count on the watch page rides the grant into `watch-atoms`.
 - **no browser `Notification`s.** the toast is in the page; a browser that is closed hears nothing. below.
 
@@ -191,7 +193,7 @@ one row per follow, about a hundred bytes with both indexes. one `XADD` per foll
 
 - needs `ids.md` phase 1 (`streamers.id`) and the `Account` in `Me` from its phase 2 (`me.id` is the follower). it can ship before the rename itself.
 - `api/src/follows.rs`, new: the four routes, `is_following`, `followers_count`, `following_among(ids)` for `list_streams`, the two list queries, the churn counter. about 250 lines.
-- `api/src/main.rs`: the table in `SCHEMA`, the merge, the two fields on `get_streamer` (`main.rs:516`), `watch` (`main.rs:722`) and `list_streams` (`main.rs:540`).
+- `api/src/main.rs`: the table in `SCHEMA`, the merge, the two fields on `get_streamer` (`main.rs`), `watch` (`main.rs`) and `list_streams` (`main.rs`).
 - `api/src/presence.rs`: `publish_follow`. `api/src/events.rs`: the `followers` map and the `following` set, the load at hello, the `follow` fact in the tail, the re-key on `renamed`, the union in the `live`/`ended` push. about 90 lines.
 - `frontend/src/infra/atoms/follow-atoms.ts`, `shared-components/FollowButton.tsx`, `shared-components/WentLive.tsx`, `user-modal/FollowingTab.tsx`; `WatchPage.tsx`, `HomePage.tsx`, `api.ts` (`follow`, `unfollow`, `following`, `followers`, the three fields), `frames.ts` (the `follow` frame), `events.ts` (the dispatch), `user-modal-atoms.ts` (the tab), `router.tsx` (the Shell mounts the toasts). about 400 lines.
 - `test/follows.js`. `docs/README.md`'s line. when it ships: `spec.md`'s api and tests tables, `status.md`'s phase 7 loses its first item, `accounts.md`'s `/events` row gains the `follow` frame.
@@ -199,7 +201,7 @@ one row per follow, about a hundred bytes with both indexes. one `XADD` per foll
 ## not this
 
 - **a graph database, redis sets, an array column, a counter column.** the short answer, above.
-- **a follow as a server-side `watch`.** the following tab would get presence words pushed for free. but `watch` recomputes and pushes a word per name (`events.rs:308`): 500 round trips at every hello, and the recheck (`events.rs:571`) does them again every 30s for every followed name of every connected login. a follower wants `live`, not `online`; `live` is one fact with one writer and no recompute. the words come over http when the list is looked at.
+- **a follow as a server-side `watch`.** the following tab would get presence words pushed for free. but `watch` recomputes and pushes a word per name (`events.rs`): 500 round trips at every hello, and the recheck (`events.rs`) does them again every 30s for every followed name of every connected login. a follower wants `live`, not `online`; `live` is one fact with one writer and no recompute. the words come over http when the list is looked at.
 - **fan-out at go-live from postgres.** on a `live` entry the gateway could `SELECT follower_id FROM follows WHERE followed_id = $1` and push to each: nothing at hello, nothing in the registry. it is a postgres read on the gateway's hot path for every go-live, in every gateway process, and the hello already reads postgres; the registry is where the gateway keeps who wants what. the two are a few lines apart; the one that stays in memory wins.
 - **the follow over the socket.** two writers of the table and a write-failure story on the socket. `status.md`'s argument, unchanged: http writes, the socket tells.
 - **a `friends` table.** two rows already say it. a third table is a cache of a join, and a cache has to be kept right.

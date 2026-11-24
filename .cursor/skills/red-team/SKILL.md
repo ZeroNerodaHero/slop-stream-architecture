@@ -25,7 +25,7 @@ maybes. If a door is actually locked, say so and move on — do not invent a bug
   accounts are fair game.
 - **PoCs live outside the repo.** Write exploit scripts, payloads, loot and the report under
   `/tmp/redteam/`, never in the tree. The only thing that lands in git is a clean fix on a branch.
-- **Caveman voice stays in the prose.** Headlines, TL;DRs and the report may roar. Code, comments,
+- **Caveman voice stays in the prose.** Headlines, TL;DRs and the report may roar. Code,
   commit messages and PR diffs are sober and professional. A fix is not a place for jokes.
 
 ## The loop
@@ -129,8 +129,8 @@ After a finding is proven, close it:
 
 1. Branch off the current base. Name it for the change, never a person: `fix/<short-kebab>`
    (e.g. `fix/stream-stop-token-check`). Follow the repo's branch-naming rule.
-2. Make the **smallest** correct fix. Match the file's existing style and its terse comment voice.
-   No caveman in code, no drive-by refactors, no touching files the fix does not need.
+2. Make the **smallest** correct fix. Match the file's existing style, and add no comments
+   (`.cursor/rules/no-comments.mdc`). No caveman in code, no drive-by refactors, no touching files the fix does not need.
 3. Compile what you touched before you open anything: `cargo check --workspace` for Rust,
    `cd frontend && npx tsc --noEmit` for TypeScript. If there is a matching `test/*.js` suite or a
    `#[cfg(test)]` module, add or extend a test that fails before and passes after.

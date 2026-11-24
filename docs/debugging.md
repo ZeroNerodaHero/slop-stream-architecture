@@ -7,7 +7,7 @@ how you find out something broke, and what. three layers, each cheap.
 - **what is the box doing** — digitalocean's own graphs for cpu, ram, disk and, the one that matters for video, outbound bandwidth.
 - **what is the browser being told** — the messages inspector (`status.md`): a setting in the user modal keeps the frames this browser sends and gets on its three sockets (the events socket, which lives in a shared worker and so never shows in a tab's devtools; the chat; the video setup), the last 1000, with a filter, in a panel that floats over the page. tokens are taken out before anything is kept. nothing leaves the browser: frames are not failures, and the report budget below would go in seconds.
 
-built: the health answer, the error reports, the debug database, `/admin`, the monitor (`api monitor`, its page, its compose file, `./status.sh` for a look from a shell). not built: the monitor box itself (you make it, ten minutes), the watcher bot, grafana. see the end.
+built: the health answer, the error reports, the debug database, `/admin`, the monitor (`api monitor`, its page, its compose file). not built: the monitor box itself (you make it, ten minutes), a shell script for a one-off look at a box (there is no `status.sh` in the repo), the watcher bot, grafana. see the end.
 
 ## the shape
 
@@ -166,7 +166,7 @@ per box in `TARGETS`:
 - `up_secs` going backwards is an event too, "api restarted (had been up 3h 12m)", same for video. a new `build` is "api build d668007 → 5ba44d7"; a new `version` is "release v12 → v13". so a deploy reads as two lines and a crash loop as a column of restarts, with no docker access to the box.
 - its memory is one file, `/data/monitor.json` in the volume, rewritten after every round as a temp file and a rename. a restart or a rebuild keeps everything; a name removed from `TARGETS` is forgotten, a renamed one starts over. `docker compose exec monitor cat /data/monitor.json` is the whole database.
 - the page (`api/src/monitor.html`, built into the binary; no node, no vite, no caddy on this box) polls `GET /api/monitor` every 10s: one card per box with the pill, the 24-hour bar, the health grid (greyed while down, showing the last answer), the events, the error table, a row opening on click. plain html and js, every string through `textContent`: the reports come from strangers' browsers.
-- loopback only, so no login of its own: `ssh -L` is the door. `GET /health` on it answers `{ ok, up_secs, targets, build }` for whoever watches the watcher. `./status.sh https://<ip>` is the same questions asked once from a shell, no box needed.
+- loopback only, so no login of its own: `ssh -L` is the door. `GET /health` on it answers `{ ok, up_secs, targets, build }` for whoever watches the watcher.
 - what it is not: proof from outside that video packets flow (the watcher bot, below), graphs of cpu and bandwidth (the host's own, below), or anything about the box it runs on.
 
 install **digitalocean's monitoring agent** on every droplet (`curl -sSL https://repos.insights.digitalocean.com/install.sh | sudo bash`). free cpu, ram, disk and bandwidth graphs in the console, and alert policies on them. outbound mbit/s is the number that kills a video box, and nothing in the stack measures it yet.
@@ -224,7 +224,7 @@ what changed for it:
 - **the pages split**: groups, a group, go live, admin, log in, sign up and oauth are chunks of their own (`router.tsx`, `React.lazy`). a stream's page loads ~980 kB of js, not 1.1 MB (home and the watch page stay in the main bundle).
 - **brotli 11 built beside every asset** (`frontend/scripts/precompress.mjs`, the Caddyfile's `precompressed br`): the js a stream's page loads is ~250 kB on the wire, not 345 kB.
 
-the rest of a cold load is the box's: the document's ~180ms of tls and ~170ms to its first byte, and after the setup one round trip for the answer and ice plus dtls (~0.5-0.8s). what would cut it further is in `.slop-fixes/firstframe-notes.md`: the boot script sending the setup itself, the grant inside the document, a cdn, more cpu for the box.
+the rest of a cold load is the box's: the document's ~180ms of tls and ~170ms to its first byte, and after the setup one round trip for the answer and ice plus dtls (~0.5-0.8s). what would cut it further is in `.slop-fixes/firstframe-notes.md` (a note beside the worktrees, not in the repo): the boot script sending the setup itself, the grant inside the document, a cdn, more cpu for the box.
 
 ## code
 
@@ -236,6 +236,5 @@ the rest of a cold load is the box's: the document's ~180ms of tls and ~170ms to
 - `docker-compose.yml`, `deploy.sh`, the four dockerfiles (`api/`, `video/`, `video/Dockerfile.dummy`, `frontend/`), `.env.example` — `BUILD`, `ENV_NAME`, `ADMIN_NAMES`, `OPS_TOKEN`, `DEBUG_DATABASE_URL`.
 - `api/src/monitor.rs` — `api monitor`: the rounds, the events, the file, the webhook, `GET /api/monitor`. `api/src/monitor.html` — its page. `api/Cargo.toml` gives reqwest a tls stack for it (rustls with ring, which the tree already had).
 - `monitor/docker-compose.yml`, `monitor/.env.example` — the monitor box.
-- `status.sh` — the shell view of one box: containers, cpu and network, `/api/health`, who is live, the error lines of every container, the error reports. `./status.sh https://<ip>` for a box elsewhere.
 - `test/errors.js` — a report lands, a bad body is 400, the route hides without an admin, health has the new fields, a thrown error in the page shows up in the api log, `/admin` renders. a step it cannot check off-box (no `OPS_TOKEN`) is `SKIP`, not `PASS`; locally it deletes the rows it inserted afterwards.
 - `test/monitor.js` — local only: runs the monitor's compose file as a throwaway project on the stack's network, watching this stack and a dead address. up with the stack's own build, down with a reason after `DOWN_AFTER` rounds, error reports pulled when there is a token (`SKIP` otherwise), the page shows both, a restart keeps the events. removes everything it made.

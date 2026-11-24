@@ -367,8 +367,6 @@ Every fact applies the same way twice.
 
 `const HEAL_EVERY`: Video's word against the table, this often. The facts are the fast lane; this is what makes them true.
 
-`const LIST_CACHE`: The list's answer, for the edge and the browser alike. Only this route's.
-
 `struct Live`: One live stream as the facts describe it. The card's editable parts are not here.
 
 `pub`: `api home`: the table from video's word, the tail, the heal, and the listener.

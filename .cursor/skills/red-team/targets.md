@@ -36,8 +36,8 @@ the browser, the DB keeps its sha256.
 ## 2. Authz & IDOR — `main.rs`, `group_mod.rs`, `dms.rs`
 
 Intended: free name = anyone; claimed name = only its login; held name = nobody (docs/ids.md).
-Stream control is by session **token**, not id (`main.rs` heartbeat comment: "Session ids are
-guessable. The token is not.").
+Stream control is by session **token**, not id: `heartbeat` in `main.rs` only updates a
+`sessions` row whose `id`, `token` and `name` all match, so a guessed session id alone does nothing.
 
 - **`may_act_as` / `may_write`** (`auth.rs`, `main.rs`): the gate for go-live, bio, picture,
   about, socials, presence, name change. Try to write a claimed name without its cookie; try a

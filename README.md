@@ -52,7 +52,7 @@ docker compose down                # stop. add -v to also drop the database
 
 there is no email password reset: `./scripts/deploy.sh passwd <name>` prints a new one.
 
-a full restart runbook (single services, a hard dev wipe, health, logs, a remote box) is not in this file on purpose; see `docs/overview.md`, `docs/debugging.md`, and the comments at the top of `scripts/deploy.sh`.
+a full restart runbook (single services, a hard dev wipe, health, logs, a remote box) is not in this file on purpose; see `docs/overview.md`, `docs/debugging.md`, and `docs/scripts-and-config.md` (what `scripts/deploy.sh` does and its flags).
 
 ## ports
 

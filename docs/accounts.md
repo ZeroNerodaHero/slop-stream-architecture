@@ -162,7 +162,7 @@ changed:
 - **config.** the api's environment (`.env` on the box, passed through `docker-compose.yml`):
 
   ```
-  PUBLIC_URL=https://hardasfuckin.org
+  PUBLIC_URL=https://nodentity.xyz
   GOOGLE_CLIENT_ID=...
   GOOGLE_CLIENT_SECRET=...
   DISCORD_CLIENT_ID=...
@@ -173,8 +173,8 @@ changed:
 
   | provider | console | redirect / callback url |
   | --- | --- | --- |
-  | google | console.cloud.google.com, apis & services, credentials, an oauth client id of type "web application" | `https://hardasfuckin.org/api/oauth/google/callback` |
-  | discord | discord.com/developers/applications, the app, oauth2, redirects ("public client" off) | `https://hardasfuckin.org/api/oauth/discord/callback` |
+  | google | console.cloud.google.com, apis & services, credentials, an oauth client id of type "web application" | `https://nodentity.xyz/api/oauth/google/callback` |
+  | discord | discord.com/developers/applications, the app, oauth2, redirects ("public client" off) | `https://nodentity.xyz/api/oauth/discord/callback` |
 
   a provider without both values, or every provider without `PUBLIC_URL`, is off: no button, its routes answer with a "not set up" page, and the api log says which at boot (never the values). nothing crashes. a changed value needs the api restarted (read once at boot). google refuses a bare ip and plain http (localhost aside), so this needs the domain and its certificate.
 - **scopes.** google `openid email profile` (and `prompt=select_account`), discord `identify email`.

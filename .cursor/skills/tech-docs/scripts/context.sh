@@ -76,7 +76,7 @@ echo "## knobs and boxes: .env.example and docker-compose.yml in the range"
 knobs=$(git diff -U1 "$diffbase" HEAD -- .env.example docker-compose.yml | grep -Ev '^(index|diff --git)' || true)
 ktotal=$(printf '%s\n' "$knobs" | grep -c . || true)
 [ "$ktotal" -gt 0 ] && printf '%s\n' "$knobs" | head -n "$KNOBS_LINES" || echo "(unchanged)"
-[ "$ktotal" -gt "$KNOBS_LINES" ] && echo "(... $((ktotal - KNOBS_LINES)) more lines cut. read .env.example and docker-compose.yml themselves: they are commented)"
+[ "$ktotal" -gt "$KNOBS_LINES" ] && echo "(... $((ktotal - KNOBS_LINES)) more lines cut. read .env.example and docker-compose.yml themselves, and docs/scripts-and-config.md for what each knob means)"
 echo
 
 echo "## new words in docs/*.md in the range (added runs only; the current file is the whole truth, read it for the topics you rewrite)"

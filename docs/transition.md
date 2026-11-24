@@ -1,5 +1,7 @@
 # transition
 
+**history.** this move has happened: the events socket (`api events`) and the home service (`api home`) run today (`status.md`, `spec.md`). the file is the plan as it was written, kept for its reasons and its deploy order; names and line references in it are from then, so check the code before relying on one.
+
 the move, now that the code is in the repo (`status.md`). the pages ask today; after this they are told. every http loop and timer the site runs, which ones the one socket in `status.md` replaces and in what order, what stays http and why, and how each step goes out with old pages and a new server on the wire at the same time. the socket itself (the gateway, the frames, the worker, the keys) is designed in `status.md`. this is the move.
 
 ## why the first draft said no
@@ -29,19 +31,19 @@ every loop the pages run, and the server's own. the two in bold are the ones tha
 
 | who | asks | how often | file |
 |---|---|---|---|
-| **home** | `GET /api/streams` | **every 3s per open tab** (was: now once on arrival, `home-atoms.ts`). the answer was also the page's clock: `since` and the thumbnail bucket moved with it | `HomePage.tsx:14`, `:118` |
-| **watch, not live** | `POST /api/streams/:name/watch` | **every 5s** until `live`, after `ended`, after an api error. the corner player waits the same way | `watch-atoms.ts:17`, `:138` |
-| home, each card | `GET /thumb/<name>.jpg?t=` | every 5s per card per tab | `HomePage.tsx:16` |
-| the publisher | `POST …/heartbeat?session=&token=` | every 15s while live | `publish-atoms.ts:20`, `:216` |
-| the panel | `GET /api/me`, then `GET /api/streamers/:name` | once per page load | `UserPanel.tsx:54`, `auth-atoms.ts:24`, `profile-atoms.ts:66` |
-| admin | `GET /api/health`, `GET /api/errors` | every 10s, admins only | `AdminPage.tsx:9` |
-| the chat | one socket per viewer per room, on `/watch/*` and `/live` only | server ping 30s, idle drop 90s, reconnect 3s flat | `chat.rs:49`, `chat-atoms.ts:29` |
+| **home** | `GET /api/streams` | **every 3s per open tab** (was: now once on arrival, `home-atoms.ts`). the answer was also the page's clock: `since` and the thumbnail bucket moved with it | `HomePage.tsx` |
+| **watch, not live** | `POST /api/streams/:name/watch` | **every 5s** until `live`, after `ended`, after an api error. the corner player waits the same way | `watch-atoms.ts` |
+| home, each card | `GET /thumb/<name>.jpg?t=` | every 5s per card per tab | `HomePage.tsx` |
+| the publisher | `POST …/heartbeat?session=&token=` | every 15s while live | `publish-atoms.ts` |
+| the panel | `GET /api/me`, then `GET /api/streamers/:name` | once per page load | `UserPanel.tsx`, `auth-atoms.ts`, `profile-atoms.ts` |
+| admin | `GET /api/health`, `GET /api/errors` | every 10s, admins only | `AdminPage.tsx` |
+| the chat | one socket per viewer per room, on `/watch/*` and `/live` only | server ping 30s, idle drop 90s, reconnect 3s flat | `chat.rs`, `chat-atoms.ts` |
 | video setup | `/ws`, one frame each way, then held for the stream | per publish, per watch | `relay.ts` |
-| the api | `GET video:7880/live` (`/viewers` for `streams`: the same names with a count each) | on every `streams`, `watch`, `go-live` and sweep | `main.rs:254` |
-| the sweeper | ends open rows nobody holds | every 60s | `main.rs:67` |
+| the api | `GET video:7880/live` (`/viewers` for `streams`: the same names with a count each) | on every `streams`, `watch`, `go-live` and sweep | `main.rs` |
+| the sweeper | ends open rows nobody holds | every 60s | `main.rs` |
 | the monitor box | `/api/health` of every box | its own interval | `monitor.rs` |
 
-what the two bold loops cost: a home tab is 20 requests a minute, each one a `GET /live` to video and a query; a waiting watcher is 12. caddy writes an access-log line per request, which is why the compose file caps the logs (`docker-compose.yml:33`). a hundred home tabs is 33 requests a second, 33 calls to video a second, for a list that changes a few times an hour.
+what the two bold loops cost: a home tab is 20 requests a minute, each one a `GET /live` to video and a query; a waiting watcher is 12. caddy writes an access-log line per request, which is why the compose file caps the logs (`docker-compose.yml`). a hundred home tabs is 33 requests a second, 33 calls to video a second, for a list that changes a few times an hour.
 
 ## the principle
 
@@ -98,11 +100,11 @@ old pages and a new server will be up together: a tab open for a day keeps its b
 |---|---|---|
 | old pages, new api | `presence` is one more field on `watch` and `GET /api/streamers/:name`. ignored | yes |
 | old pages, new gateway | nobody opens `/events`. the gateway idles | yes |
-| new pages, old caddy (no `/events` handle) | the upgrade request falls to the spa catch-all and gets `index.html` with a 200. the browser's `WebSocket` fails, `onclose` fires, and a flat 3s reconnect (the chat's, `chat-atoms.ts:191`) hits caddy every 3s from every browser until the next deploy | **no.** two rules below |
+| new pages, old caddy (no `/events` handle) | the upgrade request falls to the spa catch-all and gets `index.html` with a 200. the browser's `WebSocket` fails, `onclose` fires, and a flat 3s reconnect (the chat's, `chat-atoms.ts`) hits caddy every 3s from every browser until the next deploy | **no.** two rules below |
 | new pages, new caddy, no `events` container (a compose that predates it, or `api events` not up yet) | caddy forwards to `events:4100`, which is not there: a 502, the same failed handshake | **no.** same rules. a full `compose up` carries the service; `./scripts/deploy.sh api` swaps it with the api |
 | old api, new gateway | nothing is `XADD`ed to `events`; the tail reads nothing; presence is `online`/`offline` from the sockets alone, `streaming` from the `live:` key the old api still writes | yes, degraded |
 | a `./scripts/deploy.sh api` with sockets open | the events process sends close 1001 and drains 2s (`events.rs`, the chat the same for its rooms); the api, chat and events containers swap together (`deploy.sh`, `redeploy_service`); every browser reconnects, re-hellos, the tail replays ten seconds | yes. a herd of hellos within 3s, see the numbers |
-| a Caddyfile change | reloaded in place (`deploy.sh:699`); a reload that fails recreates the container and drops every open websocket, the chat's and video's included, and says so | yes, when the reload works |
+| a Caddyfile change | reloaded in place (`deploy.sh`); a reload that fails recreates the container and drops every open websocket, the chat's and video's included, and says so | yes, when the reload works |
 | the first draft's `seen:` string, the socket's `seen:` zset | the same key name, two types: `WRONGTYPE` on the first `ZADD`. nothing of the first draft is in the repo, so there is nothing to migrate. a box that ever ran it: `redis-cli --scan --pattern 'seen:*' \| xargs redis-cli DEL` before the gateway starts | n/a |
 
 the two rules the "no" rows need:
@@ -129,7 +131,7 @@ each step, what proves it, and the way back:
 | step | proves it | back |
 |---|---|---|
 | 1 api | `curl` the three reads say the right word; `redis-cli XRANGE events - +` has a `live`, an `ended`, a `status` entry after a go-live, a stop, a put | the previous tag. the column stays (harmless, `DEFAULT 'online'`); the stream stays (`MAXLEN ~ 1000`, trims itself) |
-| 2 gateway | a raw `wss /events` probe from `page.evaluate` (`chat.js:80` has the shape) gets `me`; `GET http://events:4100/online` from inside the network; every chat test still passes | the previous tag and the handle removed. nothing connects to it yet |
+| 2 gateway | a raw `wss /events` probe from `page.evaluate` (`chat.js` has the shape) gets `me`; `GET http://events:4100/online` from inside the network; every chat test still passes | the previous tag and the handle removed. nothing connects to it yet |
 | 3 pages | `test/presence.js`; the caddy log's count of `POST /api/streams/<name>/watch` lines per waiting watcher falls from 12 a minute to the one on arrival | `./scripts/deploy.sh frontend` at the previous tag. the gateway stays up, idle |
 | 4 inspector | `#inspector-frames` has a `me` row in a browser that has done nothing else | the previous pages |
 | 5 video | a publisher tab killed → `ended` on the stream within ~15s, not ~4 minutes | the previous video image. ends every stream, like any video deploy |
@@ -155,20 +157,20 @@ each step, what proves it, and the way back:
 
 what grows: open sockets on the chat process, one per browser plus the chat's own per room. things to check once, before phase 3 ships to anyone but the tests:
 
-- **file descriptors.** `cat /proc/1/limits` inside the chat container. docker's default `nofile` differs by version (recent daemons ship a soft limit of 1024 unless `default-ulimits` says otherwise), and a rust process does not raise its own soft limit the way go does. 1024 is a thousand browsers, then `accept` fails. `ulimits: nofile: { soft: 65536, hard: 65536 }` on the chat service in compose fixes it; a compose edit is a `compose up -d` that recreates video too (`deploy.sh:596`), so bundle it with the healthcheck change `status.md` already wants in the same full deploy.
-- **the reconnect herd.** a `./scripts/deploy.sh api` closes every socket at once and every browser is back within 3s: n hellos, n `EVAL`s, n `whoami` queries in three seconds. hundreds is nothing; the jitter in rule 2 spreads thousands. the api's pool is 8 connections (`main.rs:685`); the gateway's `whoami` goes through the same pool size, so a `Busy` on hello must be the chat's answer (admitted, identified later), never a refusal.
+- **file descriptors.** `cat /proc/1/limits` inside the chat container. docker's default `nofile` differs by version (recent daemons ship a soft limit of 1024 unless `default-ulimits` says otherwise), and a rust process does not raise its own soft limit the way go does. 1024 is a thousand browsers, then `accept` fails. `ulimits: nofile: { soft: 65536, hard: 65536 }` on the chat service in compose fixes it; a compose edit is a `compose up -d` that recreates video too (`deploy.sh`), so bundle it with the healthcheck change `status.md` already wants in the same full deploy.
+- **the reconnect herd.** a `./scripts/deploy.sh api` closes every socket at once and every browser is back within 3s: n hellos, n `EVAL`s, n `whoami` queries in three seconds. hundreds is nothing; the jitter in rule 2 spreads thousands. the api's pool is 8 connections (`main.rs`); the gateway's `whoami` goes through the same pool size, so a `Busy` on hello must be the chat's answer (admitted, identified later), never a refusal.
 - **memory per socket.** tokio task + buffers + the registry's per-socket "what it was last told" map. measure with `docker stats` at 1, 10, 100 tabs before trusting any estimate.
-- **the per-ip cap.** the chat's 8 sockets per ip per room (`chat.rs:46`) is right for a room. for `/events` it would lock out the ninth browser of a school or an office behind one address. none, or a high one.
+- **the per-ip cap.** the chat's 8 sockets per ip per room (`chat.rs`) is right for a room. for `/events` it would lock out the ninth browser of a school or an office behind one address. none, or a high one.
 
 ## rules
 
 - server first, pages last. a frame type appears in the pages only after the gateway sends it; a gateway may send frames old pages do not know.
-- unknown frame types are dropped by both sides, the way the chat drops anything that is not `say` (`chat.rs:337`). the pages log them to the inspector and nowhere else.
+- unknown frame types are dropped by both sides, the way the chat drops anything that is not `say` (`chat.rs`). the pages log them to the inspector and nowhere else.
 - every push has a pull behind it, and the pull is an event, not a clock. a reconnect re-fetches; an ask that failed is asked again, backing off; the server re-derives every watched word every 30s and pushes it on change, and the home service checks its table against video every 30s. nothing on a page asks on a timer while it is healthy and idle. the socket is the fast lane and http is what makes it true. (the watch page's idle retry and the home poll were kept slowed through the transition, as the next rule says; each was removed once its push was true at the moment it mattered: `live` published when a watcher can connect, the home list held by a service that sees every fact. see `status.md`.)
 - a failed handshake backs off to 60s; a dropped socket retries at 3s. rule 2 above.
 - no loop is removed in the deploy that adds its push. the push ships with the loop slowed; the loop is removed after the logs say it never fired alone, and the pull behind the push is then the reconnect and the failure retry, not a timer.
 - frames carry facts, never derived words (`status.md`). for home that means `live` and `ended` per name, not "the list".
-- the Caddyfile is reloaded, never recreated, while sockets are open. `deploy.sh:702` already warns when it must.
+- the Caddyfile is reloaded, never recreated, while sockets are open. `deploy.sh` already warns when it must.
 - what the site shows a stranger does not change by transport: presence on `GET /api/streamers/:name` is public, `appear offline` comes back only to its owner in `me`, the same as the first draft.
 
 ## not this
@@ -192,7 +194,7 @@ what grows: open sockets on the chat process, one per browser plus the chat's ow
 
 `status.md` lists its own. this file adds:
 
-- `spec.md`: "Home poll interval: 3s. No websockets required for the stream list" (`:250`) when home moves; the watch retry (`:35`, `:266`) in phase 3; the deploy-script section gets the order rule; known limits (`:385`) gets the socket's per-browser line.
+- `spec.md`: "Home poll interval: 3s. No websockets required for the stream list" when home moves; the watch retry in phase 3; the deploy-script section gets the order rule; known limits gets the socket's per-browser line.
 - `architecture-picture.md`: the "one stream, start to end" diagram's `loop every 3s, the home page` when home moves; the url table gains `/events`; the partial-deploy diagram gains "pages after the gateway".
 - `overview.md`: the watch bullet ("if they are not on yet, it keeps checking" becomes "it is told").
 - `chat.md`: "the panel reconnects in 3s" gains the handshake backoff if question 1 goes the other way.
