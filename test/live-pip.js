@@ -1,25 +1,3 @@
-// Picture in picture for the broadcast: leaving the go live page with a stream up keeps it. A
-// plain home click, no button, lands with your stream in a corner of every other page
-// (#live-pip-player: your camera, the status word `live`, how many are watching) while watchers
-// keep getting frames, with no stop call and the name still listed; you can open another
-// stream's page and watch it with your own still going; the corner's chat is your own room with
-// your lines marked; coming back takes the stream over (one go-live in total); the page's
-// button is the same home click; one corner at a time: while yours is there, picture in picture
-// on another stream's page is disabled and says so, and works again once yours is closed; × ends
-// it; leaving with nothing on air (stopped on the page) puts nothing in the corner; a tab closed
-// with the stream in the corner ends it too (the tab-close listener outlives the page); and
-// start with someone else's stream in the corner ends that one (their player goes, their count
-// drops). Two publishers with fake cameras and one watcher.
-// Then the tab left on air, in a browser with a profile of its own and by real tab switches:
-// another tab comes to the front and the player comes out by itself into a window of its own
-// (from the go live page, which shows no player otherwise), your stream playing in it; its
-// chat button opens your room there on the page's own socket, the page's panel standing aside;
-// back in the tab the window is gone and the page has its chat again, a half typed line and
-// all; a click on the name in the window brings the tab back; from another page the corner
-// player goes out, chat and all, and comes back; × in the window asks there and ends the
-// stream; and the page listens for the leave only while on air. SKIP where the browser does
-// not say a tab was left (that is chrome's and edge's automatic picture in picture, https only).
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node live-pip.js
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -28,8 +6,7 @@ const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const ME = 'livepip';
 const OTHER = 'livepip2';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
-const results = []; // 'pass' | 'fail' | 'skip'
-// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
+const results = [];
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
@@ -55,7 +32,6 @@ const text = (p, sel) => p.textContent(sel).then((t) => (t || '').trim());
 const waitText = (p, sel, re, timeout = 20000) =>
   p.waitForFunction(([s, src]) => new RegExp(src, 'i').test(document.querySelector(s)?.textContent || ''), [sel, re.source], { timeout });
 const waitStatus = (p, re, timeout = 20000) => waitText(p, '#status', re, timeout);
-// frames decoded into a <video>, so "playing" means pictures, not just a src
 const frames = (p, sel) => p.$eval(sel, (v) => ({ w: v.videoWidth, frames: v.getVideoPlaybackQuality().totalVideoFrames, paused: v.paused, muted: v.muted }));
 async function framesFlow(p, sel) {
   const a = await frames(p, sel);
@@ -65,7 +41,6 @@ async function framesFlow(p, sel) {
   return `${sel} ${b.w}px wide, ${b.frames - a.frames} frames in 1.5s${b.muted ? ', muted' : ''}`;
 }
 const rect = (p, sel) => p.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
-// the mic meter's level over 1.5s. the fake mic beeps every half second, so the bar jumps and falls back between beeps
 async function micMoves(p, sel) {
   const levels = await p.$eval(sel, async (el) => {
     const out = [];
@@ -82,7 +57,6 @@ async function micMoves(p, sel) {
 }
 const near = (a, b) => Math.abs(a - b) <= 1.5;
 const at = (r) => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}`;
-// press in the middle of an element and pull it by (dx, dy)
 async function drag(p, sel, dx, dy) {
   const r = await rect(p, sel);
   const x = r.left + r.width / 2;
@@ -118,7 +92,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
     return ctx.newPage();
   };
-  // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
   const asNick = (p, name) => p.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), name);
   const goLive = async (p, name) => {
     await asNick(p, name);
@@ -135,7 +108,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
   });
 
   const s = await newStreamer();
-  // every go-live and stop the streamer's tab makes for ME: taking the stream back must not add a go-live
   const calls = { goLive: 0, stop: 0 };
   s.on('request', (r) => {
     if (r.method() !== 'POST') return;
@@ -210,14 +182,12 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     const page = await framesFlow(s, '#video');
     expect((await s.$('#live-pip-player')) !== null, "the corner player is gone on another stream's page");
     expect(/^live$/i.test(await text(s, '#live-pip-status')), `the corner says "${await text(s, '#live-pip-status')}"`);
-    // each panel has its own room: the corner's is yours, the page's is theirs, both at once
     expect(!(await s.$eval('#live-pip-chat', (b) => b.disabled)), "the corner chat button is disabled on another stream's page");
     await s.click('#live-pip-chat');
     await s.waitForSelector(`#live-pip-player #chat[data-room="${ME}"]`, { timeout: 5000 });
     await s.waitForSelector(`#chat-modal #chat[data-room="${OTHER}"]`, { timeout: 5000 });
     await s.click('#live-pip-chat');
     await s.waitForSelector('#live-pip-player #chat', { state: 'detached', timeout: 5000 });
-    // your stream has the corner: theirs cannot go there too, and the button says why
     const label = await s.getAttribute('#pip', 'aria-label');
     expect(await s.$eval('#pip', (b) => b.disabled), 'the picture in picture button is enabled with your own stream in the corner');
     expect(label === 'your stream is in the corner', `the button is named "${label}"`);
@@ -235,7 +205,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.waitForSelector('#live-pip-player #chat-text', { timeout: 10000 });
     expect((await s.$('#live-pip-player #chat-nick')) === null, 'the streamer was asked for a nick in their own room');
     await s.waitForSelector('#live-pip-player #chat[data-phase="open"]', { timeout: 10000 });
-    // the watcher joins the room, then hears the line
     await w.fill('#chat-nick', 'lpviewer');
     await w.click('#chat-join');
     await waitText(w, '#chat-count', /live/, 10000);
@@ -298,7 +267,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.click('#live-pip-confirm-no');
     await s.waitForSelector('#live-pip-confirm', { state: 'detached', timeout: 5000 });
     expect((await s.$('#live-pip-player')) !== null, 'the player went on a no');
-    // escape is a no too
     await s.click('#live-pip-close');
     await s.waitForSelector('#live-pip-confirm[open]', { timeout: 5000 });
     await s.keyboard.press('Escape');
@@ -352,10 +320,9 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.waitForSelector('#live-pip-player', { timeout: 10000 });
     await w.goto(`${BASE}/watch/${ME}`, { waitUntil: 'domcontentloaded' });
     await waitStatus(w, /^watching$/);
-    // a full load, not a route change: pagehide fires, as it does for a closed tab
     await s.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await waitStatus(w, /ended/, 15000);
-    await waitUnlisted(w, ME, 6000); // the beacon told the api; video's own stop call would take longer
+    await waitUnlisted(w, ME, 6000);
     await s.waitForSelector('#list article, #empty', { timeout: 10000 }).catch(() => undefined);
     expect((await s.$('#live-pip-player')) === null, 'the corner player showed after a page load');
     return 'ended and unlisted within 6s; nothing in the corner after the load';
@@ -368,18 +335,14 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.click('#pip');
     await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#pip-player', { timeout: 10000 });
-    // every page here is one address, so the one watching tab is "1 watching" on the streamer's page
     await other.waitForFunction(() => document.querySelector('#viewers')?.dataset.viewers === '1', null, { timeout: 15000 });
-    // a route change, not a load: the watched player comes along to the go live page
     await s.click('#go-live');
     await s.waitForURL('**/live', { timeout: 10000 });
     expect((await s.$('#pip-player')) !== null, 'the watched player went before start');
-    // the name is the nick still: nothing to fill in. (the address changes a render before the page does: no #start yet is a wait, not a throw)
     await s.waitForFunction(() => document.querySelector('#start')?.disabled === false);
     await s.click('#start');
     await s.waitForSelector('#pip-player', { state: 'detached', timeout: 5000 });
     await waitStatus(s, /^live$/);
-    // not hidden, ended: the streamer's count drops
     await other.waitForFunction(() => document.querySelector('#viewers')?.dataset.viewers === '0', null, { timeout: 15000 });
     expect((await s.$('#pip-player')) === null, 'the watched player came back');
     await s.click('#stop');
@@ -391,14 +354,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
   await other.click('#stop').catch(() => undefined);
   await browser.close();
 
-  // The tab left on air: a second act, in a browser with a profile of its own. Chrome tells a
-  // page its tab was left (its automatic picture in picture) only on https, outside incognito,
-  // and to a tab its own capture indicator knows has the camera. The contexts above are
-  // incognito, and --use-fake-ui-for-media-stream answers the camera prompt without that
-  // indicator hearing of it. So: a profile on disk, the camera granted the real way, and in the
-  // profile the answer a person gives the first window's question (automatic
-  // picture-in-picture: allow; while it is unanswered the window takes no presses). The tab
-  // switches are real ones: another page of the same window brought to the front, and back.
   const LEFT = 'livepip3';
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'live-pip-'));
   fs.mkdirSync(path.join(profile, 'Default'), { recursive: true });
@@ -406,19 +361,15 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
   const ctx = await chromium.launchPersistentContext(profile, {
     channel: process.env.BROWSER_CHANNEL || 'chrome',
     headless: true,
-    // a screen with room for the window: the headless one is 800×600, and chrome keeps a window well inside its screen
     args: ['--use-fake-device-for-media-stream', '--ignore-certificate-errors', '--screen-info={1920x1080}'],
     ignoreHTTPSErrors: true,
     permissions: ['camera', 'microphone'],
-    // every page its own size: the player's window is a page too here, and must not be laid out as a 1280×720 one
     viewport: null
   });
-  // the nick, and the handler the page gives the media session for "this tab was left", kept where the test can see whether there is one
   await ctx.addInitScript((name) => {
     try {
       localStorage.setItem('nick', JSON.stringify(name));
     } catch {
-      // a blank tab has no storage
     }
     const set = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
     window.__tabLeft = null;
@@ -428,23 +379,20 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     };
   }, LEFT);
   const t = ctx.pages()[0];
-  // every chat socket the streamer's tab opens for its own room: the chat going out to the window and back must add none
   let chatSockets = 0;
   t.on('websocket', (ws) => {
     if (ws.url().includes(`/chat/${LEFT}`)) chatSockets++;
   });
   const listening = () => t.evaluate(() => typeof window.__tabLeft === 'function');
-  // the player's window is the page's own (same origin, opened by it), so the page reaches into its document
   const waitOut = (sel, timeout = 8000) => t.waitForFunction((q) => !!window.documentPictureInPicture?.window?.document.querySelector(q), sel, { timeout });
   const waitBack = (timeout = 5000) => t.waitForFunction(() => !window.documentPictureInPicture?.window, null, { timeout });
   const outFrames = () => t.evaluate(() => window.documentPictureInPicture.window.document.querySelector('#live-pip-video').getVideoPlaybackQuality().totalVideoFrames);
   const hasLine = (p, words) => p.evaluate((w) => [...document.querySelectorAll('#chat-lines [data-streamer="true"]')].some((el) => el.textContent.includes(w)), words);
-  let away; // the other tab
-  // the window is a page of its own to playwright as well, for real presses in it
+  let away;
   const windowPage = () => ctx.pages().find((p) => p !== t && p !== away);
   let win;
-  let base = 0; // the chat sockets once on air: the nick's, then the streamer's
-  let left = false; // the browser said the tab was left, and the window came
+  let base = 0;
+  let left = false;
   const NO_WINDOW = { skip: 'no window: the browser did not say the tab was left' };
 
   await step(`${LEFT} goes live in a browser with a profile of its own: the page listens for the tab being left only while on air`, async () => {
@@ -501,7 +449,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await win.click('#live-pip-chat');
     await win.waitForSelector('#live-pip-player #chat[data-phase="open"]', { timeout: 8000 });
     expect((await win.$('#chat-nick')) === null, 'the streamer was asked for a nick in their own room');
-    // the page's panel learns of the one in the window a render later: it keeps the room, and draws none of it
     await t
       .waitForFunction(() => document.querySelector('#chat')?.dataset.away === '' && !document.querySelector('#chat-lines'), null, { timeout: 5000 })
       .catch(() => expect(false, "the page's panel still draws the room, beside the window's"));
@@ -543,7 +490,6 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await waitOut('#live-pip-player #chat[data-phase="open"]');
     win = windowPage();
     await win.click('#live-pip-player a.font-semibold');
-    // the link goes to the page the tab is already on, so nothing but the tab coming to the front takes this window
     await waitBack();
     expect(new URL(t.url()).pathname === '/live', `the tab is on ${new URL(t.url()).pathname}`);
     return 'the tab is in front on /live, the window gone';

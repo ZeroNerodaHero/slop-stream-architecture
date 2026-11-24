@@ -1,15 +1,3 @@
-/**
- * Direct messages with friends (docs/dms.md): the threads the login is in, their lines, and
- * the window that shows them (FriendChat.tsx). The api keeps the lines; this module asks for
- * them a page at a time, sends new ones over http, hears them come back on the events socket
- * (to every device of both sides, so a line sent here lands in your other tabs too), and
- * counts what is new. One window, a tab per friend down its side; it hides and shows with
- * its tabs kept, and with no tab shown it offers the friends to pick from. A thread is
- * searched over http too (`searchDm`), and a hit is put in view by loading the pages back to
- * it (`openDmLine`). Same shape as the other atom modules: atoms for what renders, action
- * functions for every transition.
- */
-
 import { atom } from 'jotai';
 
 import { api, type DmLine, messageOf } from '@/infra/api';
@@ -23,7 +11,6 @@ import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
-/** Who a tab is with, as the api or the sidebar had them, and how many of their lines are new. `id` is that account; empty when the tab was opened before the list said which one. A rename does not change it. */
 export interface Dm {
   id: string;
   name: string;
@@ -32,57 +19,40 @@ export interface Dm {
   bio: string;
   presence: Presence;
   unread: number;
-  /** The thread's newest line as `GET /api/dms` listed it: a phone's friend list says it under the name. Absent on a tab opened before the list came. */
   last?: DmLine;
 }
 
-/** Somebody to open a chat with: a sidebar row, a pick from the grid. */
 export type Person = Omit<Dm, 'unread'>;
 
-/** One thread's lines as loaded, oldest first. `loaded`: the newest page has been asked for. `start`: the first line here is the first there was. */
 export interface Thread {
   lines: DmLine[];
   loaded: boolean;
   start: boolean;
 }
 
-/** Lines in one page, the api's `PAGE`. A shorter page is the start of the thread. */
 const PAGE = 50;
 const NOTICE_MS = 4000;
 
-/** The open chats, in the order they were opened: the tabs down the side of the window. From the api on load, newest thread first. */
 export const dmsAtom = atom<Dm[]>([]);
-/** The tab that is showing. `null`: none, and the window shows the friends to pick from. */
 export const dmActiveAtom = atom<string | null>(null);
-/** The window is on screen. Hidden, the tabs and their lines wait for a friend's chat button. */
 export const dmOpenAtom = atom(false);
-/** Every thread's lines, by the other side's name. */
 export const dmThreadsAtom = atom<Record<string, Thread>>({});
-/** What the last send or load said when it failed; '' otherwise. The window shows it under the box. */
 export const dmNoticeAtom = atom('');
 
-/** A search's hits, newest first, and the thread and the words they are for. Null when the pane is closed. The window shows them where the lines are while that thread is the one on screen. */
 export const dmResultsAtom = atom<{ name: string; query: string; lines: DmLine[] } | null>(null);
-/** A line to put in view (`openDmLine`): the window's log centres it once it is drawn. `n` makes a second jump to the same line a new one. */
 export const dmJumpAtom = atom<{ name: string; id: number; n: number } | null>(null);
 let jumps = 0;
-/** Which search the hits are for. Every search, close of the list, and logout is a new one; an answer to an older one is dropped. */
 let asks = 0;
 
-/** The login whose kept window (chat-layout-atoms.ts) has been put back, after its first list of threads. Until then nothing is kept: the tabs it names are not here yet. */
 let restoredFor: string | null = null;
 
-/** Threads with a page in flight. */
 const loading = new Set<string>();
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
-
-// ---- the tabs --------------------------------------------------------------------------------
 
 function find(name: string): Dm | undefined {
   return store.get(dmsAtom).find((d) => d.name === name);
 }
 
-/** A tab for `person`: new at the end, or theirs with the newer words. `unread` is kept unless given. An empty `id` does not forget one the list already gave this tab. */
 function upsert(person: Person, unread?: number) {
   const dms = store.get(dmsAtom);
   const there = dms.find((d) => d.name === person.name);
@@ -103,7 +73,6 @@ function setUnread(name: string, unread: number) {
     );
 }
 
-/** Somebody the sidebar knows, as it has them now; a bare tab otherwise, filled in by the next `loadDms`. */
 function personFor(name: string): Person {
   const row = store.get(followingAtom)?.find((f) => f.name === name);
   return row
@@ -111,12 +80,10 @@ function personFor(name: string): Person {
     : { id: '', name, avatar: null, verified: true, bio: '', presence: 'offline' };
 }
 
-/** The thread with `name` is on screen, in a tab the person is looking at. */
 function viewing(name: string): boolean {
   return store.get(dmOpenAtom) && store.get(dmActiveAtom) === name && document.visibilityState === 'visible';
 }
 
-/** Open a chat with somebody: a new tab, or the one they already have, shown, in a window brought on screen. */
 export function openDm(person: Person) {
   upsert(person);
   store.set(dmActiveAtom, person.name);
@@ -125,7 +92,6 @@ export function openDm(person: Person) {
   markRead(person.name);
 }
 
-/** Show one of the open tabs. */
 export function selectDm(name: string) {
   if (!find(name)) return;
   store.set(dmActiveAtom, name);
@@ -133,11 +99,6 @@ export function selectDm(name: string) {
   markRead(name);
 }
 
-/**
- * Take one chat's tab off the column for this visit. Shown, the tab that took its place (or
- * the last one) is shown instead; the last tab going leaves the friends to pick from. The
- * lines are the api's: the thread is back on the next load, and at once when a line comes.
- */
 export function removeDm(name: string) {
   const dms = store.get(dmsAtom);
   const at = dms.findIndex((d) => d.name === name);
@@ -148,28 +109,20 @@ export function removeDm(name: string) {
   if (store.get(dmResultsAtom)?.name === name) clearDmResults();
 }
 
-/**
- * The window on screen as it was left: the shown tab (read, now that it is looked at); with
- * none shown yet, the newest thread, which is the first tab; with no tab at all, the friends
- * to pick from. The kept window put back after a reload (`restoreDmWindow`).
- */
 export function showDms() {
   store.set(dmOpenAtom, true);
   const active = store.get(dmActiveAtom) ?? store.get(dmsAtom)[0]?.name;
   if (active) selectDm(active);
 }
 
-/** The window off screen, its tabs kept: the × on its header. */
 export function hideDms() {
   store.set(dmOpenAtom, false);
 }
 
-/** The friends to pick from, where the thread was: the + under the tabs. */
 export function pickDm() {
   store.set(dmActiveAtom, null);
 }
 
-/** Everything, on a logout or a change of login: another person's threads are not this one's. */
 export function closeAllDms() {
   restoredFor = null;
   store.set(dmsAtom, []);
@@ -183,14 +136,6 @@ export function closeAllDms() {
   asks++;
 }
 
-// ---- the api ---------------------------------------------------------------------------------
-
-/**
- * `GET /api/dms`: the login's threads, newest first, each with how many lines are new. Over
- * what is here: a tab opened from the grid with nothing said yet is kept, a tab taken off the
- * column this visit comes back only when it has a new line. Nobody: nothing to ask. The list
- * belongs to the login that asked: one that arrives after that login has gone is not these tabs.
- */
 export async function loadDms(): Promise<void> {
   const me = store.get(meAtom);
   if (!me) return;
@@ -198,15 +143,12 @@ export async function loadDms(): Promise<void> {
   try {
     list = await api.dms();
   } catch {
-    // the api is away: what is shown stays, the next open of the window asks again
     return;
   }
-  // this list is the login that asked. it is written only while that login is still the one here
   if (store.get(meAtom) !== me) return;
   const have = store.get(dmsAtom);
   const fresh: Dm[] = list.map((t) => {
     const here = have.find((d) => d.name === t.name);
-    // a line counted new since the list was asked for stays counted: the api's number is the floor
     return { id: t.id, name: t.name, avatar: t.avatar, verified: t.verified, bio: t.bio, presence: t.presence, unread: Math.max(t.unread, here?.unread ?? 0), last: t.last ? lineOf(t.last) : undefined };
   });
   const names = new Set(fresh.map((d) => d.name));
@@ -214,11 +156,6 @@ export async function loadDms(): Promise<void> {
   if (restoredFor !== me) restoreDmWindow(me);
 }
 
-/**
- * The window as this login left it before the refresh: on screen or not, and its tab when that
- * chat is still among the tabs (one gone since leaves the friends to pick from, or the newest).
- * A window opened meanwhile is not undone.
- */
 function restoreDmWindow(me: string) {
   restoredFor = me;
   const kept = keptDmWindow(me);
@@ -229,7 +166,6 @@ function restoreDmWindow(me: string) {
   keepWindow();
 }
 
-/** The window on screen or not, and its tab, kept for the next visit once this login's has been put back. */
 function keepWindow() {
   const me = store.get(meAtom);
   if (!me || restoredFor !== me) return;
@@ -243,17 +179,14 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
   store.set(dmThreadsAtom, { ...threads, [name]: next(threads[name]) });
 }
 
-/** A line as the api or a frame gave it: `images` left off (an older api, a frame with no pictures) is no pictures; `video` left off is none. */
 function lineOf(line: Omit<DmLine, 'images'> & { images?: unknown }): DmLine {
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
   const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
   const video = videoOf(line.video);
   const base = { id: line.id, from: line.from, text: line.text, at: line.at, images, reply, ...(video ? { video } : {}) };
-  // a frame's new line carries no reactions: left off, so `merge` keeps any the line already has
   return 'reactions' in line ? { ...base, reactions: reactionsOf(line.reactions) } : base;
 }
 
-/** Both sets of lines as one, by id, oldest first: a page over the lines already here, a frame over a page. */
 function merge(a: DmLine[], b: DmLine[]): DmLine[] {
   const byId = new Map<number, DmLine>();
   for (const line of a) byId.set(line.id, line);
@@ -264,14 +197,12 @@ function merge(a: DmLine[], b: DmLine[]): DmLine[] {
   return [...byId.values()].sort((x, y) => x.id - y.id);
 }
 
-/** The newest page of the thread with `name`, once. Looked at, it is read. The page belongs to the login that asked: one that arrives after that login has gone is not this chat, and is not marked read. */
 export async function loadThread(name: string): Promise<void> {
   if (store.get(dmThreadsAtom)[name]?.loaded || loading.has(name)) return;
   const me = store.get(meAtom);
   loading.add(name);
   try {
     const lines = (await api.dmThread(name)).lines.map(lineOf);
-    // logout cleared the threads. writing this page now would be the next login's chat, and `loaded` would keep their own open from asking
     if (store.get(meAtom) !== me) return;
     setThread(name, (prev) => ({ lines: merge(prev?.lines ?? [], lines), loaded: true, start: lines.length < PAGE }));
     if (viewing(name)) markRead(name);
@@ -282,7 +213,6 @@ export async function loadThread(name: string): Promise<void> {
   }
 }
 
-/** The page before the oldest line on screen. True when lines came. The page belongs to the login that asked: one that arrives after that login has gone is not this chat. */
 export async function loadOlderDm(name: string): Promise<boolean> {
   const thread = store.get(dmThreadsAtom)[name];
   const oldest = thread?.lines[0];
@@ -291,7 +221,6 @@ export async function loadOlderDm(name: string): Promise<boolean> {
   loading.add(name);
   try {
     const lines = (await api.dmThread(name, oldest.id)).lines.map(lineOf);
-    // logout cleared the threads. writing this page now would be the next login's chat, and `loaded` would keep their own open from asking
     if (store.get(meAtom) !== me) return false;
     setThread(name, (prev) => ({ lines: merge(lines, prev?.lines ?? []), loaded: true, start: lines.length < PAGE }));
     return lines.length > 0;
@@ -303,23 +232,14 @@ export async function loadOlderDm(name: string): Promise<boolean> {
   }
 }
 
-/** One line into a thread, in id order; a line already there (the api's answer, then the frame) is one line. */
 function append(name: string, line: DmLine) {
   setThread(name, (prev) => ({ lines: merge(prev?.lines ?? [], [line]), loaded: prev?.loaded ?? false, start: prev?.start ?? false }));
 }
 
-/**
- * A line to `name`: `POST /api/dm/<name>`, the words and the pictures on it (`images`, the ids
- * `api.uploadChatImage` returned; the words may be empty then), and a video (`api.uploadChatVideo`'s id). The api's answer goes in at
- * once (the socket may be down; the box must still work), and the same line coming back on the
- * socket is dropped by id. False, with the api's words under the box, when it was not kept:
- * not friends, too long, too fast, a picture the upload never kept.
- */
 export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null, video: string | null = null): Promise<boolean> {
   const text = raw.trim();
   if (!text && images.length === 0 && !video) return false;
   try {
-    // each `:name:` of the login's emotes goes out as its token (emotes.ts)
     const line = await api.sendDm(name, encodeEmotes(text), images, reply, video);
     append(name, lineOf(line));
     return true;
@@ -329,13 +249,6 @@ export async function sendDm(name: string, raw: string, images: string[] = [], r
   }
 }
 
-/**
- * The thread with `name` is being looked at: nothing in it is new any more. Tells the api,
- * which tells this login's other devices. A thread on screen still tells the api when the
- * local count is already 0, so a line that just arrived is read on the other devices too.
- * Nothing to say when there is no thread, no last line, or nothing was new and the thread
- * is not on screen (`loadThread` calls back here when the lines have arrived).
- */
 export function markRead(name: string) {
   const dm = find(name);
   const last = store.get(dmThreadsAtom)[name]?.lines.at(-1);
@@ -344,19 +257,11 @@ export function markRead(name: string) {
   api.readDm(name, last.id).catch(() => undefined);
 }
 
-/**
- * The lines of the thread with `name` that match the box (`GET /api/dm/:name/search`: the words,
- * a quoted phrase, the filters among them), newest first, into `dmResultsAtom`. A refusal (a
- * filter that wants a value, an empty box) is the api's words under the box, and the list closes.
- * The answer is kept only while it is still the one asked for: another search since, the list
- * closed, or a change of login, and it is dropped, a refusal too.
- */
 export async function searchDm(name: string, raw: string): Promise<void> {
   const q = raw.trim();
   if (!q) return;
   const ask = ++asks;
   const me = store.get(meAtom);
-  // a newer search, the list closed, or another login since: this answer is not the one wanted
   const stale = () => ask !== asks || store.get(meAtom) !== me;
   try {
     const lines = (await api.searchDm(name, q)).lines.map(lineOf);
@@ -369,28 +274,18 @@ export async function searchDm(name: string, raw: string): Promise<void> {
   }
 }
 
-/** The hits off the screen and the lines back: the pane's close, a hit picked, the search box closing. An answer still on its way is not wanted either. */
 export function clearDmResults() {
   asks++;
   store.set(dmResultsAtom, null);
 }
 
-/**
- * Line `id` of the thread with `name` in view: a hit clicked. The thread's lines are one run
- * from the newest back, so the pages before the oldest on screen are asked for one after
- * another (`loadOlderDm`) until the line is among them, or the thread's start is; then the
- * window centres it (`dmJumpAtom`). A line already loaded is centred at once. Nothing when the
- * line is not in the thread (gone, or another login's hits). True when the line is in view.
- */
 export async function openDmLine(name: string, id: number): Promise<boolean> {
   const lines = () => store.get(dmThreadsAtom)[name]?.lines ?? [];
   const loaded = () => lines().some((l) => l.id === id);
   while (!loaded()) {
     const thread = store.get(dmThreadsAtom)[name];
     const oldest = thread?.lines[0];
-    // the line would be among the loaded ones already, or there is nothing older to ask for
     if (!thread?.loaded || thread.start || !oldest || oldest.id < id) break;
-    // a page is on its way for the scroll: wait for it rather than give up
     if (loading.has(name)) {
       await new Promise((done) => setTimeout(done, 100));
       continue;
@@ -402,12 +297,6 @@ export async function openDmLine(name: string, id: number): Promise<boolean> {
   return true;
 }
 
-/**
- * `emoji` on line `id` of the thread with `name`, or off it when it is ours already (a chip
- * clicked, a pick in the picker): `PUT /api/dm/<name>/react`. The api's answer is the line's
- * reactions as they are now, and goes in at once (the socket may be down); the `dm_react` frame
- * that follows is then no change. A refusal is the api's words under the box.
- */
 export async function reactDm(name: string, line: DmLine, emoji: string): Promise<void> {
   const me = store.get(meAtom);
   const on = !(line.reactions ?? []).some((r) => r.emoji === emoji && reacted(r, me));
@@ -420,7 +309,6 @@ export async function reactDm(name: string, line: DmLine, emoji: string): Promis
   }
 }
 
-/** Line `id` of the thread with `name`, and the same line among the hits, with its reactions made over by `next`. */
 function touchLine(name: string, id: number, next: (now: Reaction[] | undefined) => Reaction[]) {
   const thread = store.get(dmThreadsAtom)[name];
   if (thread?.lines.some((l) => l.id === id)) setThread(name, () => ({ ...thread, lines: thread.lines.map((l) => (l.id === id ? { ...l, reactions: next(l.reactions) } : l)) }));
@@ -429,20 +317,12 @@ function touchLine(name: string, id: number, next: (now: Reaction[] | undefined)
     store.set(dmResultsAtom, { ...results, lines: results.lines.map((l) => (l.id === id ? { ...l, reactions: next(l.reactions) } : l)) });
 }
 
-/** Words under the box for a few seconds: the api's refusal, a page that did not come, a picture that would not go up. */
 export function showDmNotice(text: string) {
   store.set(dmNoticeAtom, text);
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => store.set(dmNoticeAtom, ''), NOTICE_MS);
 }
 
-// ---- the socket --------------------------------------------------------------------------------
-
-/**
- * The account `fromId` already has a tab under another name. That tab becomes `peer` and its
- * lines go with it: one tab. If that chat was the one on screen, it still is, under the new
- * name, before the line is counted or read.
- */
 function retarget(fromId: string, peer: string) {
   const dms = store.get(dmsAtom);
   const prior = dms.find((d) => d.id === fromId && d.name !== peer);
@@ -457,7 +337,6 @@ function retarget(fromId: string, peer: string) {
     next[peer] = there ? { lines: merge(there.lines, moved.lines), loaded: there.loaded || moved.loaded, start: there.start && moved.start } : moved;
     store.set(dmThreadsAtom, next);
   }
-  // the old tab becomes the new name, where it sat. a tab already wearing the new name goes, so this account is one tab
   store.set(
     dmsAtom,
     dms.flatMap((d) => {
@@ -471,14 +350,6 @@ function retarget(fromId: string, peer: string) {
   if (results?.name === old) store.set(dmResultsAtom, { ...results, name: peer });
 }
 
-/**
- * A `dm` frame: a line between this login and somebody, from either side (the gateway sends it
- * to both names' sockets). Into the thread; a tab for them if there is none; counted as new
- * unless it is ours or the thread is on screen. A rename is not delivered to the other person:
- * `from_id` is the account the open tab already has, so the line, the tab, and the chat on
- * screen follow the new name before the read is decided. A frame with no `from_id` matches
- * the name, as before.
- */
 function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[]; video?: ChatVideo }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
@@ -486,7 +357,6 @@ function arrived(frame: { id: number; from: string; to: string; text: string; at
   if (frame.from_id) retarget(frame.from_id, peer);
   if (!find(peer)) {
     upsert(personFor(peer));
-    // the api's words for them (the picture, the bio), behind the line
     void loadDms();
   }
   append(peer, lineOf(frame));
@@ -498,14 +368,12 @@ function arrived(frame: { id: number; from: string; to: string; text: string; at
   }
 }
 
-/** A `dm_read` frame: this login read a thread somewhere, up to a line. What is new here is what came after it. */
 function readElsewhere(frame: { name: string; peer: string; id: number }) {
   if (frame.name !== store.get(meAtom)) return;
   const lines = store.get(dmThreadsAtom)[frame.peer]?.lines ?? [];
   setUnread(frame.peer, lines.filter((l) => l.from === frame.peer && l.id > frame.id).length);
 }
 
-/** A `dm_react` frame: `from` put an emoji on a line between this login and somebody, or took it off. Onto that line, wherever it is loaded. */
 function reactedOn(frame: { id: number; from: string; to: string; emoji: string; on: boolean }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
@@ -520,8 +388,6 @@ onEvents((event) => {
   else if (event.type === 'dm_read') readElsewhere(event);
   else if (event.type === 'link') {
     if (event.phase !== 'open') return;
-    // the socket is back after a drop: lines may have come meanwhile. the counts again, and every
-    // thread's newest page again when it is next looked at (the shown one now)
     if (linkWasOpen && store.get(meAtom)) {
       void loadDms();
       const threads = store.get(dmThreadsAtom);

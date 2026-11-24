@@ -1,16 +1,7 @@
-// The calendar (docs/calendar.md): a block per session on the watch page's calendar tab. The api's
-// range (`GET /api/streamers/:name/sessions?from=&to=`: 93 days at most, the last 20 without one),
-// a go-live opens a block the watcher sees live and growing, a stop closes it with `ended_by: stop`
-// and the heartbeat's time on the row, a connection that drops (the tab goes offline and away, no
-// stop) is closed by video within a beat of the last heartbeat and the two sessions a minute apart
-// draw as one block as long as both and the gap, the grid is monday to sunday and pages a week
-// back and forward, an account's rows are its own. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node calendar.js
 const { chromium, request } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const RUN = Date.now().toString(36).slice(-5);
-/** the guest who streams: a free name, nobody's, like r1..r8 */
 const NAME = 'cal1';
-/** an account, for "whose rows" (a signup is for good, so a fresh one per run, like follows.js) */
 const ACCOUNT = 'calp' + RUN;
 const PW = 'correct horse battery 9!';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
@@ -52,7 +43,6 @@ const iso = (ms) => new Date(ms).toISOString();
 (async () => {
   const api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const range = (name, from, to) => api.get(`/api/streamers/${name}/sessions?from=${encodeURIComponent(iso(from))}&to=${encodeURIComponent(iso(to))}`);
-  /** the name's rows around now: yesterday to tomorrow */
   const today = async (name) => (await range(name, Date.now() - DAY, Date.now() + DAY)).json();
   const openRow = (rows) => (Array.isArray(rows) ? rows.find((r) => r.ended_at === null) : undefined);
 
@@ -63,7 +53,6 @@ const iso = (ms) => new Date(ms).toISOString();
   let a = await ctxA.newPage();
 
   const goLive = async (page) => {
-    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
     await page.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await page.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !document.querySelector('#start')?.disabled, null, { timeout: 20000 });
@@ -126,7 +115,6 @@ const iso = (ms) => new Date(ms).toISOString();
     return `${before} ↔ ${after}`;
   });
 
-  /** the two rows of this run's stream: the one stop closes, and the one the drop closes seconds later; one block between them */
   let stopped = null;
   let dropped = null;
 
@@ -134,8 +122,6 @@ const iso = (ms) => new Date(ms).toISOString();
     await goLive(a);
     const open = await pollUntil(async () => openRow(await today(NAME)), (r) => !!r, { timeout: 10000, label: 'an open row' });
     expect(open.ended_by === null, `an open row says ended_by ${open.ended_by}`);
-    // the watcher plays on the pushed `live` (docs/status.md); the grid asks again on that same
-    // change of phase. a watcher still waiting here is the push missing, not the calendar
     await w.waitForFunction(() => /^watching$/.test(document.querySelector('#status')?.textContent?.trim() || ''), null, { timeout: 20000 }).catch(async () => {
       const status = await w.textContent('#status').catch(() => '?');
       throw new Error(`the watcher never played: #status reads "${(status || '').trim()}". the pushed live did not arrive (is video the build the api expects?)`);
@@ -149,10 +135,7 @@ const iso = (ms) => new Date(ms).toISOString();
   });
 
   await step('a heartbeat lands on the row (last_beat_at), then stop closes it: ended_by stop, the watcher\'s block closes', async () => {
-    // the page beats every 15s; one must land before the stop so the row has a time to end at later
     const beaten = await pollUntil(async () => openRow(await today(NAME)), (r) => !!r && r.last_beat_at !== null, { timeout: 25000, label: 'a heartbeat on the row' });
-    // and the row runs half a minute: the grid hides a block under a minute, and this row with the
-    // dropped one after it must pass that together to be drawn as one
     await sleep(Math.max(0, 35000 - (Date.now() - Date.parse(beaten.started_at))));
     await a.click('#stop');
     const row = await pollUntil(
@@ -172,11 +155,7 @@ const iso = (ms) => new Date(ms).toISOString();
   await step('the drop: the tab goes offline and away without its stop call; video ends the row within a beat of its last heartbeat', async () => {
     await goLive(a);
     const open = await pollUntil(async () => openRow(await today(NAME)), (r) => !!r && r.last_beat_at !== null, { timeout: 30000, label: 'a heartbeat on the new row' });
-    // half a minute of it, for the same reason as the row before
     await sleep(Math.max(0, 30000 - (Date.now() - Date.parse(open.started_at))));
-    // no stop call can leave the page: the network goes, then the tab. video sees the socket go
-    // and calls the api's stop itself. the browser still sends a close frame as the tab goes, so
-    // video reads this as the page's own stop (`stop`); a wifi that drops sends none and reads `video`
     await ctxA.setOffline(true);
     await sleep(300);
     await ctxA.close();
@@ -196,11 +175,9 @@ const iso = (ms) => new Date(ms).toISOString();
 
   await step('two sessions under five minutes apart are one block, from the first\'s start to the second\'s end, its length on it, no mark', async () => {
     expect(stopped && dropped, 'the two rows are not both there to merge');
-    // the watcher's grid re-asked on `ended`; the second session began inside five minutes of the first's end
     await w.waitForSelector('#calendar-strip [data-block][data-live]', { state: 'detached', timeout: 20000 });
     const from = Date.parse(stopped.started_at);
     const to = Date.parse(dropped.ended_at);
-    // the bars carry their start and end to the millisecond, the api's rows to the microsecond: a second of slack
     const bars = () =>
       w.$$eval('#calendar-strip [data-block]', (els) =>
         els.map((e) => ({
@@ -210,13 +187,11 @@ const iso = (ms) => new Date(ms).toISOString();
           label: e.getAttribute('aria-label')
         }))
       );
-    // the block that has both rows in it. its start may be an older row's: a run a few minutes ago merges in too, by the same rule
     const pieces = await pollUntil(bars, (all) => all.some((b) => b.start <= from + 1000 && b.end >= to - 1000), {
       timeout: 10000,
       label: `a block over rows ${stopped.id} and ${dropped.id} (${Math.round((to - from) / 1000)}s together)`
     });
     const over = pieces.filter((b) => b.start <= from + 1000 && b.end >= to - 1000);
-    // one piece unless the run crossed the watcher's midnight; the longer piece is the one with the length on it
     const whole = over.find((b) => b.text) || over[0];
     const m = Math.round((whole.end - whole.start) / 60000);
     const want = m < 60 ? `${m}m` : m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h ${m % 60}m`;

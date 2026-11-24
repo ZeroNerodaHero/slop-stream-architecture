@@ -1,28 +1,12 @@
-/**
- * Muted camera previews for the home page, a group's live members and the profile popup,
- * beside the one watched stream.
- *
- * The watch page and the corner player share one connection (`watch-atoms`). These are
- * their own peers, so a card playing on home does not hang up a stream in the corner.
- * Each one asks for a single video section and no audio: video gives that watcher the
- * camera, which is the 720 picture the streamer sends. There is no smaller encode.
- * Each goes to video as `preview: true`, so it is not a viewer and spends none of this
- * address's watcher share (relay.ts); a hidden tab holds none at all.
- */
-
 import { atom } from 'jotai';
 
 import { connectRelay, type RelayReply, waitForIceGathering } from '@/infra/relay';
 import { store } from '@/infra/store';
 
-/** Camera streams that are actually playing, by name. Absent until the first frame's track arrives. */
 export const previewStreamsAtom = atom<Readonly<Record<string, MediaStream>>>({});
 
-/** The first wait after a connection dropped. It doubles on every drop in a row, until a track arrives. */
 const RETRY_MS = 5000;
-/** The longest wait between attempts, and the only one after video refused the stream. */
 const RETRY_CAP_MS = 60_000;
-/** What `connectRelay` rejects with on its own (relay.ts). Any other text is video's `{"error":...}`, sent before the answer. */
 const TRANSPORT_ERRORS = new Set(['socket error', 'socket closed', 'server did not answer', 'cancelled', 'bad reply']);
 
 interface Session {
@@ -32,23 +16,13 @@ interface Session {
   closed: boolean;
 }
 
-/**
- * Why a session ended on its own. `refused` is video's `{"error":...}`: it looked at the request
- * and said no (too many watchers from this address, say), and asking again at once asks the same
- * question at the price of a whole handshake. `dropped` is the socket or the peer going away,
- * which a new attempt can mend.
- */
 type Ended = 'refused' | 'dropped';
 
 const sessions = new Map<string, Session>();
 const retries = new Map<string, number>();
-/** The next wait after a drop, per name. Absent is the first. */
 const backoff = new Map<string, number>();
-/** Every camera wanted right now: the page's and the profile popup's. */
 let wanted = new Set<string>();
-/** The cameras the page under everything wants (`setHomePreviews`). */
 let pageWants: readonly string[] = [];
-/** The one the profile popup shows over that page (`setPopupPreview`), or none. */
 let popupWants: string | null = null;
 
 function publish(name: string, stream: MediaStream | null) {
@@ -64,26 +38,16 @@ function publish(name: string, stream: MediaStream | null) {
   store.set(previewStreamsAtom, next);
 }
 
-/**
- * The cameras home should be playing: the two newest, plus the card under the pointer.
- * A name that stays in the set keeps its connection. Anything else is hung up.
- */
 export function setHomePreviews(names: readonly string[]) {
   pageWants = names;
   want();
 }
 
-/**
- * The camera the profile popup shows (ProfilePopup.tsx: somebody streaming, looked at over
- * whatever page is under it), or null when it has none. Beside the page's own, not instead
- * of them: the popup closing leaves the page's cameras as they were.
- */
 export function setPopupPreview(name: string | null) {
   popupWants = name;
   want();
 }
 
-/** The page's cameras and the popup's are the ones wanted: a name still among them keeps its connection, anything else is hung up, a new one is started. */
 function want() {
   const next = new Set(pageWants);
   if (popupWants !== null) next.add(popupWants);
@@ -99,7 +63,6 @@ function want() {
   }
 }
 
-/** The name is not wanted any more: hang up, and forget the retry, so wanting it again starts fresh. */
 function stop(name: string) {
   const retry = retries.get(name);
   if (retry !== undefined) {
@@ -138,18 +101,15 @@ function again(name: string, session: Session, ended: Ended) {
 }
 
 async function start(name: string) {
-  // a hidden tab starts nothing: the visibility listener below starts the wanted names when it shows
   if (!wanted.has(name) || sessions.has(name) || document.hidden) return;
   const pc = new RTCPeerConnection();
   const stream = new MediaStream();
   const session: Session = { pc, ws: null, stream, closed: false };
   sessions.set(name, session);
-  // one video, no audio: the camera, and nothing to unmute on a card
   pc.addTransceiver('video', { direction: 'recvonly' });
   pc.ontrack = (event) => {
     if (session.closed || event.track.kind !== 'video') return;
     if (!stream.getVideoTracks().includes(event.track)) stream.addTrack(event.track);
-    // the connection works: a drop from here on is tried again soon, not where the last run's doubling left off
     backoff.delete(name);
     publish(name, stream);
   };
@@ -173,17 +133,13 @@ async function start(name: string) {
       if (!session.closed) stop(name);
       return;
     }
-    // a close with no error frame before it: the socket went, or video is gone
     session.ws.onclose = () => again(name, session, 'dropped');
   } catch (err) {
-    // before the answer, video's refusal is the rejection's text; relay.ts's own words are the transport
     const refused = err instanceof Error && !TRANSPORT_ERRORS.has(err.message);
     if (!session.closed) again(name, session, refused ? 'refused' : 'dropped');
   }
 }
 
-// a hidden tab holds no previews: nobody sees them, and each one is a peer video keeps
-// for this address. `wanted` stays as it is, so the tab showing again starts them over.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     for (const name of sessions.keys()) stop(name);

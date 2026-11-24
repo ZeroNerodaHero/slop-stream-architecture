@@ -1,16 +1,4 @@
 #!/bin/sh
-# The tech docs' checks. Prints every failing line; exit 1 when there is one.
-#
-#   sh .cursor/skills/tech-docs/scripts/check.sh
-#
-#   - words and css only: no <img>, <video>, <audio>, <svg>, <canvas>, <iframe>, <object>, <embed>,
-#     no url() in css (a picture or a font fetched), no <script> and no stylesheet from anywhere else
-#   - no box shadow (.cursor/rules/no-box-shadow.mdc), the same pattern frontend/scripts/no-box-shadow.sh uses
-#   - every href and src points at a file in docs/tech-docs (or out to http(s), or at an anchor)
-#   - every page is a whole page: <title>, <main>, the link back to index.html, and the shared style.css
-#   - every page is on index.html, so nothing is written that cannot be found
-#   - style.css keeps its prefers-reduced-motion block; built-from names a commit this repo has
-#   - when `npm run dev` is up with SHOW_DOCS=1: GET every page through it, so the url the reader uses works
 set -u
 cd "$(git rev-parse --show-toplevel)"
 DOCS=docs/tech-docs
@@ -22,7 +10,6 @@ bad() { echo "$1"; fail=1; }
 [ -f "$DOCS/index.html" ] || bad "$DOCS/index.html missing: the map every page links back to"
 [ -f "$DOCS/style.css" ] || bad "$DOCS/style.css missing: the shared look and the animations"
 
-# what a page may not hold
 if grep -rEin '<(img|video|audio|svg|canvas|iframe|object|embed|picture|source)[[:space:]>/]' "$DOCS"; then
   bad "media tags above: the docs are words and css, nothing drawn or fetched"
 fi
@@ -39,7 +26,6 @@ if grep -rEn 'style="' "$DOCS" --include='*.html' | grep -Ev 'style="--[a-z]+: *
   bad "style= above with more than one custom property in it: a page carries no css of its own. the only style= is one of --n, --t, --to for a class in style.css"
 fi
 
-# links, and the shape of a page
 for page in "$DOCS"/*.html; do
   name=$(basename "$page")
   grep -q '<title>' "$page" || bad "$name: no <title>"
@@ -68,7 +54,6 @@ else
   bad "$DOCS/built-from missing: the commit the docs last looked at (git rev-parse --short HEAD)"
 fi
 
-# through the dev server, when it is up
 if curl -fsS -o /dev/null --max-time 3 "$URL/" 2>/dev/null; then
   for page in "$DOCS"/*.html; do
     name=$(basename "$page")

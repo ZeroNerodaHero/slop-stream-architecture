@@ -1,10 +1,3 @@
-# blender -b --python puppet.py -- <out dir>
-#
-# A model made of boxes, for the tests: a head with two eyes and a mouth on a neck, a body and
-# two arms, on a skeleton whose bones are named the plain way (Hips, Spine, Chest, Neck, Head,
-# LeftArm, RightArm), with two shapes (Blink, MouthOpen) and one small picture for its colours.
-# Written as an fbx with the picture inside it (puppet.fbx), as one with the picture left
-# outside (puppet-loose.fbx), and as a glb (puppet.glb).
 import bmesh
 import bpy
 import os
@@ -15,13 +8,12 @@ out = sys.argv[sys.argv.index('--') + 1]
 os.makedirs(out, exist_ok=True)
 bpy.ops.wm.read_factory_settings(use_empty=True)
 
-# the picture: four colours, a quarter each. skin top left, dark top right, red bottom left, blue bottom right
 SIZE = 4
 image = bpy.data.images.new('puppet', SIZE, SIZE)
 COLOURS = {'skin': (0.94, 0.72, 0.6, 1), 'dark': (0.07, 0.07, 0.1, 1), 'red': (0.75, 0.1, 0.12, 1), 'blue': (0.15, 0.3, 0.75, 1)}
 WHERE = {'skin': (0.25, 0.75), 'dark': (0.75, 0.75), 'red': (0.25, 0.25), 'blue': (0.75, 0.25)}
 pixels = []
-for y in range(SIZE):  # rows from the bottom up
+for y in range(SIZE):
     for x in range(SIZE):
         name = ('red' if x < SIZE // 2 else 'blue') if y < SIZE // 2 else ('skin' if x < SIZE // 2 else 'dark')
         pixels.extend(COLOURS[name])
@@ -38,7 +30,6 @@ texture.interpolation = 'Closest'
 bsdf = material.node_tree.nodes['Principled BSDF']
 material.node_tree.links.new(bsdf.inputs['Base Color'], texture.outputs['Color'])
 
-# the boxes: a name, the bone that moves it, its colour, its middle and its size. it faces -y, its left is +x, z is up
 PARTS = [
     ('body', 'Chest', 'blue', (0, 0, 1.15), (0.36, 0.2, 0.5)),
     ('neck', 'Neck', 'skin', (0, 0, 1.45), (0.1, 0.1, 0.1)),
@@ -71,7 +62,6 @@ for name, (bone, verts, _, _) in made.items():
     group = puppet.vertex_groups.get(bone) or puppet.vertex_groups.new(name=bone)
     group.add(list(verts), 1.0, 'REPLACE')
 
-# the shapes: the eyes shut flat, the mouth opened downward
 puppet.shape_key_add(name='Basis')
 blink = puppet.shape_key_add(name='Blink')
 for eye in ('eye.L', 'eye.R'):
@@ -84,7 +74,6 @@ top = middle.z + size.z / 2
 for i in verts:
     opened.data[i].co.z = top - (top - opened.data[i].co.z) * 5
 
-# the skeleton
 armature = bpy.data.armatures.new('Armature')
 rig = bpy.data.objects.new('Armature', armature)
 bpy.context.scene.collection.objects.link(rig)

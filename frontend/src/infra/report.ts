@@ -1,14 +1,3 @@
-/**
- * The pages report their own failures to the api: one json line to POST /api/errors, same
- * origin, through sendBeacon so it still goes out of a page that is dying. The api keeps
- * them in the debug database and /admin shows them. See docs/debugging.md.
- *
- * Nothing in here may break the page: every call swallows its own errors, the same message
- * is not sent twice inside 30s, and each kind has a budget per page load (20, `api` 5),
- * then that kind goes quiet. A render loop, or an api that is down for an hour, otherwise
- * produces thousands and crowds out the one crash that mattered.
- */
-
 export type ReportKind = 'crash' | 'error' | 'rejection' | 'soft' | 'api';
 
 export type Extra = Record<string, string | number | boolean | null | undefined>;
@@ -16,7 +5,6 @@ export type Extra = Record<string, string | number | boolean | null | undefined>
 interface ReportOptions extends Extra {
   stream?: string;
   phase?: string;
-  /** Appended after the error's own stack (a crash passes react's component stack along). */
   componentStack?: string;
 }
 
@@ -44,7 +32,6 @@ function stackOf(err: unknown): string | undefined {
   return err instanceof Error ? err.stack : undefined;
 }
 
-/** sendBeacon queues it even when the page is going away. A string body goes as text/plain. */
 function send(body: string): void {
   if (typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(ENDPOINT, body)) return;
   fetch(ENDPOINT, { method: 'POST', body, keepalive: true, headers: { 'content-type': 'text/plain' } }).catch(() => undefined);
@@ -79,14 +66,11 @@ export function report(kind: ReportKind, err: unknown, options: ReportOptions = 
       })
     );
   } catch {
-    // reporting must never be the thing that breaks
   }
 }
 
-/** The throws react never sees (handlers, timers) and the promises nobody caught. Call once. */
 export function installReporting(): void {
   addEventListener('error', (e) => {
-    // not in capture mode, so a stylesheet or image that failed to load does not land here
     if (!(e instanceof ErrorEvent)) return;
     report('error', e.error ?? e.message, { source: e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : undefined });
   });
@@ -103,11 +87,6 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-/**
- * What the peer connection looked like when it failed. The sync states always; the selected
- * candidate pair from getStats() when it answers inside 300ms. Bytes in and out, the rtt and
- * the candidate types are what tell "udp blocked" from "video is dead".
- */
 export async function peerSnapshot(pc: RTCPeerConnection | null): Promise<Extra> {
   if (!pc) return {};
   const snap: Extra = {
@@ -155,17 +134,12 @@ export async function peerSnapshot(pc: RTCPeerConnection | null): Promise<Extra>
       snap.remote = remote && `${str(remote.candidateType) ?? '?'}/${str(remote.protocol) ?? '?'}:${num(remote.port) ?? '?'}`;
     }
   } catch {
-    // a closed connection has no stats. the sync states still say plenty
   } finally {
     clearTimeout(timer);
   }
   return snap;
 }
 
-/**
- * A watch or publish that ended in `failed`. Call it before the peer connection is closed;
- * it resolves once the stats are read (300ms at most), so the caller can close after that.
- */
 export function reportPeerFailure(role: 'watch' | 'publish', stream: string, message: string, pc: RTCPeerConnection | null): Promise<void> {
   return peerSnapshot(pc).then((snap) => report('soft', message, { ...snap, role, stream, phase: 'failed' }));
 }
