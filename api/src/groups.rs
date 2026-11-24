@@ -449,7 +449,7 @@ pub(crate) async fn delete_if_empty(s: &AppState, group: &str) -> Result<(), sql
     }
     crate::emotes::drop_group(s, group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
-    let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
+    crate::group_mod::drop_banner(s, group).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(group).execute(&s.db).await?;
     log::info!("deleted {group}: nobody left");
     tell(s, group, "deleted", json!({})).await;
@@ -475,7 +475,7 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     crate::voice::drop_channel_from_voice(&s, &group, None).await;
     crate::emotes::drop_group(&s, &group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
-    let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
+    crate::group_mod::drop_banner(&s, &group).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&s.db).await?;
     log::info!("{}: deleted the group {group}", who.name);
     tell(&s, &group, "deleted", json!({})).await;
