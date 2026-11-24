@@ -54,6 +54,22 @@ the cookie at the upgrade decides who it is at first. a login or a logout in tha
 
 every chat room a socket follows is a `Lease` in the room's set plus a forwarder task, kept together in one value; dropping it (a topic leaves the set, the socket closes, the task panics or is aborted) gives the room back and stops the forwarder. the events side is the socket's `Seat`. counts are read off the sets. each line is serialized once, by the room's reader, and the same bytes go to every `/rt` subscriber; each events fact is serialized once for all its sockets.
 
+## the browser side
+
+off by default for now. `?rt=1` on any page turns it on and keeps it on in `localStorage` (`rt`), `?rt=0` turns it off. with it off the page uses `/chat/...` and `/events` as before.
+
+- **topics a page holds.** `useTopic(topic)` (`frontend/src/infra/use-topic.ts`) holds a topic while the component is mounted. underneath is a refcount (`frontend/src/infra/rt/refs.ts`): `acquire` returns a release that works once, however often it is called, so a StrictMode double mount nets zero. changes in one task are coalesced into one set, and only a set that changed is sent. a chat room (`ChatRoom` in `chat-atoms.ts`) holds `chat:<name>` or `chat:<server>/*`; the events link holds `presence:<name>`, `streams:*` and `group:<name>` for what it watches.
+- **one socket for every tab.** a SharedWorker (`frontend/src/infra/rt.worker.ts`, named `rt-<build>`) owns the socket; the logic is `RtCore` in `frontend/src/infra/rt/core.ts`, plain code with the clock and the socket passed in. each tab sends its whole set; the worker sends the union, and only when the union changes. a tab pings every 15s; one silent for 60s is dropped, and `pagehide` says bye at once. with no tab left the socket stays 5s, for a reload. a tab that joins a set already held gets the last `subbed` straight away.
+- **version check.** a tab attaches with its build; a worker of another build answers `stale` and the tab runs its own socket instead (a deploy while old tabs are open).
+- **fallback.** no SharedWorker, a worker error, or no answer within 2s: the tab runs the same `RtCore` in the page, on a socket of its own.
+- **keeping the set right.** the set goes again on every reconnect, every 60s, and when the tab gets focus; a `subbed` that is missing a topic it was not refused or evicted is a mismatch, and the set goes again 1s later.
+- **watchdog and backoff.** 45s with no frame (beats come every 20s) and the socket is cut. a reconnect waits 250ms, doubling up to 30s, plus up to half again at random; a 1001 close (a restart) waits a random 0 to 1.5s instead and does not count as a failure.
+- **history.** a room subscribes first, then loads its history over http, then merges, deduplicating by id; the set it sends after carries `since` with the newest id it has, and every reconnect does the same, so the server replays the gap. a `gap` is filled over http (the room's newest lines, or the group's).
+- **say and react.** both are asks with a `rid`; the `ack` or `nack` comes back to the tab that asked. 10s with no answer, or a socket that closes first, is a `nack` (`chat is down`). a nack fails that one pending line and puts the text back.
+- **who.** a login, a logout, or a new guest nick sends `identify`: the worker gets a ticket and sends `auth`, and the socket stays up. if the ticket fails the socket reconnects with the new hello.
+
+tests: `npm test` in `frontend` runs `frontend/tests/rt-*.test.ts` with node (the refcount, the worker's union, dead tabs, stale builds, mismatches, backoff, restarts, the watchdog, since and behind, asks, flapping a topic 1000 times). `tests/rt-live.test.ts` runs only with `RT_URL` set to a running `/rt`. `test/rt-page.js` (in `scripts/test.sh`) uses real browsers: two tabs and a second browser in one room, lines between them, one socket per browser, a closed tab, and a page without SharedWorker. with `LOCAL=1 RT_SOCKETS=<chat port>` it also counts the sockets with `ss`.
+
 ## deploy
 
 the `chat` container (api image) serves `/rt` and `/rt/ticket`; caddy routes `/rt` and `/rt/*` to `chat:4100` (`frontend/Caddyfile`), rate limited as `rt-socket` (60/min/ip) and `rt-ticket` (30/min/ip) in `api/src/ratelimit.rs`.

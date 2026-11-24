@@ -8,6 +8,7 @@
     "build": "sh scripts/no-box-shadow.sh && sh scripts/no-native-select.sh && tsc --noEmit && vite build && node scripts/precompress.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
     "lint": "sh scripts/no-box-shadow.sh && sh scripts/no-native-select.sh && oxlint --quiet",
     "format": "oxfmt ./src",
     "format:check": "oxfmt --check ./src"
