@@ -199,6 +199,8 @@ pub(crate) struct SubFrame {
     pub(crate) topics: Vec<String>,
     #[serde(default)]
     pub(crate) since: HashMap<String, String>,
+    #[serde(default)]
+    pub(crate) fresh: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -423,8 +425,13 @@ impl Topics {
         }
     }
 
-    fn stale_wildcards(&self, now: Instant) -> Vec<Topic> {
-        self.chat.iter().filter(|(t, e)| matches!(t, Topic::Every(_)) && now.duration_since(e.resolved) >= WILDCARD_FRESH).map(|(t, _)| t.clone()).collect()
+    fn stale_wildcards(&self, now: Instant, fresh: &[String]) -> Vec<Topic> {
+        let asked: HashSet<Topic> = fresh.iter().filter_map(|raw| Topic::parse(raw)).collect();
+        self.chat
+            .iter()
+            .filter(|(t, e)| matches!(t, Topic::Every(_)) && (asked.contains(t) || now.duration_since(e.resolved) >= WILDCARD_FRESH))
+            .map(|(t, _)| t.clone())
+            .collect()
     }
 
     fn gated(&self) -> Vec<Topic> {
@@ -808,8 +815,8 @@ impl Conn {
         self.topics.admit(t, rooms, Instant::now());
     }
 
-    async fn refresh_wildcards(&mut self, refused: &mut Vec<Refusal>) {
-        for t in self.topics.stale_wildcards(Instant::now()) {
+    async fn refresh_wildcards(&mut self, refused: &mut Vec<Refusal>, fresh: &[String]) {
+        for t in self.topics.stale_wildcards(Instant::now(), fresh) {
             self.recheck(t, refused).await;
         }
     }
@@ -848,7 +855,7 @@ impl Conn {
         for t in plan.join {
             self.join(t, &mut refused).await;
         }
-        self.refresh_wildcards(&mut refused).await;
+        self.refresh_wildcards(&mut refused, &sub.fresh).await;
         self.prune();
         self.replay(socket, &sub.since).await?;
         self.subbed(socket, refused).await
@@ -1099,6 +1106,18 @@ mod tests {
     }
 
     #[test]
+    fn a_wildcard_is_resolved_again_when_asked_or_after_a_minute() {
+        let now = Instant::now();
+        let mut t = Topics::new(now);
+        let every = Topic::parse("chat:cats/*").unwrap();
+        t.admit(every.clone(), wildcard_rooms("cats", vec!["general".into()]), now);
+        t.admit(Topic::parse("chat:dogs").unwrap(), vec![], now);
+        assert!(t.stale_wildcards(now, &[]).is_empty());
+        assert_eq!(t.stale_wildcards(now, &["chat:cats/*".into(), "chat:dogs".into(), "junk".into()]), vec![every.clone()]);
+        assert_eq!(t.stale_wildcards(now + WILDCARD_FRESH, &[]), vec![every]);
+    }
+
+    #[test]
     fn a_thousand_presence_topics_and_no_more() {
         let now = Instant::now();
         let mut t = Topics::new(now);
@@ -1130,7 +1149,7 @@ mod tests {
     }
 
     fn sub(rev: u64, raw: &[&str]) -> SubFrame {
-        SubFrame { rev, topics: topics(raw), since: HashMap::new() }
+        SubFrame { rev, topics: topics(raw), since: HashMap::new(), fresh: Vec::new() }
     }
 
     #[test]
