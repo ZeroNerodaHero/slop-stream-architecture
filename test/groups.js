@@ -345,7 +345,7 @@ const dropAll = async (ctx, names) => {
           ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
             seen.push(msg.type);
-            if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text: 'beep boop' }));
+            if (msg.type === 'ready') ws.send(JSON.stringify({ type: 'say', text: 'beep boop' }));
             if (msg.type === 'message' && msg.text === 'beep boop') {
               ws.close();
               resolve({ groups: msg.groups, from: msg.from });
@@ -448,7 +448,7 @@ const dropAll = async (ctx, names) => {
           ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
           ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text }));
+            if (msg.type === 'ready') ws.send(JSON.stringify({ type: 'say', text }));
             if (msg.type === 'message' && msg.text === text) {
               ws.close();
               resolve({ ok: true });
@@ -606,7 +606,7 @@ const dropAll = async (ctx, names) => {
           ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
           ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'error' || msg.type === 'history') {
+            if (msg.type === 'error' || msg.type === 'ready') {
               ws.close();
               resolve({ type: msg.type, error: msg.error });
             }
@@ -646,7 +646,7 @@ const dropAll = async (ctx, names) => {
             ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
             ws.onmessage = (e) => {
               const msg = JSON.parse(e.data);
-              if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text }));
+              if (msg.type === 'ready') ws.send(JSON.stringify({ type: 'say', text }));
               if (msg.type === 'message' && msg.text === text) {
                 ws.close();
                 resolve({ ok: true });
@@ -675,16 +675,18 @@ const dropAll = async (ctx, names) => {
           ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
           ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'error' || msg.type === 'history') {
+            if (msg.type === 'error' || msg.type === 'ready') {
               ws.close();
-              resolve({ type: msg.type, error: msg.error, n: (msg.messages || []).length });
+              resolve({ type: msg.type, error: msg.error });
             }
           };
           setTimeout(() => resolve({ timeout: true }), 8000);
         }),
       slug
     );
-    expect(singleNow.type === 'history' && singleNow.n >= 1, `with the role the single socket said ${JSON.stringify(singleNow)}`);
+    expect(singleNow.type === 'ready', `with the role the single socket said ${JSON.stringify(singleNow)}`);
+    const staffLatest = await body(await member.get(`/chat/${slug}/staff/before`));
+    expect((staffLatest.lines || []).some((l) => l.text === 'staff only ' + RUN), `with the role the latest staff lines are ${JSON.stringify(staffLatest)}`);
     const seen = await say('staff again ' + RUN);
     expect(seen.ok, `the owner's second line: ${JSON.stringify(seen)}`);
     await new Promise((r) => setTimeout(r, 1500));
@@ -842,7 +844,7 @@ const dropAll = async (ctx, names) => {
             ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
             ws.onmessage = (e) => {
               const msg = JSON.parse(e.data);
-              if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text }));
+              if (msg.type === 'ready') ws.send(JSON.stringify({ type: 'say', text }));
               if (msg.type === 'message' && msg.text === text) {
                 ws.close();
                 resolve({ ok: true });
@@ -919,7 +921,7 @@ const dropAll = async (ctx, names) => {
             ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
             ws.onmessage = (e) => {
               const msg = JSON.parse(e.data);
-              if (msg.type === 'history') next();
+              if (msg.type === 'ready') next();
               if (msg.type === 'message' && msg.text === texts[ids.length]) {
                 ids.push(msg.id);
                 next();
