@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
@@ -534,6 +534,7 @@ async fn put_file(
     Name(name): Name,
     me: Me,
     q: Result<Query<FileQuery>, QueryRejection>,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let q = q.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "bad type. one of image, video, sound"))?.0;
@@ -547,6 +548,14 @@ async fn put_file(
     };
     let kind = sniffed(&q.kind, &body)?;
     let row = ensure_row(&s.db, &name).await?;
+    // a picture is looked at (moderate.rs); a video or a sound is not
+    let looked = if kind.kind == "image" {
+        let ip = crate::ratelimit::forwarded_ip(&headers);
+        let up = crate::moderate::Upload { kind: crate::moderate::UploadKind::AboutFile, who: Some(me.0.as_ref().map_or(row, |a| a.id)), ip: ip.as_deref(), mime: kind.mime, key: None };
+        crate::moderate::check(&s, up, &body).await?
+    } else {
+        crate::moderate::Passed::default()
+    };
     for _ in 0..2 {
         let id = ((OsRng.next_u64() >> 11) as i64).max(1);
         let inserted: Option<i64> = match sqlx::query_scalar(
@@ -583,6 +592,7 @@ async fn put_file(
             log::error!("s3 about {name}: {e}");
             return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save the file"));
         }
+        crate::moderate::set_key(&s.db, looked.row, &about_key(row, id, kind.ext)).await;
         log::info!("{name}: about {} {id}, {} bytes", kind.kind, body.len());
         return Ok(Json(json!({ "id": id, "type": kind.kind, "src": file_src(&name, id) })));
     }

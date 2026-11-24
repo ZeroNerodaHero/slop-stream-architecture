@@ -339,6 +339,16 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
         }
         None => None,
     };
+    // the pictures' look (moderate.rs): a direct message keeps a flagged one, blurred, unless `DM_GROUP_IMAGE_BLOCK_SEXUAL`
+    {
+        let mut all: Vec<&str> = images.iter().map(String::as_str).collect();
+        if let Some(video) = &video {
+            all.push(&video.poster);
+        }
+        if let Err(why) = crate::moderate::may_post(&s.db, &all, crate::moderate::PlaceKind::Dm).await? {
+            return Err(ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, why));
+        }
+    }
     // the line answered must be this thread's: a lookup, paid for by the rate like the pictures'
     let reply = match body.reply {
         Some(id) => Some(quote(&s.db, me.id, other.id, id).await?.ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE))?),

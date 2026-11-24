@@ -25,10 +25,19 @@ export function posterSrc(id: string): string {
 /** Why a chat picture or video did not load: taken down by an admin (410, or 404 for one long gone), or a group channel's or a direct message's that this viewer may not see (401, 403). Null when it was something else (the network). */
 export type MediaGone = 'removed' | 'members only';
 
+/** A picture moderation flagged `sexual` (moderate.rs), kept in a direct message or a group channel: the api answers 409 for it, to anyone but its sender, until it is asked for with `?show=1` (`shownSrc`). Drawn blurred until clicked. */
+export type MediaSensitive = 'sensitive';
+
+/** A flagged picture's address once the viewer chose to see it. */
+export function shownSrc(src: string): string {
+  return `${src}?show=1`;
+}
+
 /** Asks the api why `src` did not load: an `<img>`'s error does not say. */
-export async function whyGone(src: string): Promise<MediaGone | null> {
+export async function whyGone(src: string): Promise<MediaGone | MediaSensitive | null> {
   try {
     const res = await fetch(src, { method: 'HEAD', credentials: 'same-origin' });
+    if (res.status === 409) return 'sensitive';
     if (res.status === 410 || res.status === 404) return 'removed';
     if (res.status === 401 || res.status === 403) return 'members only';
   } catch {

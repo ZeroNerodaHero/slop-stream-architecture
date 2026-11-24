@@ -11,7 +11,7 @@
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -1724,7 +1724,11 @@ async fn read_picture(s: &AppState, group: &str, key: &str, column: &str) -> Res
     }
 }
 
-async fn write_picture(s: &AppState, who: crate::auth::Account, group: &str, key: &str, column: &str, body: Bytes) -> Result<i64, ApiError> {
+/// The picture looked at (moderate.rs), then the bucket, then the column's time.
+#[allow(clippy::too_many_arguments)]
+async fn write_picture(s: &AppState, who: crate::auth::Account, headers: &HeaderMap, kind: crate::moderate::UploadKind, group: &str, key: &str, column: &str, body: Bytes) -> Result<i64, ApiError> {
+    let ip = crate::ratelimit::forwarded_ip(headers);
+    crate::moderate::check(s, crate::moderate::Upload { kind, who: Some(who.id), ip: ip.as_deref(), mime: "image/jpeg", key: Some(key) }, &body).await?;
     if let Err(e) = s3::put(&s.s3, key, &body, "image/jpeg").await {
         log::error!("s3 group picture {group}: {e}");
         return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save the picture"));
@@ -1743,12 +1747,12 @@ async fn get_icon(State(s): State<AppState>, Path(group): Path<String>) -> Resul
 }
 
 /// `PUT /api/groups/:group/icon`: a jpeg, from an owner. The new version goes out as `icon`.
-async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Bytes, BytesRejection>) -> ApiResult {
+async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
     need_owner(&s, who.id, &group).await?;
     let body = jpeg_in(body, MAX_ICON)?;
-    let version = write_picture(&s, who, &group, &icon_key(&group), "icon_at", body).await?;
+    let version = write_picture(&s, who, &headers, crate::moderate::UploadKind::GroupIcon, &group, &icon_key(&group), "icon_at", body).await?;
     groups::tell(&s, &group, "icon", json!({ "icon": version })).await;
     Ok(Json(json!({ "icon": version })))
 }
@@ -1759,12 +1763,12 @@ async fn get_banner(State(s): State<AppState>, Path(group): Path<String>) -> Res
 }
 
 /// `PUT /api/groups/:group/banner`: the same, 1 mb, as `banner`.
-async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Bytes, BytesRejection>) -> ApiResult {
+async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
     need_owner(&s, who.id, &group).await?;
     let body = jpeg_in(body, MAX_BANNER)?;
-    let version = write_picture(&s, who, &group, &banner_key(&group), "banner_at", body).await?;
+    let version = write_picture(&s, who, &headers, crate::moderate::UploadKind::GroupBanner, &group, &banner_key(&group), "banner_at", body).await?;
     groups::tell(&s, &group, "banner", json!({ "banner": version })).await;
     Ok(Json(json!({ "banner": version })))
 }

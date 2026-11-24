@@ -56,6 +56,7 @@ mod janny;
 mod media;
 mod schema;
 mod models;
+mod moderate;
 mod monitor;
 mod notify;
 mod oauth;

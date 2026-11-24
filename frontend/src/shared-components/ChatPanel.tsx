@@ -23,7 +23,7 @@ import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import { roleColorsAtom } from '@/infra/atoms/room-atoms';
 import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
-import { type MediaGone, whyGone } from '@/infra/chat-video';
+import { type MediaGone, shownSrc, whyGone } from '@/infra/chat-video';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, PICTURE_ACCEPT, splitFiles, STREAM_CHAT_VIDEO, STREAM_VIDEO_OFF, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
@@ -305,11 +305,23 @@ const THUMB_HOVER =
  * A direct message's pictures are drawn by the same (FriendChat.tsx), and so are a pinned line's in
  * a group channel's pins list (ServerRoom.tsx), `small` there: rows 4rem tall, one picture at most
  * 5rem, to sit in the narrow list.
+ *
+ * A picture moderation flagged (a direct message's or a group channel's, `sensitive`) is drawn
+ * blurred with a `show` button over it; the click draws it as any other, full size view included.
+ * A stream's chat never has one: the api refuses them there.
  */
 export function ChatImages({ ids, small = false }: { ids: string[]; small?: boolean }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
   // pictures that would not load, and why (an admin took it down, or it is not this viewer's to see): the word stands in their place
   const [gone, setGone] = useState<Record<string, MediaGone>>({});
+  // flagged pictures (the api's 409): false while blurred, true once `show` was pressed
+  const [sensitive, setSensitive] = useState<Record<string, boolean>>({});
+  const srcOf = (id: string) => (id in sensitive ? shownSrc(pictureSrc(id)) : pictureSrc(id));
+  const failed = (id: string) =>
+    void whyGone(srcOf(id)).then((w) => {
+      if (w === 'sensitive') setSensitive((all) => (id in all ? all : { ...all, [id]: false }));
+      else if (w) setGone((all) => ({ ...all, [id]: w }));
+    });
 
   if (ids.length === 0) return null;
   const many = ids.length > 1;
@@ -325,6 +337,24 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
             const i = r * first + j;
             const why = gone[id];
             if (why) return <MediaGoneNote key={id} why={why} className={many ? 'min-w-0 flex-1 justify-center' : undefined} />;
+            if (sensitive[id] === false) {
+              return (
+                <span
+                  key={id}
+                  data-sensitive={id}
+                  className={cn(
+                    'relative flex flex-col items-center justify-center gap-1 overflow-hidden bg-backgroundTertiary',
+                    many ? 'min-w-0 flex-1' : small ? 'h-20 w-32 max-w-full' : 'h-[7.5rem] w-48 max-w-full'
+                  )}
+                >
+                  <img src={srcOf(id)} alt="" aria-hidden draggable={false} className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
+                  <span className="relative bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
+                  <Button size="sm" className="relative" aria-label="show sensitive picture" onClick={() => setSensitive((all) => ({ ...all, [id]: true }))}>
+                    show
+                  </Button>
+                </span>
+              );
+            }
             return (
               <button
                 key={id}
@@ -335,9 +365,9 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                 onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
               >
                 <img
-                  src={pictureSrc(id)}
+                  src={srcOf(id)}
                   alt=""
-                  onError={() => void whyGone(pictureSrc(id)).then((w) => w && setGone((all) => ({ ...all, [id]: w })))}
+                  onError={() => failed(id)}
                   className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')}
                 />
               </button>
@@ -349,6 +379,8 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
         createPortal(
           <PictureView
             ids={ids}
+            srcOf={srcOf}
+            blurred={(id) => sensitive[id] === false}
             at={view.at}
             onStep={(by) => setView((cur) => (cur ? { ...cur, at: (cur.at + by + ids.length) % ids.length } : cur))}
             onClose={() => setView(null)}
@@ -361,6 +393,10 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
 
 interface PictureViewProps {
   ids: string[];
+  /** Where each is fetched from: a flagged one's `?show=1` address. */
+  srcOf: (id: string) => string;
+  /** A flagged one not shown yet: blurred here too, reached by the arrows from one that was. */
+  blurred: (id: string) => boolean;
   /** Which of `ids` is up. */
   at: number;
   /** The arrows and the arrow keys: one on, or one back, round the end. */
@@ -379,7 +415,7 @@ const PICTURE_EDGE = 3;
  * closes it too, and so does a click on the grey beside the picture. Several on the line get
  * arrows at the edges, and the arrow keys.
  */
-function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
+function PictureView({ ids, srcOf, blurred, at, onStep, onClose }: PictureViewProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** The press that began this click was beside the picture too: a drag off the picture is not a close. */
   const pressedBeside = useRef(false);
@@ -431,7 +467,7 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
       {shown && (
         <img
           key={shown}
-          src={pictureSrc(shown)}
+          src={srcOf(shown)}
           alt=""
           draggable={false}
           onLoad={(e) => {
@@ -440,7 +476,7 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
           }}
           // as wide as the window less the edge, or as tall as that, whichever comes first; the height follows from the ratio. unseen until the ratio is known
           style={ratio === undefined ? undefined : { width: `min(${span}cqw, calc(${span}cqh * ${ratio}))` }}
-          className={cn('shrink-0 self-center', ratio === undefined && 'invisible')}
+          className={cn('shrink-0 self-center', ratio === undefined && 'invisible', blurred(shown) && 'blur-2xl')}
         />
       )}
       {/* everything under the picture: the grey with a little of the blue in it */}

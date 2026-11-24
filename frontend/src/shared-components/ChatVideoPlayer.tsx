@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { type ChatVideo, type MediaGone, posterSrc, videoSrc, whyGone } from '@/infra/chat-video';
+import { type ChatVideo, type MediaGone, posterSrc, shownSrc, videoSrc, whyGone } from '@/infra/chat-video';
+import { Button } from '@/shared-components/Button';
 import { MEDIA_SIZED } from '@/infra/keyboard';
 import { cn } from '@/utils/cn';
 
@@ -10,16 +11,28 @@ import { cn } from '@/utils/cn';
  * playing on its own. As tall as a picture is at most, five lines (`max-h-[7.5rem]`), or the
  * pins list's `small` row. Every chat draws it: a stream's, a group channel's, a direct message.
  * One an admin took down (its poster goes with it) says "removed" instead; one this viewer may not
- * see says so.
+ * see says so. One whose poster moderation flagged (a direct message's or a group channel's, the
+ * api's 409) is covered, its poster blurred, until `show` is pressed.
  */
 export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; small?: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [gone, setGone] = useState<MediaGone | null>(null);
+  // the poster was flagged: false while covered, true once `show` was pressed
+  const [sensitive, setSensitive] = useState<boolean | null>(null);
   // the poster is asked for at once, the video only on play: a poster that will not load is the word on the video too
   useEffect(() => {
     let live = true;
     const probe = new Image();
-    probe.addEventListener('error', () => void whyGone(posterSrc(video.poster)).then((why) => live && why && setGone(why)), { once: true });
+    probe.addEventListener(
+      'error',
+      () =>
+        void whyGone(posterSrc(video.poster)).then((why) => {
+          if (!live || !why) return;
+          if (why === 'sensitive') setSensitive(false);
+          else setGone(why);
+        }),
+      { once: true }
+    );
     probe.src = posterSrc(video.poster);
     return () => {
       live = false;
@@ -32,14 +45,30 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
     const seen = new ResizeObserver(() => el.dispatchEvent(new Event(MEDIA_SIZED)));
     seen.observe(el);
     return () => seen.disconnect();
-  }, []);
+    // the player is drawn again once a covered one is shown
+  }, [sensitive]);
   if (gone) return <MediaGoneNote why={gone} />;
+  const poster = sensitive === null ? posterSrc(video.poster) : shownSrc(posterSrc(video.poster));
+  if (sensitive === false) {
+    return (
+      <span
+        data-sensitive={video.id}
+        className={cn('relative mt-1 flex flex-col items-center justify-center gap-1 overflow-hidden bg-black', small ? 'h-20 w-32' : 'h-[7.5rem] w-48', 'max-w-full')}
+      >
+        <img src={poster} alt="" aria-hidden draggable={false} className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
+        <span className="relative bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
+        <Button size="sm" className="relative" aria-label="show sensitive video" onClick={() => setSensitive(true)}>
+          show
+        </Button>
+      </span>
+    );
+  }
   return (
     <video
       ref={ref}
       data-chat-video={video.id}
       src={videoSrc(video.id)}
-      poster={posterSrc(video.poster)}
+      poster={poster}
       controls
       preload="none"
       playsInline

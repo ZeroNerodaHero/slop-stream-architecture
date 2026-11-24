@@ -6,19 +6,26 @@
 //!
 //! Who may post one and who is served one is media.rs's: a stream's are public, a group
 //! channel's and a direct message's are for those who may read them.
+//!
+//! Each is looked at before it is kept (moderate.rs): its `sexual` and `violence/graphic` go on
+//! the row (`nsfw`, `graphic`) for the say to check. One with `nsfw` is not served to anyone but
+//! its uploader without `?show=1`: 409 `sensitive` instead, which the page reads as "blur it
+//! until clicked" (ChatPanel.tsx `ChatImages`).
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::Me;
 use crate::media::{self, Kind};
+use crate::moderate::{self, UploadKind};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
@@ -51,21 +58,25 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a picture"));
     };
     crate::auth::limit(&s, &format!("rl:chatimg:{}", me.id), RATE_WINDOW_SECS, RATE_PER_WINDOW, "slow down").await?;
-    let id = store(&s, &me, mime, &body, crate::ratelimit::forwarded_ip(&headers).as_deref()).await?;
+    let id = store(&s, &me, UploadKind::ChatImage, mime, &body, crate::ratelimit::forwarded_ip(&headers).as_deref()).await?;
     Ok(Json(json!({ "id": id })))
 }
 
-/// A chat picture kept: the row (postgres makes the id, the same as every other id, with the
-/// bytes' sha256 and the uploader's address), then the bytes; a failed save deletes the row.
-/// The upload's way in, and a chat video's poster's (chat_videos.rs), which the api drew itself.
-pub(crate) async fn store(s: &AppState, me: &crate::auth::Account, mime: &str, body: &[u8], ip: Option<&str>) -> Result<Uuid, ApiError> {
+/// A chat picture kept: the look (moderate.rs, which may refuse it), the row (postgres makes the
+/// id, the same as every other id, with the bytes' sha256, the uploader's address and the look's
+/// flags), then the bytes; a failed save deletes the row. The upload's way in, and a chat
+/// video's poster's (chat_videos.rs), which the api drew itself: the bytes looked at are the ones kept.
+pub(crate) async fn store(s: &AppState, me: &crate::auth::Account, kind: UploadKind, mime: &str, body: &[u8], ip: Option<&str>) -> Result<Uuid, ApiError> {
+    let passed = moderate::check(s, moderate::Upload { kind, who: Some(me.id), ip, mime, key: None }, body).await?;
     let id: Uuid = match sqlx::query_scalar(
-        "INSERT INTO chat_images (id, mime, created_by, sha256, uploader_ip) VALUES (gen_random_uuid(), $1, $2, $3, $4) RETURNING id",
+        "INSERT INTO chat_images (id, mime, created_by, sha256, uploader_ip, nsfw, graphic) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(mime)
     .bind(me.id)
     .bind(media::sha256_hex(body))
     .bind(ip)
+    .bind(passed.nsfw)
+    .bind(passed.graphic)
     .fetch_one(&s.db)
     .await
     {
@@ -80,26 +91,43 @@ pub(crate) async fn store(s: &AppState, me: &crate::auth::Account, mime: &str, b
         log::warn!("{}: chat picture: {e}", me.name);
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not save the picture"));
     }
+    moderate::set_key(&s.db, passed.row, &key_of(id, mime)).await;
     Ok(id)
 }
 
+#[derive(Deserialize, Default)]
+struct ShowQuery {
+    /// `1`: the viewer clicked a blurred one, serve it.
+    show: Option<String>,
+}
+
+/// The words, and status, for a flagged picture asked for without `?show=1`.
+const SENSITIVE: &str = "sensitive";
+
 /// `GET /api/chat-images/:id`: the picture, to whoever may see it (media.rs `access`): anyone for
 /// a stream's, cached a day; a member or one of the two for a group's or a direct message's, not
-/// cached. 401/403 for anyone else, 410 `removed` for one an admin took down.
-async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<Response, ApiError> {
+/// cached. 401/403 for anyone else, 410 `removed` for one an admin took down, 409 `sensitive` for
+/// one with `nsfw` asked for by anyone but its uploader without `?show=1`.
+async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     };
-    let Some(access) = media::access(&s.db, Kind::Image, id, me.map(|m| m.id)).await? else {
+    let viewer = me.map(|m| m.id);
+    let Some(access) = media::access(&s.db, Kind::Image, id, viewer).await? else {
         return Err(media::missing(&s.db, Kind::Image, id).await);
     };
     if let Some(no) = media::refused(&access) {
         return Err(no);
     }
-    let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
-    let Some(mime) = mime else {
+    let row: Option<(String, bool, Option<Uuid>)> =
+        sqlx::query_as("SELECT mime, nsfw, created_by FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
+    let Some((mime, nsfw, by)) = row else {
         return Err(media::missing(&s.db, Kind::Image, id).await);
     };
+    let shown = q.ok().and_then(|Query(q)| q.show).is_some_and(|v| v == "1");
+    if nsfw && !shown && (viewer.is_none() || by != viewer) {
+        return Err(ApiError::new(StatusCode::CONFLICT, SENSITIVE));
+    }
     let bytes = match s3::get(&s.s3, &key_of(id, &mime)).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return Err(ApiError::new(StatusCode::NOT_FOUND, "no such picture")),

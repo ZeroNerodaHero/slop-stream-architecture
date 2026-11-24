@@ -69,6 +69,7 @@ use uuid::Uuid;
 use crate::auth::{self, Me};
 use crate::chat::clean_text;
 use crate::presence::{self, Presence};
+use crate::moderate::{self, UploadKind};
 use crate::s3;
 use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
 
@@ -217,6 +218,16 @@ async fn lift_object(s: &AppState, from: &str, to: &str) -> Result<Option<Vec<u8
     Ok(Some(bytes))
 }
 
+/// The look before a picture of the name `row` is kept (moderate.rs), the exact bytes the bucket
+/// gets. Its uploader is the login, or the name's own row for a dummy-password write. Not for
+/// `lift_object` and `lift_legacy`: those move a picture already served under the name, on a read.
+#[allow(clippy::too_many_arguments)]
+async fn look(s: &AppState, me: &Me, row: Uuid, headers: &HeaderMap, kind: UploadKind, mime: &str, key: Option<&str>, body: &[u8]) -> Result<moderate::Passed, ApiError> {
+    let ip = crate::ratelimit::forwarded_ip(headers);
+    let who = me.0.as_ref().map_or(row, |a| a.id);
+    moderate::check(s, moderate::Upload { kind, who: Some(who), ip: ip.as_deref(), mime, key }, body).await
+}
+
 async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
     // a name held after a rename answers for the name it became (docs/ids.md): a chat line keeps
     // the name it was said under, and the page fetches its face by that name for the hold's length
@@ -346,6 +357,7 @@ async fn put_avatar(
     Name(name): Name,
     me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
@@ -355,6 +367,7 @@ async fn put_avatar(
     // bucket, then the version: a failed save leaves the old version number, so a cached
     // url does not start pointing at a picture that never landed.
     let id = ensure_row(&s.db, &name).await?;
+    look(&s, &me, id, &headers, UploadKind::Avatar, "image/jpeg", Some(&avatar_key(id)), &body).await?;
     if let Err(e) = s3::put(&s.s3, &avatar_key(id), &body, "image/jpeg").await {
         return Err(picture_failed(&name, "could not save the picture", e));
     }
@@ -485,6 +498,7 @@ async fn put_thumb(
     Name(name): Name,
     me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
@@ -492,6 +506,7 @@ async fn put_thumb(
     let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
     // the row's id is the key in the bucket; the thumbs table still lists them by name
     let row = ensure_row(&s.db, &name).await?;
+    let looked = look(&s, &me, row, &headers, UploadKind::Thumb, "image/jpeg", None, &body).await?;
     for _ in 0..2 {
         let id = new_thumb_id();
         // the cap is a count in the insert's own statement, but a statement only sees rows
@@ -535,6 +550,7 @@ async fn put_thumb(
             }
             return Err(thumb_failed(&name, "could not save the picture", e));
         }
+        moderate::set_key(&s.db, looked.row, &thumb_key(row, id)).await;
         log::info!("{name}: thumbnail {id}, {} bytes", body.len());
         return Ok(Json(json!({ "id": id })));
     }
@@ -716,12 +732,14 @@ async fn put_asset(
     Name(name): Name,
     me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let (body, kind) = asset_body(body)?;
     let row = ensure_row(&s.db, &name).await?;
+    let looked = look(&s, &me, row, &headers, UploadKind::Asset, kind.mime, None, &body).await?;
     for _ in 0..2 {
         let id = new_thumb_id();
         let mut tx = s.db.begin().await?;
@@ -762,6 +780,7 @@ async fn put_asset(
             }
             return Err(asset_failed(&name, "could not save the picture", e));
         }
+        moderate::set_key(&s.db, looked.row, &asset_key(row, id, kind.ext)).await;
         log::info!("{name}: scene picture {id}, {} bytes, {}", body.len(), kind.mime);
         return Ok(Json(json!({ "id": id, "mime": kind.mime, "bytes": body.len() })));
     }
@@ -839,12 +858,14 @@ async fn put_offline(
     Name(name): Name,
     me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let body = jpeg_body(body, MAX_OFFLINE_BYTES, offline_too_big)?;
     let id = ensure_row(&s.db, &name).await?;
+    look(&s, &me, id, &headers, UploadKind::Offline, "image/jpeg", Some(&offline_key(id)), &body).await?;
     if let Err(e) = s3::put(&s.s3, &offline_key(id), &body, "image/jpeg").await {
         return Err(offline_failed(&name, "could not save the picture", e));
     }
