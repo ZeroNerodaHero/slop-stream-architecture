@@ -22,7 +22,6 @@ pub(crate) fn versioned_cache(res: Result<Response, ApiError>, query: Option<&st
     Ok(res)
 }
 
-pub(crate) const HOME_CACHE: &str = "public, max-age=0, s-maxage=3, stale-while-revalidate=10";
 pub(crate) const SESSIONS_CACHE: &str = "public, max-age=30, s-maxage=60";
 pub(crate) const ABOUT_PAGE_CACHE: &str = "public, max-age=0, s-maxage=30";
 pub(crate) const PROVIDERS_CACHE: &str = "public, max-age=300";
@@ -344,8 +343,8 @@ mod tests {
         use axum::routing::get;
         let app = axum::Router::new()
             .route("/private", get(|| async { "mine" }))
-            .route("/public", get(|| async { "everyone's" }).layer(map_response(public_cache(HOME_CACHE))))
-            .route("/public-fails", get(|| async { StatusCode::BAD_REQUEST }).layer(map_response(public_cache(HOME_CACHE))))
+            .route("/public", get(|| async { "everyone's" }).layer(map_response(public_cache(SESSIONS_CACHE))))
+            .route("/public-fails", get(|| async { StatusCode::BAD_REQUEST }).layer(map_response(public_cache(SESSIONS_CACHE))))
             .route("/picture", get(|| async { ([(header::CACHE_CONTROL, PUBLIC_CACHE)], "jpeg") }))
             .fallback(|| async { StatusCode::NOT_FOUND })
             .layer(map_response(no_store_by_default));
@@ -355,7 +354,7 @@ mod tests {
         let http = reqwest::Client::new();
         for (path, want) in [
             ("/private", PRIVATE_CACHE),
-            ("/public", HOME_CACHE),
+            ("/public", SESSIONS_CACHE),
             ("/public-fails", PRIVATE_CACHE),
             ("/picture", PUBLIC_CACHE),
             ("/nowhere", PRIVATE_CACHE),
