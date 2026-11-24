@@ -133,3 +133,171 @@ the page is on loopback only; nothing is published to the internet. from your la
 ## `docs/tech-docs/style.css`
 
 the tech docs' look and every animation. the pages reach these by class and carry no css of their own (`.cursor/skills/tech-docs/SKILL.md` lists the classes). the site's palette (`frontend/src/app/globals.css`), 1px strokes, no radius, no shadow (`.cursor/rules/no-box-shadow.mdc`). every animation shows a fact: a dot moving is data moving, a blink is live, a bar filling is a limit. all of them stop under `prefers-reduced-motion`, at the bottom of the file, with the end state readable.
+
+## `.env.example`
+
+every knob in the root `.env.example`, with what its comment said. `./scripts/deploy.sh` appends any of these a box's `.env` does not have yet (`sync_env_keys`), with the default shown here; it used to copy the comment above each one along with it, and now copies just the line.
+
+| variable | default | what it is |
+|---|---|---|
+| `SHOW_DOCS` | `0` | the human docs (docs/tech-docs, short pages the tech-docs skill writes from the last 100 commits) at http://localhost:42069/tech-docs while `npm run dev` runs in frontend/. 1 serves them, 0 does not. only vite reads this; the docker stack ignores it, and no deploy ever serves them. |
+| `PUBLIC_IP` | `127.0.0.1` | the ip people type in the browser. deploy.sh fills this in. 127.0.0.1 counts as "not set": deploy.sh will detect the ip instead. |
+| `CARGO_BUILD_JOBS` | `1` | how many cores the rust build may use. a full ./scripts/deploy.sh overwrites this every run (ram / 1.5 GB, capped at the core count); partial runs and --pull compute the same number but leave this line alone. to force a value: CARGO_BUILD_JOBS=2 ./scripts/deploy.sh |
+| `IMAGES`<br>`TAG` | (empty)<br>(empty) | where ./scripts/deploy.sh gets the images. empty IMAGES: the registry the git remote implies (github.com/<you>/… → ghcr.io/<you>/), where the github action pushes them on every push to main. set it for another registry. TAG is what the last deploy ran (a commit, or a release like v12: the action tags every image with its v<n>); deploy.sh writes it. `./scripts/deploy.sh --build` compiles the images here instead and ignores both. |
+| `ENV_NAME` | (empty) | what this box is called in /api/health and in every stored error. empty: deploy.sh fills in this machine's hostname. use prod, dev, ... if you prefer.  see docs/debugging.md |
+| `ADMIN_NAMES` | (empty) | who may read /api/errors and open /admin: account names, comma separated. empty = nobody. each name needs an account on this box (sign up, or ./scripts/deploy.sh passwd <name>), else the api drops it at boot |
+| `OPS_TOKEN` | (empty) | a machine's key for /api/errors (Authorization: Bearer ...). empty = off.  make one: openssl rand -hex 32 16 characters at least: a shorter one is ignored, with a warn line in the api log |
+| `PUBLIC_URL`<br>`GOOGLE_CLIENT_ID`<br>`GOOGLE_CLIENT_SECRET`<br>`DISCORD_CLIENT_ID`<br>`DISCORD_CLIENT_SECRET` | (empty)<br>(empty)<br>(empty)<br>(empty)<br>(empty) | log in with google, discord (docs/accounts.md). empty = that provider is off, no button. PUBLIC_URL is the https origin people type, no trailing slash. each provider's console needs the redirect uri {PUBLIC_URL}/api/oauth/<google\|discord>/callback, exactly (https://hardasfuckin.org/api/oauth/google/callback, .../discord/callback). google refuses a bare ip and plain http (except localhost): this needs a real domain + cert. |
+| `TURNSTILE_ENABLED`<br>`TURNSTILE_SITE_KEY`<br>`TURNSTILE_SECRET` | `false`<br>(empty)<br>(empty) | cloudflare turnstile, a human check on signup and login (docs/cloudflare-turnstile.md). on only with TURNSTILE_ENABLED=true and both keys; the flag on with a key missing logs an error and stays off. the site key is public (the pages draw the widget with it); the secret never leaves the api. |
+| `CF_PURGE_TOKEN`<br>`CF_ZONE_ID` | (empty)<br>(empty) | cloudflare in front (docs/cloudflare-cache-rules.md): a takedown of a public picture or video purges its url (under PUBLIC_URL) from the edge. the token's only permission: Zone > Cache Purge, on this zone alone. either empty = no purge (the edge keeps it until its max-age runs out) |
+| `DUMMY_STREAMS`<br>`DUMMY_PASSWORD` | `0`<br>(empty) | fake streams for styling and debugging: gifs bouncing around, named dummy-mango, dummy-pixel, ... set a count and any password, then: ./scripts/deploy.sh dummy the password is what lets the dummy box publish dummy-* names. nobody else can. |
+| `DUMMY_NAMES` | (empty) | optional: your own names instead, comma separated |
+| `S3_ENDPOINT`<br>`S3_BUCKET`<br>`S3_REGION`<br>`S3_ACCESS_KEY`<br>`S3_SECRET_KEY` | `off`<br>`stream`<br>`us-east-1`<br>(empty)<br>(empty) | where objects go. off (the default): the s3 container in docker-compose (seaweedfs), bucket "stream", no aws bill. set a url to use a real bucket instead, and then the key, the secret and the bucket name. the container still runs either way; a url only changes where the api sends.   https://s3.us-east-1.amazonaws.com   https://<account>.r2.cloudflarestorage.com |
+| `S3_PATH_STYLE` | (empty) | empty: path-style, except amazonaws.com which wants virtual-hosted. 1 or 0 forces it. the container always uses path-style, and this line does not apply to it. |
+| `MODERATION_ENABLED`<br>`OPENAI_API_KEY` | `false`<br>(empty) |  |
+| `CHAT_PERSIST` | (empty) | keep chat lines in postgres, so a room can be scrolled past the last 500, searched, and jumped to. empty or 0: redis only (the last 500, gone a week after the last line). 1 turns it on. the chat process reads this. the api process does not. |
+| `GROUPS_PER_OWNER` | (empty) | how many groups one login may own: the ones it made plus the ones it was named owner of. empty: 2. at most 8, the groups a login may be in (its own included); more is read as 8. the pages offer create under it, and the api refuses at it. see docs/groups.md |
+| `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
+
+## `docker-compose.yml`
+
+- test stream certs makes the https cert once, then exits pages builds the react pages, copies them into a volume, then exits frontend caddy. serves the pages. /api and /watch -> api, /ws and /thumb -> video, /chat -> chat, http -> https api save a bio and a picture, go live, heartbeat, start/end log, the /watch page. also /api/health and /api/errors chat the text chat. websocket per viewer, last 500 lines per stream in redis database the bio and the session log. not the video. plus a second database, debug, for the pages' error reports redis who is live s3 a seaweedfs bucket on this machine. S3_ENDPOINT=off (the default) uses it; a url uses that bucket instead video rust. one upload in, copies it out. media on udp 7882 dummy fake streams for styling: gifs bouncing around. DUMMY_STREAMS in .env says how many voice rust, video's image as `video voice`. voice channels, media on udp 7883. off until `--profile voice` (see the service below) start: ./scripts/deploy.sh everything, first time or any time ./scripts/deploy.sh api only the api (also: frontend, video, dummy) ./scripts/deploy.sh --pull git pull, then rebuild what changed since the last deploy that ended well ./scripts/deploy.sh --images TAG no build here: pull the images ./scripts/ship.sh pushed from a laptop (IMAGES=ghcr.io/<you>/ and TAG in .env name them; empty = built here) (by hand: cp .env.example .env, set PUBLIC_IP, BUILD=$(git rev-parse --short HEAD) docker compose up -d --build) the images carry BUILD and are named after the last commit that touched what they are built from (./image-paths), so a full deploy (or `up -d --build`) restarts video whenever that moved since the last one: every live stream ends. deploy.sh warns first. open: https://<PUBLIC_IP from the .env file> ports: 80/tcp 443/tcp 7882/udp dummies: in .env set DUMMY_STREAMS=3 and DUMMY_PASSWORD=anyword, then ./scripts/deploy.sh dummy peek: docker compose exec database psql -U stream docker compose exec database psql -U stream -d debug (the pages' error reports) docker compose exec redis redis-cli health: https://<PUBLIC_IP>/api/health errors: https://<PUBLIC_IP>/admin (ADMIN_NAMES in .env) (at `name: stream`)
+- every long-running container logs through this: 3 files of 10 MB each, then the oldest goes. docker's default json-file has no cap, and caddy writes a line per request (home polls every 3s per open tab), so a lab left alone fills its disk. (at `x-logging: &default-logging`)
+- builds the react pages (vite) and copies them into the volume caddy serves. runs once per deploy, then exits. redeploying pages never restarts caddy. (at `build:`)
+- the commit, from deploy.sh. the pages send it with every error report (at `BUILD: ${BUILD:-dev}`)
+- image names spelled out: compose would derive them from `name:` above, and chat below names the api image by hand, so they must not move with the project name (at `image: ${IMAGES:-}stream-pages:${TAG:-latest}`)
+- not read by caddy. a change forces a restart so the new cert is loaded. (at `PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}`)
+- off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
+- the pages' error reports. a second database in the same postgres, made by the api when missing. the api runs fine without it. see docs/debugging.md (at `DEBUG_DATABASE_URL: postgres://stream:stream@database:5432/debug`)
+- names starting with dummy- need this password to go live (the dummy box has it) (at `DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}`)
+- what this box is called in /api/health and in stored errors. deploy.sh writes the hostname into .env when it is empty; still empty (by hand) and the api says "unnamed" (at `ENV_NAME: ${ENV_NAME:-}`)
+- who may read /api/errors: these accounts (the /admin page), or a bearer token (a machine) (at `ADMIN_NAMES: ${ADMIN_NAMES:-}`)
+- log in with google, discord (docs/accounts.md). a provider is on only with both its id and secret, and PUBLIC_URL (callback: {PUBLIC_URL}/api/oauth/<provider>/callback) (at `PUBLIC_URL: ${PUBLIC_URL:-}`)
+- cloudflare turnstile on signup and login (docs/cloudflare-turnstile.md). on only with TURNSTILE_ENABLED=true and both keys (at `TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-false}`)
+- purge a taken-down public picture or video from cloudflare's cache, by its url under PUBLIC_URL. either empty: no purge. see docs/cloudflare-cache-rules.md (at `CF_PURGE_TOKEN: ${CF_PURGE_TOKEN:-}`)
+- how many groups one login may own. empty: 2. see docs/groups.md (at `GROUPS_PER_OWNER: ${GROUPS_PER_OWNER:-}`)
+- signs voice grants and lets the voice container in. empty: voice is off (joins are a 503) (at `VOICE_SECRET: ${VOICE_SECRET:-}`)
+- where a moderator's mute or disconnect is sent (voice.rs `tell_voice`): the voice container, inside (at `VOICE_URL: http://voice:7881`)
+- off (the default): the s3 container below. a url: that bucket, with the key and secret. the container's own login is not these two; it is the literals on the s3 service. (at `S3_ENDPOINT: ${S3_ENDPOINT:-off}`)
+- the built pages. /watch/<name> is served from here with that name's preview tags (at `PAGES_DIR: /srv`)
+- no host port. browsers reach this through the frontend, at /api and /watch (at `chat:`)
+- the text chat. the api binary run as `api chat`, same image, no extra build. one websocket per viewer at /chat/<name>; the live lines are a redis stream. see docs/chat.md. the chat only: presence and the pushes are the `events` container below. CHAT_PERSIST=1 also writes each line to postgres, so a room can be scrolled, searched and jumped to. (at `image: ${IMAGES:-}stream-api:${TAG:-latest}`)
+- off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
+- empty or 0: redis only, last 500 lines. 1: also keep every line in postgres. (at `CHAT_PERSIST: ${CHAT_PERSIST:-}`)
+- the site admins see every channel of a server, kept to a role or not (docs/groups.md): the same names the api reads (at `ADMIN_NAMES: ${ADMIN_NAMES:-}`)
+- healthy, not started: the api creates the tables (accounts included) on its way up, and the chat reads them from its first socket on (at `api:`)
+- the image's own check looks at the api port; this one looks at ours, and asks for a real answer: a wedged process still accepts connections (the kernel's backlog does), it just never answers. GET /health is "ok" from the same listener /chat hangs off (at `healthcheck:`)
+- a socket per viewer per room: a file descriptor each. docker's default soft limit is 1024 on recent daemons, and a rust process does not raise its own the way go does: a thousand viewers, then accept fails. see docs/transition.md (at `ulimits:`)
+- no host port. browsers reach this through the frontend, at /chat (at `events:`)
+- the gateway: presence and the pushes. one websocket per browser at /events, open on every page; it marks its name here (`seen:<name>`), says which names it watches, and is told `me`, `presence`, `live`, `ended` and `renamed` as they happen. the facts come off the `events` redis stream the api writes (go-live's `live` when video has the publisher, stop's `ended`, a status change); this process tails it and fans each one out to the sockets that watch the name. the api binary run as `api events`, same image, no extra build. it reads redis and the database, nothing else, and keeps no state that matters: if it restarts, browsers reconnect in 3s and it replays the last 10s of the stream. see docs/status.md (at `image: ${IMAGES:-}stream-api:${TAG:-latest}`)
+- off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
+- healthy, not started: the api creates the tables (accounts included) on its way up, and the gateway reads them from its first hello on (at `api:`)
+- one socket per browser, every page: a file descriptor each (see the chat's note) (at `ulimits:`)
+- no host port. browsers reach this through the frontend, at /events (at `home:`)
+- the home list: every live stream and how many are watching it, in memory, from the facts on the `events` redis stream (`live`, `viewers`, `ended`), built from video's own word at boot and checked against it every 30s. answers GET /api/streams once per home page load; the page then takes the same facts over the events socket, so nothing polls. first on, first shown; the ranking of the home page, when there is one, goes here. the api binary run as `api home`, same image, no extra build. see docs/status.md and api/src/home.rs (at `image: ${IMAGES:-}stream-api:${TAG:-latest}`)
+- off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
+- no host port. browsers reach this through the frontend, at /api/streams (at `database:`)
+- no host port. older docker leaks "127.0.0.1" ports to the lan. peek with: docker compose exec database psql -U stream (at `healthcheck:`)
+- no save file. a restart loses who is live, every room's chat history and the login/signup counters. the database keeps the bio and the accounts. (at `command: redis-server --save "" --appendonly no`)
+- no host port. peek with: docker compose exec redis redis-cli (at `healthcheck:`)
+- minio's images are not public any more. seaweedfs `weed mini` is one process: s3 on :8333, and it creates S3_BUCKET itself. login is stream / stream-s3, the same literals api/src/s3.rs signs with when S3_ENDPOINT is off. path-style. (at `image: chrislusf/seaweedfs:4.48`)
+- a 403 is the server up and asking for the signature. no answer is down. no host port. the bucket name is S3_BUCKET. (at `healthcheck:`)
+- processes + threads, together. every live stream costs one ffmpeg (a few threads) for its thumbnail, and anyone can publish; this stops a flood from starving the box instead of the stream. room for 25 or so streams. no cpu or memory limit on purpose: small vms vary, and a limit that kills video ends every stream at once. (at `pids_limit: 256`)
+- off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
+- a picture of every live stream every few seconds, served at /thumb/<name>.jpg. THUMBS=0 turns it off (at `THUMB_EVERY_SECS: "5"`)
+- webrtc_ice at error: at warn it logs one line per stray udp packet (at `RUST_LOG: "warn,video=info,webrtc_ice=error"`)
+- all the video packets, one port. host port must equal container port. (at `- "7882:7882/udp"`)
+- 7880 (the setup websocket) stays inside. browsers reach it through the frontend, at /ws (at `dummy:`)
+- fake streams for styling and debugging. each one is a few gifs (random-media/gifs, dealt out at random) bouncing around, the stream's name on top, a clock, plus a quiet tone. same binary as video, run as `video dummy`, with ffmpeg drawing the picture. DUMMY_STREAMS=0 means it sits idle. change .env, then: ./scripts/deploy.sh dummy (at `build:`)
+- one ffmpeg per fake stream, like video above: ~30 threads each on a many-core box (the lavfi source's pool grows with the cores). raise it before DUMMY_STREAMS goes past ~15 (at `pids_limit: 512`)
+- optional: your own names, comma separated. default: dummy-mango, dummy-pixel, ... (at `DUMMY_NAMES: ${DUMMY_NAMES:-}`)
+- pretend viewers talk in each dummy room. leave empty to turn that off. (at `CHAT_WS_URL: ws://chat:4100`)
+- the voice sfu for the servers' voice channels: same image as video, run as `video voice` (video/src/voice.rs). a page brings a grant from the api, we redeem it with VOICE_SECRET (the api's own) for the person and the room, and tell the api who is in. off by default: the profile keeps a plain `up -d` and deploy.sh from creating it. turn it on with a VOICE_SECRET in .env, udp 7883 open in the firewall (docs/voice.md), then docker compose --profile voice up -d voice until then /voice is a 502 and the api answers voice joins with a 503. (at `image: ${IMAGES:-}stream-video:${TAG:-latest}`)
+- no ffmpeg here, only webrtc. the same cap as video (at `pids_limit: 256`)
+- off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)
+- empty: no grant can be redeemed, and every join is "voice is not open" (at `VOICE_SECRET: ${VOICE_SECRET:-}`)
+- webrtc_ice at error: at warn it logs one line per stray udp packet (at `RUST_LOG: "warn,video=info,webrtc_ice=error"`)
+- the image's own check looks at video's port; this one looks at ours (at `healthcheck:`)
+- all the voice packets, one port. host port must equal container port. (at `- "7883:7883/udp"`)
+- 7881 (the voice websocket) stays inside. browsers reach it through the frontend, at /voice (at `volumes:`)
+
+## `Cargo.toml`
+
+- Smaller binaries. strip runs after the link, so it saves image size, not build memory (that is CARGO_BUILD_JOBS, in deploy.sh). debug = false is already the release default; spelled out so nobody wonders. (at `[profile.release]`)
+
+## `.dockerignore`
+
+- rust build output (at `target`)
+- not part of the rust images (at `.git`)
+- host config, must not end up inside an image (at `.env`)
+- the seed script's pictures (seed.sh). random-media/gifs stays: the dummy image copies it (at `random-media/random-pfps`)
+- editing these must not invalidate COPY layers (at `docker-compose.yml`)
+
+## `.github/workflows/images.yml`
+
+- builds the four images on github's machines on every push to main that touches what they are built from (`paths` below: the list in ./image-paths, written out by hand because a filter cannot read a file) and pushes them to ghcr.io/<owner>/stream-<x>:<tag>, :v<n> and :latest. the tag is the last commit that touched ./image-paths (not the push head: a push can end on a docs commit), 7 characters; deploy.sh and ship.sh name the images by the same rule, so a docs-only commit runs the images of the one before it and nothing is recreated for it. v<n> is the release: one more than the highest v<n> tag in the repo, taken by the `version` job before anything is built, put on every image, and — once all four are pushed — on the commit as a git tag by the `release` job. so v13 is a set of four images that exist, and the commit they came from. a commit already tagged (a re-run) keeps its number. one run at a time (`concurrency`), so two pushes cannot both take v13. on the box, deploy.sh finds the highest v<n> reachable from its HEAD and records it after the health check: /api/health says it under `version`. `./scripts/deploy.sh --images v13` pins the set by hand. see docs/spec.md, "deploy script", and api/src/release.rs. the box then runs ./scripts/deploy.sh --pull --images and pulls those, building nothing. free: actions minutes are unlimited for a public repo, and public packages cost nothing. the runners are x86-64, so no emulation: the same dockerfiles ./scripts/deploy.sh and ./scripts/ship.sh use, built natively on 4 cores. the dependency layers are cached between runs (type=gha), so a source change is a few minutes; a Cargo.lock change rebuilds them once. the GITHUB_TOKEN pushes the packages and the tag; no personal token anywhere. packages a workflow creates take the repo's visibility, so from a public repo they are public from the first push and the box pulls without a login. (a push from a laptop with ./scripts/ship.sh makes them private instead; then: github › your profile › Packages › stream-x › Package settings › Change visibility.) a tag pushed with the GITHUB_TOKEN starts no other workflow, by github's rule; nothing here wants one. (at `name: images`)
+- the list this filter copies: a change to it always builds, so the two cannot drift unnoticed (at `- image-paths`)
+- one run at a time, in order: the version is counted from the tags, and the tag lands at the end of the run. a push during a run waits; a third replaces the one waiting (its commit gets no number of its own, the next run's set covers it) (at `concurrency:`)
+- the names everything below uses: the image tag, the registry owner, the release (at `version:`)
+- the whole history, tags included: the image tag is found by walking back to the last commit that touched the image paths, and the release by the highest tag so far (at `- uses: actions/checkout@v4`)
+- the tag: the last commit that touched what the images are built from, 7 characters, the same rule and the same list (./image-paths) as deploy.sh and ship.sh. owner lowercased, ghcr wants that (at `- id: meta`)
+- BUILD stays the commit, not the release: it is what the image was built from, and /api/health says the release from the database (api/src/release.rs), so an image that did not change between two releases is the same image under two tags (at `- uses: docker/build-push-action@v6`)
+- links the package to this repo on github; the version is on the image for `docker image inspect` (at `labels: |`)
+- the git tag, last: only once all four images are in the registry under v<n>, so the tag never names a release that is not there. a failed image leaves no tag, and the next run takes the same number again, over the half-pushed set (at `release:`)
+
+## shell comments inside YAML
+
+- `.github/workflows/images.yml`, in a shell block: already there (a re-run): fine on this commit, wrong on another
+- `.github/workflows/images.yml`, in a shell block: an empty list would make `git log -1 --` plain HEAD, a tag deploy.sh never asks for
+- `.github/workflows/images.yml`, in a shell block: the release: the v<n> already on this commit (a re-run keeps its number), else one
+- `.github/workflows/images.yml`, in a shell block: more than the highest anywhere in the repo (a number taken on another branch stays taken)
+- `docker-compose.yml`, in a shell block: 825 days and serverAuth: the most apple devices will accept if you ever trust it by hand
+
+## `test/voice-spike.js`
+
+Voice spike (video/src/voice.rs): two browsers hear each other through `video voice`. A and B
+join spike/lounge, each offering one sendrecv m-line (the fake mic) and 15 recvonly ones; each
+hears the other on the m-line the seats frame names, and getStats shows those packets growing.
+C comes and goes without anyone renegotiating (negotiationneeded and signalingState are
+counted), and A and B keep hearing each other while their seats frames show C come and go.
+Closing B's browser frees B's seat: A's seats frame drops it and the next comer sits there.
+Not in scripts/test.sh. Run a server first, then:
+  VOICE_DEV_OPEN=1 PUBLIC_IP=127.0.0.1 cargo run -p video -- voice
+  node test/voice-spike.js            (VOICE_URL=ws://127.0.0.1:7881/ws by default)
+A server without VOICE_DEV_OPEN turns the join away and this fails with 'voice is not open'.
+
+## `test/voice-video.js`
+
+Video in voice (video/src/voice.rs, docs/voice.md): three headless chromes with fake devices
+(a beeping mic, the moving test picture) in one voice room of a `video voice` started with
+VOICE_DEV_OPEN=1. Each joins with the page's offer (1 sendrecv mic + 15 recvonly audio), then:
+A and B turn their cameras on (a new sendonly VP8 m-line, offered again with its mid named
+`camera`), and every one of A, B and C gets the others' audio and video with frames decoding,
+each picture on the mid its seats frame names; A shares its screen mid-call (a second sendonly
+line named `screen`) and B and C decode it next to A's camera, at the screen's size; A's camera
+goes off (its line inactive) and the others' seats frames drop it while the screen keeps
+going; B's mute and deafen show in A's seats frame; C leaves and the rest go on. How long a
+new viewer waits for its first picture (the PLI on subscribe) is printed and kept under 3s.
+Not in scripts/test.sh: it needs its own voice server. Run one first, then this:
+  VOICE_DEV_OPEN=1 PUBLIC_IP=127.0.0.1 VOICE_WS_PORT=17881 VOICE_UDP_PORT=17883 cargo run -p video -- voice
+  VOICE_URL=ws://127.0.0.1:17881/ws node test/voice-video.js
+
+## `test/voice.js`
+
+Voice channels (api/src/voice.rs, video/src/voice.rs). Two parts.
+The api part always runs: a voice channel is made (kind voice in the room and on the channel
+fact; a kind that is neither 400), it is no chat (its socket and its search say `no such
+channel`), the voice power is reached like any other (a roles holder cannot hand it out, the
+owner can), and the join route's answers: nobody 401, not a member 403, a channel that is not
+there or kept from you 404, a text channel 400, a member gets a 64-hex grant for /voice good for
+30s (a stack with no VOICE_SECRET answers it 503 `voice is off` instead), and the internal
+redeem route is a 404 from outside. Locally it also writes who is in voice
+straight into redis (as the voice server's calls would) for `already in voice` 409, `channel
+full` 409 (the owner never kept out) and the room's `voice`, which hides a channel you cannot see.
+The voice server part runs only with VOICE=1, against a stack started with `--profile voice` and
+a VOICE_SECRET: two logins join through grants and hear each other, a watcher of group:<name>
+on /events hears `voice` for both, the room shows them, a grant used once is `bad grant` the
+second time, and a closed page is `voice_left` within 20s.
+Run through ./scripts/test.sh (VOICE=1 ./scripts/test.sh voice for both parts), or:
+BASE_URL=https://<ip> [LOCAL=1] [VOICE=1] node voice.js
+The local-only and voice-only steps say SKIP when they cannot run, not PASS.
