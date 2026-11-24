@@ -17,7 +17,6 @@ import { Button } from '@/shared-components/Button';
 import { FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** The four kinds, as switches. */
 const KINDS: readonly { kind: NotificationKind; label: string; icon: ReactNode }[] = [
   {
     kind: 'live',
@@ -41,21 +40,12 @@ const KINDS: readonly { kind: NotificationKind; label: string; icon: ReactNode }
   }
 ];
 
-/**
- * Which kinds go in the inbox (docs/notifications.md): four switches, kept with the account
- * through the api, so every device agrees. The bell at the top right of every page is the
- * inbox itself; this tab is only what is put in it. Nobody sees the pointer to an account.
- * A switch stays disabled until this login's settings have been applied, so a click cannot
- * save the default. A channel is muted one at a time on the room page; the switch here is
- * every group's channels at once.
- */
 export function NotificationsTab() {
   const me = useAtomValue(meAtom);
   const settings = useAtomValue(notifySettingsAtom);
   const loaded = useAtomValue(notifySettingsLoadedAtom);
   const note = useAtomValue(notifySettingsNoteAtom);
 
-  // the settings as the api has them, for the login this is about; a stale `saved` goes with the tab
   useEffect(() => {
     if (me) void loadNotifications();
     return clearNotifySettingsNote;

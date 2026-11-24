@@ -16,7 +16,6 @@ import { WELCOME_TIP, WelcomeEditor } from '@/shared-components/WelcomeEditor';
 import { Info } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** "3m ago", "2h ago", "4d ago". */
 function ago(iso: string): string {
   const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
   if (secs < 60) return 'just now';
@@ -25,7 +24,6 @@ function ago(iso: string): string {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
-/** "in 9m", "in 3h". */
 function left(iso: string): string {
   const secs = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000));
   if (secs < 60) return `${secs}s left`;
@@ -34,7 +32,6 @@ function left(iso: string): string {
   return `${Math.round(secs / 86400)}d left`;
 }
 
-/** A timeout's length: "30s", "10m", "1h", "7d". */
 function length(secs: number): string {
   if (secs < 60) return `${secs}s`;
   if (secs < 3600) return `${Math.round(secs / 60)}m`;
@@ -42,7 +39,6 @@ function length(secs: number): string {
   return `${Math.round(secs / 86400)}d`;
 }
 
-/** A log row's detail column: a deleted line's words (or its pictures), a ban's reason, a timeout's length. */
 function detailOf(row: ModLogRow): string {
   switch (row.action) {
     case 'delete': {
@@ -60,14 +56,12 @@ function detailOf(row: ModLogRow): string {
   }
 }
 
-/** The action chip's colour: a ban in the decrease colour, a timeout in caution, the rest quiet. */
 function chipColor(action: string): string {
   if (action === 'ban') return 'border-decrease/60 text-decrease';
   if (action === 'timeout') return 'border-caution/60 text-caution';
   return 'border-primaryStroke text-textTertiary';
 }
 
-/** The log's filters: which actions each shows. `all` shows every one, `active` what still stands (`standing`). */
 const FILTERS = [
   { word: 'all', actions: null },
   { word: 'active', actions: null },
@@ -78,11 +72,6 @@ const FILTERS = [
 ] as const;
 type Filter = (typeof FILTERS)[number]['word'];
 
-/**
- * The faces of the names the tab lists (jannies, the banned): each a profile read, kept a few
- * minutes. The jannies and ban answers carry no picture; until one answers, or for a name with
- * no account, the letter the name makes stands in (`Face`).
- */
 function useFaces(names: string[]): Map<string, number | null> {
   const reads = useQueries({
     queries: names.map((n) => ({
@@ -95,12 +84,6 @@ function useFaces(names: string[]): Map<string, number | null> {
   return new Map(names.map((n, i) => [n, reads[i]?.data ?? null]));
 }
 
-/**
- * Find a janny by name: a box like the sidebar's search (Friends.tsx) with its own letters
- * (`usePeopleSearch`, not the sidebar's atoms), and under it the people found, each with their
- * face and name. Up and down move through them, enter or a click makes that one a janny at once,
- * escape closes the list. The streamer and their jannies are left out: there is nothing to add.
- */
 function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean; onPick: (who: string) => Promise<unknown> }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -111,7 +94,6 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   const shown = open && found.q !== '';
   const at = Math.min(active, Math.max(0, hits.length - 1));
 
-  // the row the keys rest on stays in sight in a list taller than its box
   useEffect(() => {
     if (shown) document.getElementById(`mod-janny-hit-${at}`)?.scrollIntoView({ block: 'nearest' });
   }, [shown, at]);
@@ -144,7 +126,6 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   };
 
   return (
-    // the list opens over the jannies under the box
     <div className="relative min-w-0">
       <label htmlFor="mod-janny-search" className="sr-only">
         find someone to make a janny
@@ -182,7 +163,6 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
           id="mod-janny-hits"
           role="listbox"
           aria-label="people found"
-          // a press leaves the focus in the box; the click picks
           onMouseDown={(e) => e.preventDefault()}
           className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto border border-primaryStroke bg-backgroundSecondary py-1"
         >
@@ -215,12 +195,10 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   );
 }
 
-/** What the ⓘ beside each card's title says: the lines that used to sit under the titles. */
 const JANNIES_TIP = 'jannies can delete lines, time out and ban. not you, not each other';
 const BANS_TIP = 'who cannot talk in your chat. a ban lasts until you lift it, a timeout ends on its own';
 const LOG_TIP = 'what you and your jannies did in your chat, newest first';
 
-/** One card of the tab: a stroke, the lifted fill, the small title with its ⓘ, a count at the right. */
 function Card({ id, title, tip, count, children }: { id?: string; title: string; tip: string; count?: number; children: ReactNode }) {
   return (
     <section id={id} className="flex min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
@@ -234,10 +212,6 @@ function Card({ id, title, tip, count, children }: { id?: string; title: string;
   );
 }
 
-/**
- * A row of the jannies or the banned: the face, the name, what it is, the one button. The name and
- * what it is share a line; on a phone the name sits over it. Both truncate, the button never shrinks.
- */
 const ROW = 'flex items-center gap-2 border-b border-primaryStroke px-3 py-1.5 last:border-b-0 max-md:min-h-[52px] max-md:py-2';
 const ROW_FACE = 'h-6 w-6 shrink-0 text-[10px]';
 const ROW_TEXT = 'flex min-w-0 flex-1 items-center gap-2 max-md:flex-col max-md:items-stretch max-md:gap-0';
@@ -245,9 +219,7 @@ const ROW_NAME = 'min-w-0 truncate text-sm font-semibold';
 const ROW_WHAT = 'min-w-0 flex-1 truncate text-sm text-textSecondary max-md:text-[13px]';
 const ROWS = 'border border-primaryStroke bg-background';
 
-/** My chat welcome, the profile tab's editor (WelcomeEditor.tsx): the same atoms, so a save in one shows in the other. */
 function WelcomeSection() {
-  // Mount only: my welcome as the api has it (the same name again keeps the draft).
   useEffect(() => {
     void loadMyProfile();
   }, []);
@@ -261,10 +233,6 @@ function WelcomeSection() {
   );
 }
 
-/**
- * The log rows whose doing still stands: the newest ban of someone still banned, the newest
- * timeout of someone still timed out, the newest add of someone still a janny.
- */
 function standing(rows: ModLogRow[], banned: Set<string>, timedOut: Set<string>, jannies: Set<string>): Set<ModLogRow> {
   const newest = new Map<string, ModLogRow>();
   for (const row of rows) {
@@ -278,7 +246,6 @@ function standing(rows: ModLogRow[], banned: Set<string>, timedOut: Set<string>,
   return new Set(newest.values());
 }
 
-/** A log row's time: "2d ago", the full date and time on hover and focus. */
 function When({ at }: { at: string }) {
   return (
     <Tooltip content={new Date(at).toLocaleString()}>
@@ -289,12 +256,10 @@ function When({ at }: { at: string }) {
   );
 }
 
-/** A log row's action, in its colour. */
 function Chip({ action }: { action: string }) {
   return <span className={cn('inline-block shrink-0 border px-1.5 text-xs leading-5', chipColor(action))}>{action}</span>;
 }
 
-/** A log row's detail, the whole of it on hover and focus; `—` for none. */
 function Detail({ text }: { text: string }) {
   if (!text) return <span>—</span>;
   return (
@@ -306,14 +271,6 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-/**
- * The mod tab, on my own page only (docs/jannies.md): my stream's jannies (found by name and
- * added in one pick, removed from the list under the box), who is banned or timed out of my chat
- * (lift either), and the log of what was done in it, filtered by kind or to what still stands. A
- * janny deletes, bans and times out from the chat's lines; this is where the streamer keeps the
- * list. Beside them, what Eques says to each viewer who opens my chat. Two columns from md, one
- * card under another on a phone.
- */
 export function ModTab({ name }: { name: string }) {
   const client = useQueryClient();
   const jannies = useQuery({ queryKey: ['jannies', name], queryFn: () => api.streamJannies(name), retry: false });
@@ -468,7 +425,6 @@ export function ModTab({ name }: { name: string }) {
       )}
 
       <Card id="mod-log-card" title="mod log" tip={LOG_TIP} count={log.data ? rows.length : undefined}>
-        {/* one row: all and active at the left, the kinds at the right; on a phone it scrolls sideways */}
         <div id="mod-log-filters" role="group" aria-label="show" className="flex flex-nowrap gap-2 overflow-x-auto">
           {FILTERS.map(({ word }) => chip(word))}
         </div>
@@ -513,7 +469,6 @@ export function ModTab({ name }: { name: string }) {
                 ))}
               </tbody>
             </table>
-            {/* a phone: each row two lines, who and what and when, then to whom and the detail on one line that ends in … when it runs long */}
             <ul id="mod-log-rows" aria-label="mod log" className="md:hidden">
               {rows.map((row, i) => (
                 <li key={`${row.at}-${i}`} data-action={row.action} className="flex flex-col gap-0.5 border-b border-primaryStroke px-3 py-2 text-sm last:border-b-0">

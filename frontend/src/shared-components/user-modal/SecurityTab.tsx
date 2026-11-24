@@ -36,13 +36,6 @@ import { useTurnstile } from '@/shared-components/Turnstile';
 import { INPUT } from '@/shared-components/input';
 import { BUTTON, Block, Field, PasswordInput, Status } from '@/shared-components/user-modal/parts';
 
-/**
- * The account. Nobody has to have one; with one the name is yours. Logged out: log in or sign
- * up, right here (the /login and /signup pages are the same form with a place to go after).
- * Logged in: a new password (or a first one, for an account made with a provider), the linked
- * Google / Discord logins (which make the account verified), and the ways out. No email reset
- * yet: the words say so.
- */
 export function SecurityTab() {
   const me = useAtomValue(meAtom);
   return <div className="divide-y divide-primaryStroke">{me ? <LoggedIn me={me} /> : <LoggedOut />}</div>;
@@ -52,19 +45,15 @@ function LoggedOut() {
   const busy = useAtomValue(authBusyAtom);
   const error = useAtomValue(authErrorAtom);
   const [signingUp, setSigningUp] = useState(false);
-  // the nick, as the name it would be: signing up as it claims the status, page and picture saved under it
   const [name, setName] = useState(() =>
     cleanName(store.get(nickAtom))
       .replace(/[^a-z0-9_-]/g, '')
       .slice(0, 32)
   );
   const [password, setPassword] = useState('');
-  // a new password's rule, said under the box as it is typed; logging in asks none of it
   const problem = signingUp && password ? newPasswordProblem(password) : null;
-  // the human check (Turnstile.tsx): nothing while the api has it off
   const human = useTurnstile('sec-turnstile');
 
-  // Mount only: a stale error from the login page or an earlier open should not greet you here.
   useEffect(() => {
     clearAuthError();
   }, []);
@@ -73,7 +62,6 @@ function LoggedOut() {
     e.preventDefault();
     if (problem || !human.ready) return;
     const ok = await (signingUp ? signup(name, password, human.token) : login(name, password, human.token));
-    // the token is single-use, spent or not
     human.spent();
     if (ok) {
       setPassword('');
@@ -83,7 +71,6 @@ function LoggedOut() {
 
   return (
     <Block title="account">
-      {/* no method="dialog": a submit would close the modal. onSubmit owns enter */}
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
         <Field id="sec-name" label="name" hint="a-z 0-9 _ -">
           <input
@@ -150,7 +137,6 @@ function LoggedIn({ me }: { me: string }) {
   const [sure, setSure] = useState(false);
   const problem = fresh ? newPasswordProblem(fresh) : null;
 
-  // Mount only: the last visit's "changed" should not still be there.
   useEffect(() => {
     clearPasswordStatus();
   }, []);
@@ -180,7 +166,6 @@ function LoggedIn({ me }: { me: string }) {
 
       <Block title="password">
         <form onSubmit={(e) => void submit(e)}>
-          {/* for password managers: which account the new password belongs to */}
           <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
           <div className="flex flex-wrap gap-1.5">
             {hasPassword && (
@@ -256,18 +241,11 @@ function LoggedIn({ me }: { me: string }) {
   );
 }
 
-/** Under a new password's box: what it still needs, in red, or the rule and the warning that there is no reset. */
 function PasswordHint({ problem }: { problem: string | null }) {
   return problem ? <span className="text-decrease">{problem}</span> : <>{NEW_PASSWORD_RULE}. there is no reset: remember it.</>;
 }
 
-/**
- * The provider account's picture, 24px square, or the provider's icon when there is none or it
- * will not load. The api only keeps pictures on the provider's own image host; no referrer goes
- * with the request.
- */
 function LinkedPicture({ provider, src }: { provider: string; src?: string | null }) {
-  // the picture that would not load: a new one gets its own try
   const [broken, setBroken] = useState<string | null>(null);
   const box = 'flex size-6 shrink-0 items-center justify-center border border-primaryStroke';
   if (!src || broken === src) {
@@ -280,20 +258,11 @@ function LinkedPicture({ provider, src }: { provider: string; src?: string | nul
   return <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setBroken(src)} className={`${box} object-cover`} />;
 }
 
-/**
- * Google and Discord (whatever the api turned on) on this account: link one (a trip to the
- * provider and back to this tab), or unlink it. Any one linked makes the account verified: the
- * blue mark beside the name everywhere (OAuthMark.tsx). The api refuses to unlink the last way
- * in (no password and nothing else linked), and the row says so before you try. A linked row
- * shows who it is on the provider's side: their picture and name (the api keeps them from each
- * login); one linked before they were kept shows the provider's icon and "linked".
- */
 function LinkedLogins() {
   const providers = useAtomValue(oauthProvidersAtom);
   const [linked, setLinked] = useState<OAuthIdentities | null>(null);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
-  // the provider whose unlink is waiting on "sure?"
   const [sure, setSure] = useState<string | null>(null);
 
   useEffect(() => {
@@ -308,7 +277,6 @@ function LinkedLogins() {
   }, []);
 
   const mine = linked?.identities.map((i) => i.provider) ?? [];
-  // linked ones show even if the provider was turned off since: they can still be unlinked
   const shown = [...new Set([...(providers ?? []), ...mine])];
   if (!shown.length) return null;
   const lastWayIn = !!linked && !linked.has_password && mine.length <= 1;
@@ -326,7 +294,6 @@ function LinkedLogins() {
     } finally {
       setSure(null);
       setBusy(false);
-      // the verified mark, and the profile tab's words, follow
       void refreshMeInfo();
     }
   }
@@ -359,7 +326,6 @@ function LinkedLogins() {
                       </Tooltip>
                       {lastWayIn ? (
                         <Tooltip content="your only login">
-                          {/* a disabled button takes no hover: the span around it does */}
                           <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className="inline-flex shrink-0">
                             <Button size="sm" variant="outline-danger" disabled className="pointer-events-none shrink-0">
                               unlink

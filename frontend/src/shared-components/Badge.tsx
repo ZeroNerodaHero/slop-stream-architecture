@@ -12,34 +12,17 @@ import { Tooltip } from '@/shared-components/Tooltip';
 
 interface BadgeProps {
   group: GroupBadge;
-  /** A picture not up yet (the create dialog's preview), shown instead of the group's. */
   src?: string | null;
-  /** The pointer or the keyboard focus on it shows the group's card (GroupCard): a chat line's badges. Otherwise a plain `title`. */
   card?: boolean;
-  /** The colour given, never the one the page heard for the name: a preview of a colour not saved yet. */
   preview?: boolean;
-  /** `md` is 24px tall instead of 16: the create dialog's preview, beside its colour swatches. */
   size?: 'sm' | 'md';
-  /** On the badge's own box: the one beside the name in the watch page's header is #watch-badge. */
   id?: string;
   className?: string;
 }
 
-/**
- * A group's badge, the way discord tags a bot: the group's picture, tiny and square, then a
- * small solid box in the group's colour with the word in capitals, next to a name. One unit,
- * the height of the word's line (16px), so nothing it sits in grows. The picture's version is
- * the freshest the page has heard (`groupIconsAtom`), else the one the line carried, and the
- * colour likewise (`groupColorsAtom`); no
- * picture is its first letter on its colour, as `GroupMark` draws everywhere. The word is
- * white or black by the colour's own lightness, not the theme's, so it reads on any theme and
- * with any colour a group picked. With `card` it is a tab stop, and hovering or focusing it
- * shows the group's card instead of the browser's title.
- */
 export function Badge({ group: carried, src, card, preview, size = 'sm', id, className }: BadgeProps) {
   const icons = useAtomValue(groupIconsAtom);
   const icon = icons.has(carried.name) ? icons.get(carried.name) : carried.icon;
-  // the colour the page heard last, over the one the line carried: a recolour reaches old lines
   const heard = useAtomValue(groupColorsAtom).get(carried.name);
   const group = !preview && heard && heard !== carried.color ? { ...carried, color: heard } : carried;
   const pill = (
@@ -63,7 +46,6 @@ export function Badge({ group: carried, src, card, preview, size = 'sm', id, cla
   );
 }
 
-/** The word in the group's colour, white or black by that colour's lightness. */
 function Pill({ group, className }: { group: GroupBadge; className?: string }) {
   const dark = isDark(fromHex(group.color));
   return (
@@ -76,13 +58,6 @@ function Pill({ group, className }: { group: GroupBadge; className?: string }) {
   );
 }
 
-/**
- * What a chat line's badge shows on hover and focus, from what the line carried and nothing
- * asked (groups.rs `Badge`): the banner across the top when the group has one (16:5), then its
- * picture beside its full name with the badge under the name, the line about it (three lines
- * at most); how many are in it sits at the right end of the name's row. A line kept before these rode along has the name and the
- * badge alone. Drawn in the Tooltip's box, 280px wide: a stroke, no shadow.
- */
 function GroupCard({ group, icon }: { group: GroupBadge; icon: number | null | undefined }) {
   const banner = groupImage(group.name, 'banner', group.banner);
   const members = group.name !== BOT_GROUP && typeof group.members === 'number' ? group.members : null;
@@ -93,7 +68,6 @@ function GroupCard({ group, icon }: { group: GroupBadge; icon: number | null | u
         <span className="flex items-center gap-1.5">
           <GroupMark name={group.name} color={group.color} icon={icon} className="h-10 w-10 text-base" />
           <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
-            {/* the name, cut short when long, with how many are in it at the right end */}
             <span className="flex w-full min-w-0 items-center justify-between gap-2">
               <span className="min-w-0 truncate font-semibold leading-tight text-textPrimary">{group.name}</span>
               {members !== null && (

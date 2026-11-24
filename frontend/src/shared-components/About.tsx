@@ -20,34 +20,15 @@ import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable
 import { Tooltip, type TooltipAt } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/**
- * The about tab (docs/about.md): the page under the player, as rows. A row holds one to six
- * components (text, an image, a video, a track) on twelve columns; each takes a width of its
- * own (two columns at the least), the rest of the row is empty, and under `sm` they stack. The
- * `+` at the end of a row adds to it; `add a row` under the last one starts another, made with
- * its first component, so a row is never empty. The edge of a component drags its width; when
- * the row is full the one beside it gives way.
- *
- * Saved through the page api as it is: `y` is the row, `x` and `w` the component's columns on
- * the api's 800-wide scale, `z` its place in the row. Text is html (a few tags, cleaned here
- * and again at the door); a picture, a clip or a track goes up first and the page names it by
- * id. It saves on its own a moment after a change, and on `done`.
- */
-
 type Kind = 'text' | 'image' | 'video' | 'audio';
 
 interface Cell {
   key: string;
   kind: Kind;
-  /** The object's id on the api. 0 for a new text, or a file still going up. A dummy's is -1: nothing is saved. */
   id: number;
-  /** Columns of the twelve. */
   cols: number;
-  /** Text: the html, cleaned. */
   html: string;
-  /** A picture, a clip, a track: where it is. A blob url while the file goes up. */
   src: string;
-  /** A dummy clip's poster. An upload shows its first frame. */
   poster?: string;
 }
 
@@ -60,19 +41,13 @@ const KINDS: readonly Kind[] = ['text', 'image', 'video', 'audio'];
 const COLS = 12;
 const COLS_MIN = 2;
 const CELLS_MAX = COLS / COLS_MIN;
-/** `gap-4` between the cells, in the pitch of a column. */
 const GAP = 16;
-/** The api keeps `x` and `w` on a 0..800 scale (its largest block): a row is 800 wide, a column a twelfth of that. */
 const UNIT = 800 / COLS;
-/** A height for the api, which wants one. Rows are as tall as their content. */
 const HEIGHT: Record<Kind, number> = { text: 120, image: 180, video: 200, audio: 56 };
 const WIRE: Record<Kind, PageWire['type']> = { text: 'text', image: 'image', video: 'video', audio: 'sound' };
 const ACCEPT: Record<Exclude<Kind, 'text'>, string> = { image: 'image/*', video: 'video/mp4,video/webm', audio: 'audio/*' };
-/** Where the open menu adds to: a row's key, or this for a row of its own. */
 const NEW = 'new';
-/** What the owner starts from. Theirs to rewrite; it says so. */
 const STARTER = "what you stream, when you're on, what to ask about. this is yours to rewrite.";
-/** The sample's media, the site's own, uploaded as the owner's so the page can keep them. */
 const SAMPLE_FILES: { kind: Exclude<Kind, 'text'>; path: string }[] = [
   { kind: 'image', path: '/about-demo/banner.jpg' },
   { kind: 'audio', path: '/about-demo/track-1.mp3' }
@@ -81,11 +56,8 @@ const SAMPLE_FILES: { kind: Exclude<Kind, 'text'>; path: string }[] = [
 const ADD = 'text-sm font-semibold text-primaryBlue disabled:opacity-40';
 const LABEL = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
 const DASHED = 'border border-dashed border-primaryStroke';
-/** An icon-only control: 24px square, the icon 16. Its name is its tooltip and its label. */
 const ICON = 'flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary hover:text-textPrimary disabled:opacity-40 disabled:hover:text-textSecondary';
-/** The actions on a component sit on this, over the top right corner (`right-1.5 top-1.5`), so they read over a picture. */
 const PLATE = 'flex gap-0.5 border border-primaryStroke bg-background/90 p-0.5';
-/** How far in from the right edge a component's first line stops, with `n` actions on the plate: the plate (24 an icon, 2 between, 2 of padding and 1 of border a side) and the room either side of it. */
 const inset = (n: number) => 6 + (n * 26 + 4) + 8;
 const KIND_ICON: Record<Kind, ReactNode> = {
   text: <RiText size={16} aria-hidden />,
@@ -100,7 +72,6 @@ function makeCell(kind: Kind, part: Partial<Cell> = {}): Cell {
   return { key: uid(), kind, id: 0, cols: COLS, html: '', src: '', ...part };
 }
 
-/** A component with something in it: words, or a file. */
 function filled(cell: Cell): boolean {
   return cell.kind === 'text' ? sanitizeHtml(cell.html).length > 0 : cell.src.length > 0;
 }
@@ -127,7 +98,6 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** Plain lines as the text block's html: a paragraph a line, a blank line kept. */
 function paragraphs(text: string): string {
   return text
     .split('\n')
@@ -141,9 +111,6 @@ function kindOf(type: PageWire['type']): Kind | null {
   return null;
 }
 
-// ---- the wire ------------------------------------------------------------------------------------------
-
-/** The saved blocks as rows: a row a `y`, left to right by `x`, each as wide as its `w` says. A shape, or a kind unknown, is left out. */
 function rowsOf(blocks: PageWire[]): Row[] {
   const byY = new Map<number, PageWire[]>();
   for (const block of blocks) {
@@ -160,7 +127,6 @@ function rowsOf(blocks: PageWire[]): Row[] {
       const kind = kindOf(block.type);
       if (!kind) continue;
       const cols = Math.max(COLS_MIN, Math.min(COLS, Math.round((block.w ?? UNIT * 4) / UNIT)));
-      // one that does not fit starts a row of its own: an older page, or one that was wider than the api kept
       if (row.cells.length > 0 && (used(row) + cols > COLS || row.cells.length >= CELLS_MAX)) {
         rows.push(row);
         row = { key: uid(), cells: [] };
@@ -172,7 +138,6 @@ function rowsOf(blocks: PageWire[]): Row[] {
   return rows;
 }
 
-/** The rows as blocks, in reading order. A file still going up (id 0) is not on the page yet. */
 function blocksOf(rows: Row[]): PageWire[] {
   const out: PageWire[] = [];
   rows.forEach((row, y) => {
@@ -189,7 +154,6 @@ function blocksOf(rows: Row[]): PageWire[] {
   return out;
 }
 
-/** A fake stream's page from its document: the words; the picture beside the clip; the tracks. Nothing of it is saved. */
 function dummyRows(doc: AboutDoc): Row[] {
   const rows: Row[] = [];
   const media: Cell[] = [];
@@ -208,9 +172,6 @@ function dummyRows(doc: AboutDoc): Row[] {
   return rows;
 }
 
-// ---- text -----------------------------------------------------------------------------------------------
-
-/** The cleaned html drawn by react, never written as a string: each tag it allows becomes its element. */
 function Rich({ html }: { html: string }) {
   const safe = sanitizeHtml(html);
   if (!safe) return null;
@@ -271,7 +232,6 @@ function richNode(node: Node, key: string): ReactNode {
   return <span key={key}>{kids}</span>;
 }
 
-/** The text box: contenteditable, so bold, italic and a pasted link survive. Cleaned on every keystroke and cut at TEXT_MAX. */
 function TextEditor({ html, autoFocus, inset, onChange }: { html: string; autoFocus: boolean; inset: number; onChange: (html: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const last = useRef(html);
@@ -312,16 +272,12 @@ function TextEditor({ html, autoFocus, inset, onChange }: { html: string; autoFo
         last.current = next;
         onChange(next);
       }}
-      // a float in the top right corner, as wide as the actions over it: the first lines wrap short of them, the rest run full width
       style={{ '--inset': `${inset}px` } as CSSProperties}
       className="about-text min-h-[3.5rem] whitespace-pre-wrap border border-primaryStroke bg-background px-2 py-1 outline-none [overflow-wrap:anywhere] before:float-right before:h-7 before:w-[var(--inset)] before:content-[''] focus:border-primaryBlue empty:after:text-textTertiary empty:after:content-[attr(data-placeholder)]"
     />
   );
 }
 
-// ---- media ----------------------------------------------------------------------------------------------
-
-/** An icon-only control: its name is its accessible label and the tooltip on hover and focus (tooltips.mdc). */
 function Icon({ label, at, onClick, disabled, children }: { label: string; at?: TooltipAt; onClick: () => void; disabled?: boolean; children: ReactNode }) {
   return (
     <Tooltip content={label} at={at}>
@@ -347,7 +303,6 @@ function PlayGlyph({ size, playing = false }: { size: number; playing?: boolean 
   );
 }
 
-/** The clip before it plays: its first frame (or poster), the glyph, how long it is. The native bar comes with the press. */
 function Clip({ src, poster, editing }: { src: string; poster?: string; editing: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [on, setOn] = useState(false);
@@ -384,7 +339,6 @@ function Clip({ src, poster, editing }: { src: string; poster?: string; editing:
   );
 }
 
-/** One track: the word and the clock, and a bar that seeks. Plays on a press; silent when the tab is left. */
 function Track({ src, inset }: { src: string; inset: number }) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -417,7 +371,6 @@ function Track({ src, inset }: { src: string; inset: number }) {
         onLoadedMetadata={(e) => setLength(e.currentTarget.duration)}
         onError={() => setBroken(true)}
       />
-      {/* the clock stops short of the actions over the corner */}
       <div className="flex items-center gap-3" style={{ paddingRight: inset }}>
         <button type="button" onClick={toggle} disabled={broken} className={cn(ADD, 'inline-flex shrink-0 items-center gap-1')}>
           <PlayGlyph size={14} playing={playing} />
@@ -453,19 +406,14 @@ function Track({ src, inset }: { src: string; inset: number }) {
   );
 }
 
-/** A component's content. `inset` is the room its first line leaves for the actions over its corner while editing; 0 otherwise. */
 function Body({ cell, editing, focus, inset, onHtml }: { cell: Cell; editing: boolean; focus: boolean; inset: number; onHtml: (html: string) => void }) {
   if (cell.kind === 'text') return editing ? <TextEditor html={cell.html} autoFocus={focus} inset={inset} onChange={onHtml} /> : <Rich html={cell.html} />;
   if (cell.kind === 'image')
     return <img src={cell.src} alt="" draggable={false} className="about-image aspect-video w-full border border-primaryStroke bg-black object-cover" />;
-  // keyed on the file: another one starts over, first frame up and length unknown
   if (cell.kind === 'video') return <Clip key={cell.src} src={cell.src} poster={cell.poster} editing={editing} />;
   return <Track key={cell.src} src={cell.src} inset={inset} />;
 }
 
-// ---- adding ----------------------------------------------------------------------------------------------
-
-/** The four kinds, as icons, then a close. Down the strip at the end of a row, across the strip under the page. */
 function KindMenu({ column, onPick, onClose }: { column: boolean; onPick: (kind: Kind) => void; onClose: () => void }) {
   return (
     <div className={cn('flex items-center gap-1', column && 'flex-col')}>
@@ -484,7 +432,6 @@ function KindMenu({ column, onPick, onClose }: { column: boolean; onPick: (kind:
   );
 }
 
-/** The `+` at the end of a row: as tall as the row; opens into the four kinds. */
 function AddToRow({ open, onOpen, onPick, onClose }: { open: boolean; onOpen: () => void; onPick: (kind: Kind) => void; onClose: () => void }) {
   if (open) {
     return (
@@ -507,44 +454,31 @@ function AddToRow({ open, onOpen, onPick, onClose }: { open: boolean; onOpen: ()
   );
 }
 
-// ---- the tab ----------------------------------------------------------------------------------------------
-
 interface Pending {
   at: string;
   kind: Exclude<Kind, 'text'>;
-  /** A cell whose file is being swapped, instead of a new cell. */
   replace?: string;
 }
 
 interface AboutProps {
   name: string;
-  /** A fake stream's document, drawn as its page. Null for a real name: the page is read from the api. */
   doc: AboutDoc | null;
-  /** My own page: it edits. */
   edit?: boolean;
-  /** The page's id. `about-<name>` unless given, the watch page's and the tests' handle; the profile popup, which may stand over that very page, gives its own. */
   id?: string;
 }
 
-/** Keyed on the name by the caller: another name is another page, read fresh. */
 export function About({ name, doc, edit = false, id }: AboutProps) {
   const box = id ?? `about-${name}`;
   const [rows, setRows] = useState<Row[]>(() => (doc ? dummyRows(doc) : []));
   const [loaded, setLoaded] = useState(doc !== null);
-  /** The api did not answer for the page. Not an empty page: no editor, and nothing saves off it. */
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState('');
-  /** Which `+` is open: a row's key, `NEW`, or none. */
   const [menu, setMenu] = useState<string | null>(null);
-  /** A text just made: its box takes the focus. */
   const [focusKey, setFocusKey] = useState<string | null>(null);
-  /** The component whose edge is being dragged: its width shows beside the handle while it is. */
   const [dragging, setDragging] = useState<string | null>(null);
   const dirty = useRef(false);
-  /** Files on their way up. The page does not save while there are any: the api drops every file a saved page does not name. */
   const uploads = useRef(0);
-  /** A save in flight. An upload waits for it, for the same reason the other way round. */
   const saving = useRef<Promise<void> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pending = useRef<Pending | null>(null);
@@ -553,7 +487,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     rowsRef.current = rows;
   }, [rows]);
 
-  // a real name's page, from the api. a failed ask is not an empty page: it is its own state, until `try again` clears it and this asks once more
   useEffect(() => {
     if (doc || failed) return;
     let dead = false;
@@ -574,7 +507,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
 
   const persist = (list: Row[]) => {
     if (uploads.current > 0) {
-      // the last upload's end saves the page, with the file on it
       dirty.current = true;
       setStatus('saving');
       return;
@@ -585,7 +517,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     const flight = api
       .saveAboutPage(name, blocks)
       .then((saved) => {
-        // a new text's id comes back in the order it was sent
         const ids = new Map<string, number>();
         let at = 0;
         for (const row of list)
@@ -614,7 +545,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     persistRef.current = persist;
   });
 
-  // a moment after a change, the page saves itself. never off a failed load: the page's content is unknown, and a save would replace it
   useEffect(() => {
     if (!edit || failed || !dirty.current) return;
     const list = rows;
@@ -630,10 +560,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
   const patchCell = (key: string, part: Partial<Cell>) =>
     touch((list) => list.map((row) => ({ ...row, cells: row.cells.map((c) => (c.key === key ? { ...c, ...part } : c)) })));
 
-  /**
-   * A component into a row, or into a row of its own under the last. In a row with room it takes
-   * the room; in a full one every component gives way and they share the row evenly.
-   */
   const place = (at: string, cell: Cell) => {
     if (count(rowsRef.current) >= BLOCKS_MAX) {
       setStatus(`${BLOCKS_MAX} blocks at most`);
@@ -673,10 +599,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     openFile({ at, kind });
   };
 
-  /**
-   * The file up to the api, the cell showing it from a blob url meanwhile. No save runs until
-   * every upload is back; then the page saves once, with the files on it.
-   */
   const upload = async (key: string, kind: Exclude<Kind, 'text'>, file: Blob) => {
     uploads.current += 1;
     try {
@@ -697,7 +619,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
       setStatus(`not saved: ${err instanceof Error ? err.message : 'could not upload'}`);
     } finally {
       uploads.current -= 1;
-      // a save that waited for this: a fresh list wakes the effect that saves
       if (uploads.current === 0 && dirty.current) setRows((list) => [...list]);
     }
   };
@@ -755,7 +676,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
       })
     );
 
-  /** A row by its handle (Reorderable): dragged, or space and the arrow keys on it. The drop moves it and the page saves. */
   const rowKeys = rows.map((row) => row.key);
   const reorder = useReorder({
     keys: rowKeys,
@@ -776,7 +696,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
       })
     );
 
-  /** A component's width, from a drag on its edge. Past the row's end the one beside it gives way, down to its least; then no further. */
   const resize = (rowKey: string, index: number, want: number) => {
     setRows((list) => {
       const row = list.find((r) => r.key === rowKey);
@@ -825,7 +744,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     handle.addEventListener('pointercancel', up);
   };
 
-  /** Done: an empty text goes, and a row left with nothing goes with it. Then the page saves. */
   const finish = () => {
     const kept = rowsRef.current.map((row) => ({ ...row, cells: row.cells.filter((c) => c.kind !== 'text' || filled(c)) })).filter((row) => row.cells.length > 0);
     setRows(kept);
@@ -834,7 +752,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     persistRef.current(kept);
   };
 
-  /** The sample: the words now; the site's picture and track fetched and put up as the owner's own, then a row of the two. */
   const startSample = async () => {
     const words = makeCell('text', { html: paragraphs(STARTER) });
     setEditing(true);
@@ -861,7 +778,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
     }
   };
 
-  // the api did not answer: the same line for a viewer and the owner, and no editor. an empty page it is not
   if (failed) {
     return (
       <p id={box} data-failed className="text-textSecondary">
@@ -935,7 +851,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
             <div className="flex items-stretch gap-3">
               <div data-row className="grid min-w-0 flex-1 grid-cols-12 gap-4">
                 {row.cells.map((cell, i) => {
-                  // the kind a file would replace; null for text. read here: a closure below does not keep the narrowing
                   const fileKind = cell.kind === 'text' ? null : cell.kind;
                   const actions = (row.cells.length > 1 ? 2 : 0) + (fileKind ? 1 : 0) + 1;
                   return (
@@ -970,7 +885,6 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
                         </span>
                       )}
                       {editing && (
-                        // the width label takes the tooltip's place while the edge is held
                         <Tooltip content={dragging === cell.key ? null : 'drag to resize'} at="right">
                           <button
                             type="button"

@@ -5,14 +5,8 @@ import { groupImage, groupWords, type Server } from '@/infra/api';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { cn } from '@/utils/cn';
 
-/** The square's box: its size, stroke and fill. A stand-in square takes the same, so the two cannot drift. */
 export const GROUP_SQUARE_BOX = 'aspect-square border border-primaryStroke bg-backgroundSecondary';
 
-/**
- * What a square shows, inside a box that is `relative overflow-hidden` and a `group`: the banner
- * or its colour, the picture, the name and the members. `corner` goes at the top right. `compact`:
- * a smaller picture and padding on a phone, for a grid of two across a narrow pane.
- */
 export function GroupSquareFace({ server, corner, compact }: { server: Server; corner?: ReactNode; compact?: boolean }) {
   const banner = groupImage(server.name, 'banner', server.banner);
   const words = groupWords(server);
@@ -46,7 +40,6 @@ export function GroupSquareFace({ server, corner, compact }: { server: Server; c
   );
 }
 
-/** One group as a square: the banner or its colour, the picture, the name. */
 export function GroupSquare({ server, id }: { server: Server; id: string }) {
   const live = server.live?.length ?? 0;
   return (

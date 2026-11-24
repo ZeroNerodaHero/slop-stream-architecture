@@ -3,7 +3,6 @@ import { type KeyboardEvent, type ReactNode, type RefObject, type SyntheticEvent
 import { type Emote, emoteQueryAt, emoteSrc, matchEmotes, notePicked, useMyEmotes } from '@/infra/emotes';
 import { cn } from '@/utils/cn';
 
-/** What a composer's box spreads on itself for the list: its keys, its caret, and the combobox words for a reader. */
 export interface EmoteCompleteBox {
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => boolean;
   onSelect: (e: SyntheticEvent<HTMLInputElement>) => void;
@@ -15,18 +14,6 @@ export interface EmoteCompleteBox {
   'aria-autocomplete': 'list';
 }
 
-/**
- * The composer's emote list (docs/chat.md "emotes"): `:` and two or more letters of a name just
- * before the caret open a drop-up over the box with the login's emotes that match (the picture,
- * `:name:` and the group), the names that start with the letters first. The arrows walk it, enter
- * or tab puts the one lit in, escape shuts it until the letters change, and a click picks too.
- * The pick goes in as `:name:`, which the send writes as the emote's token (emotes.ts
- * `encodeEmotes`), and the box keeps the caret after it.
- *
- * Every composer has it: a stream's chat and a group's channel (ChatPanel.tsx), a direct message
- * (FriendChat.tsx). `box` is spread on the `<input>`, whose own key handler calls `onKeyDown`
- * first and stops when it says it took the key; `list` goes in the box's row, which is `relative`.
- */
 export function useEmoteComplete({
   value,
   onChange,
@@ -41,10 +28,8 @@ export function useEmoteComplete({
   const mine = useMyEmotes();
   const own = useId();
   const listId = id ?? `emote-complete-${own.replace(/:/g, '')}`;
-  /** Where the caret is: null while the box does not have the focus. */
   const [caret, setCaret] = useState<number | null>(null);
   const [active, setActive] = useState(0);
-  /** The query escape shut: `start:query`, open again once either moves. */
   const [shut, setShut] = useState('');
 
   const at = caret === null ? null : emoteQueryAt(value, caret);
@@ -62,7 +47,6 @@ export function useEmoteComplete({
     onChange(next);
     setCaret(to);
     setActive(0);
-    // after react has put the new value in the box
     requestAnimationFrame(() => input.current?.setSelectionRange(to, to));
   }
 
@@ -107,7 +91,6 @@ export function useEmoteComplete({
   };
 
   const list = open ? (
-    // a press in here keeps the box's focus (and its caret), so the click lands as a pick
     <div
       id={`${listId}-panel`}
       data-emote-complete

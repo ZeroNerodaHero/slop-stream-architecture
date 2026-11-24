@@ -7,16 +7,11 @@ import { loadOAuthProviders, oauthProvidersAtom, oauthStartUrl } from '@/infra/a
 import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { cn } from '@/utils/cn';
 
-/**
- * A provider's brand colour: its mark and name, and its border on hover. Discord's name (only) is a lighter
- * blurple, since #5865F2 reads dim as text on the dark panel. Any other provider stays textPrimary.
- */
 const PROVIDER_COLOR: Partial<Record<OAuthProvider, { brand: string; text: string }>> = {
   google: { brand: '#EA4335', text: '#EA4335' },
   discord: { brand: '#5865F2', text: '#8891F2' }
 };
 
-/** The provider's mark, or a plain one for a provider this build has no icon for (infra/oauth.ts). */
 export function ProviderIcon({ provider, size = 18 }: { provider: OAuthProvider; size?: number }) {
   switch (provider) {
     case 'google':
@@ -28,12 +23,6 @@ export function ProviderIcon({ provider, size = 18 }: { provider: OAuthProvider;
   }
 }
 
-/**
- * "or continue with" Google / Discord, under the log in and sign up forms. Only the providers the
- * api turned on (their env vars are set); none, and this is nothing at all. Plain links: the
- * browser goes to the provider and comes back to /oauth (OAuthPage.tsx), then to the page it
- * left. A provider login nobody here has asks for a name first; a known one logs straight in.
- */
 export function OAuthButtons() {
   const providers = useAtomValue(oauthProvidersAtom);
 
@@ -45,7 +34,6 @@ export function OAuthButtons() {
   return (
     <div className="flex flex-col gap-2" aria-label="log in with another account">
       <p className="text-sm text-textTertiary">or continue with</p>
-      {/* one row: two columns edge to edge with the inputs (one column for a lone provider) */}
       <div className={cn('grid gap-2', providers.length > 1 ? 'grid-cols-2' : 'grid-cols-1')}>
         {providers.map((p) => {
           const color = PROVIDER_COLOR[p];

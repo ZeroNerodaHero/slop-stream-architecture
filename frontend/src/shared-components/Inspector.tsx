@@ -25,12 +25,10 @@ import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/Mobile
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** The box look, the corner player's FRAME: a stroke on the box colour. */
 const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 320;
 const MIN_H = 200;
-/** Within this many px of the newest row counts as "at the bottom". */
 const STUCK_PX = 40;
 
 const DIR_TONE: Record<FrameEntry['dir'], string> = {
@@ -49,12 +47,10 @@ interface Box {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 
-/** The time of a row, to the second, and the full stamp in its title. */
 function clock(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour12: false });
 }
 
-/** The row's json, laid out, for the expanded view. The text as it came when it is not json. */
 function pretty(text: string): string {
   try {
     return JSON.stringify(JSON.parse(text), null, 2);
@@ -63,13 +59,6 @@ function pretty(text: string): string {
   }
 }
 
-/**
- * The messages inspector (docs/status.md): the frames this browser sent and got on its three
- * sockets, the last 1000, newest at the bottom, with a filter and the direction toggles. A
- * `<dialog>` opened with `show()`, not `showModal()`: the frames worth watching are made by
- * using the page, and a modal would freeze it. Floats over every page (mounted by the Shell),
- * dragged by its header, resized from its corner. Renders nothing until `openInspector`.
- */
 export function Inspector() {
   const open = useAtomValue(inspectorOpenAtom);
   return open ? <InspectorPanel /> : null;
@@ -93,13 +82,9 @@ function InspectorPanel() {
   const mobile = useIsMobile();
   useSheetBack(closeInspector);
 
-  // the rows: the ring through the filter, this tick. paused, the rows as they were when the pause
-  // began (taken by the toggle itself) while the recorder goes on; the count line says how many came
   const rows = frozen?.rows ?? shownEntries(filter, dirs);
   const since = frozen ? ring.count - frozen.count : 0;
 
-  // Mount only: shown, not modal. Closed on the way out. (The ring is kept whether or not this is
-  // open: the setting is what records, this only shows.)
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.show();
@@ -109,7 +94,6 @@ function InspectorPanel() {
     };
   }, []);
 
-  // the newest row in view while the view sits at the bottom, like the chat
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el && stuck.current) el.scrollTop = el.scrollHeight;
@@ -120,7 +104,6 @@ function InspectorPanel() {
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
   }
 
-  /** A press on the header (a move) or the corner (a resize): followed through window listeners, kept on screen. */
   const press = (e: ReactPointerEvent, kind: 'move' | 'resize') => {
     const el = dialogRef.current;
     if (e.button !== 0 || stop.current || !el) return;
@@ -177,7 +160,6 @@ function InspectorPanel() {
       className={cn(
         FRAME,
         'fixed z-50 m-0 flex flex-col overflow-hidden p-0 text-sm text-textPrimary open:flex',
-        // a phone's is a sheet on the foot of the window, the page above it still usable (MobileSheet.tsx): no moving, no resizing
         mobile
           ? 'inset-x-0 bottom-0 top-auto h-[60dvh] w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
           : !box && 'left-auto right-6 top-6 h-[min(440px,calc(100dvh-3rem))] w-[min(600px,calc(100vw-3rem))]'

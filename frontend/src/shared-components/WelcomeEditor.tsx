@@ -18,17 +18,8 @@ import { INPUT } from '@/shared-components/input';
 import { CHECKBOX, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** What the welcome is, by its title in both places. */
 export const WELCOME_TIP = 'Eques says it in your chat to each viewer who opens it. only they see it, and it is never sent';
 
-/**
- * My chat welcome (welcome-atoms.ts), the editor: the bot Eques says it at the top of my chat to
- * whoever opens it, on their screen alone. The switch saves at once, with the words as saved; the
- * words save with the button. Under them, the line as Eques says it, the draft's words in the
- * chat's shape. In the profile tab and in my page's mod tab, the one set of atoms (profile-atoms.ts)
- * behind both, so a save in one shows in the other. `id` tells their elements apart; the caller
- * loads my profile (`loadMyProfile`) and draws the title.
- */
 export function WelcomeEditor({ id }: { id: string }) {
   const welcome = useAtomValue(profileWelcomeAtom);
   const draft = useAtomValue(profileWelcomeDraftAtom);
@@ -72,7 +63,6 @@ export function WelcomeEditor({ id }: { id: string }) {
         aria-describedby={`${id}-count`}
         className={cn(INPUT, 'mt-2 block w-full resize-y py-1.5')}
       />
-      {/* the preview: an empty box is the default words, as the api keeps it; off, the line is dimmed and nobody sees it */}
       <div id={`${id}-preview`} className="mt-3 flex flex-col">
         <div className="flex items-center justify-between gap-3">
           <span className={SECTION_TITLE}>{on ? 'in your chat' : 'off: nobody sees it'}</span>

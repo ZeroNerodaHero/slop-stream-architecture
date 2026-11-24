@@ -6,7 +6,6 @@ import { cn } from '@/utils/cn';
 
 interface Playback {
   muted: boolean;
-  /** 0..1, the level the dial returns to. */
   level: number;
 }
 
@@ -14,9 +13,7 @@ interface StreamStatsButtonProps {
   id: string;
   role: 'watch' | 'publish';
   stats: StreamStats | null;
-  /** Where in the picture's top left corner it sits: the offset the player's other chips use. */
   className?: string;
-  /** Watcher only: how loud this browser is playing it. */
   playback?: Playback;
 }
 
@@ -24,26 +21,18 @@ function unhealthy(word: QualityWord): boolean {
   return word === 'breaking' || word === 'upload limited' || word === 'cpu limited';
 }
 
-/** The trouble is the pipe: the picture arriving in holes, or the upload not getting through. */
 function broken(word: QualityWord): boolean {
   return word === 'breaking' || word === 'upload limited';
 }
 
-/** How many of the four bars are lit: all on a clear picture, two on a rough one, none while it breaks or before the first sample. */
 function barsOf(stats: StreamStats | null): number {
   if (!stats) return 0;
   if (stats.word === 'rough') return 2;
   return unhealthy(stats.word) ? 0 : 4;
 }
 
-/** The bars' heights, left to right, in a 24px box standing on y=21. */
 const BARS = [6, 10, 14, 18];
 
-/**
- * Reception bars, the way a phone shows its signal: four bars rising to the right, the lit
- * ones solid and the rest faint. `broken` strikes them through. Flat rectangles: the theme
- * has no arcs.
- */
 function SignalIcon({ bars, broken }: { bars: number; broken: boolean }) {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
@@ -55,7 +44,6 @@ function SignalIcon({ bars, broken }: { bars: number; broken: boolean }) {
   );
 }
 
-/** A chip with its legs: the streamer's own machine is what holds the picture back, not any pipe. */
 function CpuIcon() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="miter">
@@ -174,15 +162,6 @@ function Sound({ role, audio }: { role: 'watch' | 'publish'; audio: AudioLine | 
   );
 }
 
-/**
- * The stream's health, in the picture's top left corner: a dark chip with signal bars in it.
- * While the picture is actually in trouble it is up on its own, red, the bars struck through
- * (a chip glyph instead when the streamer's cpu is what limits it); otherwise it comes and goes
- * with the other controls, on hover and keyboard focus, so the numbers stay a click away.
- * Hover and keyboard focus show the quality line under it; a click opens the numbers and a
- * click again, Escape, or a press outside closes them. It is not a setting: a watcher gets the
- * one picture the box has (docs/bitrates.md), so there is nothing here to choose.
- */
 export function StreamStatsButton({ id, role, stats, className = 'left-3 top-3', playback }: StreamStatsButtonProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -196,7 +175,6 @@ export function StreamStatsButton({ id, role, stats, className = 'left-3 top-3',
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
-    // the window this button is in: the page's, or the popped out player's (CornerPlayer), whose presses never reach the page
     const win = root.current?.ownerDocument.defaultView ?? window;
     win.addEventListener('pointerdown', onPointer);
     win.addEventListener('keydown', onKey);
@@ -207,7 +185,6 @@ export function StreamStatsButton({ id, role, stats, className = 'left-3 top-3',
   }, [open]);
 
   return (
-    // `data-video-stats`: the corner player does not take a press here as a drag
     <div ref={root} data-video-stats="" className={cn('absolute z-20', revealClassName(bad), className)}>
       <button
         id={id}

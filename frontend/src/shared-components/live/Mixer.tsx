@@ -22,18 +22,12 @@ import { Collapsible, ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** The fader's place as decibels, for the tooltip: the gain is the cube of the slider (mixer.ts), so 0.5 is -18 dB. */
 function decibels(level: number): string {
   if (level <= 0) return 'silent';
   const db = 60 * Math.log10(level);
   return db > -0.05 ? '0 dB' : `${db.toFixed(0)} dB`;
 }
 
-/**
- * A row's bar: a thin track the green fill grows along, painted from a frame loop (mic-level.ts
- * reads, this paints) and never through react; `aria-valuenow` moves only when the rounded
- * percent does. The master's also lights the clip mark while the mix is too hot.
- */
 function Meter({ id, clip }: { id: string; clip?: boolean }) {
   const root = useRef<HTMLSpanElement | null>(null);
   const fill = useRef<HTMLSpanElement | null>(null);
@@ -116,12 +110,6 @@ function Row({ row, master = false }: { row: MixRow; master?: boolean }) {
   );
 }
 
-/**
- * The sound, under the preview while the stream is up (docs/audio.md): a row for the mic (and
- * for any sound added later), each with its bar, its mute and its fader, and under them
- * `everyone hears`, the mix that leaves, with the same. The faders are what the watchers get;
- * nothing here plays on this machine.
- */
 export function Mixer() {
   const rows = useAtomValue(mixRowsAtom);
   const master = useAtomValue(masterRowAtom);

@@ -8,7 +8,6 @@ import { Button } from '@/shared-components/Button';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** `name`'s user id while you and they are in the same voice channel of the room on the page (and they are not you): the one whose level you can set. Else null. */
 export function useHeardUid(name: string): string | null {
   const room = useAtomValue(roomAtom);
   const call = useAtomValue(voiceCallAtom);
@@ -17,12 +16,10 @@ export function useHeardUid(name: string): string | null {
   return room.voice?.[call.channel]?.find((p) => p.name === name)?.uid ?? null;
 }
 
-/** `uid`'s level as you keep it (voice-atoms.ts `voiceHeardAtom`). */
 export function useHeardLevel(uid: string) {
   return heardLevelOf(useAtomValue(voiceHeardAtom), uid);
 }
 
-/** The mark on a voice channel's row for someone you muted for yourself: nobody else hears a difference. */
 export function HeardMutedMark({ uid }: { uid: string }) {
   if (!useHeardLevel(uid).muted) return null;
   return (
@@ -34,17 +31,8 @@ export function HeardMutedMark({ uid }: { uid: string }) {
   );
 }
 
-/**
- * Your own level for `name`, someone in your voice channel: mute them for yourself, and their
- * volume from 0 to 200% (100 as they come), the percent beside it. Only what you hear: it is
- * applied to their line on the call as it moves (voice-atoms.ts `applyHeard`) and kept in this
- * browser by their id, so a rejoin and a reload keep it. At the foot of their hover card
- * (PersonCard.tsx `below`) and in a phone's profile sheet. `pin`: the card's hold, so it stays
- * while the slider is dragged.
- */
 export function VoiceLevel({ id, name, uid, pin, className }: { id: string; name: string; uid: string; pin?: (on: boolean) => void; className?: string }) {
   const { volume, muted } = useHeardLevel(uid);
-  // the drag ends wherever the pointer is let go, on the card or off it
   const grab = () => {
     if (!pin) return;
     pin(true);

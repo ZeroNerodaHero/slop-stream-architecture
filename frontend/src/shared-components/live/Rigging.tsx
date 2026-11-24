@@ -18,7 +18,6 @@ import type { FaceLines, FaceMarks } from '@/infra/face';
 import { Collapsible } from '@/shared-components/live/Collapsible';
 import { cn } from '@/utils/cn';
 
-/** What stands over the picture while the reader has no face to mark, in the streamer's words. */
 const WORDS: Record<FaceReading, string> = {
   idle: '',
   starting: 'getting ready to read your face',
@@ -29,7 +28,6 @@ const WORDS: Record<FaceReading, string> = {
   'camera-blocked': 'camera blocked'
 };
 
-/** What the pose made of the marks, each a bar from 0 to 100. */
 const BARS: readonly { id: string; label: string; of: (marks: FaceMarks) => number }[] = [
   { id: 'mouth', label: 'mouth open', of: (marks) => marks.mouth },
   { id: 'blink', label: 'eyes shut', of: (marks) => marks.blink },
@@ -37,40 +35,19 @@ const BARS: readonly { id: string; label: string; of: (marks: FaceMarks) => numb
   { id: 'brows-up', label: 'brows up', of: (marks) => Math.max(0, marks.brows) },
   { id: 'brows-down', label: 'brows down', of: (marks) => Math.max(0, -marks.brows) }
 ];
-/** And where the head is asked to turn, in degrees. */
 const TURNS: readonly { id: string; label: string; of: (marks: FaceMarks) => number }[] = [
   { id: 'turn', label: 'head turn', of: (marks) => marks.yaw },
   { id: 'nod', label: 'head nod', of: (marks) => marks.pitch },
   { id: 'tilt', label: 'head tilt', of: (marks) => marks.roll }
 ];
-/** No face being read: no marks, and every number at rest. */
 const REST: FaceMarks = { points: null, yaw: 0, pitch: 0, roll: 0, mouth: 0, blink: 0, smile: 0, brows: 0 };
-/** A camera that has not said its shape yet. */
 const ASPECT = 4 / 3;
-/**
- * The view frames the face: a window on the camera's frame, eased toward one in which the
- * face is this much of the height, so the marks on the eyes and the mouth can be seen on a
- * face that sits small in its frame. Never closer than `CLOSEST` of the frame across, and the
- * whole frame again when no face is read: that is when where you are in it matters.
- */
 const FACE_FILLS = 0.6;
 const CLOSEST = 0.3;
-/** How long the window takes to catch up with the face, in seconds: slow, so a nod moves the face in the picture and not the picture. */
 const FOLLOW_S = 0.6;
-/** The face's box sits under the head's middle: the window's middle is this much of the face's height higher. */
 const HEAD_UP = 0.06;
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
-/**
- * The panel's body: the picture with the marks on it, and the numbers beside it. Mounted only
- * while the panel is open, so the worker sends the marks only then.
- *
- * The marks and the numbers are painted from the reader's own rate (thirty a second) straight
- * onto a canvas and into the bars, never through react: `#rig-marks` carries how many points
- * it last drew (`data-points`), how many times it has drawn (`data-frames`) and how far the
- * view is in on the face (`data-zoom`, 1 for the whole frame), each bar its `aria-valuenow`,
- * each turn its `data-value`, for the test, which reads those and never pixels.
- */
 function RigBody() {
   const stream = useAtomValue(readerCameraAtom);
   const face = useAtomValue(faceAtom);
@@ -81,13 +58,10 @@ function RigBody() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const numbersRef = useRef<HTMLDivElement | null>(null);
-  /** What the painter reads, kept out of its effect's reasons to start over: a start over stops and starts the worker's marks. */
   const linesRef = useRef<FaceLines | null>(null);
   const readingRef = useRef(false);
   const repaintRef = useRef<() => void>(() => undefined);
   const reading = face === 'on';
-  // the camera's picture is on the page only while it is asked for, and never while a screen is shared or being picked:
-  // a share of this page would send it, so it is gone before the browser's picker opens, while there is no share to see it
   const shown = picture && !sharing && stream !== null;
   const settings = stream?.getVideoTracks()[0]?.getSettings();
   const aspect = settings?.width && settings.height ? settings.width / settings.height : ASPECT;
@@ -115,23 +89,18 @@ function RigBody() {
       shown: 0
     }));
     const turns = TURNS.map((turn) => ({ value: numbers.querySelector<HTMLElement>(`#rig-${turn.id}`), shown: 0 }));
-    // someone who asked for less motion gets the whole frame, standing still
     const still = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    /** The window on the camera's frame that the view shows: its middle, and how much of the frame it is across (1: all of it). */
     const view = { x: 0.5, y: 0.5, across: 1 };
     let latest: FaceMarks = REST;
     let frame = 0;
     let frames = 0;
     let paintedAt = 0;
-    /** The window as the picture last wore it: written again only when it moved. */
     let last = '';
-    /** The theme's colours for the marks, read again once a second: a custom accent is theirs too, and asking every frame costs a style pass each. */
     const inks = { at: -Infinity, mesh: '', outline: '', features: '', irises: '' };
 
     const paint = (now: number) => {
       frame = 0;
       const marks = readingRef.current ? latest : REST;
-      // where the window is headed: round the face while one is read, the whole frame while none is
       const to = { x: 0.5, y: 0.5, across: 1 };
       if (marks.points && !still) {
         let top = 1;
@@ -147,11 +116,9 @@ function RigBody() {
           if (y > bottom) bottom = y;
         }
         to.across = clamp((bottom - top) / FACE_FILLS, CLOSEST, 1);
-        // never past the frame's edge: there is no picture there
         to.x = clamp((left + right) / 2, to.across / 2, 1 - to.across / 2);
         to.y = clamp((top + bottom) / 2 - (bottom - top) * HEAD_UP, to.across / 2, 1 - to.across / 2);
       }
-      // a step as long as the time since the last one; after a pause (nothing was read), one frame's worth, not the pause's
       const since = now - paintedAt;
       const k = 1 - Math.exp(-(since > 0 && since < 250 ? since / 1000 : 1 / 30) / FOLLOW_S);
       paintedAt = now;
@@ -162,13 +129,11 @@ function RigBody() {
       if (settled) Object.assign(view, to);
       const zoom = 1 / view.across;
       const video = videoRef.current;
-      // the picture through the same window as the marks (the mirror, when it is on, is their box's: it flips both)
       const through = zoom === 1 ? '' : `scale(${zoom.toFixed(4)}) translate(${((0.5 - view.x) * 100).toFixed(3)}%, ${((0.5 - view.y) * 100).toFixed(3)}%)`;
       if (video && through !== last) {
         last = through;
         video.style.transform = through;
       }
-      // the canvas is as many dots as the box it lies over has, whatever the page was resized to
       const dots = win.devicePixelRatio || 1;
       const w = Math.round(canvas.clientWidth * dots);
       const h = Math.round(canvas.clientHeight * dots);
@@ -232,8 +197,6 @@ function RigBody() {
         el.value.textContent = `${value > 0 ? '+' : ''}${value}°`;
         el.value.dataset.value = String(value);
       });
-      // the window still has a way to go and no reading will come to move it (the face left): it goes on by itself.
-      // while a face is read every reading is a step, and that is often enough
       if (!settled && !readingRef.current) schedule();
     };
     function schedule() {
@@ -251,7 +214,6 @@ function RigBody() {
     };
   }, []);
 
-  // what the painter reads. a reader that stopped reading (the face left, the camera went) sends nothing more: the marks are wiped here
   useEffect(() => {
     linesRef.current = lines;
     readingRef.current = reading;
@@ -261,11 +223,8 @@ function RigBody() {
   const words = WORDS[face];
   return (
     <>
-      {/* side by side where the panel has the room for both, the numbers under the picture where it has not: the panel's
-          own width decides (it sits between the sources and the chat), not the window's */}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-3 p-3">
         <div id="rig-view" className="relative w-full max-w-md overflow-hidden border border-primaryStroke bg-black" style={{ aspectRatio: String(aspect) }}>
-          {/* a mirror flips the picture and the marks together: the marks are drawn where the camera has them */}
           <div className={cn('absolute inset-0', mirror && '-scale-x-100')}>
             <video
               ref={videoRef}
@@ -330,18 +289,6 @@ function RigBody() {
   );
 }
 
-/**
- * The rigging, under the preview while a model is on (docs/vtuber.md): what the face reader
- * sees and what it makes of it. The camera's picture with the reader's points on it (the mesh
- * faint, the face's outline, the eyes, brows and lips in the accent, the irises green), and
- * beside it the numbers those points become, which are what move the model: how open the
- * mouth is, how shut the eyes, the smile, the brows, and the head's turn, nod and tilt.
- *
- * This is the one place the camera's own picture is shown, and it is this page's alone: the
- * track is in no sender (`readerCameraAtom`). The picture is always under the marks (no eye: Billy wants
- * the face video and the rig together); while a screen is shared it is hidden, since a share of this page would carry it out. Hidden from before the browser's picker
- * opens (`screenMaySeePageAtom`): once a screen is shared its first frames are already sent.
- */
 export function Rigging() {
   const model = useAtomValue(modelAtom);
   const open = useAtomValue(livePanelsAtom).rig;

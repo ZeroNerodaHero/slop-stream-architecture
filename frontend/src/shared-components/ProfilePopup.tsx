@@ -37,42 +37,22 @@ import { cn } from '@/utils/cn';
 import { monthOf } from '@/utils/since';
 import { roveTabs } from '@/utils/tabs';
 
-/** Their page's three tabs (WatchPage.tsx), in its order. */
 type PopupTab = 'about' | 'calendar' | 'socials';
 const POPUP_TABS: readonly PopupTab[] = ['about', 'calendar', 'socials'];
-/** A tab, the watch page's look: the open one wears the blue line under it. */
 const TAB = '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150';
 const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
-/** A link inside a sentence (buttons.mdc): `try again` after the words that the read failed. */
 const WORDS = 'text-sm font-semibold text-primaryBlue underline-offset-2 hover:underline';
-/** A small action in the row: boxed, the size of `go to their page` (buttons.mdc), and a thumb's 44px on a phone. */
 const SMALL = 'px-3 py-1.5 text-sm max-md:min-h-11';
 
-/**
- * The profile popup (docs/follows.md): somebody's page over the page you are on, discord's
- * way. A click on a member of a group's roster, or on a name in a chat, opens it while this
- * browser's setting says so (settings.profilePopup, the chat tab's `people` cards: on unless
- * turned off, and then the click does what it did before). Mounted by the Shell; it renders
- * nothing until `openProfilePopup`.
- */
 export function ProfilePopup() {
   const target = useAtomValue(profilePopupAtom);
-  // keyed on the name: another person is another popup, read fresh
   return target ? <ProfileDialog key={target.name} target={target} /> : null;
 }
 
-/**
- * Their stream while they are live, the width of the popup: video's frame of it
- * (StreamStill.tsx) until their camera is playing, then the camera, muted (infra/preview.ts:
- * a peer of its own beside whatever the page plays, and not a viewer). The whole picture is
- * the way to their page, where the stream has its sound and its chat. Wanted while it is on
- * screen: the popup closing, or the stream ending, hangs it up.
- */
 function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
   const ref = useRef<HTMLVideoElement | null>(null);
-  // which stream the video got to play: a new stream is not playing until it says so
   const [playingStream, setPlayingStream] = useState<MediaStream | null>(null);
   const playing = stream !== null && playingStream === stream;
 
@@ -92,7 +72,6 @@ function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
     <Link
       id="profile-popup-stream"
       to={`/watch/${encodeURIComponent(name)}`}
-      // a stream: the page holds the player's box from its first paint (WatchPage.tsx)
       state={{ live: true }}
       onClick={onGo}
       draggable={false}
@@ -110,7 +89,6 @@ function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
         onPlaying={() => setPlayingStream(stream)}
         className={cn('absolute inset-0 h-full w-full object-cover', !playing && 'opacity-0')}
       />
-      {/* the home card's chip: the square breathes, the word says it */}
       <span className="absolute left-3 top-3 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
         <span aria-hidden className="h-2 w-2 animate-pulse bg-increase motion-reduce:animate-none" />
         live
@@ -119,64 +97,32 @@ function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
   );
 }
 
-/**
- * Mounted = shown, the user modal's way: a native <dialog> opened modal on mount, so the
- * browser keeps focus in it, closes it on escape and hands focus back to the row that was
- * clicked; a click on the backdrop closes it too, and so does the page under it changing.
- *
- * What it shows is their watch page without the chat: the head (the face, the name with its
- * marks, the word for how they are; under the name their group's badge, how many follow them
- * and, streaming, how many watch; their status), then the follow button and the button that
- * goes to their page; under those, scrolling, their stream while
- * they are live (`LiveStream`) or the offline picture and line they put up, and the page's
- * three tabs, the same three components: the page of their own, when they stream, where else
- * to find them. A friend has the way to their chat with you, and a popup opened from a chat
- * line the way to that account's messages there, which is what the click did before the popup.
- *
- * It asks nothing the page does not: one profile read (`loadPeek`, the hover card's, kept a
- * short while, so a popup opened off a row whose card was up is whole at once), the tabs'
- * own reads as each is opened, and the name's word from the events socket while it is up, so
- * the stream stands in the popup the moment they start. The row that was clicked gives the
- * face and the ✓ meanwhile.
- */
 function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const { name } = target;
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
-  /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
   const { pathname } = useLocation();
-  /** The page the popup was opened over: the path as it was on the first render, for good. */
   const [openedOn] = useState(pathname);
   const [tab, setTab] = useState<PopupTab>('about');
-  /** The profile read did not come. Not an empty page: words, and a way to ask again. */
   const [failed, setFailed] = useState(false);
   const card = useAtomValue(peeksAtom)[name]?.card;
   const heard = useAtomValue(presencesAtom).get(name);
-  // the socket's word for them is now's when the page was already keeping it (a roster's member is held by the room), and from the first
-  // frame after this popup's own hold otherwise: until then a word the atoms kept from some earlier look may be an old one
   const [trusted, setTrusted] = useState(() => wantsPresence(name));
-  // a friend: they follow this login back. the watch page's rule for the line to them (docs/dms.md)
   const friend = useAtomValue(followingAtom)?.find((f) => f.name === name && f.mutual);
-  // my own row, or my own name in a chat: the popup is about me, and the button says so
   const mine = useAtomValue(myNameAtom) === name;
-  // home's list, the count its cards show (PersonCard.tsx): null while it has not come, or did not say
   const viewers = useAtomValue(homeStreamsAtom)?.find((s) => s.name === name)?.viewers ?? null;
 
-  // A layout effect: its cleanup runs while the node is still in the document, which is when
-  // close() hands focus back to the opener. (A passive cleanup would run after the removal.)
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    // the ×, not the first thing that takes focus: a stray enter closes, and goes nowhere
     closeRef.current?.focus();
     return () => {
       if (dialog.open) dialog.close();
     };
   }, []);
 
-  // the profile read, unless a fresh one is in hand. a read that failed with none kept before it leaves nothing to draw
   useEffect(() => {
     if (failed) return;
     let gone = false;
@@ -188,7 +134,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
     };
   }, [name, failed]);
 
-  // their word, as it changes, for as long as the popup is up
   useEffect(() => {
     holdPresence(name);
     const off = onEvents((event) => {
@@ -200,17 +145,13 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
     };
   }, [name]);
 
-  // the page under it changed (the browser's back, a link followed): the popup was over that page, and goes with it
   useEffect(() => {
     if (pathname !== openedOn) closeProfilePopup();
   }, [pathname, openedOn]);
 
-  // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
-  // a phone's is a sheet up from the foot (MobileSheet.tsx): the back button shuts it, and the page under it stays
   useSheetBack(close);
   const mobile = useIsMobile();
-  // in your voice channel: your own level for them, the hover card's foot (VoiceLevel.tsx), which a phone has no hover for
   const heardUid = useHeardUid(name);
 
   const presence = (trusted ? heard : undefined) ?? card?.presence;
@@ -220,7 +161,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const avatar = card ? card.avatar : target.avatar;
   const offline = card?.offline ?? null;
   const socials = useMemo(() => cleanSocials(card?.socials), [card?.socials]);
-  // a fake stream gets a page from its name. anyone else's is read from the api (About.tsx)
   const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
   const page = `/watch/${encodeURIComponent(name)}`;
 
@@ -239,19 +179,14 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         if (pressedBackdrop.current && e.target === e.currentTarget) close();
       }}
       onClose={(event) => {
-        // a `close` from something inside walks the react tree up to here (UserModal.tsx): not this dialog's
         if (event.target !== event.currentTarget) return;
         closeProfilePopup();
       }}
       className={cn(
-        // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col',
-        // a sheet up from the foot on a phone (MobileSheet.tsx): the browser's margins and size caps of a modal dialog go
         'm-0 max-h-none w-full max-w-none border border-primaryStroke',
         SHEET_DIALOG,
-        // past a phone (mobile.ts), as tall as what is in it, between a floor and the window: hung from a fixed top, so a tab with more in it grows the box downward and the head stays put.
-        // `h-fit`, not `h-auto`: a modal dialog is pinned top and bottom, and an auto height would stretch between the two
         'md:mx-auto md:mb-auto md:mt-[8dvh] md:h-fit md:max-h-[calc(92dvh-1.5rem)] md:min-h-[min(22rem,calc(92dvh-1.5rem))] md:w-[min(720px,calc(100vw-3rem))]',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
@@ -264,7 +199,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             <Who name={name} verified={verified} oauthVerified={oauthVerified} />
             {presence && <Word presence={presence} className="font-normal" />}
           </h2>
-          {/* under the name: their group's badge, how many follow them (not a fake stream's: nobody follows one), and while they stream how many watch */}
           <div id="profile-popup-meta" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-textSecondary">
             {card?.badge && <Badge group={card.badge} className="min-w-0" />}
             {typeof card?.followers === 'number' && !isDummyName(name) && (
@@ -274,7 +208,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             )}
             {live && <ViewerCount id="profile-popup-viewers" count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
           </div>
-          {/* their status: the one line about them (`bio` on the wire), a few lines of it here and the whole on hover */}
           {card?.bio && (
             <p id="profile-popup-bio" title={card.bio} className="mt-1 line-clamp-3 text-textSecondary [overflow-wrap:anywhere]">
               {card.bio}
@@ -299,8 +232,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         </Tooltip>
       </header>
 
-      {/* the watch page's row under the picture: the follow button (not for a fake stream: nobody follows one); then the small ways on (a
-          friend's chat, a speaker's messages), and at the far end the way to the page itself. a phone's are one row of equal columns, the sheet's width */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3 max-md:grid max-md:auto-cols-fr max-md:grid-flow-col max-md:items-stretch max-md:gap-x-2">
         {!isDummyName(name) && <FollowButton id="profile-popup-follow" name={name} className="max-md:min-h-11" />}
         {friend && (
@@ -309,7 +240,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             type="button"
             className={buttonClassName('secondary', SMALL)}
             onClick={() => {
-              // the chat window is the page's, under this: the popup makes way for it
               openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence });
               close();
             }}
@@ -317,7 +247,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             message
           </button>
         )}
-        {/* a desktop's only: a phone's row keeps to follow, message and the page */}
         {target.lines && !mobile && (
           <Tooltip content="show only their messages in this chat">
             <button
@@ -333,12 +262,10 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             </button>
           </Tooltip>
         )}
-        {/* on their page already (a name in their own chat): there is nowhere to go */}
         {openedOn !== page && (
           <Link
             id="profile-popup-page"
             to={page}
-            // streaming: the page holds the player's box from its first paint (WatchPage.tsx)
             state={live ? { live: true } : undefined}
             onClick={close}
             draggable={false}
@@ -352,7 +279,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
 
       {mobile && heardUid && <VoiceLevel id="profile-popup-voice" name={name} uid={heardUid} className="shrink-0 border-b border-t-0 px-5 py-3" />}
 
-      {/* `relative`: what is `absolute` or `sr-only` under here has its place inside the scroller (relative-parent.mdc) */}
       <div id="profile-popup-body" className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">
         {failed ? (
           <p id="profile-popup-failed" className="text-textSecondary">
@@ -369,7 +295,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
           </Skeleton>
         ) : (
           <>
-            {/* where the page has its player: the stream, or what they put up for when there is none */}
             {live ? (
               <LiveStream name={name} onGo={close} />
             ) : (
@@ -381,7 +306,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
               </p>
             )}
 
-            {/* the page's tabs (WatchPage.tsx), the same three components. a tab's content is only in the popup while it is open */}
             <div id="profile-popup-tabs" className={cn((live || offline !== null || card.offline_note) && 'mt-5')}>
               <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke">
                 {POPUP_TABS.map((t) => {
@@ -410,7 +334,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
                   <Calendar name={name} scope="popup" live={live} id="profile-popup-calendar" />
                 ) : (
                   <div className="flex flex-col gap-3">
-                    {/* here since when: the month, in the viewer's time zone; the whole date on hover (the page's socials tab) */}
                     {card.joined_at && (
                       <p id="profile-popup-joined" className="text-sm text-textSecondary">
                         joined{' '}

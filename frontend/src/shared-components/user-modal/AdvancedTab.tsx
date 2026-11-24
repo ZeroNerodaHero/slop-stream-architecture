@@ -5,11 +5,6 @@ import { inspectorEnabledAtom, setInspectorEnabled } from '@/infra/atoms/setting
 import { Button } from '@/shared-components/Button';
 import { Block, CHECKBOX, Info } from '@/shared-components/user-modal/parts';
 
-/**
- * The rest of this browser's settings: the ones for looking under the hood. The messages
- * inspector (docs/status.md): the frames this browser gets, in the browser. A shared worker's
- * socket does not show in a tab's devtools, and a phone has no devtools.
- */
 export function AdvancedTab() {
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   return (

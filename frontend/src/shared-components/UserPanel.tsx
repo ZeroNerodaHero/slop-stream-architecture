@@ -27,43 +27,29 @@ import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** Closed: a column of pictures. Open: wide enough for the names. The page sits in what's left. */
 const COLLAPSED = 'w-14';
 const EXPANDED = 'w-[min(300px,calc(100vw-12rem))]';
-/** The column's place in the page, closed or not yet known: sticky, the window's height, this wide. */
 const COLUMN = 'sticky top-0 h-screen w-14 shrink-0 self-start';
-/** The panel inside it, against the page's edge, with the stroke on the side the page is. */
 const panelClass = (side: 'left' | 'right') =>
   cn(
     'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base',
     side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke'
   );
 
-/** How long the pointer may be off the panel before the sidebar closes: a slip over its edge does not shut it, a move away does. */
 const LEAVE_GRACE_MS = 100;
-/** The panel widening and narrowing: quick, and easing out, so it is at full width almost at once and settles. Still for anyone who asked for less motion. */
 const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition-none';
 
-/** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
-/** An icon-only action on a phone: a finger's 44px square. */
 const ICON_TAP = 'max-md:h-11 max-md:w-11';
-/**
- * The icon-only actions at the far end of your row (the messages, a phone's bell, the gear, log out): a 24px box,
- * the small Button's stroke and a lifted fill, the 14px glyph centred, a tooltip of the same name (buttons.mdc).
- */
 const ACTION = cn(
   'relative inline-flex h-6 w-6 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundTertiary text-textSecondary transition-colors duration-100',
   'hover:border-secondaryStroke hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
   ICON_TAP
 );
-/** The worded actions under a guest's name (sign up, log in): a small Button, a remix icon and a word, a size down so the line stays one line. */
 const BOX = 'shrink-0 gap-1 px-2 py-0.5 font-normal';
 const ICON = 14;
-/** Your picture: one box, a blue stroke when pointed at or focused. No shadow. A flex box, so a link lays the picture out the way the button did (no line box under it). */
 const YOU =
   'relative inline-flex shrink-0 border border-transparent transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
-/** The dot between two actions. */
 function Dot() {
   return (
     <span aria-hidden className="mx-1.5 text-textTertiary">
@@ -72,7 +58,6 @@ function Dot() {
   );
 }
 
-/** The messages inspector, one click from every page while its setting is on (docs/status.md). An icon alone, beside the gear. */
 function InspectorOpener() {
   return (
     <Tooltip content="messages: the frames this browser gets">
@@ -83,14 +68,6 @@ function InspectorOpener() {
   );
 }
 
-/**
- * The gear: the user modal (profile, groups, security, notifications; appearance, chat, sidebar,
- * advanced), opened on the tab it was last left on (appearance, the first of this browser's
- * tabs, the first time).
- * At the far end of your row, away from the picture. The opener takes focus first, so the
- * browser has somewhere to hand it back (safari does not focus a clicked button), and the
- * panel closes under the dialog.
- */
 function SettingsOpener() {
   return (
     <Tooltip content="settings">
@@ -112,10 +89,6 @@ function SettingsOpener() {
   );
 }
 
-/**
- * A phone's bell: the title row has none (PageFrame.tsx), so it is here, just before the gear.
- * The drawer shuts and the list (Notifications.tsx) opens under the title row.
- */
 function NotificationsOpener() {
   const unread = useAtomValue(unreadNotificationsAtom);
   return (
@@ -146,7 +119,6 @@ function NotificationsOpener() {
   );
 }
 
-/** Log out: the last of your row's actions, after the gear (the first, on the right side's mirrored row). */
 function LogoutButton() {
   return (
     <Tooltip content="log out">
@@ -157,7 +129,6 @@ function LogoutButton() {
   );
 }
 
-/** How you are, as a word, under your name at the head of a phone's drawer: the desktop column says it in the picture's tooltip. */
 function Status({ presence }: { presence: Presence }) {
   return (
     <span id="my-status" className={PRESENCE_TEXT[presence]}>
@@ -166,10 +137,6 @@ function Status({ presence }: { presence: Presence }) {
   );
 }
 
-/**
- * A phone's way into the sidebar's drawer (UserPanel below), at the left of every page's title
- * row (PageFrame.tsx): the menu glyph, a 44px square. Who you are is the drawer's head.
- */
 export function DrawerOpener() {
   const open = useAtomValue(friendsOpenAtom);
   return (
@@ -190,23 +157,6 @@ export function DrawerOpener() {
   );
 }
 
-/**
- * A column beside every page (left, or the right from settings). Collapsed it is only as wide as
- * the pictures, and the streams use the rest: the search box as its icon, then friends, the rest
- * of who you follow, and the groups you are in, a line between each, in the order settings put
- * them (Friends.tsx), you at the bottom. Hover or focus widens it
- * over the streams (the page does not move, and neither do the pictures): the box, and beside
- * each picture the name, how they are, unfollow, chat for a friend, and your actions. Logged
- * in: your account name and a ✓, and under it the badge you picked (`#you-badge`, your primary group's), none if you picked none. Not logged in: a name box (localstorage,
- * used in chat and as the go-live default) that reads as plain text until you point at it, with
- * sign up and log in under it. Nobody has to. At the far end of your row, boxed icons: the
- * messages (while that setting is on), a phone's bell, the gear, and log out. The picture, and a login's name, are the way to
- * your own page, `/watch/<you>`: your status, your about me, your links, your calendar as everyone sees them (the about me and the links are written there too); the
- * gear is the way to the user modal (profile, groups,
- * security, notifications; appearance, chat, voice, sidebar, advanced). The friend chat window opens
- * from a friend's chat button on their row (Friends.tsx). Go live is the right end of the page's title row.
- * The ids are the ones the tests key on; `data-open` says which state the panel is in.
- */
 export function UserPanel() {
   const me = useAtomValue(meAtom);
   const nick = useAtomValue(nickAtom);
@@ -215,29 +165,19 @@ export function UserPanel() {
   const presence = useAtomValue(myPresenceAtom);
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const side = useAtomValue(panelSideAtom);
-  // the badge you picked in the groups tab (your primary group's), the chip chat puts beside your name. none picked: none here
   const myBadge = useAtomValue(myGroupsAtom).find((g) => g.primary) ?? null;
   const mobile = useIsMobile();
   const { pathname } = useLocation();
   const panel = useRef<HTMLElement | null>(null);
-  // the nick as it was when the box got focus: leaving it tells the chat only on a real change
   const nickAtFocus = useRef('');
-  // the box over the panel (docs/follows.md): hovered or focused it is there
   const friendsOpen = useAtomValue(friendsOpenAtom);
   const leaving = useRef<number | null>(null);
-  // the pointer is over the panel: losing focus then (a click on a line of words in it) is not leaving
   const hovered = useRef(false);
 
-  // Mount only. Asks /api/me once per page load, then loads my picture; every later mount reuses the answer.
   useEffect(() => {
     void loadMe().then(loadMyProfile);
   }, []);
 
-  // who I follow, the groups I am in, my chats and my inbox: a login's, once the login is known and whenever
-  // it changes (in, out, a rename). the watch page's follow button and the sidebar's lists read the
-  // first; the sidebar's groups list the second; the chat window the third; the bell at the top right the
-  // fourth. another login's are not this one's, and a guest has none but who it follows: names kept in this
-  // browser (follow-atoms.ts), asked about once the page knows nobody is logged in.
   useEffect(() => {
     forgetFollowing();
     forgetMyServers();
@@ -245,7 +185,6 @@ export function UserPanel() {
     forgetNotifications();
     if (me !== undefined) {
       void loadFollowing();
-      // which groups are mine, and the primary one: the badge under your name
       void loadGroups();
     }
     if (me) {
@@ -255,13 +194,10 @@ export function UserPanel() {
     }
   }, [me]);
 
-  // a page change closes the box: a friend's name was clicked, or the back button
   useEffect(() => {
     store.set(friendsOpenAtom, false);
   }, [pathname]);
 
-  // closed with focus still inside (Escape, a page change): the box and the rows are in the
-  // closed column now, and typing into a box with no room would show nothing. focus lets go
   useEffect(() => {
     if (friendsOpen) return;
     const active = document.activeElement;
@@ -276,9 +212,6 @@ export function UserPanel() {
     if (!friendsOpen) store.set(friendsOpenAtom, true);
   }
   function leaveSoon() {
-    // typing in the box, or tabbing along the rows: the pointer leaving does not close it. a click elsewhere takes the focus, and that
-    // does. a button clicked with the pointer keeps the focus too in some browsers, but not visibly (:focus-visible), and that is no
-    // reason to stay: a fold or a chat button pressed and left should not pin the panel open
     const active = document.activeElement;
     if (active && active !== panel.current && panel.current?.contains(active) && active.matches(':focus-visible')) return;
     if (leaving.current !== null) window.clearTimeout(leaving.current);
@@ -291,53 +224,33 @@ export function UserPanel() {
     store.set(friendsOpenAtom, false);
   }
 
-  // who I am is not known yet (/api/me is being asked): the column all the same, its width in the
-  // page from the first paint, with the search square at its head and your picture's square at
-  // its foot in grey. the page beside it would otherwise be laid out wider and reflow when the
-  // column arrived. no id: the panel the tests key on is the one below
   if (me === undefined) {
-    // a phone has no column to hold the page's place: its drawer comes once who you are is known
     if (mobile) return null;
     return (
       <aside aria-label="you" data-side={side} className={COLUMN}>
         <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED)}>
           <div className={cn('flex flex-1 pt-1', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
-            {/* the closed search box: 2rem tall, a face column wide (Friends.tsx) */}
             <Bone className="h-8 w-[calc(2rem+2px)]" />
           </div>
           <div className={cn('flex shrink-0 border-t border-primaryStroke py-1.5', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
-            {/* your picture in its box: 2rem and the box's 1px border each side, like a row's face above */}
             <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)]" />
           </div>
         </Skeleton>
       </aside>
     );
   }
-  // on the right the panel grows leftward, so the row is mirrored and your picture stays at the edge, like the rows above it
-  // a phone's drawer is always the left one
   const mirrored = side === 'right' && !mobile;
-  // the names and actions beside the picture: the open column's, and the drawer's whenever it is on screen
   const wide = friendsOpen || mobile;
-  // where the picture goes: my page, once I have a name. a guest with none yet gets the profile tab, where the name box is
   const myPage = isValidName(myName) ? `/watch/${myName}` : null;
   const youLabel = `you: ${myPage ? 'your page' : 'pick a name'}. ${PRESENCE_WORD[presence]}`;
   const youTitle = `${myPage ? 'your page' : 'pick a name'} · ${PRESENCE_WORD[presence]}`;
   const face = (
     <>
       <Face name={me ?? nick} version={avatar} className={RAIL_FACE} />
-      {/* the presence square in the corner of the picture: green online, green and blue cut
-          corner to corner streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
       <PresenceSquare id="my-presence" status={presence} className="border-background" />
     </>
   );
 
-  // your picture 0.75rem less its 1px border in from the edge (11px at the browser's size, the faces' inset in Friends.tsx), open or
-  // closed: centered in the closed 3.5rem column at every text size, in line with the faces above. the name block beside it is in
-  // the row closed too, invisible, so the row is one height in both states and the lists above have the same room (Friends.tsx
-  // cuts them at whole rows of it). the foot of the column; a phone's drawer has it at its head, over the lists, with the
-  // drawer's roomier 2.5rem face 1.25rem in
-  // the boxed icons at the far end of the row, centred on the picture, away from it on either side: on the right the row is
-  // mirrored, and so are they, log out still the farthest. invisible closed, like the names
   const actions = (
     <span className={cn('flex shrink-0 items-center gap-1', mirrored && 'flex-row-reverse', !wide && 'invisible')}>
       {inspectorOn && <InspectorOpener />}
@@ -355,7 +268,6 @@ export function UserPanel() {
         mobile ? 'pl-[calc(1.25rem-1px)] pr-3' : mirrored ? 'flex-row-reverse pl-3 pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)] pr-3'
       )}
     >
-      {/* the picture is a link to your own page, the way every face above is a link to theirs. not draggable: it must not lift off as a ghost */}
       {myPage ? (
         <Link id="you" to={myPage} aria-label={youLabel} title={youTitle} draggable={false} onClick={closeFriends} className={YOU}>
           {face}
@@ -381,7 +293,6 @@ export function UserPanel() {
       {me ? (
         <>
           <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !wide && 'invisible')}>
-            {/* a login's name is a second way to your page. #me stays the bare name, for the tests, even while the panel is closed */}
             <Link
               to={`/watch/${me}`}
               title="your page"
@@ -402,9 +313,6 @@ export function UserPanel() {
                 </span>
               </Tooltip>
             </Link>
-            {/* the line under the name: your badge, the chip chat shows beside your name, and on a phone how you are after it. no badge
-                and a desktop: no line, and the row is the name alone, centred on the picture. closed it is invisible with the name.
-                leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid */}
             {(myBadge || mobile) && (
               <span id="you-badge" className={cn('flex items-center text-xs leading-5', mirrored && 'flex-row-reverse')}>
                 {myBadge && <Badge group={myBadge} card className="min-w-0" />}
@@ -421,7 +329,6 @@ export function UserPanel() {
             <label htmlFor="username" className="sr-only">
               your name
             </label>
-            {/* a guest's name is the box: clicking it edits, it does not open anything */}
             <span className="relative -mx-1 block">
               <input
                 id="username"
@@ -431,7 +338,6 @@ export function UserPanel() {
                   nickAtFocus.current = e.currentTarget.value;
                 }}
                 onBlur={(e) => {
-                  // a reconnect replaces the history and blips the count for the whole room: only for a new name
                   if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick');
                 }}
                 onKeyDown={(e) => {
@@ -445,7 +351,6 @@ export function UserPanel() {
                 spellCheck={false}
                 className={cn(
                   NAME_LINE,
-                  // the border shows on hover and goes blue on focus (said here too: the hover rule outranks the one in globals.css)
                   'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background',
                   mirrored ? 'pl-6 text-right' : 'pr-6'
                 )}
@@ -454,7 +359,6 @@ export function UserPanel() {
                 ✎
               </span>
             </span>
-            {/* the way to make the name yours, right under it (leading-5: the pixel grid, as above) */}
             <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
               {mobile && (
                 <>
@@ -478,9 +382,6 @@ export function UserPanel() {
     </div>
   );
 
-  // a phone: the column is a drawer from the left (SwipeDrawer.tsx), opened by the menu button at the left of the title row
-  // (`DrawerOpener`). you at its head, then the lists, open the whole time it is on screen. `friendsOpenAtom` is its open, so a
-  // page change, a name picked and the gear shut it as they shut the column
   if (mobile) {
     return (
       <SwipeDrawer id="user-drawer" side="left" open={friendsOpen} onOpenChange={(to) => store.set(friendsOpenAtom, to)} label="you">
@@ -513,7 +414,6 @@ export function UserPanel() {
       }}
       onFocusCapture={stayOpen}
       onBlurCapture={(e) => {
-        // focus went somewhere outside the panel and its list, or nowhere, and the pointer is not here either
         if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !hovered.current) leaveSoon();
       }}
       onKeyDown={(e) => {
@@ -524,7 +424,6 @@ export function UserPanel() {
       }}
       className={cn(COLUMN, friendsOpen && 'z-40')}
     >
-      {/* the column stays this wide in the page. open, the panel grows out of it and covers the streams */}
       <div className={cn(panelClass(side), WIDEN, friendsOpen ? EXPANDED : COLLAPSED)}>
         <div className="flex min-h-0 flex-1 flex-col">
           <Friends open={friendsOpen} side={side} onPick={closeFriends} />

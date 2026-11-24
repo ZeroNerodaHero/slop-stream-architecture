@@ -18,23 +18,14 @@ import { PicturePick } from '@/shared-components/PicturePick';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { cn } from '@/utils/cn';
 
-/** The api's caps, as the boxes know them. */
 const MAX_BADGE_CHARS = 12;
 const MAX_ABOUT_CHARS = 200;
 
-/** A picture chosen before the group exists: the bytes the crop dialog made, and a url that shows them here. */
 interface Picked {
   blob: Blob;
   url: string;
 }
 
-/**
- * The dialog that makes a group (docs/groups.md): the name, the word on the badge, a colour,
- * a line about it, public or private, and the banner and the picture, each through the crop
- * dialog and shown here as they will sit on the group. `make it` posts the group, puts the
- * pictures on it, and goes to the new room. Home and `/groups` open it, for a login under the
- * cap on owned groups (`groups_per_owner`, the api's); past it the api says so here.
- */
 export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
   const busy = useAtomValue(groupsBusyAtom);
   const status = useAtomValue(groupsStatusAtom);
@@ -49,7 +40,6 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
   const [isPublic, setPublic] = useState(true);
   const [icon, setIcon] = useState<Picked | null>(null);
   const [banner, setBanner] = useState<Picked | null>(null);
-  /** From `make it` until the room: the group and then its pictures are going up. */
   const [sending, setSending] = useState(false);
   const [spoke, setSpoke] = useState(false);
   const clean = cleanName(name);
@@ -66,7 +56,6 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  // a preview's url goes with the picture it showed: replaced, or the dialog gone
   useEffect(() => {
     if (!icon) return;
     return () => URL.revokeObjectURL(icon.url);
@@ -76,7 +65,6 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
     return () => URL.revokeObjectURL(banner.url);
   }, [banner]);
 
-  /** A picture for the group: cut to its shape in the crop dialog (over this one), kept here until the group exists. */
   async function pick(file: File, kind: 'icon' | 'banner') {
     const blob = await cropPicture(file, kind === 'icon' ? GROUP_ICON : GROUP_BANNER);
     if (!blob) return;
@@ -95,13 +83,10 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
       setSending(false);
       return;
     }
-    // the pictures, now that there is a group to put them on. one that does not go up is no
-    // reason to stop: the group is made, and the room offers the pictures again
     try {
       if (icon) await api.saveGroupIcon(made.name, icon.blob);
       if (banner) await api.saveGroupBanner(made.name, banner.blob);
     } catch {
-      // said nowhere: the room shows the picture missing, with the way to add it
     }
     await qc.invalidateQueries({ queryKey: ['explore'] });
     onClose();
@@ -125,7 +110,6 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
       onPointerDown={onPointerDown}
       onClick={onClick}
       onClose={onClose}
-      // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
         'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
@@ -133,12 +117,9 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
     >
       <SheetGrab onDismiss={onClose} />
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
-        {/* the dialogs' title (CropDialog, ConfirmDialog): the blue bar, a size down to keep this one dense */}
         <h2 id="groups-make-title" className="border-l-4 border-primaryBlue pl-3 text-lg font-semibold leading-tight text-textPrimary">
           create group
         </h2>
-        {/* the banner and the picture as they will sit on the group: the whole picture is the click, as on the room */}
-        {/* the picture hangs 32px under the banner; the line under it sits 8px past that (28 here and the form's 12) */}
         <div className="relative mb-7">
           <div id="groups-make-banner" className="group/banner relative h-28 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
             {banner && <img src={banner.url} alt="" className="h-full w-full object-cover" />}
@@ -201,12 +182,10 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           aria-label="about"
           className={INPUT}
         />
-        {/* the swatches and the square for any other colour on the left, the badge as it will read pushed to the right: one 24px line */}
         <div className="flex flex-wrap items-center gap-1.5">
           <GroupColorPick id="groups-make-color" value={color} onChange={setColor} />
           <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} preview size="md" className="ml-auto" />
         </div>
-        {/* public or private on the left, the two answers on the right */}
         <div className="flex items-center justify-between gap-3">
           <VisibilityToggle isPublic={isPublic} onChange={setPublic} ids={['groups-make-public', 'groups-make-private']} />
           <span className="flex items-center gap-3">

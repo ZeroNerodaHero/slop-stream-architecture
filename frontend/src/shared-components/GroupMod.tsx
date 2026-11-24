@@ -19,26 +19,15 @@ import type { CardAction } from '@/shared-components/PersonCard';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/**
- * A group's moderation (docs/groups.md): what a moderator may do to a member, asked from a line's
- * `more` menu (`lineModItems`), from the box on a member's card (`useCardMod`, the roster's and a
- * voice channel's), and from the member's info (`MemberInfo`). Each asks first (`ModConfirm`); the
- * page has one of each up at a time (`GroupModHost`). The api has the last word on every rule
- * here: the page only leaves out what it would refuse.
- */
-
 export type ModKind = 'delete' | 'kick' | 'timeout' | 'ban' | 'mute' | 'disconnect';
 
-/** A moderation asked for, waiting on its yes. `line` for a delete. */
 export interface ModAsk {
   kind: ModKind;
   name: string;
   line?: { id: string; channel: string };
 }
 
-/** The question up, null for none. */
 export const modAskAtom = atom<ModAsk | null>(null);
-/** Whose info is up, null for none. */
 export const memberInfoAtom = atom<string | null>(null);
 
 export function askMod(ask: ModAsk): void {
@@ -49,7 +38,6 @@ export function openMemberInfo(name: string): void {
   store.set(memberInfoAtom, name);
 }
 
-/** How long a timeout runs, the picks (seconds): the api takes ten seconds to a week. */
 export const TIMEOUT_PICKS: { seconds: number; label: string }[] = [
   { seconds: 60, label: '1m' },
   { seconds: 300, label: '5m' },
@@ -59,36 +47,24 @@ export const TIMEOUT_PICKS: { seconds: number; label: string }[] = [
   { seconds: 604800, label: '1w' }
 ];
 
-/** What this login may do to one member here. */
 export interface ModPowers {
-  /** Kick, and with it a timeout. */
   kick: boolean;
   ban: boolean;
-  /** Mute and disconnect in voice: the kick power, or the voice power. */
   voice: boolean;
-  /** Any of them: the info and their lines are for these. */
   any: boolean;
 }
 
 const NONE: ModPowers = { kick: false, ban: false, voice: false, any: false };
 
-/**
- * What this login may do to `name` in `room`: nothing to themselves, nothing to an owner (the api
- * lets an owner act on another; the page leaves it to the members tab), and the powers they hold
- * (an owner and a site admin hold all of them, `perms` says so). A member the roster has not
- * loaded yet counts as no owner: the api refuses if they are one.
- */
 export function modPowers(room: GroupRoom | null, me: string | null | undefined, name: string): ModPowers {
   if (!room || !me || name === me) return NONE;
   if (room.roster?.some((m) => m.name === name && m.owner)) return NONE;
   const kick = room.perms.kick;
   const ban = room.perms.ban;
-  // the voice power: the api's room says it, the page's roles tab does not hand it out yet
   const voice = kick || (room.perms as RolePerms & { voice?: boolean }).voice === true;
   return { kick, ban, voice, any: kick || ban || voice };
 }
 
-/** Where `name` sits in voice here, and whether a moderator muted them; null when they are not in voice. */
 export function voiceSeatOf(room: GroupRoom | null, name: string): { channel: string; muted: boolean } | null {
   for (const [channel, people] of Object.entries(room?.voice ?? {})) {
     const p = people.find((person) => person.name === name);
@@ -97,17 +73,11 @@ export function voiceSeatOf(room: GroupRoom | null, name: string): { channel: st
   return null;
 }
 
-/** Whether this login may give or take a role with these powers: the roles tab's rule (ServerRoom.tsx `reaches`), the api's. */
 function reaches(room: GroupRoom, perms: RolePerms): boolean {
   if (room.owner || room.admin === true) return true;
   return (Object.keys(perms) as (keyof RolePerms)[]).every((key) => !perms[key] || room.perms[key] === true);
 }
 
-/**
- * The buttons on `name`'s card (PersonCard.tsx `actions`), for the room on the page: mute or unmute
- * and disconnect while they are in voice, then kick, time out and ban (red), then their info.
- * Null when this login may do none of it. `close` takes the card away as a button opens its question.
- */
 export function useCardMod(name: string, close: () => void): CardAction[] | null {
   const room = useAtomValue(roomAtom);
   const me = useAtomValue(meAtom);
@@ -152,11 +122,6 @@ export function useCardMod(name: string, close: () => void): CardAction[] | null
   return actions;
 }
 
-/**
- * A channel line's moderation, for its `more` menu: `delete message` on your own line, or anyone's
- * with the kick power (an owner's never, the page's rule); then, past a divider, kick, timeout
- * and ban on its author, red. None for a line nobody here may touch.
- */
 export function lineModItems(room: GroupRoom | null, me: string | null | undefined, channel: string, line: ChatLine): LineMenuItem[] {
   if (!room || !me) return [];
   const mine = line.verified && line.from === me;
@@ -178,7 +143,6 @@ export function lineModItems(room: GroupRoom | null, me: string | null | undefin
   return items;
 }
 
-/** Words for a failed moderation: under the chat box, where the room says such things. */
 function said(server: string, err: unknown): void {
   serverChat(server).showNotice(messageOf(err), 5000);
 }
@@ -193,11 +157,9 @@ async function setVoiceMute(name: string, muted: boolean): Promise<void> {
   }
 }
 
-/** The one question and the one member's info the page has up, for the room on it. */
 export function GroupModHost({ server }: { server: string }) {
   const ask = useAtomValue(modAskAtom);
   const info = useAtomValue(memberInfoAtom);
-  // a room left: nothing of it stays up
   useEffect(
     () => () => {
       store.set(modAskAtom, null);
@@ -222,7 +184,6 @@ const TITLES: Record<ModKind, (name: string) => { title: string; yes: string }> 
   disconnect: (name) => ({ title: `disconnect ${name}?`, yes: 'disconnect' })
 };
 
-/** One moderation's question (ConfirmDialog), and on a yes the call: a timeout picks how long and a reason first, a ban a reason. */
 function ModConfirm({ server, ask, onDone }: { server: string; ask: ModAsk; onDone: () => void }) {
   const [seconds, setSeconds] = useState(600);
   const [reason, setReason] = useState('');
@@ -232,14 +193,12 @@ function ModConfirm({ server, ask, onDone }: { server: string; ask: ModAsk; onDo
     try {
       if (kind === 'delete' && line) {
         await api.deleteGroupMessage(server, line.channel, line.id);
-        // the socket's `delete` says the same a moment later; gone from here now
         serverChat(server).removeLine(line.id, line.channel);
       } else if (kind === 'kick') await api.kickMember(server, name);
       else if (kind === 'timeout') await api.timeoutMember(server, name, seconds, reason.trim());
       else if (kind === 'ban') await api.banMember(server, name, reason.trim());
       else if (kind === 'mute') await api.voiceMute(server, name, true);
       else if (kind === 'disconnect') await api.voiceDisconnect(server, name);
-      // gone from the group: their info has nothing left to edit
       if ((kind === 'kick' || kind === 'ban') && store.get(memberInfoAtom) === name) store.set(memberInfoAtom, null);
     } catch (err) {
       said(server, err);
@@ -295,21 +254,12 @@ function ModConfirm({ server, ask, onDone }: { server: string; ask: ModAsk; onDo
   );
 }
 
-/** When they joined, as a date. */
 function joinedWords(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 const ROLE_CHIP = 'flex items-center gap-1 border px-2 py-0.5 text-xs font-semibold';
 
-/**
- * A member's info, for a moderator: their face and name, when they joined, their roles as chips
- * (the ones this login may give or take press on and off, saved as pressed: the roles tab's rule
- * and calls), the moderator's buttons, and every line of theirs here this login can see, newest
- * first, each with its channel and time and, for a reply, what it answered over it. 50 lines a
- * page, the next asked as the list's end scrolls near. A native <dialog>, ConfirmDialog's way: a
- * sheet on a phone.
- */
 function MemberInfo({ server, name, onClose }: { server: string; name: string; onClose: () => void }) {
   const room = useAtomValue(roomAtom);
   const me = useAtomValue(meAtom);
@@ -319,7 +269,6 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
   const [missing, setMissing] = useState('');
   const [lines, setLines] = useState<MemberLine[]>([]);
   const [next, setNext] = useState<string | null | undefined>(undefined);
-  // the first page is on its way from the start
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState<string | null>(null);
@@ -336,7 +285,6 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
 
-  // the member as the roster has them: their roles and when they joined, asked of the api since a page of the roster may not have them
   useEffect(() => {
     let live = true;
     api.groupMember(server, name).then(
@@ -348,11 +296,9 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
     };
   }, [server, name]);
 
-  // the roster's word on them as it changes (a role given elsewhere, a timeout), once it has them
   const fromRoster = room?.roster?.find((m) => m.name === name);
   const shown = fromRoster ?? member;
 
-  /** A page of their lines onto the end: the first (`before` null) is the effect's, the rest the scroll's. */
   const page = (before: string | null) =>
     api.groupMemberMessages(server, name, before).then(
       (got) => {
@@ -374,7 +320,6 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
     void page(null);
   }, [server, name]);
 
-  // the next page as the list's end comes near
   useEffect(() => {
     const el = end.current;
     if (!el || !next || busy) return;
@@ -387,7 +332,6 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
 
   const can = modPowers(room, me, name);
   const seat = voiceSeatOf(room, name);
-  // a role cannot touch an owner, unless an owner is the one giving or taking (the roles tab's rule)
   const touch = !!room && room.perms.roles && (!shown?.owner || room.owner);
   const held = new Set(shown?.roles.map((r) => r.id) ?? []);
   const toggle = async (id: string, on: boolean) => {
@@ -459,7 +403,6 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
         </Tooltip>
       </div>
       <div className="flex flex-col gap-3 border-b border-primaryStroke p-4">
-        {/* every role of the group a chip: held ones in their colour; the ones this login may give or take press on and off */}
         <ul id="member-info-roles" aria-label="roles" className="flex flex-wrap gap-1.5">
           {room?.roles
             .filter((role) => held.has(role.id) || (touch && reaches(room, role.perms)))
@@ -545,7 +488,6 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
   );
 }
 
-/** One of the member's lines: its channel and time, what it answered over it, then the words (or what its pictures were). */
 function LogLine({ line }: { line: MemberLine }) {
   const words = plainEmotes(line.text) || quoteWords({ text: '', images: line.images?.length ?? 0, video: !!line.video });
   return (
