@@ -7,10 +7,18 @@ import { loadOAuthProviders, oauthProvidersAtom, oauthStartUrl } from '@/infra/a
 import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { cn } from '@/utils/cn';
 
-const PROVIDER_COLOR: Partial<Record<OAuthProvider, { brand: string; text: string }>> = {
-  google: { brand: '#EA4335', text: '#EA4335' },
-  discord: { brand: '#5865F2', text: '#8891F2' }
+export const PROVIDER_COLOR: Partial<Record<OAuthProvider, { brand: string; hover: string; text: string }>> = {
+  google: { brand: '#EA4335', hover: '#D33426', text: '#EA4335' },
+  discord: { brand: '#5865F2', hover: '#4752C4', text: '#8891F2' }
 };
+
+export function providerBrandStyle(provider: OAuthProvider): CSSProperties {
+  const color = PROVIDER_COLOR[provider];
+  return {
+    '--brand': color?.brand ?? 'rgb(var(--primary-color))',
+    '--brand-hover': color?.hover ?? 'rgb(var(--primary-color-hover))'
+  } as CSSProperties;
+}
 
 export function ProviderIcon({ provider, size = 18 }: { provider: OAuthProvider; size?: number }) {
   switch (provider) {
