@@ -1,8 +1,14 @@
 import react from '@vitejs/plugin-react';
+import autoprefixer from 'autoprefixer';
+import { transform as minifyCss } from 'lightningcss';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, loadEnv, type Plugin } from 'vite';
+import postcss from 'postcss';
+import tailwindcss from 'tailwindcss';
+import { defineConfig, loadEnv, type Plugin, type ResolvedConfig } from 'vite';
+
+import tailwindConfig from './tailwind.config';
 
 const techDocs = (dir: string): Plugin => ({
   name: 'tech-docs',
@@ -134,6 +140,62 @@ const preloadFirstPage = (pages: { path: string; module: string }[]): Plugin => 
   };
 };
 
+const cssTargets = (target: ResolvedConfig['build']['cssTarget']) => {
+  const browsers: Record<string, string> = { chrome: 'chrome', edge: 'edge', firefox: 'firefox', safari: 'safari', ios: 'ios_saf', opera: 'opera' };
+  const targets: Record<string, number> = {};
+  for (const entry of target ? [target].flat() : []) {
+    const match = /^([a-z]+)(\d+)(?:\.(\d+))?$/.exec(entry);
+    const browser = match?.[1] && browsers[match[1]];
+    if (!match || !browser) continue;
+    const version = (Number(match[2]) << 16) | (Number(match[3] ?? 0) << 8);
+    if (!targets[browser] || version < targets[browser]) targets[browser] = version;
+  }
+  return Object.keys(targets).length > 0 ? targets : undefined;
+};
+
+const deferStylesheet = (stylesheet: string, path: string): Plugin => {
+  let config: ResolvedConfig;
+  return {
+    name: 'defer-stylesheet',
+    apply: 'build',
+    configResolved(resolved) {
+      config = resolved;
+    },
+    transformIndexHtml: {
+      order: 'post',
+      async handler(html, ctx) {
+        const bundle = ctx.bundle;
+        if (!bundle) return;
+        const link = /\s*<link rel="stylesheet" crossorigin href="([^"]+\.css)">/.exec(html);
+        if (!link) throw new Error('index.html has no stylesheet link');
+        const href = link[1] ?? '';
+        const full = bundle[href.slice(config.base.length)];
+        if (!full || full.type !== 'asset') throw new Error(`no asset for ${href}`);
+        const source = readFileSync(stylesheet, 'utf8').replace(/^@(import|tailwind utilities)\b[^;]*;\s*/gm, '');
+        const result = await postcss([
+          tailwindcss({ ...tailwindConfig, content: [{ raw: '<body class="bg-background font-sans text-textPrimary antialiased">', extension: 'html' }] }),
+          autoprefixer()
+        ]).process(source, {
+          from: stylesheet
+        });
+        const shell = new TextDecoder().decode(
+          minifyCss({ filename: 'shell.css', code: Buffer.from(result.css), minify: true, targets: cssTargets(config.build.cssTarget) }).code
+        );
+        if (/<\/style/i.test(shell)) throw new Error('shell css closes its style tag');
+        config.logger.info(
+          `  shell css: ${(shell.length / 1000).toFixed(2)} kB inlined, ${(full.source.length / 1000).toFixed(2)} kB stylesheet off the critical path on ${path}`
+        );
+        const loader =
+          `(function(){var h=${JSON.stringify(href)};if(new RegExp(${JSON.stringify(path)}).test(location.pathname)){` +
+          `var l=document.createElement('link');l.rel='stylesheet';l.crossOrigin='';l.href=h;` +
+          `window.__bootCss=new Promise(function(r){l.onload=l.onerror=r});document.head.appendChild(l)}` +
+          `else document.write('<link rel="stylesheet" crossorigin href="'+h+'">')})()`;
+        return html.replace(link[0], '').replace('</head>', `  <style>${shell}</style>\n    <script>${loader}</script>\n  </head>`);
+      }
+    }
+  };
+};
+
 export default defineConfig(({ mode }) => {
   const here = fileURLToPath(new URL('.', import.meta.url));
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -168,6 +230,7 @@ export default defineConfig(({ mode }) => {
         { path: '^/$', module: '/src/app/home/HomePage.tsx' },
         { path: '^/watch/[^/]+/?$', module: '/src/app/watch/WatchPage.tsx' }
       ]),
+      deferStylesheet(join(here, 'src', 'app', 'globals.css'), '^/$'),
       showDocs && techDocs(docsDir)
     ],
     define: {
