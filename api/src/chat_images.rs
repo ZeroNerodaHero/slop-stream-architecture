@@ -161,13 +161,18 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
 
 /// The picture `id` out of the bucket, then its row; a failed delete in the bucket keeps the row,
 /// so the takedown can be tried again. chat_videos.rs takes a video's poster down this way too.
+/// A stream's (the only public ones) is purged from Cloudflare after (cf_purge.rs).
 pub(crate) async fn remove(s: &AppState, me: &crate::auth::Account, id: Uuid, mime: &str) -> Result<(), ApiError> {
+    let posted: Option<String> = sqlx::query_scalar("SELECT posted_kind FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?.flatten();
     if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
         log::warn!("{}: take down chat picture {id}: {e}", me.name);
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not delete the picture"));
     }
     media::remember_removed(&s.db, Kind::Image, id, me.id).await?;
     sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(id).execute(&s.db).await?;
+    if posted.as_deref() == Some("stream") {
+        crate::cf_purge::purge(vec![format!("/api/chat-images/{id}")]);
+    }
     Ok(())
 }
 

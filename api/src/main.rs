@@ -40,6 +40,7 @@
 mod about_page;
 mod analytics;
 mod auth;
+mod cf_purge;
 mod chat;
 mod chat_images;
 mod chat_videos;
@@ -68,6 +69,7 @@ mod reactions;
 mod release;
 mod s3;
 mod socket;
+mod turnstile;
 mod voice;
 
 use std::collections::{HashMap, HashSet};
@@ -142,6 +144,8 @@ pub(crate) struct AppState {
     live_cache: LiveCache,
     /// The login providers the environment turned on (oauth.rs). Empty: password logins only.
     pub(crate) oauth: Arc<oauth::Config>,
+    /// The human check on signup and login (turnstile.rs). Off unless the environment turns it on.
+    pub(crate) turnstile: Arc<turnstile::Config>,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -1000,6 +1004,7 @@ fn router(state: AppState) -> Router {
     Router::new()
         .merge(auth::routes())
         .merge(oauth::routes())
+        .merge(turnstile::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
         .merge(groups::routes())
@@ -1217,6 +1222,7 @@ async fn main() {
         groups_per_owner,
         live_cache: Arc::default(),
         oauth: Arc::new(oauth::Config::from_env()),
+        turnstile: Arc::new(turnstile::Config::from_env()),
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

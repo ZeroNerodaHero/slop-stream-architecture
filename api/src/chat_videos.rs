@@ -224,8 +224,9 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
     };
-    let row: Option<(String, Option<Uuid>)> = sqlx::query_as("SELECT mime, poster FROM chat_videos WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
-    let Some((mime, poster)) = row else {
+    let row: Option<(String, Option<Uuid>, Option<String>)> =
+        sqlx::query_as("SELECT mime, poster, posted_kind FROM chat_videos WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
+    let Some((mime, poster, posted)) = row else {
         return Err(media::missing(&s.db, Kind::Video, id).await);
     };
     if let Err(e) = s3::delete(&s.s3, &key_of(id, &mime)).await {
@@ -234,6 +235,10 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     }
     media::remember_removed(&s.db, Kind::Video, id, me.id).await?;
     sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await?;
+    // a stream's is public, so the edge may hold it (cf_purge.rs); a group's or a DM's never was
+    if posted.as_deref() == Some("stream") {
+        crate::cf_purge::purge(vec![format!("/api/chat-videos/{id}")]);
+    }
     if let Some(poster) = poster {
         let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(poster).fetch_optional(&s.db).await?;
         if let Some(mime) = mime {

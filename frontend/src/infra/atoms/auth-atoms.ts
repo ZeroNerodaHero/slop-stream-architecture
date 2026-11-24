@@ -99,12 +99,13 @@ async function attempt(call: () => Promise<{ name: string }>): Promise<boolean> 
   }
 }
 
-export function login(name: string, password: string): Promise<boolean> {
-  return attempt(() => api.login(name.trim().toLowerCase(), password));
+/** `turnstileToken`: the human check's (Turnstile.tsx), undefined while it is off. */
+export function login(name: string, password: string, turnstileToken?: string): Promise<boolean> {
+  return attempt(() => api.login(name.trim().toLowerCase(), password, turnstileToken));
 }
 
-export function signup(name: string, password: string): Promise<boolean> {
-  return attempt(() => api.signup(name.trim().toLowerCase(), password));
+export function signup(name: string, password: string, turnstileToken?: string): Promise<boolean> {
+  return attempt(() => api.signup(name.trim().toLowerCase(), password, turnstileToken));
 }
 
 export async function logout(): Promise<void> {

@@ -1,0 +1,15 @@
+---
+description: Never write code comments
+alwaysApply: true
+---
+
+# No comments
+
+Billy's rule: do not write comments in code. None.
+
+- No line comments, block comments, doc comments (`///`, `//!`, `/** */`, JSDoc), TODOs, or commented-out code in any language: Rust, TypeScript/TSX, JS, SQL, shell, YAML, Caddyfile, Dockerfile, CSS, HTML.
+- Comments go stale and agents end up trusting them over the code and the real system. Read the code and check the live system instead.
+- When editing a file, delete any comments in the lines you touch. Don't add new ones.
+- Explanations belong in `docs/` (markdown), PR descriptions, or commit messages, never in source.
+- Only allowed exceptions are things that are not comments to a human but instructions to a tool: lint/compiler directives (`// eslint-disable-next-line`, `// @ts-expect-error`, `#[allow(...)]`), `#!` shebangs, `// @vite-ignore`, and similar pragmas. Keep them minimal and without explanatory text.
+- Env example files (`.env.example`) may not carry comments either; document variables in `docs/`.

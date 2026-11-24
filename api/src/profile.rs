@@ -390,6 +390,12 @@ async fn delete_avatar(
 ) -> Result<StatusCode, ApiError> {
     let Query(q) = q?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    // the version the pages ask for it under (`?v=`), for the edge's purge after
+    let version: Option<i64> = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1")
+        .bind(&name)
+        .fetch_optional(&s.db)
+        .await?
+        .flatten();
     // under the id, and under the name for one saved before ids
     let mut keys = vec![legacy_avatar_key(&name)];
     if let Some(id) = row_id(&s.db, &name).await? {
@@ -404,6 +410,10 @@ async fn delete_avatar(
         .bind(&name)
         .execute(&s.db)
         .await?;
+    let bare = format!("/api/streamers/{name}/avatar");
+    let mut paths = vec![bare.clone()];
+    paths.extend(version.map(|v| format!("{bare}?v={v}")));
+    crate::cf_purge::purge(paths);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -593,6 +603,7 @@ async fn delete_thumb(
         .bind(id)
         .execute(&s.db)
         .await?;
+    crate::cf_purge::purge(vec![format!("/api/streamers/{name}/thumbs/{id}")]);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -818,6 +829,7 @@ async fn delete_asset(
         .bind(id)
         .execute(&s.db)
         .await?;
+    crate::cf_purge::purge(vec![format!("/api/streamers/{name}/assets/{id}")]);
     Ok(StatusCode::NO_CONTENT)
 }
 

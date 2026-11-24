@@ -310,6 +310,8 @@ async fn save_page(
             .bind(id)
             .execute(&mut *conn)
             .await?;
+        // served public and immutable, so the edge may hold it a year (cf_purge.rs)
+        crate::cf_purge::purge(vec![file_src(name, *id)]);
     }
     let mut out = Vec::with_capacity(kept.len());
     for block in kept {

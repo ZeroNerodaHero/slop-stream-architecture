@@ -149,6 +149,15 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      # cloudflare turnstile on signup and login (docs/cloudflare-turnstile.md). on only with
+      # TURNSTILE_ENABLED=true and both keys
+      TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-false}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+      # purge a taken-down public picture or video from cloudflare's cache, by its url under
+      # PUBLIC_URL. either empty: no purge. see docs/cloudflare-cache-rules.md
+      CF_PURGE_TOKEN: ${CF_PURGE_TOKEN:-}
+      CF_ZONE_ID: ${CF_ZONE_ID:-}
       # how many groups one login may own. empty: 2. see docs/groups.md
       GROUPS_PER_OWNER: ${GROUPS_PER_OWNER:-}
       # signs voice grants and lets the voice container in. empty: voice is off (joins are a 503)
