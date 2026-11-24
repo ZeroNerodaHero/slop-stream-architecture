@@ -1,10 +1,3 @@
-// Monitor (docs/debugging.md): `api monitor` on this machine watches the local stack and a dead
-// address. The live one comes up with the stack's own build, the dead one goes down after
-// DOWN_AFTER rounds with a reason, the page shows both, and the memory survives a restart of the
-// monitor. Local only: it runs monitor/docker-compose.yml as project monitor-test on port 3012
-// with the stream-api image already here (./scripts/deploy.sh builds it), joins it to the stack's network
-// so it can reach caddy as https://frontend (from inside a container, 127.0.0.1 is the container),
-// and removes it all at the end. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> LOCAL=1 node monitor.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const path = require('path');
@@ -14,8 +7,7 @@ const REPO = path.join(__dirname, '..');
 const PORT = 3012;
 const MON = `http://127.0.0.1:${PORT}`;
 const PROJECT = 'monitor-test';
-// fast rounds: a dead box is down after ~4s instead of 45. the shell env wins over monitor/.env
-const STACK_NETWORK = 'stream_default'; // `name: stream` in docker-compose.yml
+const STACK_NETWORK = 'stream_default';
 const ENV = {
   ...process.env,
   TARGETS: 'local=https://frontend,dead=https://127.0.0.1:9',
@@ -50,7 +42,6 @@ const expect = (cond, what) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// the monitor's json, once `ready(state)` says so, or a throw with the monitor's log
 async function stateWhen(api, ready, what, ms = 40000) {
   const until = Date.now() + ms;
   let last = null;

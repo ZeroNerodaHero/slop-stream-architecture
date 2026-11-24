@@ -1,24 +1,13 @@
-// Presence (docs/status.md, docs/transition.md): a tab open as a name makes it `online` through the
-// events socket (one per browser, in a shared worker), the choice (`dnd`, `appear offline`) reaches a
-// watcher's page pushed and the api's word agrees, going live is `streaming` on both and stopping
-// goes back to the choice, two tabs of one browser share one socket and the last one closing is
-// `offline` at once, a claimed name is refused on hello, the watch page waits by push and not by
-// poll, and the messages inspector shows the frames. Run through ./scripts/test.sh, or:
-// BASE_URL=https://<ip> node presence.js   (LOCAL=1 reads redis and the gateway's /online too)
-// The local-only steps say SKIP off-box, not PASS.
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const LOCAL = process.env.LOCAL === '1';
 const REPO = require('path').join(__dirname, '..');
 const RUN = Date.now().toString(36).slice(-5);
-/** the guest; unclaimed, like r1..r7. */
 const NAME = 'r8';
-/** a claimed name. not r9: regress.js needs that one free, and a signup is for good. 201 or 409 both do. */
 const CLAIMED = 'rp1';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
-const results = []; // 'pass' | 'fail' | 'skip'
-// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
+const results = [];
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
@@ -41,7 +30,6 @@ const expect = (cond, what) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const compose = (cmd) => execSync(`docker compose ${cmd}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-/** GET /online on the events container: no curl in the image, bash's /dev/tcp instead. `{ "<name>": <sockets> }`. */
 const online = () => {
   const raw = compose(`exec -T events bash -c 'exec 3<>/dev/tcp/127.0.0.1/4100; printf "GET /online HTTP/1.0\\r\\n\\r\\n" >&3; cat <&3'`);
   return JSON.parse(raw.slice(raw.indexOf('{')));
@@ -62,13 +50,11 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   const api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const presenceOf = async (name) => (await (await api.get(`/api/streamers/${name}`)).json()).presence;
   const presenceIs = (name, want, timeout = 5000) => pollUntil(() => presenceOf(name), (p) => p === want, { timeout, label: `${name} is ${want}` });
-  /** the word a page shows, read off the dom: `#my-presence` in the corner panel, `#presence` beside a streamer's name. */
   const shownIs = (page, selector, want, timeout = 5000) => page.waitForSelector(`${selector}[data-presence="${want}"]`, { timeout });
   const pick = async (page, choice) => {
     await page.click(`label[for="presence-${choice}"]`);
     expect(await page.isChecked(`#presence-${choice}`), `#presence-${choice} is not checked`);
   };
-  /** the profile tab: the gear at the end of your line in the panel opens the modal (the picture is your page), then the tab */
   const openProfile = async (page) => {
     await page.hover('#user-panel');
     await page.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
@@ -83,12 +69,10 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   const ctxB = await browser.newContext({ ignoreHTTPSErrors: true });
   const a = await ctxA.newPage();
   const w = await ctxB.newPage();
-  // every POST /api/streams/<name>/watch the watcher makes: one on arrival, then only when `live` is pushed. nothing polls
   let watchCalls = 0;
   w.on('request', (r) => {
     if (r.method() === 'POST' && new RegExp(`/api/streams/${NAME}/watch$`).test(r.url())) watchCalls++;
   });
-  // a home page in the watcher's browser: one GET /api/streams on arrival, the cards by push from then on (docs/status.md)
   const h = await ctxB.newPage();
   let listCalls = 0;
   h.on('request', (r) => {
@@ -99,7 +83,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   await step(`preflight: ${NAME} is offline and not live`, async () => {
     const streams = await (await api.get('/api/streams')).json();
     expect(!streams.some((s) => s.name === NAME), `${NAME} is live already; is another run going?`);
-    // a run that died at dnd leaves the choice; the first tab resets it below
     return `presence ${await presenceOf(NAME)}`;
   });
 
@@ -108,8 +91,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await shownIs(w, '#presence', 'offline', 15000);
     await w.waitForFunction(() => /not live/.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 15000 });
     expect((await w.$$('#video')).length === 0, 'a player is on the page while nobody is live');
-    // the page is watched for a player appearing at all, however briefly: a re-ask that showed
-    // one while the api answered was a black box flashing on an offline profile
     await w.evaluate(() => {
       window.__videoSeen = 0;
       new MutationObserver(() => {
@@ -140,7 +121,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.hover('#user-panel');
     await a.waitForSelector('#username', { timeout: 15000 });
     await a.fill('#username', NAME);
-    await a.press('#username', 'Enter'); // blur: the nick is committed and the socket says hello as it
+    await a.press('#username', 'Enter');
     await presenceIs(NAME, 'online');
     await shownIs(a, '#my-presence', 'online');
     const calls = watchCalls;
@@ -175,7 +156,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
 
   await step(`go live as ${NAME}: streaming on both, the watcher plays on the push, one \`watch\` call`, async () => {
     const calls = watchCalls;
-    // no name box on /live: the page streams as the nick the panel set above
     await a.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await a.waitForFunction(() => !document.querySelector('#start')?.disabled, null, { timeout: 20000 });
     await a.click('#start');
@@ -183,7 +163,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await presenceIs(NAME, 'streaming', 5000);
     await shownIs(a, '#my-presence', 'streaming', 5000);
     await shownIs(w, '#presence', 'streaming', 10000);
-    // the streaming square (PresenceSquare.tsx): cut corner to corner, green over blue, and still its 12px
     for (const [page, sel] of [[a, '#my-presence'], [w, '#presence']]) {
       const bg = await page.$eval(sel, (el) => getComputedStyle(el).backgroundImage);
       expect(/linear-gradient/.test(bg), `${sel} is streaming with no diagonal cut (${bg})`);
@@ -191,9 +170,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     const box = await w.$eval('#presence', (el) => el.getBoundingClientRect().toJSON());
     expect(Math.round(box.width) === 12 && Math.round(box.height) === 12, `#presence is ${box.width}x${box.height}, not 12x12`);
     await w.waitForFunction(() => /^watching$/.test(document.querySelector('#status')?.textContent?.trim() || ''), null, { timeout: 20000 });
-    // `live` is published when video has the publisher, so the one ask on the push is answered live.
-    // two is the word `streaming` running a beat ahead of the fact (the gateway's 30s recheck landing
-    // between go-live and video's claim): that ask is answered not live, the push asks again
     const asked = watchCalls - calls;
     expect(asked >= 1 && asked <= 2, `watch was asked ${asked} times for the start (want 1, at most 2)`);
     return `${asked} watch call(s)`;
@@ -203,7 +179,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     const before = listCalls;
     await h.waitForSelector(card, { timeout: 10000 });
     expect(listCalls === before, `home asked /api/streams again (${before} -> ${listCalls}) to learn of the stream`);
-    // the watcher is one address receiving it: video says so within a second or two, pushed through the api
     await h.waitForSelector(`#viewers-${NAME}[data-viewers="1"]`, { timeout: 10000 });
     return `card pushed, ${listCalls} list call(s) in all`;
   });
@@ -242,7 +217,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.fill('#inspector-filter', '');
     const count = await a.textContent('#inspector-count');
     expect(/\d+ of the last \d+/.test(count || ''), `count line: ${count}`);
-    // the chat's frames ride in too: watching a room as r8 says hello to its chat
     await a.goto(`${BASE}/watch/${CLAIMED}`, { waitUntil: 'domcontentloaded' });
     await a.hover('#user-panel');
     await a.waitForSelector('#inspector-open', { timeout: 15000 });
@@ -254,7 +228,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
 
   let a2 = null;
   await step('two tabs, one socket: the second tab knows the word at once; locally /online counts one socket', async () => {
-    // back to online first: also the reset the next run counts on
     await openProfile(a);
     await pick(a, 'online');
     await a.keyboard.press('Escape');
@@ -263,7 +236,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     a2 = await ctxA.newPage();
     await a2.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await shownIs(a2, '#my-presence', 'online', 5000);
-    // playwright does not expose shared workers; the browser does, over a raw cdp session
     const cdp = await browser.newBrowserCDPSession();
     const { targetInfos } = await cdp.send('Target.getTargets');
     const workers = targetInfos.filter((t) => t.type === 'shared_worker' && /events/.test(t.url));
@@ -311,7 +283,6 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
 
   await step('local: the seen set has a ttl in (0, 90], and comes back within 35s after a DEL', async () => {
     if (!LOCAL) return { skip: 'redis is on the box' };
-    // its own browser: the watcher's context shares a worker (and a nick) with any page in it, and must stay nobody
     const ctxC = await browser.newContext({ ignoreHTTPSErrors: true });
     const p = await ctxC.newPage();
     await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });

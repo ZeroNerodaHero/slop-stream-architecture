@@ -1,11 +1,3 @@
-// Debugging (docs/debugging.md): /api/health has the monitor fields, a report posted the way
-// the pages do it (text/plain, sendBeacon style) is 204 and lands in the debug database and the
-// api log, a bad one is 400, the list hides from anyone who is not an admin, a throw inside a
-// real page is reported, and /admin renders for a stranger. Run through ./scripts/test.sh, or:
-// BASE_URL=https://<ip> node errors.js   (LOCAL=1 checks the api log and the debug database too;
-// OPS_TOKEN=... reads the list back through the api instead)
-// A step that has no way to check its claim (off-box, no OPS_TOKEN) says SKIP, not PASS.
-// Locally the rows this file inserted are deleted from the debug database at the end.
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -15,8 +7,7 @@ const CAN_READ_BACK = Boolean(OPS_TOKEN) || LOCAL;
 const REPO = require('path').join(__dirname, '..');
 const RUN = Date.now().toString(36).slice(-5);
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
-const results = []; // 'pass' | 'fail' | 'skip'
-// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
+const results = [];
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
@@ -40,9 +31,6 @@ const expect = (cond, what) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const compose = (cmd) => execSync(`docker compose ${cmd}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
-// where a report can be read back from: the api with a token, else the api log on the local stack.
-// null when it never showed up; `lastSeen` then says what the readback answered (a 401 means the
-// token is wrong, or under 16 characters, which the api ignores with a warn line at boot).
 let lastSeen = '';
 async function reported(api, text, tries = 10) {
   for (let i = 0; i < tries; i++) {
@@ -72,7 +60,6 @@ const notFound = (text) => `"${text}" did not show up: ${lastSeen}`;
     const h = await res.json();
     expect([200, 503].includes(res.status()), `got ${res.status()}`);
     expect(typeof h.env === 'string' && typeof h.build === 'string', `env/build: ${JSON.stringify(h)}`);
-    // the release deploy.sh recorded: a string once a run ended well on this box, null before (a test stack built by hand)
     expect('version' in h && (h.version === null || /^v\d+/.test(h.version)) && 'deployed_at' in h, `version: ${JSON.stringify(h)}`);
     expect(typeof h.up_secs === 'number' && typeof h.postgres === 'boolean' && typeof h.redis === 'boolean', `fields: ${JSON.stringify(h)}`);
     expect(typeof h.video === 'boolean' && 'live' in h && 'video_up_secs' in h, `video fields: ${JSON.stringify(h)}`);
@@ -158,7 +145,6 @@ const notFound = (text) => `"${text}" did not show up: ${lastSeen}`;
   await browser.close();
   await api.dispose();
 
-  // the rows this run inserted (the text/plain report has ua errors.js, the throw has a known message)
   if (LOCAL) {
     try {
       compose(`exec -T database psql -U stream -d debug -tAc "DELETE FROM client_errors WHERE ua = 'errors.js' OR message LIKE 'browser throw %'"`);

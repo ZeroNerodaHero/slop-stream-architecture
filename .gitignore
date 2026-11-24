@@ -3,13 +3,9 @@ node_modules/
 frontend/dist/
 .DS_Store
 
-# written by deploy.sh. copy .env.example to start by hand.
 .env
-# the commit the last deploy.sh run that ended well deployed. --pull diffs from it.
 .deployed
-# what random-media/vrms held when scripts/models.sh last put it in the bucket here
 .models
 
-# seed.sh: the names and passwords it made (local only)
 .seeded-users
 .seeded-groups

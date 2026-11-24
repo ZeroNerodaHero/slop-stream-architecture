@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-// End-to-end WebRTC live-stream test: publisher (/live) -> video server -> watcher (/watch/<name>).
-//
-// Run through ./scripts/test.sh at the repo root, or: BASE_URL=https://<ip> node e2e.js
-// HEADED=1 to watch it. Exit code 0 when every step passes. Screenshots land in $TMPDIR/stream-e2e.
 
 const fs = require('fs');
 const { chromium, request } = require('playwright');
@@ -12,28 +8,26 @@ const NAME = process.env.STREAM_NAME || 'e2etest';
 const HEADLESS = !process.env.HEADED;
 const OUT = require('path').join(require('os').tmpdir(), 'stream-e2e');
 
-// What the pages print. Tune here if the frontend wording differs.
-const LIVE_RE = /^\s*live\b/i;      // publisher #status while publishing ("live", "live - watch at ...")
-const ENDED_RE = /\bended\b/i;      // watcher #status after the publisher stops
+const LIVE_RE = /^\s*live\b/i;
+const ENDED_RE = /\bended\b/i;
 
-const T = {               // timeouts, ms
-  pageReady: 20000,       // /live loaded, #start enabled
-  goLive: 20000,          // publisher #status -> live
-  listed: 15000,          // GET /api/streams lists the name
-  firstFrame: 20000,      // watcher <video>.videoWidth > 0
-  statsGap: 2000,         // gap between the two framesDecoded samples
-  ended: 15000,           // watcher #status -> ended
-  unlisted: 15000,        // GET /api/streams no longer lists the name
+const T = {
+  pageReady: 20000,
+  goLive: 20000,
+  listed: 15000,
+  firstFrame: 20000,
+  statsGap: 2000,
+  ended: 15000,
+  unlisted: 15000,
 };
 
 const CHROME_ARGS = [
-  '--use-fake-device-for-media-stream',      // synthetic camera (moving pattern, 640x480@20fps) + synthetic mics
-  '--use-fake-ui-for-media-stream',          // auto-accept the getUserMedia prompt
-  '--ignore-certificate-errors',             // self-signed cert: covers page loads AND the wss:// signaling socket
+  '--use-fake-device-for-media-stream',
+  '--use-fake-ui-for-media-stream',
+  '--ignore-certificate-errors',
   '--autoplay-policy=no-user-gesture-required',
 ];
 
-// ---------- step runner -------------------------------------------------------------------------
 const results = [];
 let aborted = false;
 async function step(name, fn) {
@@ -54,7 +48,6 @@ async function step(name, fn) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Poll a Node-side async fn until `until(value)` is true.
 async function pollUntil(fn, until, { timeout, interval = 500, label }) {
   const t0 = Date.now();
   let last;
@@ -66,12 +59,10 @@ async function pollUntil(fn, until, { timeout, interval = 500, label }) {
   throw new Error(`${label}: timed out after ${timeout} ms; last value: ${JSON.stringify(last)}`);
 }
 
-// Poll a function evaluated inside the page until `until(value)` is true. Reports the last value on timeout.
 async function pollPage(page, pageFn, until, { timeout, interval = 250, label }, arg) {
   return pollUntil(() => page.evaluate(pageFn, arg), until, { timeout, interval, label });
 }
 
-// Does the /api/streams JSON mention the name anywhere (array of strings, [{name}], {streams:[...]}, {name:{...}})?
 function listsName(value, name) {
   const want = name.toLowerCase();
   const seen = new Set();
@@ -85,8 +76,6 @@ function listsName(value, name) {
   return walk(value);
 }
 
-// Record every RTCPeerConnection the page creates so the test can call getStats() on it,
-// whether or not the page exposes `window.pc`. Must be installed before navigation (context.addInitScript).
 function recordPeerConnections() {
   window.__pcs = [];
   for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection']) {
@@ -102,9 +91,6 @@ function recordPeerConnections() {
   }
 }
 
-// Runs in the watcher page: find the inbound video RTP stats on whichever PC has them. The
-// watcher asks for several video sections (the camera and the screen slots); the one with
-// the most frames is the camera here, the others sit idle (padding gives them a stats entry).
 async function inboundVideoStats() {
   const pcs = [];
   if (window.pc && typeof window.pc.getStats === 'function') pcs.push(window.pc);
@@ -137,7 +123,6 @@ function videoState() {
 
 function statusText() { const s = document.querySelector('#status'); return s ? s.textContent.trim() : null; }
 
-// Keep console / websocket chatter per page; printed only when something fails.
 function tap(page, tag) {
   const log = [];
   page.on('console', (m) => log.push(`[${tag} console.${m.type()}] ${m.text()}`));
@@ -153,7 +138,6 @@ function tap(page, tag) {
   return log;
 }
 
-// ---------- the test ----------------------------------------------------------------------------
 (async () => {
   const tStart = Date.now();
   fs.mkdirSync(OUT, { recursive: true });
@@ -171,9 +155,6 @@ function tap(page, tag) {
 
     await step('0. preflight: GET /api/streams reachable, name not already live', async () => {
       const list = await getStreams();
-      // stop needs the session's own token, so nothing here can clear a stale key: a key
-      // left by an aborted run expires on its own within 90s. the names are fixed, so two
-      // people running the suites against one server at once collide here on purpose.
       if (listsName(list, NAME)) throw new Error(`${NAME} is already live (another run, or an aborted one: wait 90s): ${JSON.stringify(list)}`);
       return `streams=${JSON.stringify(list).slice(0, 80)}`;
     });
@@ -192,7 +173,6 @@ function tap(page, tag) {
     });
 
     await step('2. publisher: open /live as the nick, wait #start enabled', async () => {
-      // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
       await publisher.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
       await publisher.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded', timeout: T.pageReady });
       await pollPage(publisher,
@@ -207,8 +187,6 @@ function tap(page, tag) {
       return `status="${v}"`;
     });
 
-    // home is opened now, before the first thumbnail exists (~6s after go-live), so its first
-    // <img> load 404s: step 4c checks the card recovers on a later bucket instead of staying black.
     await step('3b. watcher: open home (/) before the first thumbnail exists, card appears', async () => {
       await watcher.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: T.pageReady });
       await pollPage(watcher, (n) => !!document.querySelector(`img[data-thumb="${n}"]`), (ok) => ok, { timeout: T.listed, label: `home card for ${NAME}` }, NAME);
@@ -254,8 +232,8 @@ function tap(page, tag) {
     });
 
     await step('7. watcher: screenshot', async () => {
-      await watcher.screenshot({ path: `${OUT}/watcher.png` });                      // whole page
-      await watcher.locator('#video').screenshot({ path: `${OUT}/watcher-video.png` }); // just the frame
+      await watcher.screenshot({ path: `${OUT}/watcher.png` });
+      await watcher.locator('#video').screenshot({ path: `${OUT}/watcher-video.png` });
       return `${OUT}/watcher.png, ${OUT}/watcher-video.png`;
     });
 
@@ -282,7 +260,6 @@ function tap(page, tag) {
   } finally {
     const failed = results.some((r) => r.status !== 'PASS');
     if (failed) {
-      // Leave the lab clean and keep evidence.
       if (publisher && !publisher.isClosed()) {
         await publisher.click('#stop', { timeout: 2000 }).catch(() => {});
         await publisher.screenshot({ path: `${OUT}/fail-publisher.png` }).catch(() => {});

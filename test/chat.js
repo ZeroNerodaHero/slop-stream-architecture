@@ -1,8 +1,3 @@
-// The text chat: two viewers talk, history survives a reload, 501 chars is refused,
-// the streamer's lines are marked, their name wears the person card on hover, a nick's
-// third line in a minute waits on the send button and the chat refuses it on any socket.
-// scrolled up, someone else's line leaves the view where it is and your own send jumps to the bottom.
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node chat.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const ROOM = 'chattest' + Date.now().toString(36).slice(-4);
@@ -60,7 +55,7 @@ async function say(page, text) {
 
   await step('reload keeps the history', async () => {
     await b.reload({ waitUntil: 'domcontentloaded' });
-    await b.waitForSelector('#chat-text', { timeout: 10000 }); // nick remembered, auto-joins
+    await b.waitForSelector('#chat-text', { timeout: 10000 });
     await b.waitForFunction(() => /hello from alice/.test(document.querySelector('#chat-lines').textContent) && /hey alice/.test(document.querySelector('#chat-lines').textContent), null, { timeout: 10000 });
     return `${(await lines(b)).length} lines after reload`;
   });
@@ -69,7 +64,7 @@ async function say(page, text) {
     const before = (await lines(a)).length;
     await a.fill('#chat-text', 'x'.repeat(501));
     const disabled = await a.$eval('#chat-send', (b) => b.disabled);
-    await a.press('#chat-text', 'Enter'); // the keyboard path hits the server rule
+    await a.press('#chat-text', 'Enter');
     await sleep(700);
     const after = (await lines(a)).length;
     await say(a, 'y'.repeat(500));
@@ -79,7 +74,6 @@ async function say(page, text) {
   });
 
   await step('a ninth socket from one ip in a room is refused', async () => {
-    // a and b hold two of this ip's eight already; raw sockets take the other six, the next one is told no
     const outcome = await a.evaluate(async ({ room, tag }) => {
       const open = [];
       const seen = [];
@@ -106,7 +100,6 @@ async function say(page, text) {
 
   await step('the streamer\'s lines are marked', async () => {
     const s = await fresh();
-    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
     await s.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), ROOM);
     await s.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await s.waitForFunction(() => !document.querySelector('#start').disabled, null, { timeout: 15000 });
@@ -121,12 +114,10 @@ async function say(page, text) {
   });
 
   await step('the pointer resting on the streamer\'s name shows their card beside the chat', async () => {
-    // the line is really the room's, so the name wears the card: the face with the word on it (from one profile read), the name
     await a.hover(`#chat-lines p[data-streamer="true"] [data-from="${ROOM}"]`);
     await a.waitForSelector(`#chat-peek-${ROOM}[data-presence]`, { timeout: 10000 });
     const text = (await a.textContent(`#chat-peek-${ROOM}`)) || '';
     if (!text.includes(ROOM)) throw new Error(`the card says "${text}"`);
-    // off the name: the card goes
     await a.mouse.move(5, 5);
     await a.waitForSelector(`#chat-peek-${ROOM}`, { state: 'detached', timeout: 5000 });
     return `"${text}"`;
@@ -139,7 +130,6 @@ async function say(page, text) {
     await e.goto(`${BASE}/watch/${ROOM}`, { waitUntil: 'domcontentloaded' });
     await joinAs(d, 'dave');
     await joinAs(e, 'erin');
-    // a short list, so the lines so far scroll; then up to the top, the way a reader goes back
     await d.evaluate(() => {
       const el = document.querySelector('#chat-lines');
       el.style.flex = 'none';
@@ -178,8 +168,6 @@ async function say(page, text) {
     await say(c, 'carol two');
     await c.waitForFunction(() => /carol two/.test(document.querySelector('#chat-lines').textContent), null, { timeout: 10000 });
     const before = (await lines(c)).length;
-    // the page's own bucket is empty: the line stays in the box, nothing is sent, and the send
-    // button is a red countdown to the next token (a few ms under 30s by now)
     await c.fill('#chat-text', 'carol three');
     await c.press('#chat-text', 'Enter');
     await c.waitForSelector('#chat-send[data-wait]', { timeout: 5000 });
@@ -189,7 +177,6 @@ async function say(page, text) {
     const after = (await lines(c)).length;
     const secs = Number((shown.match(/^(\d+)s$/) || [])[1]);
     if (!(secs > 0 && secs <= 30) || draft !== 'carol three' || after !== before) throw new Error(`button "${shown}", box "${draft}", lines ${before}->${after}`);
-    // the chat's bucket is the nick's, not the socket's: a second socket as carol is told to wait, and how long
     const raw = await c.evaluate(
       ({ room }) =>
         new Promise((resolve) => {

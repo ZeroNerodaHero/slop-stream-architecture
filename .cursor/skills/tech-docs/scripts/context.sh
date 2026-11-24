@@ -1,17 +1,4 @@
 #!/bin/sh
-# What the tech-docs skill reads before it writes: where the docs stand, the last 100 commits, and
-# what moved since the docs last looked. Never further back than 100 commits, on purpose: the docs
-# follow recent work, and the current files are the truth for everything older.
-#
-#   sh .cursor/skills/tech-docs/scripts/context.sh
-#       the window (100 commits), the range (since docs/tech-docs/built-from, or the whole window),
-#       each commit's docs and code, the files that moved most, the .env.example and compose diff,
-#       and the words added to docs/*.md
-#   sh .cursor/skills/tech-docs/scripts/context.sh --patch <pathspec>...
-#       the range's patch for those paths, when the stats are not enough (api/src/chat.rs, frontend/src/infra)
-#
-# Commit subjects here are often one word ("added"), so the files a commit touched are the signal,
-# and the long docs (docs/*.md) say what the change meant. Read those, not the whole code patch.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -25,7 +12,6 @@ head=$(git rev-parse --short HEAD)
 from=$([ -f "$DOCS/built-from" ] && tr -d '[:space:]' < "$DOCS/built-from" || true)
 oldest=$(git rev-list --max-count="$WINDOW" HEAD | tail -n 1)
 
-# the range: built-from..HEAD when built-from is one of the last 100 commits, else the whole window
 if [ -n "$from" ] && git rev-list --max-count="$WINDOW" HEAD | grep -q "^$(git rev-parse --verify --quiet "$from^{commit}" || echo none)"; then
   commits=$(git rev-list "$from..HEAD")
   diffbase=$from
@@ -41,7 +27,6 @@ else
 fi
 count=$(printf '%s\n' "$commits" | grep -c . || true)
 
-# noise in a diff: lockfiles, media, build output
 quiet() {
   git "$@" -- . ':!package-lock.json' ':!**/package-lock.json' ':!Cargo.lock' ':!random-media' ':!frontend/dist' ':!target'
 }

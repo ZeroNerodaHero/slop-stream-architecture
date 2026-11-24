@@ -1,16 +1,7 @@
-// The about tab (docs/about.md): the about me first (a few paragraphs, through the api on a free
-// name, first on the tab for a watcher, and written in place by the owner, the box opening where
-// the words are), then the page of their own under the player, drawn from blocks. The sample
-// document's blocks are on the page (a heading, a picture, a clip, the music player, links) and
-// its media comes from this origin; the player plays on a press and pauses on the next; the
-// sample's own sheet stays under the box's id. Run through ./scripts/test.sh, or:
-// BASE_URL=https://<ip> node about.js
 const { chromium, request } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
-/** a free name, nobody's, not live: the page is the profile and the tabs, and its about me is anyone's to write */
 const NAME = 'ab1';
 const BOX = `#about-${NAME}`;
-/** the about me this suite writes: through the api (two paragraphs, kept), then in the box on the page */
 const ABOUT_API = 'written through the api.\n\ntwo paragraphs, kept.';
 const ARGS = ['--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
 const results = [];
@@ -30,7 +21,6 @@ const expect = (cond, what) => {
   if (!cond) throw new Error(what);
 };
 
-/** every selector of the box's <style>, media and supports rules walked into */
 const selectorsOf = (page) =>
   page.evaluate((box) => {
     const style = document.querySelector(`${box} style`);

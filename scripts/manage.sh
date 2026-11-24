@@ -31,13 +31,12 @@ want_to=0; want_dir=0; want_db=0
 for a in "$@"; do
   if [ "$want_to" = 1 ]; then TO="$a"; want_to=0; continue; fi
   if [ "$want_dir" = 1 ]; then DIR="$a"; want_dir=0; continue; fi
-  # the word after --db is the database, unless it is clearly a flag
   if [ "$want_db" = 1 ]; then
     want_db=0
     case "$a" in -*) ;; *) DB="$a"; continue ;; esac
   fi
   case "$a" in
-    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     --db) MODE=db; want_db=1 ;;
     --db=*) MODE=db; DB="${a#--db=}" ;;
     --redis) MODE=redis ;;

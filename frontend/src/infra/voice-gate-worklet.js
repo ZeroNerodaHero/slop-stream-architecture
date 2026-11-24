@@ -1,13 +1,4 @@
-/**
- * The noise gate for voice activity (voice-atoms.ts): the mic passes while it is louder than
- * `threshold` (a linear RMS, 0 for always open) and for HOLD_S after, then fades out, so the
- * room between words is silence. Runs in the audio thread: a hidden tab's timers slow down, this
- * does not. Plain js: an AudioWorklet module is loaded by its url, not bundled.
- */
-
-/** How long the gate stays open after the last loud block: the tail of a word, a breath between two. */
 const HOLD_S = 0.25;
-/** Open fast, so the start of a word is not eaten; close slowly, so the cut does not click. */
 const ATTACK_S = 0.004;
 const RELEASE_S = 0.06;
 

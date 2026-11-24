@@ -1,6 +1,3 @@
-// Accounts: sign up, log in, log out, a claimed name is only its owner's (go live, bio, chat),
-// a login's chat lines are verified, too many tries is refused. Run through ./scripts/test.sh, or:
-// BASE_URL=https://<ip> node auth.js   (LOCAL=1 also checks `api passwd` through docker compose)
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -9,7 +6,6 @@ const REPO = require('path').join(__dirname, '..');
 const RUN = Date.now().toString(36).slice(-5);
 const NAME = 'acct' + RUN;
 const PW = 'correct horse battery 9!';
-// the account's name after the rename steps (docs/ids.md): what the steps after them use
 const NEW = 'renamed' + RUN;
 let CURRENT = NAME;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
@@ -37,7 +33,6 @@ const body = async (res) => {
 };
 
 (async () => {
-  // two http clients: one that keeps the login cookie, one that never has it
   const owner = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const anon = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
 
@@ -75,7 +70,6 @@ const body = async (res) => {
     expect(yes.status() === 200 && grant.session && grant.token, `owner got ${yes.status()} ${JSON.stringify(grant)}`);
     const stop = await owner.post(`/api/streams/${NAME}/stop?session=${grant.session}&token=${grant.token}`);
     expect(stop.status() === 200, `stop got ${stop.status()}`);
-    // a free name still needs nothing
     const free = await anon.post(`/api/streams/free${RUN}/go-live`);
     const freeGrant = await body(free);
     expect(free.status() === 200, `free name got ${free.status()}`);
@@ -130,7 +124,6 @@ const body = async (res) => {
     const pw = await anon.post('/api/password', { data: { old: 'a brand new password 7!', new: 'yet another password 5!' } });
     const all = await anon.post('/api/logout-all');
     expect(pw.status() === 401 && all.status() === 401, `nobody got ${pw.status()} and ${all.status()}`);
-    // a second device logs in; the first logs every device out
     const phone = await anon.post('/api/login', { data: { name: NAME, password: 'a brand new password 7!' } });
     expect(phone.status() === 200, `second device got ${phone.status()}`);
     const out = await owner.post('/api/logout-all');
@@ -143,7 +136,7 @@ const body = async (res) => {
 
   await step('a password typed decomposed (200 raw chars) logs in composed: nfkc first, then the length rule', async () => {
     const name = 'nfc' + RUN;
-    const decomposed = 'e\u0301'.repeat(100) + '1!'; // 202 code points, 102 characters after nfkc
+    const decomposed = 'e\u0301'.repeat(100) + '1!';
     const composed = '\u00e9'.repeat(100) + '1!';
     const up = await anon.post('/api/signup', { data: { name, password: decomposed } });
     expect(up.status() === 201, `signup got ${up.status()} ${JSON.stringify(await body(up))}`);
@@ -156,8 +149,6 @@ const body = async (res) => {
 
   await step('15 wrong passwords on one name at once: 10 are 401, 5 are 429, and the 16th is 429', async () => {
     const name = 'lock' + RUN;
-    // all in flight together: the counter must be bumped before the check, or they would all read zero.
-    // guesses must be 8+ chars: a password no account can have is refused before it is counted
     const burst = await Promise.all(Array.from({ length: 15 }, (_, i) => anon.post('/api/login', { data: { name, password: 'wrong guess ' + i } })));
     const codes = burst.map((r) => r.status());
     const wrong = codes.filter((c) => c === 401).length;
@@ -168,7 +159,6 @@ const body = async (res) => {
     return `"${(await body(again)).error}"`;
   });
 
-  // the pages: log in through the form, chat as the account, and an anonymous person cannot wear the name
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
   const ROOM = 'authroom' + RUN;
@@ -181,7 +171,6 @@ const body = async (res) => {
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NAME, { timeout: 10000 });
     expect(p.url().endsWith('/live'), `landed on ${p.url()}`);
-    // no name box on /live: a login streams as its account, so its chat room opens on arrival (the panel, not the dashed placeholder)
     await p.waitForSelector('#chat[data-phase]', { timeout: 10000 });
     expect((await p.$('#pick-name')) === null, 'the page asks a login to pick a name');
     await p.close();
@@ -226,7 +215,6 @@ const body = async (res) => {
     await p.waitForFunction(() => /account/.test(document.querySelector('#chat-notice')?.textContent || ''), null, { timeout: 10000 });
     await p.waitForSelector('#chat-nick', { timeout: 5000 });
     const notice = await p.textContent('#chat-notice');
-    // a free nick still works
     await p.fill('#chat-nick', 'someone' + RUN);
     await p.click('#chat-join');
     await p.waitForSelector('#chat-text', { timeout: 10000 });
@@ -262,7 +250,6 @@ const body = async (res) => {
     return 'the panel shows the name box';
   });
 
-  // ---- the name can change (docs/ids.md): the id stays, the logins stay, the old name is held ----
   const PW2 = 'a brand new password 7!';
   const OTHER = 'other' + RUN;
 
@@ -295,18 +282,16 @@ const body = async (res) => {
     expect(busy.status() === 409 && /stop/.test((await body(busy)).error), `while live got ${busy.status()}`);
     const stop = await owner.post(`/api/streams/${NAME}/stop?session=${grant.session}&token=${grant.token}`);
     expect(stop.status() === 200, `stop got ${stop.status()}`);
-    // a phone: logged in as the same account before the rename
     const device = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
     const second = await device.post('/api/login', { data: { name: NAME, password: PW2 } });
     expect(second.status() === 200, `the other device's login got ${second.status()}`);
-    // a stranger's page on /watch/<old>, open while the name changes: the renamed frame moves it
     const watcher = await fresh();
     await watcher.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded' });
     await watcher.waitForFunction(() => /not live|loading|checking/.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 10000 });
     const before = await body(await owner.get('/api/me'));
     const res = await owner.post('/api/name', { data: { name: NEW, password: PW2 } });
     const got = await body(res);
-    if (res.status() === 200) CURRENT = NEW; // whatever the checks below say, the account is called this now
+    if (res.status() === 200) CURRENT = NEW;
     expect(res.status() === 200 && got.name === NEW && got.id === before.id && got.renamed_at, `rename got ${res.status()} ${JSON.stringify(got)}`);
     const after = await body(await owner.get('/api/me'));
     const other = await body(await device.get('/api/me'));
@@ -340,8 +325,6 @@ const body = async (res) => {
     await p.fill('#auth-password', PW2);
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NEW, { timeout: 10000 });
-    // the login page moves to home, and a page change closes the panel: wait for the move. then the profile tab: the
-    // gear at the end of your line opens the modal (the picture is your page now), then the tab
     await p.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
     await p.hover('#user-panel');
     await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
@@ -349,7 +332,6 @@ const body = async (res) => {
     await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
     await p.click('#tab-profile');
     await p.waitForSelector('#profile-new-name', { timeout: 10000 });
-    // the date comes with /api/me, a beat after the login
     await p.waitForFunction(() => /next \d{4}-\d\d-\d\d/.test(document.querySelector('#profile-new-name-hint')?.textContent || ''), null, { timeout: 10000 });
     const note = await p.textContent('#profile-new-name-hint');
     await p.close();
@@ -368,7 +350,6 @@ const body = async (res) => {
       const old = await anon.post('/api/login', { data: { name: CURRENT, password: 'a brand new password 7!' } });
       const fresh = await anon.post('/api/login', { data: { name: CURRENT, password: pw } });
       expect(old.status() === 401 && fresh.status() === 200, `old ${old.status()}, printed one ${fresh.status()}`);
-      // the name renamed away from is held: passwd must not make a stranger's account on it
       let refused = '';
       try {
         execSync(`docker compose exec -T api api passwd ${NAME}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -379,9 +360,6 @@ const body = async (res) => {
       return `"${pw}"; the held ${NAME} refused`;
     });
 
-    // this run's wrong passwords and signups count against this machine's ip for a while.
-    // forget those two, so running the suite in a loop never locks the developer out.
-    // only those: rl:errors:* belongs to the error-report limiter and is not ours to clear.
     execSync(`docker compose exec -T redis sh -c "for p in 'rl:login:*' 'rl:signup:*'; do redis-cli --scan --pattern \\"\\$p\\" | xargs -r redis-cli del; done"`, { cwd: REPO, stdio: 'ignore' });
   }
 

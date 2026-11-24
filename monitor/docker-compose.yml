@@ -1,25 +1,3 @@
-# the monitor box. a different box from the ones it watches: a dead box cannot say so
-# itself. our own code, the api binary run as `api monitor` (api/src/monitor.rs): one
-# container, one json file for its memory, one page built into the binary. no database,
-# no redis, nothing pulled from anyone. see docs/debugging.md, "the monitor box".
-#
-#   monitor   asks every box's /api/health every 15s, pulls its /api/errors every minute,
-#             remembers up/down, restarts and new builds, posts down/up to a webhook,
-#             serves the page on this box's loopback :3002
-#
-# on a box of its own. it builds the rust image, so 2 GB of ram, or 1 GB plus swap:
-#   curl -fsSL https://get.docker.com | sudo sh
-#   git clone <repo> && cd slop-stream-architecture/monitor
-#   cp .env.example .env                 # TARGETS, OPS_TOKENS, ALERT_WEBHOOK
-#   BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
-# update:  git pull && BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
-#          (the memory is in the volume; a rebuild keeps the history)
-#
-# the page is on loopback only: nothing here is published to the internet. from your laptop:
-#   ssh -L 3002:127.0.0.1:3002 root@<monitor ip>      then open http://localhost:3002
-# peek:  docker compose logs -f monitor       every down and up is a warn line there too
-#        docker compose exec monitor cat /data/monitor.json
-
 name: monitor
 
 services:
@@ -30,9 +8,6 @@ services:
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
         BUILD: ${BUILD:-dev}
-    # stream-api:latest when built here (the monitor box). test.sh runs this beside a
-    # stack and sets MONITOR_IMAGE to the image that stack's api was started from, the
-    # registry's name and tag or a local build, so the monitor under test is that checkout's
     image: ${MONITOR_IMAGE:-stream-api:latest}
     container_name: monitor
     restart: unless-stopped
@@ -56,7 +31,6 @@ services:
       - "127.0.0.1:${MONITOR_PORT:-3002}:3002"
     volumes:
       - monitor-data:/data
-    # the image's own check looks at the api port; this one looks at ours
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3002"]
       interval: 15s

@@ -1,18 +1,3 @@
-// The scene (docs/screen.md): on the go live page the camera, the shared screens and the
-// pictures are sources in a sidebar and layers over a 16:9 preview; the layers are dragged,
-// resized from a corner, ordered and hidden, and every watcher's player
-// draws the same frame from the fractions the slots frame carries. A video source left off the
-// stream is a tile for watchers, as every screen used to be. Screens are shared into slots
-// offered empty when going live, so nobody renegotiates; a watcher arriving mid-stream gets the
-// whole scene at once. The mixer under the preview: the mic and the master move with the fake
-// mic, and a fader at 0 or a mute flattens the master. Mic only at the end: the camera's × leaves
-// the mic alone with the avatar for a face, a watcher gets it on the sound with nothing on video
-// and the avatar moves with the voice on both sides, and the + puts the camera back live.
-// Chrome picks the screen on its own (--auto-select-desktop-capture-source). Which picture is where is read off the layers
-// (#layer-<id>, their place and size as fractions of the frame off the inline style), the tiles
-// (#tile-<slot>) and track identity (a track that moves between a layer and a tile is the same
-// track); not off sizes, which the encoder changes with the bitrate.
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node screen.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const NAME = 'screentest';
@@ -43,13 +28,10 @@ async function framesFlow(p, sel) {
   expect(b.w > 0 && b.frames > a.frames, `${sel}: ${JSON.stringify(a)} -> ${JSON.stringify(b)}`);
   return `${b.w}px wide, ${b.frames - a.frames} frames in 1.5s`;
 }
-/** The video track a <video> plays, by id: the same track keeps its id as it moves between a layer and a tile. */
 const trackId = (p, sel) => p.$eval(sel, (v) => v.srcObject?.getVideoTracks()[0]?.id ?? null);
 const audioTracks = (p, sel) => p.$eval(sel, (v) => ({ tracks: v.srcObject?.getAudioTracks().length ?? 0, muted: v.muted }));
-/** The tiles under the video, in order: the button's id and the label on it. */
 const tiles = (p) => p.$$eval('#tiles button[id^="tile-"]', (els) => els.map((el) => ({ id: el.id, label: el.parentElement.querySelector('span')?.textContent.trim() ?? el.textContent.trim() })));
 const sameTiles = (got, want) => got.length === want.length && got.every((t, i) => t.id === want[i].id && t.label === want[i].label);
-/** Until the tiles are exactly these (none: no strip at all). */
 async function waitTiles(p, want, timeout = 10000) {
   const t0 = Date.now();
   let got = [];
@@ -60,7 +42,6 @@ async function waitTiles(p, want, timeout = 10000) {
   }
   throw new Error(`tiles are ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
 }
-/** A layer's box as fractions of the frame, read off the inline style it is drawn with; null when the layer is not there. */
 const layerBox = (p, id) =>
   p.evaluate((id) => {
     const el = document.getElementById(`layer-${id}`);
@@ -71,7 +52,6 @@ const layerBox = (p, id) =>
 const TOL = 0.02;
 const near = (got, want) => got !== null && ['x', 'y', 'w', 'h'].every((k) => Math.abs(got[k] - want[k]) < TOL);
 const fmt = (b) => (b ? `${Math.round(b.x * 100)},${Math.round(b.y * 100)} ${Math.round(b.w * 100)}x${Math.round(b.h * 100)}%` : 'none');
-/** Until the layer's box is about `want` (null: until the layer is gone). */
 async function waitBox(p, id, want, timeout = 10000) {
   const t0 = Date.now();
   let got = null;
@@ -82,7 +62,6 @@ async function waitBox(p, id, want, timeout = 10000) {
   }
   throw new Error(`layer ${id} is ${fmt(got)}, wanted ${want ? fmt(want) : 'none'}`);
 }
-/** The layers of the frame, bottom first, by id. */
 const order = (p) => p.$$eval('#scene > [id^="layer-"]', (els) => els.map((el) => el.id.replace('layer-', '')));
 async function waitOrder(p, want, timeout = 5000) {
   const t0 = Date.now();
@@ -94,10 +73,8 @@ async function waitOrder(p, want, timeout = 5000) {
   }
   throw new Error(`the layers are ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
 }
-/** A source's row taken by the handle at its left end and dragged `rows` rows down the sidebar (negative: up). The rows are the stack, top first: a row down is one layer back. */
 async function dragRow(p, id, rows) {
   const handle = await (await p.$(`#source-drag-${id}`)).boundingBox();
-  // a row to the next, the measure the page takes at the press
   const pitch = await p.$$eval('#source-list > li', (els) => els[1].getBoundingClientRect().top - els[0].getBoundingClientRect().top);
   const x = handle.x + handle.width / 2;
   const y = handle.y + handle.height / 2;
@@ -106,7 +83,6 @@ async function dragRow(p, id, rows) {
   await p.mouse.move(x, y + rows * pitch, { steps: 8 });
   await p.mouse.up();
 }
-/** A meter's bar over 1.5s (or an avatar's `data-voice`): its peak and how many different readings it gave. The fake mic beeps about twice a second. */
 async function meter(p, sel, ms = 1500, attr = 'aria-valuenow') {
   const t0 = Date.now();
   const levels = new Set();
@@ -119,11 +95,8 @@ async function meter(p, sel, ms = 1500, attr = 'aria-valuenow') {
   }
   return { peak, distinct: levels.size };
 }
-/** How much an avatar layer moved with the voice over 1.5s: `data-voice` 0..100 on its picture, written from the frame loop. */
 const voice = (p, id, ms = 1500) => meter(p, `#layer-${id}-avatar`, ms, 'data-voice');
-/** The tracks a <video> plays: a mic-only stream is sound and no picture. */
 const trackCounts = (p, sel) => p.$eval(sel, (v) => ({ video: v.srcObject?.getVideoTracks().length ?? 0, audio: v.srcObject?.getAudioTracks().length ?? 0 }));
-// Every RTCPeerConnection the page makes, for getStats: installed before navigation.
 function recordPeerConnections() {
   window.__pcs = [];
   const Orig = window.RTCPeerConnection;
@@ -135,7 +108,6 @@ function recordPeerConnections() {
     }
   });
 }
-/** How many video streams this watcher is really receiving: inbound video sections whose decoded frames grow over a second. Idle slots get padding, no frames. */
 async function flowingVideos(p) {
   const sample = () =>
     p.evaluate(async () => {
@@ -151,7 +123,6 @@ async function flowingVideos(p) {
   const b = await sample();
   return Object.keys(b).filter((k) => b[k] > (a[k] || 0)).length;
 }
-/** A 60x40 png made in the page: 3:2, so a picture layer proves it keeps its own shape and is not forced to 16:9. */
 const makePng = (p) =>
   p.evaluate(() => {
     const c = document.createElement('canvas');
@@ -163,7 +134,6 @@ const makePng = (p) =>
     ctx.clearRect(10, 10, 40, 20);
     return c.toDataURL('image/png');
   });
-/** The watcher's <img> of a picture layer has decoded. */
 const imageLoaded = (p, id) => p.waitForFunction((sel) => {
   const i = document.querySelector(sel);
   return !!i && i.complete && i.naturalWidth > 0;
@@ -172,19 +142,14 @@ const imageLoaded = (p, id) => p.waitForFunction((sel) => {
 const CAMERA = { id: 'tile-0', label: 'camera' };
 const SCREEN2 = { id: 'tile-2', label: 'screen 2' };
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
-/** `screen + face`: the camera bottom right, a quarter wide (infra/scene.ts CORNER). */
 const CORNER = { x: 0.73, y: 0.714, w: 0.25, h: 0.25 };
-/** Where the drag below puts it: up and left by 0.3 of the frame. */
 const MOVED = { x: 0.43, y: 0.414, w: 0.25, h: 0.25 };
-/** And the corner pulled after that: 0.15 wider, the shape kept, the top left corner fixed. */
 const SIZED = { x: 0.43, y: 0.414, w: 0.4, h: 0.4 };
-/** A second screen's own corner, bottom left (infra/scene.ts). */
 const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
 
 (async () => {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const pubContext = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
-  // the arrangement, the panels and the faders are this browser's (localstorage): start clean, whatever an earlier run left
   await pubContext.addInitScript(() => {
     for (const key of ['settings.lastArrangement', 'settings.livePanels', 'settings.mixer', 'settings.cameraLayout', 'settings.micOnly']) localStorage.removeItem(key);
   });
@@ -195,11 +160,9 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     return ctx.newPage();
   };
   const w = await newWatcher();
-  /** The camera's and the screens' tracks as the watcher knows them, by slot, learnt as they show; and the publisher's own camera track. */
   const track = {};
 
   await step(`publisher goes live as ${NAME}: the sources and the camera layer are there before start, the share button and the mixer come with the stream`, async () => {
-    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
     await pub.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await pub.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await pub.waitForFunction(() => !document.querySelector('#start').disabled);
@@ -240,7 +203,6 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     await waitBox(pub, 's1', FULL, 5000);
     await waitBox(pub, 'cam', CORNER, 5000);
     await waitOrder(pub, ['s1', 'cam']);
-    // the preview's own <video> stands in for the bottom layer, the screen now; the camera is a copy over it
     await pub.waitForFunction((id) => document.querySelector('#layer-s1 #preview')?.srcObject?.getVideoTracks()[0]?.id !== id, track.pubCamera, { timeout: 5000 });
     expect((await trackId(pub, '#layer-cam-video')) === track.pubCamera, 'the camera layer does not play the camera');
     expect(!(await pub.$eval('#share-screen', (b) => b.disabled)), 'the share button went disabled with slots left');
@@ -289,14 +251,12 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
       return { w: r.width, h: r.height };
     });
     const h = await (await pub.$('#layer-cam-resize-se')).boundingBox();
-    // 0.15 of the frame along both axes: the same pull either way, so the shape is kept at 0.4
     await pub.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
     await pub.mouse.down();
     await pub.mouse.move(h.x + h.width / 2 + frame.w * 0.15, h.y + h.height / 2 + frame.h * 0.15, { steps: 10 });
     await pub.mouse.up();
     const mine = await waitBox(pub, 'cam', SIZED, 2000);
     const theirs = await waitBox(w, 'cam', SIZED, 5000);
-    // the arrangement of a screen and the camera is kept in this browser, for the next first share
     await pub.waitForFunction(() => {
       const last = JSON.parse(localStorage.getItem('settings.lastArrangement') || 'null');
       return !!last && last.boxes.some((b) => b.role === 'camera' && Math.abs(b.w - 0.4) < 0.02);
@@ -309,7 +269,6 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     await pub.click('#add-source');
     await pub.click('#add-image');
     await pub.setInputFiles('#image-file', { name: 'border.png', mimeType: 'image/png', buffer: Buffer.from(png.split(',')[1], 'base64') });
-    // the crop dialog over the picked file: the box is the whole picture to begin with, and used as it is the file itself goes up
     await pub.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
     const goes = ((await pub.textContent('#crop-size')) || '').trim();
     expect(goes === 'goes up as it is: 60×40 png', `the dialog says "${goes}"`);
@@ -317,7 +276,6 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     await pub.waitForSelector('#source-i1', { timeout: 15000 });
     const mine = await waitBox(pub, 'i1', { x: 0.35, y: 0.322, w: 0.3, h: 0.356 }, 5000);
     expect(mine.kind === 'image', `the picture layer is a ${mine.kind}`);
-    // 60 wide over 40 tall in a 16:9 frame: the box is 1.185 as tall as it is wide
     expect(Math.abs(mine.h / mine.w - 1.185) < 0.05, `the picture's box is ${fmt(mine)}, not 3:2`);
     await imageLoaded(pub, 'i1');
     const theirs = await waitBox(w, 'i1', mine, 5000);
@@ -334,7 +292,6 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     await dragRow(pub, 'i1', -1);
     await waitOrder(pub, ['s1', 'cam', 'i1']);
     await waitOrder(w, ['s1', 'cam', 'i1']);
-    // space picks it up, the arrows move it (the frame follows), space drops it; escape puts it back where it was picked up
     await pub.focus('#source-drag-i1');
     await pub.keyboard.press('Space');
     await pub.keyboard.press('ArrowDown');
@@ -478,7 +435,6 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     expect(tracks.video === 0 && tracks.audio === 1, `the watcher's stream is ${JSON.stringify(tracks)}`);
     const n = await flowingVideos(w);
     expect(n === 0, `${n} video streams flowing, not 0: the avatar is drawn, not sent`);
-    // a click first: the watcher's page has had none, and a sound reader made without one sits suspended until then
     await w.click('#unmute');
     const mine = await voice(pub, 'me');
     const theirs = await voice(w, 'me');

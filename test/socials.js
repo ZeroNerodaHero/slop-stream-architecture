@@ -1,27 +1,14 @@
-// Socials (docs/socials.md): where else to find them, the links under the player. A name keeps
-// one document of them (how they sit, how big, the links) through the bio's gate; the api
-// refuses what is not a link (a javascript: url, a kind it does not know, more than the cap)
-// and anyone the name is not; the watch page's socials tab draws them as anchors that leave
-// this origin safely, wearing the layout and the size; the owner edits them on that same tab,
-// the editor opening under the strip, which follows the draft as it is typed and is the saved
-// document again on `done`. Also the corner panel as it is now: the picture is your page, the
-// gear is at the end of your line, and the `following` button is gone.
-// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node socials.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const LOCAL = process.env.LOCAL === '1';
 const REPO = require('path').join(__dirname, '..');
 const RUN = Date.now().toString(36).slice(-5);
-/** a signup is for good, so a fresh name per run (like follows.js and preview.js) */
 const ME = 'soc' + RUN;
-/** somebody else with an account: the one the name is not */
 const NOSY = 'nos' + RUN;
 const PW = 'correct horse battery 9!';
 const ARGS = ['--ignore-certificate-errors'];
-/** the api's cap on how many links one document holds. keep this with the api's */
 const MAX_LINKS = 20;
-/** what this suite puts and then goes looking for on the page */
 const DOC = {
   layout: 'row',
   size: 'medium',
@@ -30,8 +17,7 @@ const DOC = {
     { kind: 'web', url: 'https://example.com/', label: 'my site' }
   ]
 };
-const results = []; // 'pass' | 'fail' | 'skip'
-// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
+const results = [];
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
@@ -59,7 +45,6 @@ const body = async (res) => {
     return null;
   }
 };
-/** the links on the page, in order, as the dom has them. `text` is the word on the link (its first span); a grid square says the host under it too */
 const shown = (page, box = '#socials') =>
   page.$$eval(`${box} a`, (as) =>
     as.map((a) => ({
@@ -72,7 +57,6 @@ const shown = (page, box = '#socials') =>
   );
 
 (async () => {
-  // three http clients: the name, somebody else with an account, and nobody
   const me = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const nosy = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const anon = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
@@ -98,7 +82,6 @@ const shown = (page, box = '#socials') =>
     expect(res.status() === 200, `the put got ${res.status()}: ${JSON.stringify(saved)}`);
     expect(saved?.name === ME && saved.socials?.layout === 'row' && saved.socials?.size === 'medium', `the put came back ${JSON.stringify(saved)}`);
     expect(saved.socials.links.length === 2 && saved.socials.links[0].kind === 'youtube' && saved.socials.links[0].url === DOC.links[0].url, `the first link: ${JSON.stringify(saved.socials.links[0])}`);
-    // an empty label is left off the wire; a given one is kept
     expect(!('label' in saved.socials.links[0]) && saved.socials.links[1].label === 'my site', `the labels: ${JSON.stringify(saved.socials.links)}`);
     const back = await socialsOf(ME);
     expect(JSON.stringify(back) === JSON.stringify(saved.socials), `the profile read says ${JSON.stringify(back)}`);
@@ -128,7 +111,6 @@ const shown = (page, box = '#socials') =>
       expect(res.status() === 400, `${what} got ${res.status()}: ${said}`);
       expect(said.startsWith(word), `${what} said "${said}", want "${word}…"`);
     }
-    // nothing refused may have landed: the document is the one from the step before
     const back = await socialsOf(ME);
     expect(back.links.length === 2 && back.links[0].url === DOC.links[0].url, `a refused put changed the document: ${JSON.stringify(back)}`);
     return `${cases.length} refused, the document untouched`;
@@ -152,7 +134,6 @@ const shown = (page, box = '#socials') =>
     await p.fill('#auth-password', PW);
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, name, { timeout: 10000 });
-    // the login page moves to home, and a page change closes the panel: nothing hovers it before the move
     await p.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
   };
   let w;
@@ -160,7 +141,6 @@ const shown = (page, box = '#socials') =>
 
   await step(`a watcher on /watch/${ME}: the socials tab, after about and calendar, draws the links as anchors that leave safely, wearing the layout and the size`, async () => {
     w = await watcher.newPage();
-    // nothing on this page may reach another host: an icon from elsewhere hands the viewer's address over
     const elsewhere = [];
     w.on('request', (r) => {
       if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !r.url().startsWith('blob:')) elsewhere.push(r.url());
@@ -182,15 +162,12 @@ const shown = (page, box = '#socials') =>
       expect(l.target === '_blank', `${l.href} opens in ${l.target}`);
       expect(/noopener/.test(l.rel || '') && /noreferrer/.test(l.rel || '') && /nofollow/.test(l.rel || ''), `${l.href} has rel "${l.rel}"`);
     }
-    // a link with a label wears it; one without wears the kind's word
     expect(links[0].text === 'youtube', `the unlabelled link reads "${links[0].text}"`);
     expect(links[1].text === 'my site', `the labelled link reads "${links[1].text}"`);
-    // over the strip: since when the account is here, the month in words, the whole date on the <time>
     const joinedLine = ((await w.textContent('#socials-joined')) || '').trim();
     expect(/^joined [a-z]+ \d{4}$/.test(joinedLine), `the joined line reads "${joinedLine}"`);
     const joinedAt = (await body(await anon.get(`/api/streamers/${ME}`)))?.joined_at;
     expect(joinedAt && (await w.getAttribute('#socials-joined time', 'datetime')) === joinedAt, `the <time> says ${await w.getAttribute('#socials-joined time', 'datetime')}, the profile ${joinedAt}`);
-    // not my page: no way into the editor here
     expect((await w.$$('#socials-edit')).length === 0, 'a watcher is offered the editor');
     expect(elsewhere.length === 0, `the page fetched ${JSON.stringify(elsewhere)}`);
     return `${links.length} links, ${DOC.layout}/${DOC.size}, ${joinedLine}, nothing fetched elsewhere`;
@@ -228,18 +205,15 @@ const shown = (page, box = '#socials') =>
 
   await step('a desktop body too narrow for the chat beside the player: the chat is the last tab, the desktop shell stays, and widening puts it back beside without a reconnect', async () => {
     const tabIds = () => w.$$eval('#watch-tabs [role="tab"]', (els) => els.map((el) => el.id).join(' '));
-    // 900px: a desktop (not a phone, under 768), but 900 − the 56px rail − 40px of padding is under the 928px body the column needs
     await w.setViewportSize({ width: 900, height: 900 });
     await w.waitForSelector('[data-chat="tabbed"] #tab-chat', { timeout: 10000 });
     expect((await tabIds()) === 'tab-about tab-calendar tab-socials tab-chat', `the narrow tabs are ${await tabIds()}`);
     expect((await w.getAttribute('#tab-socials', 'aria-selected')) === 'true', 'the open tab was not kept into the narrow body');
     const [row, chatTab] = await Promise.all([w.$eval('#watch-tabs [role="tablist"]', (el) => el.getBoundingClientRect().right), w.$eval('#tab-chat', (el) => el.getBoundingClientRect().right)]);
     expect(Math.abs(row - chatTab) <= 1, `the chat tab ends at ${chatTab}, the row at ${row}`);
-    // the desktop's own, not the phone's: the sidebar rail and go live in the title row, and no chat button on the player
     expect(await w.isVisible('#user-panel'), 'the sidebar is gone');
     expect(await w.isVisible('#go-live'), 'the title row has no go live');
     expect((await w.$$('#chat-open')).length === 0, 'the player still has the chat button');
-    // the chat is in the page and connected under another tab: the same element after the widening below says no remount
     await w.$eval('#chat', (el) => {
       el.dataset.kept = 'yes';
     });
@@ -248,7 +222,6 @@ const shown = (page, box = '#socials') =>
     await w.waitForSelector('#tab-chat[aria-selected="true"]', { timeout: 10000 });
     expect(await w.isVisible('#panel-chat #chat'), 'the chat tab does not show the chat');
     expect((await w.$$('#panel-socials')).length === 0, 'the socials panel is still up beside the chat');
-    // wide again: the column beside the player, the three tabs, the chat button back, the same chat element
     await w.setViewportSize({ width: 1280, height: 900 });
     await w.waitForSelector('[data-chat="beside"]', { timeout: 10000 });
     expect((await tabIds()) === 'tab-about tab-calendar tab-socials', `the wide tabs are ${await tabIds()}`);
@@ -257,11 +230,9 @@ const shown = (page, box = '#socials') =>
     expect(await w.isVisible('#chat-open'), 'the chat button did not come back');
     const [video, chat] = await Promise.all([w.$eval('#watch-tabs', (el) => el.getBoundingClientRect().right), w.$eval('#chat', (el) => el.getBoundingClientRect().left)]);
     expect(chat >= video, `the chat starts at ${chat}, left of the tabs' right edge ${video}`);
-    // and narrow once more: the chat tab is still the open one
     await w.setViewportSize({ width: 900, height: 900 });
     await w.waitForSelector('#tab-chat[aria-selected="true"]', { timeout: 10000 });
     expect((await w.getAttribute('#chat', 'data-kept')) === 'yes', 'the chat was remounted by the second resize');
-    // the chat in a window: it stays a window, and there is no chat tab
     await w.evaluate(() => localStorage.setItem('settings.chatSide', JSON.stringify('modal')));
     await w.reload({ waitUntil: 'domcontentloaded' });
     await w.waitForSelector('#tab-about[aria-selected="true"]', { timeout: 15000 });
@@ -298,48 +269,39 @@ const shown = (page, box = '#socials') =>
     await o.click('#socials-edit');
     await o.waitForSelector('#socials-editor', { timeout: 10000 });
     expect((await o.$$('#user-modal[open]')).length === 0, 'the editor opened the user modal');
-    // the rows are the document as kept
     await o.waitForFunction((v) => document.querySelector('#socials-url-1')?.value === v, DOC.links[1].url, { timeout: 10000 });
     expect((await o.inputValue('#socials-label-1')) === 'my site', `the second row's words: "${await o.inputValue('#socials-label-1')}"`);
     expect(await o.isChecked('#socials-layout-row'), 'the row card is not the one on');
     expect(await o.isChecked('#socials-size-medium'), 'the medium card is not the one on');
-    // the strip stays above the editor, and the way into the editor is gone while it is open
     expect((await shown(o)).length === 2, 'the strip left the page when the editor opened');
     expect((await o.$$('#socials-edit')).length === 0, 'the edit link is still there with the editor open');
     return 'the editor under the strip, with the two rows';
   });
 
   await step('the editor: the grid and large cards, a github row from its square with a bare host; the strip above follows the draft; save, and the api has it', async () => {
-    // a radio as a card: the input is sr-only, so the label is what takes the click (presence.js's way)
     await o.click('label[for="socials-layout-grid"]');
     expect(await o.isChecked('#socials-layout-grid'), '#socials-layout-grid is not checked');
     await o.click('label[for="socials-size-large"]');
     expect(await o.isChecked('#socials-size-large'), '#socials-size-large is not checked');
-    // the strip above is the draft: it wears the picks before any save
     await o.waitForSelector('#socials[data-layout="grid"][data-size="large"]', { timeout: 5000 });
     await o.click('#socials-add-github');
     await o.waitForSelector('#socials-row-2[data-kind="github"]', { timeout: 5000 });
-    // the new row's url box took focus; a bare host is fine: https goes in front on the way up
     const focused = await o.evaluate(() => document.activeElement?.id || '');
     expect(focused === 'socials-url-2', `focus is on "${focused}"`);
     await o.fill('#socials-url-2', 'github.com/you');
     await o.fill('#socials-label-2', 'the code');
-    // the strip has the third link already, as the save will keep it
     await o.waitForFunction(() => document.querySelectorAll('#socials a').length === 3, null, { timeout: 5000 });
     const drawn = await shown(o);
     expect(drawn[2].href === 'https://github.com/you' && drawn[2].text === 'the code', `the strip's third link before the save: ${JSON.stringify(drawn[2])}`);
     const status = ((await o.textContent('#socials-status')) || '').trim();
     expect(/changed/.test(status), `the status before the save reads "${status}"`);
-    // nothing went up yet
     expect((await socialsOf(ME)).links.length === 2, 'the api has the third link before the save');
     await o.click('#socials-save');
     await o.waitForFunction(() => document.querySelector('#socials-status')?.textContent === 'saved', null, { timeout: 10000 });
-    // the box shows the url as the api kept it
     expect((await o.inputValue('#socials-url-2')) === 'https://github.com/you', `the url box reads "${await o.inputValue('#socials-url-2')}"`);
     const back = await socialsOf(ME);
     expect(back.layout === 'grid' && back.size === 'large', `the api says ${back.layout}/${back.size}`);
     expect(back.links.length === 3 && back.links[2].kind === 'github' && back.links[2].url === 'https://github.com/you' && back.links[2].label === 'the code', `the api's links: ${JSON.stringify(back.links)}`);
-    // done: the editor folds away and the strip is the saved document, no reload
     await o.click('#socials-done');
     await o.waitForSelector('#socials-editor', { state: 'detached', timeout: 5000 });
     await o.waitForSelector('#socials[data-layout="grid"][data-size="large"]', { timeout: 5000 });
@@ -356,9 +318,7 @@ const shown = (page, box = '#socials') =>
     await o.waitForSelector('#socials-row-3[data-kind="web"]', { timeout: 5000 });
     await o.fill('#socials-url-3', 'https://www.twitch.tv/you');
     await o.waitForSelector('#socials-row-3[data-kind="twitch"]', { timeout: 5000 });
-    // the strip above follows: four links while the draft has four
     await o.waitForFunction(() => document.querySelectorAll('#socials a').length === 4, null, { timeout: 5000 });
-    // the handle: space picks the twitch row up, the up arrow takes it over github, space drops it
     expect(!(await o.$('#socials-up-0')) && !(await o.$('#socials-down-3')), 'a row still has up and down buttons');
     await o.focus('#socials-drag-3');
     await o.keyboard.press('Space');
@@ -366,7 +326,6 @@ const shown = (page, box = '#socials') =>
     await o.keyboard.press('Space');
     await o.waitForSelector('#socials-row-2[data-kind="twitch"]', { timeout: 5000 });
     expect((await o.getAttribute('#socials-row-3', 'data-kind')) === 'github', 'github did not move down');
-    // escape puts a picked-up row back where it was
     const firstKind = await o.getAttribute('#socials-row-0', 'data-kind');
     await o.focus('#socials-drag-0');
     await o.keyboard.press('Space');
@@ -377,7 +336,6 @@ const shown = (page, box = '#socials') =>
     await o.click('#socials-remove-2');
     await o.waitForSelector('#socials-row-3', { state: 'detached', timeout: 5000 });
     expect((await o.getAttribute('#socials-row-2', 'data-kind')) === 'github', 'github is not back in the third row');
-    // nothing went up: the api still has three
     const back = await socialsOf(ME);
     expect(back.links.length === 3, `the api has ${back.links.length} links after edits that were not saved`);
     await o.click('#socials-done');
@@ -400,7 +358,6 @@ const shown = (page, box = '#socials') =>
     const res = await putSocials(me, ME, { links: [] });
     const saved = await body(res);
     expect(res.status() === 200 && saved?.socials?.links?.length === 0, `emptying got ${res.status()}: ${JSON.stringify(saved)}`);
-    // layout and size left out: the defaults
     expect(saved.socials.layout === 'row' && saved.socials.size === 'medium', `the defaults came back as ${saved.socials.layout}/${saved.socials.size}`);
     await w.reload({ waitUntil: 'domcontentloaded' });
     await w.waitForSelector('#tab-socials', { timeout: 15000 });
@@ -416,7 +373,6 @@ const shown = (page, box = '#socials') =>
   await anon.dispose();
 
   if (LOCAL) {
-    // this run's signups count against this machine's ip for a while: forget them, like auth.js does
     execSync(`docker compose exec -T redis sh -c "redis-cli --scan --pattern 'rl:signup:*' | xargs -r redis-cli del"`, { cwd: REPO, stdio: 'ignore' });
   }
 

@@ -38,7 +38,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 ALL=(pages api video dummy)
 TARGETS=()
-MODE=push          # push | send | local
+MODE=push
 TO=""
 want_to=0
 for a in "$@"; do
@@ -61,8 +61,6 @@ have docker || die "docker is not installed"
 docker buildx version >/dev/null 2>&1 || die "docker buildx is missing (docker desktop has it; on linux: apt install docker-buildx-plugin)"
 have git || die "git is not installed"
 
-# the same BUILD rule as deploy.sh and the action: the last commit that touched what the
-# images are built from (./image-paths, 7 characters), -dirty when that has uncommitted edits
 PATHSPECS=()
 while IFS= read -r p; do PATHSPECS+=("$p"); done < <(tr -d '\r' < image-paths 2>/dev/null | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)' || true)
 [ ${#PATHSPECS[@]} -gt 0 ] || die "image-paths is missing or empty in the repo root"
@@ -72,7 +70,6 @@ if [ "$BUILD" != dev ] && [ -n "$(git status --porcelain -- "${PATHSPECS[@]}" 2>
   BUILD="$BUILD-dirty"
 fi
 
-# how a command reaches the box. `local` runs it here (for trying this script out).
 remote() {
   case "$TO" in
     gcloud:*) gcloud compute ssh "${TO#gcloud:}" --quiet --command "$1" ;;
@@ -81,9 +78,6 @@ remote() {
   esac
 }
 
-# the registry name the images go by, the same one deploy.sh derives: ghcr.io/<owner>/ from
-# the git remote, lowercased (ghcr wants that). sent images carry it too, so the box finds
-# them under the name compose looks for, with nothing to configure.
 if [ -z "${IMAGES:-}" ] && [ "$MODE" != local ]; then
   owner="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https://github\.com/|git@github\.com:)([^/]+)/.*$#\2#' | tr '[:upper:]' '[:lower:]')"
   [ -n "$owner" ] && [ "$owner" != "$(git remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]')" ] || die "cannot tell the registry from the git remote. set it:  IMAGES=ghcr.io/<you>/ ./scripts/ship.sh"
@@ -97,8 +91,6 @@ case "$MODE" in
     PLATFORM="${PLATFORM:-linux/amd64}"
     TAG="$BUILD"
     OUT=(--push)
-    # logged in to that registry? docker keeps a key per host in config.json, even with a credential
-    # store. a registry on this machine (localhost:5055, for trying this out) needs no login.
     host="${IMAGES%%/*}"
     if [[ ! "$host" =~ ^(localhost|127\.0\.0\.1)(:[0-9]+)?$ ]] \
        && ! python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if sys.argv[2] in c.get("auths",{}) else 1)' "${DOCKER_CONFIG:-$HOME/.docker}/config.json" "$host" 2>/dev/null; then
@@ -122,7 +114,6 @@ or skip registries altogether:  ./scripts/ship.sh --to gcloud:<instance>"
     OUT=(--load) ;;
 esac
 
-# the laptop's cores for cargo; the Dockerfiles default to 1 for small boxes
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)"
 
 case "$MODE" in
@@ -132,7 +123,7 @@ case "$MODE" in
 esac
 note "BUILD=$BUILD, CARGO_BUILD_JOBS=$JOBS. the first rust build under emulation takes a while; the next one reuses the dependency layers"
 
-build() {   # image, context, dockerfile
+build() {
   local name="$1" ctx="$2" file="$3" t0 secs
   local -a tags=(-t "${IMAGES}stream-$name:$TAG")
   [ "$MODE" != push ] || tags+=(-t "${IMAGES}stream-$name:latest")
@@ -155,8 +146,6 @@ for t in "${TARGETS[@]}"; do
 done
 
 if [ "$MODE" = send ]; then
-  # one stream: the images as a tar, gzipped, straight into docker on the box. layers the
-  # images share (debian, ffmpeg) go once. nothing lands on disk at either end.
   names=(); for t in "${TARGETS[@]}"; do names+=("${IMAGES}stream-$t:$TAG"); done
   say "sending ${names[*]} to $TO"
   t0=$(date +%s)
