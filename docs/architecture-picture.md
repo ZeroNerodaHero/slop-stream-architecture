@@ -281,7 +281,7 @@ flowchart LR
 
   pages -->|"publish-pages.sh · new files first, then stale ones removed"| pagesdata -->|"ro"| frontend
   certs -->|"cert.pem key.pem"| certsdata -->|"ro"| frontend
-  caddyfile -.->|"bind mount · reloaded in place"| frontend
+  caddyfile -.->|"bind mount · recreated when it changed"| frontend
   database --> dbdata
   frontend --> caddydata
 ```
@@ -345,7 +345,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  fe["./scripts/deploy.sh frontend"] --> pagesc["pages rebuilt, files copied<br/>caddy untouched · streams stay up"]
+  fe["./scripts/deploy.sh frontend"] --> pagesc["pages rebuilt, files copied<br/>caddy recreated only if the Caddyfile changed · streams stay up"]
   apid["./scripts/deploy.sh api"] --> apic["api + chat swapped<br/>a few seconds of 502 · streams stay up"]
   vid["./scripts/deploy.sh video"] --> videoc["video swapped<br/>ends every stream · warns first"]
   dum["./scripts/deploy.sh dummy"] --> dummyc["dummy rebuilt<br/>DUMMY_* from .env"]
@@ -354,7 +354,7 @@ flowchart LR
   diff -->|"api/**"| apic
   diff -->|"video/**"| videoc & dummyc
   diff -->|"Cargo.toml · Cargo.lock"| apic & videoc & dummyc
-  diff -->|"frontend/Caddyfile"| reload["caddy reload in place"]
+  diff -->|"frontend/Caddyfile"| reload["caddy recreated if its mount is stale, else reloaded"]
   diff -->|"other frontend/**"| pagesc
   diff -->|"docker-compose.yml"| compose["compose up -d"]
   diff -->|"docs only"| nothing["nothing"]

@@ -540,7 +540,7 @@ compose_up() {
   say "${DOCKER[*]} compose up -d ${UP_FLAGS[*]:-}"
   "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
   up_voice
-  reload_caddy
+  sync_caddy
   prune_images
 }
 
@@ -622,6 +622,31 @@ reload_caddy() {
   "${DOCKER[@]}" compose up -d --no-deps --force-recreate frontend
 }
 
+caddy_stale() {
+  local mounted
+  mounted="$("${DOCKER[@]}" compose exec -T frontend cat /etc/caddy/Caddyfile 2>/dev/null)" || return 0
+  [ "$mounted" != "$(cat frontend/Caddyfile)" ]
+}
+
+sync_caddy() {
+  local status out
+  read -r status _ <<< "$(container_state frontend)"
+  if [ "$status" != running ]; then
+    note "caddy is $status, so there is no running config to bring up to frontend/Caddyfile"
+    return 0
+  fi
+  if ! caddy_stale; then
+    reload_caddy
+    return 0
+  fi
+  if ! out="$("${DOCKER[@]}" compose exec -T frontend caddy validate --config - --adapter caddyfile < frontend/Caddyfile 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    die "caddy rejected frontend/Caddyfile (its words above) and keeps the config it has. fix the file, then deploy again"
+  fi
+  say "frontend/Caddyfile changed since caddy started, recreating it (open websockets drop, browsers reconnect)"
+  "${DOCKER[@]}" compose up -d --no-deps --force-recreate frontend
+}
+
 redeploy_service() {
   if [ "$1" = video ]; then
     warn "redeploying video ends every live stream right now. watchers reconnect on their own; streamers press start again."
@@ -673,11 +698,11 @@ redeploy_targets() {
   local t voice=0
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
-      frontend) redeploy_frontend ;;
+      frontend) redeploy_frontend; sync_caddy ;;
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
       voice) ! voice_on || build_one video ;;
-      caddy) say "Caddyfile changed, reloading caddy in place"; reload_caddy ;;
+      caddy) say "Caddyfile changed, bringing caddy up to it"; sync_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
     case "$t" in video|voice|compose) voice=1 ;; esac
@@ -689,6 +714,7 @@ swapped_containers() {
   local t out=""
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
+      frontend) out="$out frontend" ;;
       api) out="$out api chat events home" ;;
       video) out="$out video" ;;
       dummy) out="$out dummy video api" ;;
