@@ -28,8 +28,8 @@ import { cleanName } from '@/infra/names';
 import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
-import { Button, buttonClassName } from '@/shared-components/Button';
-import { OAuthButtons, ProviderIcon } from '@/shared-components/OAuthButtons';
+import { Button } from '@/shared-components/Button';
+import { OAuthButtons, ProviderIcon, providerBrandStyle } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { useTurnstile } from '@/shared-components/Turnstile';
@@ -245,6 +245,10 @@ function PasswordHint({ problem }: { problem: string | null }) {
   return problem ? <span className="text-decrease">{problem}</span> : <>{NEW_PASSWORD_RULE}. there is no reset: remember it.</>;
 }
 
+const SEGMENT = 'shrink-0 bg-[var(--brand)] px-2.5 text-xs font-semibold';
+const DIVIDER = 'border-l border-white/30';
+const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white';
+
 function LinkedPicture({ provider, src }: { provider: string; src?: string | null }) {
   const [broken, setBroken] = useState<string | null>(null);
   const box = 'flex size-6 shrink-0 items-center justify-center border border-primaryStroke';
@@ -315,57 +319,57 @@ function LinkedLogins() {
                   <ProviderIcon provider={p} />
                   {providerLabel(p)}
                 </span>
-                <span className={on ? 'flex min-w-0 items-center gap-2 border border-primaryStroke p-1' : 'flex flex-wrap items-center gap-1.5'}>
-                  {on ? (
-                    <>
+                {on ? (
+                  <span style={providerBrandStyle(p)} className="flex min-w-0 items-stretch border border-[var(--brand)]">
+                    <span className="flex min-w-0 items-center gap-2 bg-[var(--brand)] px-2 py-1 text-white">
                       <LinkedPicture provider={p} src={on.avatar} />
                       <Tooltip content={`since ${new Date(on.linked_at).toLocaleDateString()}`}>
                         <span id={`sec-linked-name-${p}`} tabIndex={0} className="min-w-0 max-w-[180px] truncate text-sm font-semibold">
                           {on.name || 'linked'}
                         </span>
                       </Tooltip>
-                      {lastWayIn ? (
-                        <Tooltip content="your only login">
-                          <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className="inline-flex shrink-0">
-                            <Button size="sm" variant="outline-danger" disabled className="pointer-events-none shrink-0">
-                              unlink
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      ) : sure === p ? (
-                        <>
-                          <Button
-                            id={`sec-unlink-${p}`}
-                            size="sm"
-                            variant="outline-danger"
-                            disabled={busy}
-                            className="shrink-0 whitespace-nowrap"
-                            onClick={() => void unlink(p)}
-                          >
-                            sure? unlink
-                          </Button>
-                          <Button size="sm" className="shrink-0" onClick={() => setSure(null)}>
-                            keep
-                          </Button>
-                        </>
-                      ) : (
-                        <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" className="shrink-0" onClick={() => setSure(p)}>
-                          unlink
-                        </Button>
-                      )}
-                    </>
-                  ) : providers?.includes(p) ? (
-                    <a
-                      id={`sec-link-${p}`}
-                      href={oauthStartUrl(p, true)}
-                      onClick={() => rememberReturn(true)}
-                      aria-label={`link ${providerLabel(p)}`}
-                      className={buttonClassName('outline', undefined, 'sm')}
-                    >
-                      link
-                    </a>
-                  ) : null}
-                </span>
+                    </span>
+                    {lastWayIn ? (
+                      <Tooltip content="your only login">
+                        <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className={`flex shrink-0 ${DIVIDER} ${FOCUS}`}>
+                          <button type="button" disabled className={`pointer-events-none ${SEGMENT} text-white/50`}>
+                            unlink
+                          </button>
+                        </span>
+                      </Tooltip>
+                    ) : sure === p ? (
+                      <>
+                        <button
+                          id={`sec-unlink-${p}`}
+                          type="button"
+                          disabled={busy}
+                          className={`${DIVIDER} ${FOCUS} shrink-0 whitespace-nowrap bg-decrease px-2.5 text-xs font-semibold text-white disabled:opacity-50`}
+                          onClick={() => void unlink(p)}
+                        >
+                          sure? unlink
+                        </button>
+                        <button type="button" className={`${DIVIDER} ${FOCUS} ${SEGMENT} text-white hover:bg-[var(--brand-hover)]`} onClick={() => setSure(null)}>
+                          keep
+                        </button>
+                      </>
+                    ) : (
+                      <button id={`sec-unlink-${p}`} type="button" className={`${DIVIDER} ${FOCUS} ${SEGMENT} text-white hover:bg-decrease`} onClick={() => setSure(p)}>
+                        unlink
+                      </button>
+                    )}
+                  </span>
+                ) : providers?.includes(p) ? (
+                  <a
+                    id={`sec-link-${p}`}
+                    href={oauthStartUrl(p, true)}
+                    onClick={() => rememberReturn(true)}
+                    aria-label={`link ${providerLabel(p)}`}
+                    style={providerBrandStyle(p)}
+                    className={`flex items-center border border-[var(--brand)] py-1 ${FOCUS} ${SEGMENT} text-white hover:bg-[var(--brand-hover)]`}
+                  >
+                    link
+                  </a>
+                ) : null}
               </li>
             );
           })}
