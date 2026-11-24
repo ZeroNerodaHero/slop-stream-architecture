@@ -1,34 +1,3 @@
-//! `/events`: the gateway. One websocket per browser, open on every page. A process of its
-//! own, `api events` on :4100, the `events` container: the chat is a different socket in a
-//! different container, and the two share only the plumbing in socket.rs. See docs/status.md.
-//!
-//! A socket says hello as a name (the cookie's login, else the nick lowercased when nobody
-//! owns that name, else nobody) and from then on the name is *here*: a member of the sorted
-//! set `seen:<name>` scored by the time this socket last refreshed it, which it does on its own
-//! 30s ping. The first socket in and the last one out of a name are atomic EVALs that also put
-//! a `seen` fact on the `events` stream. A socket may `watch` names: it is told their word
-//! (`presence`) when it changes, and `live` / `ended` as they happen. Every socket watches its
-//! own name without asking: `me` carries the word and the choice.
-//!
-//! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
-//! `status`, `renamed`, and `dm` / `dm_react` / `dm_read` for the direct messages of docs/dms.md and
-//! `notify` / `notify_read` / `notify_removed` / `chat_read` for the inbox of docs/notifications.md, which go to
-//! the sockets that *are* a name rather than to its watchers; the chat process writes `notify`
-//! too, for a line in a channel) and by this module (`seen`).
-//! One task per process tails it and routes
-//! each entry to the sockets that care; the word is derived here, on delivery, from the inputs
-//! (the `live:` key, the set, the column), never carried in a fact, so two writers cannot race
-//! a stale word past a fresh one. The pages never write through this socket: the choice is an
-//! http PUT. A socket may also `watch` `*`: every name's `live`, `ended` and `viewers`, the
-//! home page's feed behind its one `GET /api/streams` (home.rs). And it may `watch`
-//! `group:<name>`: every change to that group (`group` facts from groups.rs, forwarded whole),
-//! plus `live` and `ended` for its members, so a room on screen follows without asking again.
-//!
-//! A `renamed` fact (docs/ids.md) re-keys the sockets of the old name to the new one: they
-//! leave `seen:<old>` at once and enter `seen:<new>`, and they, and the old name's watchers,
-//! get a `renamed` frame. A socket's name lives in the registry, not in its task, so the
-//! ping that keeps it here reads the current one.
-
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,42 +25,24 @@ use crate::presence::{self, Presence, Status, EVENTS_KEEP, EVENTS_KEY, SEEN_TTL_
 use crate::socket::{first_text, send, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{live_key, valid_name};
 
-/// How far back the tail starts after a (re)start: the gap of a deploy, replayed. Deliveries
-/// are idempotent (the word is recomputed from the truth; `live` and `ended` make the page ask
-/// `watch` again), so a replayed entry costs nothing.
 const REPLAY_MS: i64 = 10_000;
-/// Every watched name's word again, pushed on change: notices a gateway that died without its
-/// drain (its members go stale and nobody published `seen 0`) and heals an entry a watcher missed.
 const RECHECK_EVERY: Duration = Duration::from_secs(30);
-/// The `watch` that means every name: the home page's. Not a name (names are letters, digits, `_ -`).
 const EVERYONE: &str = "*";
-/// Events sockets one address may hold open at once in this process. The page keeps one per
-/// browser (a shared worker carries every tab), so this is a household's worth of browsers.
 const MAX_SOCKETS_PER_IP: usize = 20;
-/// Names and topics one socket may watch at once. The sidebar watches every follow (500 at
-/// most, follows.rs) plus the people on screen; past this a `watch` is dropped.
 const MAX_WATCHES: usize = 1000;
-/// `watch` and `unwatch` frames one socket may send in a minute; past it they are dropped
-/// until the minute is over. Each watch of a name costs a lookup of its word.
 const MAX_WATCH_FRAMES_PER_MIN: u32 = 2000;
-/// The `watch` that means one group's room: `group:<name>`. Not a name either (the colon).
 const GROUP_TOPIC: &str = "group:";
 
-/// `group:<name>` → the group, when the rest is a name. None for anything else.
 fn group_topic(watch: &str) -> Option<&str> {
     watch.strip_prefix(GROUP_TOPIC).filter(|name| valid_name(name))
 }
 
-/// A `watch` that is a topic, not a name: no word to compute or recheck for it.
 fn is_topic(watch: &str) -> bool {
     watch == EVERYONE || watch.starts_with(GROUP_TOPIC)
 }
 
 type SocketId = u64;
 
-/// The first socket of a name: trim the stale, add mine, keep the set alive, and say `seen 1`
-/// if the set was empty. One EVAL, so two gateways cannot race a last-out against a first-in.
-/// KEYS: seen:<name>, events. ARGV: socket id, now ms, name, window ms, ttl secs, maxlen.
 const FIRST_IN: &str = r#"
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. (tonumber(ARGV[2]) - tonumber(ARGV[4])))
 local was = redis.call('ZCARD', KEYS[1])
@@ -104,7 +55,6 @@ end
 return 0
 "#;
 
-/// The mirror: remove mine, trim the stale, and say `seen 0` if nobody is left.
 const LAST_OUT: &str = r#"
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. (tonumber(ARGV[2]) - tonumber(ARGV[4])))
@@ -123,17 +73,13 @@ pub(crate) struct Gateway {
     client: redis::Client,
     shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
-    /// `<hostname>:<n>` is a socket's member in `seen:<name>`: a stale one names the process that left it.
     host: Arc<str>,
     next: Arc<AtomicU64>,
     registry: Registry,
-    /// Pinged when redis is back: every socket re-marks its name at once rather than at its next tick.
     refresh: Arc<Notify>,
-    /// Open sockets per address (`MAX_SOCKETS_PER_IP`). A std lock: never held across an await.
     per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
-/// One address's place among `per_ip`, given back when the socket ends (or never upgrades).
 struct IpSlot {
     per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
     ip: String,
@@ -163,8 +109,6 @@ impl Drop for IpSlot {
     }
 }
 
-/// Every open socket of this process, and two indexes over them: which sockets are a name,
-/// which sockets watch it. Behind one lock; nothing in here waits on the network.
 #[derive(Clone, Default)]
 pub(crate) struct Registry(Arc<Mutex<Sockets>>);
 
@@ -179,9 +123,7 @@ struct Entry {
     tx: mpsc::UnboundedSender<Out>,
     name: Option<String>,
     watching: HashSet<String>,
-    /// The last word each watched name was told. Pushed only on change.
     told: HashMap<String, Presence>,
-    /// The last `me`: my word and my choice. Pushed only on change.
     me: Option<(Presence, Status)>,
 }
 
@@ -198,8 +140,6 @@ enum In {
 enum Out {
     Me { name: Option<String>, presence: Presence, status: Status },
     Presence { name: String, presence: Presence },
-    /// A stream started. `card` is what the api put in the fact for a home card (`verified`,
-    /// `avatar`, `bio`, `thumbs`), spread into the frame as it came; empty from an older api.
     Live {
         name: String,
         since: i64,
@@ -207,13 +147,8 @@ enum Out {
         card: serde_json::Map<String, Value>,
     },
     Ended { name: String },
-    /// How many are receiving a stream now, as video counts them (docs/viewers.md).
     Viewers { name: String, viewers: usize },
-    /// `name` became `to`. To the account's own sockets and to `name`'s watchers.
     Renamed { name: String, to: String },
-    /// A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line.
-    /// `from_id` is the writer's account. Absent when an older api wrote the fact. `images` are the pictures on
-    /// the line, the ids `POST /api/chat-images` handed back; left off when there are none.
     Dm {
         id: i64,
         from: String,
@@ -224,19 +159,13 @@ enum Out {
         from_id: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
-        /// the video on the line and its poster (chat_videos.rs). absent for none
         #[serde(skip_serializing_if = "Option::is_none")]
         video: Option<crate::chat::Video>,
-        /// the quote of the line it answers (dms.rs `quote_json`). absent for none
         #[serde(skip_serializing_if = "Option::is_none")]
         reply: Option<Value>,
     },
-    /// `from` put `emoji` on line `id` of their thread with `to`, or took it off (`on`), docs/dms.md
-    /// "reactions". To the sockets of both names, as the line went.
     #[serde(rename = "dm_react")]
     DmReact { id: i64, from: String, to: String, emoji: String, on: bool },
-    /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
-    /// `peer_id` is that account. Absent when an older api wrote the fact.
     #[serde(rename = "dm_read")]
     DmRead {
         name: String,
@@ -245,10 +174,6 @@ enum Out {
         #[serde(skip_serializing_if = "Option::is_none")]
         peer_id: Option<String>,
     },
-    /// A row of the login's inbox (docs/notifications.md), to its own sockets: `name` is who did
-    /// it, as the list draws them; `actor` is that account's id (absent when an older api wrote
-    /// the fact); `id` the row, so a replayed fact is the same row; `room` a `chat` row's
-    /// `<server>/<channel>`, absent on the other kinds.
     Notification {
         id: i64,
         kind: String,
@@ -263,19 +188,12 @@ enum Out {
         #[serde(skip_serializing_if = "Option::is_none")]
         room: Option<String>,
     },
-    /// `name` saw its inbox up to `id` on some device. To `name`'s sockets: the others drop their count.
     #[serde(rename = "notify_read")]
     NotifyRead { name: String, id: i64 },
-    /// `name` dismissed the row `id` on some device. To `name`'s sockets: the others drop it too.
     #[serde(rename = "notify_removed")]
     NotifyRemoved { name: String, id: i64 },
-    /// `name` had the channel `room` on screen on some device: its `chat` rows for it are read. To `name`'s sockets.
     #[serde(rename = "chat_read")]
     ChatRead { name: String, room: String },
-    /// A group changed (docs/groups.md), to the sockets watching `group:<group>`. `what` says
-    /// how; `data` is the change as the api wrote it, spread into the frame as it came
-    /// (`joined` carries `who`, `avatar`, `joined`, `members`; `channel` the channel; and so on).
-    /// This process knows no more about it than that, so a new kind of change is the api's alone.
     Group {
         group: String,
         what: String,
@@ -285,7 +203,6 @@ enum Out {
     Error { error: &'static str },
 }
 
-/// A hello that can never do. Said once, and the socket is closed, as in the chat.
 struct Refused(&'static str);
 
 impl Registry {
@@ -294,9 +211,6 @@ impl Registry {
     }
 }
 
-/// `api events`: the gateway on a listener of its own. `GET /health` for the container's
-/// check, `/events` for the browsers, `/online` for the tests inside the network. On SIGTERM
-/// every socket gets a close frame and up to DRAIN_LIMIT to leave, like the chat's rooms.
 pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let client = redis::Client::open(redis_url)?;
     let redis = crate::connect_redis(redis_url).await;
@@ -309,7 +223,6 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(routes(gateway))
-        // socket opens per address (ratelimit.rs); open-at-once and watches are counted in here
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -318,11 +231,9 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             crate::wait_for_signal().await;
-            // axum does not wait for upgraded sockets: tell every handle to say goodbye
             let _ = stop.send(true);
         })
         .await?;
-    // ...and give them a moment to send the close frame, instead of being cut mid-send
     let deadline = Instant::now() + DRAIN_LIMIT;
     while !sockets.is_empty().await && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -332,7 +243,6 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
 
 impl Gateway {
     pub(crate) fn new(db: PgPool, redis: ConnectionManager, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String) -> Self {
-        // docker sets HOSTNAME to the container id; a box without it is "events"
         let host = std::env::var("HOSTNAME").ok().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "events".into());
         let g = Gateway {
             db,
@@ -351,15 +261,10 @@ impl Gateway {
         g
     }
 
-    /// For the drain: `run` waits until this is empty, like the rooms.
     pub(crate) fn registry(&self) -> Registry {
         self.registry.clone()
     }
 
-    // ---- redis: here or not ------------------------------------------------------------------
-
-    /// One of the two scripts, with its keys and arguments. Raw EVAL like `DEL_IF_HELD_BY` in
-    /// main.rs: the crate's `Script` is behind a feature this binary does not carry.
     async fn eval(&self, script: &str, sid: &str, name: &str) -> Result<i64, redis::RedisError> {
         let mut r = self.redis.clone();
         redis::cmd("EVAL")
@@ -393,9 +298,6 @@ impl Gateway {
         }
     }
 
-    /// Every 30s, and when redis is back: my member fresh again, the set alive. A set redis
-    /// lost (a restart) comes back from this; the word watchers hold is then recomputed as
-    /// what they already have and nothing is pushed.
     async fn touch(&self, sid: &str, name: &str) {
         let mut r = self.redis.clone();
         let key = presence::seen_key(name);
@@ -412,11 +314,6 @@ impl Gateway {
         }
     }
 
-    // ---- the word ----------------------------------------------------------------------------
-
-    /// The rule of presence.rs, from the key (not video: one http call per event per watcher
-    /// would be the wrong price; phase 5 of docs/status.md makes the key honest within seconds).
-    /// The choice is read only when it decides the word, or when a `me` needs it.
     async fn word(&self, name: &str, want_status: bool) -> (Presence, Status) {
         let mut r = self.redis.clone();
         let live: bool = r.exists(live_key(name)).await.unwrap_or(false);
@@ -429,7 +326,6 @@ impl Gateway {
         (presence::derive(live, here, status), status)
     }
 
-    /// The word of `name` again, to everyone it concerns, on change only.
     async fn push(&self, name: &str) {
         let (word, status) = self.word(name, true).await;
         let mut s = self.registry.0.lock().await;
@@ -453,8 +349,6 @@ impl Gateway {
         }
     }
 
-    /// A frame to every socket that *is* one of `names` (not their watchers): what a login's
-    /// own devices hear, a direct message, a read mark. Once each, whichever names it wears.
     async fn tell(&self, names: &[&str], out: Out) {
         let s = self.registry.0.lock().await;
         let mut told: HashSet<SocketId> = HashSet::new();
@@ -469,8 +363,6 @@ impl Gateway {
         }
     }
 
-    /// A fact as it is, to the name's watchers and to everyone watching `*` (the home pages:
-    /// every stream's `live`, `ended` and `viewers`, whoever it is). Once each, to a socket that is both.
     async fn fan(&self, name: &str, out: Out) {
         let s = self.registry.0.lock().await;
         let named = s.watchers.get(name).into_iter().flatten();
@@ -482,8 +374,6 @@ impl Gateway {
         }
     }
 
-    /// A frame to the sockets watching one topic (`group:<name>`), and nobody else: not the
-    /// home pages, a group's change is not a stream's.
     async fn tell_topic(&self, topic: &str, out: Out) {
         let s = self.registry.0.lock().await;
         for id in s.watchers.get(topic).into_iter().flatten() {
@@ -493,8 +383,6 @@ impl Gateway {
         }
     }
 
-    /// The groups of `name` that somebody here has the room of open. One query, and only when
-    /// some socket watches some group at all: a quiet gateway asks postgres nothing.
     async fn watched_groups_of(&self, name: &str) -> Vec<String> {
         let watched: Vec<String> = {
             let s = self.registry.0.lock().await;
@@ -520,8 +408,6 @@ impl Gateway {
         }
     }
 
-    /// `name` went live or ended: the rooms of its groups show its face (or stop), so each
-    /// group's watchers hear it as a `group` frame, `what` `live` or `ended`, `who` the name.
     async fn fan_groups(&self, name: &str, what: &str) {
         for group in self.watched_groups_of(name).await {
             let mut data = serde_json::Map::new();
@@ -529,8 +415,6 @@ impl Gateway {
             self.tell_topic(&format!("{GROUP_TOPIC}{group}"), Out::Group { group, what: what.to_owned(), data }).await;
         }
     }
-
-    // ---- the registry ------------------------------------------------------------------------
 
     async fn insert(&self, id: SocketId, tx: mpsc::UnboundedSender<Out>, name: Option<String>) {
         let mut s = self.registry.0.lock().await;
@@ -540,7 +424,6 @@ impl Gateway {
         s.by_id.insert(id, Entry { tx, name, watching: HashSet::new(), told: HashMap::new(), me: None });
     }
 
-    /// Takes the socket out and says which name it was, at that moment: the one to unmark.
     async fn remove(&self, id: SocketId) -> Option<String> {
         let mut s = self.registry.0.lock().await;
         let e = s.by_id.remove(&id)?;
@@ -563,15 +446,10 @@ impl Gateway {
         e.name
     }
 
-    /// The socket's name right now: the hello's, or what a `renamed` fact made it since.
     async fn name_of(&self, id: SocketId) -> Option<String> {
         self.registry.0.lock().await.by_id.get(&id).and_then(|e| e.name.clone())
     }
 
-    /// An account changed its name (docs/ids.md). Its sockets here are the new name from now:
-    /// re-keyed in the registry, out of `seen:<old>` and into `seen:<new>` at once (not the 90s
-    /// lapse, so the old name reads offline the moment it is nobody's), and told, as are the
-    /// old name's watchers (pages on `/watch/<old>`, which move). Then a `me` with the new name.
     async fn renamed(&self, old: &str, new: &str) {
         let frame = Out::Renamed { name: old.to_owned(), to: new.to_owned() };
         let moved: Vec<SocketId> = {
@@ -580,7 +458,7 @@ impl Gateway {
             for id in &ids {
                 if let Some(e) = s.by_id.get_mut(id) {
                     e.name = Some(new.to_owned());
-                    e.me = None; // the next `me` carries the new name, whatever the word
+                    e.me = None;
                     let _ = e.tx.send(frame.clone());
                 }
             }
@@ -605,11 +483,6 @@ impl Gateway {
         }
     }
 
-    /// `watch`: from now on the word of `name` as it changes, and its word right now. `*` is
-    /// the home page's topic: every name's `live`, `ended` and `viewers` from now on, no word
-    /// (there is none for everyone; the list itself is `GET /api/streams`, the home service's).
-    /// `group:<name>` is a room's topic: that group's changes from now on, no word either (the
-    /// room itself is `GET /api/groups/:group`, asked once).
     async fn watch(&self, id: SocketId, name: &str) {
         {
             let mut s = self.registry.0.lock().await;
@@ -650,7 +523,6 @@ impl Gateway {
         }
     }
 
-    /// The `me` for a named socket, right after hello and whenever it changes.
     async fn tell_me(&self, id: SocketId, name: &str) {
         let (word, status) = self.word(name, true).await;
         let mut s = self.registry.0.lock().await;
@@ -662,15 +534,11 @@ impl Gateway {
         }
     }
 
-    // ---- the stream ----------------------------------------------------------------------------
-
-    /// One entry of `events`, routed. Unknown types are dropped, like unknown frames.
     async fn deliver(&self, entry: StreamId) {
         let (Some(kind), Some(name)): (Option<String>, Option<String>) = (entry.get("type"), entry.get("name")) else { return };
         match kind.as_str() {
             "live" => {
                 let since: i64 = entry.get("since").unwrap_or(0);
-                // the card as the api wrote it, json in one field; an older api wrote none
                 let card = entry
                     .get::<String>("card")
                     .and_then(|card| serde_json::from_str::<Value>(&card).ok())
@@ -700,7 +568,6 @@ impl Gateway {
                     self.renamed(&name, &to).await;
                 }
             }
-            // a direct message: `name` is who it is to. both names' own sockets, so the writer's other devices hear it too
             "dm" => {
                 let (Some(from), Some(id), Some(text)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("text")) else { return };
                 let at: i64 = entry.get("at").unwrap_or(0);
@@ -710,20 +577,16 @@ impl Gateway {
                 let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
                 self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, reply }).await;
             }
-            // a reaction on a direct message: `name` is the other side. both names' sockets, as the line went
             "dm_react" => {
                 let (Some(from), Some(id), Some(emoji)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("emoji")) else { return };
                 let on = entry.get::<String>("on").as_deref() == Some("1");
                 self.tell(&[&from, &name], Out::DmReact { id, from: from.clone(), to: name.clone(), emoji, on }).await;
             }
-            // `name` read a thread somewhere: its other devices drop their count
             "dm_read" => {
                 let (Some(peer), Some(id)): (Option<String>, Option<i64>) = (entry.get("peer"), entry.get("id")) else { return };
                 let peer_id: Option<String> = entry.get("peer_id").filter(|id: &String| !id.is_empty());
                 self.tell(&[&name], Out::DmRead { name: name.clone(), peer, id, peer_id }).await;
             }
-            // a notification (docs/notifications.md): `name` is who did it, `to` the logins it reached
-            // and their row ids. one frame per login, to that login's own sockets
             "notify" => {
                 let (Some(kind), Some(to)): (Option<String>, Option<String>) = (entry.get("kind"), entry.get("to")) else { return };
                 let Ok(Value::Object(to)) = serde_json::from_str::<Value>(&to) else { return };
@@ -751,23 +614,18 @@ impl Gateway {
                     self.tell(&[&login], frame).await;
                 }
             }
-            // `name` saw its inbox somewhere: its other devices drop their count
             "notify_read" => {
                 let Some(id): Option<i64> = entry.get("id") else { return };
                 self.tell(&[&name], Out::NotifyRead { name: name.clone(), id }).await;
             }
-            // `name` dismissed a row somewhere: its other devices drop it
             "notify_removed" => {
                 let Some(id): Option<i64> = entry.get("id") else { return };
                 self.tell(&[&name], Out::NotifyRemoved { name: name.clone(), id }).await;
             }
-            // `name` had a channel on screen somewhere: its other devices read that channel's rows
             "chat_read" => {
                 let Some(room): Option<String> = entry.get("room") else { return };
                 self.tell(&[&name], Out::ChatRead { name: name.clone(), room }).await;
             }
-            // a group changed (docs/groups.md): `name` is the group, `data` the change as json,
-            // forwarded whole to whoever has the room open
             "group" => {
                 let Some(what): Option<String> = entry.get("what") else { return };
                 let data = entry
@@ -785,16 +643,11 @@ impl Gateway {
     }
 }
 
-// ---- the routes ----------------------------------------------------------------------------
-
 pub(crate) fn routes(g: Gateway) -> Router {
     Router::new().route("/events", get(ws)).route("/online", get(online)).with_state(g)
 }
 
-/// The login cookie came with the handshake; `handle` reads it. Not the `Me` extractor: a
-/// database error would be a 500 before the upgrade, and a nameless socket may still watch.
 async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> axum::response::Response {
-    // only what came through caddy is counted: the tests and the network inside are not an address
     let slot = match crate::ratelimit::forwarded_ip(&headers) {
         Some(ip) => match IpSlot::take(&g.per_ip, ip) {
             Some(slot) => Some(slot),
@@ -812,9 +665,6 @@ async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgr
         .into_response()
 }
 
-/// `{ "<name>": <open sockets in this process> }`, like video's `GET /live`. Inside the compose
-/// network only (no caddy route); the tests read it locally, the truth for everyone else is
-/// `presence` on `GET /api/streamers/:name`.
 async fn online(State(g): State<Gateway>) -> Json<Value> {
     let s = g.registry.0.lock().await;
     let mut names: Vec<(&String, usize)> = s.own.iter().map(|(n, set)| (n, set.len())).collect();
@@ -822,9 +672,6 @@ async fn online(State(g): State<Gateway>) -> Json<Value> {
     Json(Value::Object(names.into_iter().map(|(n, count)| (n.clone(), json!(count))).collect()))
 }
 
-/// A guest's nick to the name it would be, the chat's way: cut to 24, letters digits `_` `-`,
-/// then lowercased, so the two sockets of one browser land on the same name. No nick, or a
-/// blank one, is nobody. Pure: `identify` adds the one check that needs the database.
 fn guest_name(nick: Option<&str>, dummy_prefix: &str) -> Result<Option<String>, Refused> {
     let Some(nick) = nick.map(clean_nick).filter(|n| !n.is_empty()) else { return Ok(None) };
     if !valid_nick(&nick) {
@@ -837,10 +684,6 @@ fn guest_name(nick: Option<&str>, dummy_prefix: &str) -> Result<Option<String>, 
     Ok(Some(name))
 }
 
-/// Who the socket is: the cookie's login; else the nick cleaned the chat's way and lowercased,
-/// when it is a name nobody owns; else nobody (a hello with neither, or a database that did not
-/// answer: admitted, it may still watch, it marks nothing). A claimed or reserved nick is
-/// refused outright, in the chat's words: wearing somebody's name would be a lie.
 async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Result<Option<String>, Refused> {
     match whoami(&g.db, headers).await {
         Ok(Some(me)) => return Ok(Some(me.name)),
@@ -855,7 +698,6 @@ async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Resul
         Ok(false) => Ok(Some(name)),
         Ok(true) => Err(Refused(NICK_HAS_ACCOUNT)),
         Err(e) => {
-            // fail closed: with the database down a claimed name must not be wearable
             log::warn!("events: cannot check whether {name} is claimed: {e}");
             Ok(None)
         }
@@ -863,7 +705,6 @@ async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Resul
 }
 
 async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
-    // 1. hello: who is here
     let Some(first) = first_text(&mut socket).await else { return };
     let Ok(In::Hello { nick }) = serde_json::from_str::<In>(&first) else {
         let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
@@ -877,7 +718,6 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         }
     };
 
-    // 2. in the registry, in redis, and told who it is
     let id = g.next.fetch_add(1, Ordering::Relaxed);
     let sid = format!("{}:{id}", g.host);
     let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
@@ -895,19 +735,16 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         }
     }
     log::info!("events: {} joined", name.as_deref().unwrap_or("nobody"));
-    // from here the name is the registry's: a `renamed` fact may change it under the socket
     let named = name.is_some();
     drop(name);
 
-    // 3. the loop: frames out, watch/unwatch in, a ping now and then that also keeps the name here
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ping.tick().await; // the first tick is immediate
+    ping.tick().await;
     let mut shutdown = g.shutdown.clone();
     let refresh = g.refresh.clone();
     let mut going = false;
-    // watch and unwatch frames this minute (`MAX_WATCH_FRAMES_PER_MIN`)
     let mut frames = (Instant::now(), 0u32);
     loop {
         tokio::select! {
@@ -929,7 +766,6 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
                 if frames.1 > MAX_WATCH_FRAMES_PER_MIN {
                     continue;
                 }
-                // unknown frames are dropped, on both sides (docs/transition.md)
                 match serde_json::from_str::<In>(&text) {
                     Ok(In::Watch { name: n }) => {
                         let n = n.trim().to_lowercase();
@@ -960,8 +796,6 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
     }
 
     let name = g.remove(id).await;
-    // on SIGTERM the member is left to go stale: the browser is back with a new one in ~3s,
-    // and an unmark here would flicker every name offline and online on every deploy
     if let Some(n) = &name {
         if !going {
             g.mark_last(&sid, n).await;
@@ -970,8 +804,6 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
     log::info!("events: {} left", name.as_deref().unwrap_or("nobody"));
 }
 
-/// One tail of `events` per process, on its own connection. Starts REPLAY_MS back, continues
-/// from the last id across redis blips, and when redis is back tells every socket to re-mark.
 async fn tail(g: Gateway) {
     let config = crate::socket::blocking_config(READ_BLOCK_MS);
     let mut last = format!("{}-0", presence::now_ms() - REPLAY_MS);
@@ -987,7 +819,6 @@ async fn tail(g: Gateway) {
                 continue;
             }
         };
-        // redis is here (again): every open socket marks its name now, not at its next tick
         g.refresh.notify_waiters();
         let options = StreamReadOptions::default().block(READ_BLOCK_MS).count(100);
         loop {
@@ -1013,7 +844,6 @@ async fn tail(g: Gateway) {
     }
 }
 
-/// Every RECHECK_EVERY, the word of every name somebody here is or watches, pushed on change.
 async fn recheck(g: Gateway) {
     let mut tick = tokio::time::interval(RECHECK_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1048,13 +878,10 @@ mod tests {
         assert!(IpSlot::take(&per_ip, "1.2.3.4".into()).is_some());
     }
 
-    /// The pure half of `identify`, with a refusal as its text.
     fn named(nick: Option<&str>) -> Result<Option<String>, &'static str> {
         guest_name(nick, "dummy-").map_err(|Refused(why)| why)
     }
 
-    /// The gateway used to keep a nick of up to 32 characters (the stream-name rule) while
-    /// the chat cuts it to 24: one browser, two names. Both sockets now compute the same one.
     #[test]
     fn a_guest_nick_is_cleaned_the_chats_way() {
         let long = "A".repeat(30);
@@ -1069,7 +896,6 @@ mod tests {
         assert_eq!(named(Some("Dummy-x")), Err("that nick belongs to the fake streams. pick another"));
     }
 
-    /// A room watches `group:<name>`: a topic like `*`, never a name, never given a word.
     #[test]
     fn a_group_topic_is_not_a_name() {
         assert_eq!(group_topic("group:gaming-0042"), Some("gaming-0042"));
@@ -1082,7 +908,6 @@ mod tests {
         assert!(!valid_name("group:gaming-0042"));
     }
 
-    /// The change rides whole: the api's json spread into the frame beside `group` and `what`.
     #[test]
     fn a_group_frame_spreads_the_change() {
         let mut data = serde_json::Map::new();
