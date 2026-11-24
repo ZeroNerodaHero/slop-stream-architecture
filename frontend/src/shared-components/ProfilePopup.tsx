@@ -11,11 +11,12 @@ import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { presencesAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { closeProfilePopup, profilePopupAtom, type ProfilePopupTarget } from '@/infra/atoms/profile-popup-atoms';
-import { holdPresence, onEvents, releasePresence, wantsPresence } from '@/infra/events';
+import { onEvents, wantsPresence } from '@/infra/events';
 import { useIsMobile } from '@/infra/mobile';
 import { previewStreamsAtom, setPopupPreview } from '@/infra/preview';
 import { cleanSocials } from '@/infra/socials';
 import { store } from '@/infra/store';
+import { useTopic } from '@/infra/use-topic';
 import { Badge } from '@/shared-components/Badge';
 import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { buttonClassName } from '@/shared-components/Button';
@@ -132,16 +133,14 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
     };
   }, [name, failed]);
 
-  useEffect(() => {
-    holdPresence(name);
-    const off = onEvents((event) => {
-      if (event.type === 'presence' && event.name === name) setTrusted(true);
-    });
-    return () => {
-      off();
-      releasePresence(name);
-    };
-  }, [name]);
+  useTopic(`presence:${name}`);
+  useEffect(
+    () =>
+      onEvents((event) => {
+        if (event.type === 'presence' && event.name === name) setTrusted(true);
+      }),
+    [name]
+  );
 
   useEffect(() => {
     if (pathname !== openedOn) closeProfilePopup();

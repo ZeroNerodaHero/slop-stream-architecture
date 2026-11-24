@@ -9,6 +9,9 @@ import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { type Attached, Attachments, idsOf, isPictureRefusal, MAX_CHAT_IMAGES, releaseAttached, wordsOf } from '@/infra/chat-attach';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { relayUrl } from '@/infra/relay';
+import { acquireTopic, listenTopic, onRtFrame, onRtPhase, rtAsk, rtFill, rtFresh, rtHolds, rtIdentify, rtOn } from '@/infra/rt/client';
+import type { Release } from '@/infra/rt/refs';
+import { channelOf, chatTopicOf, type RtFrame, type Subbed } from '@/infra/rt/wire';
 import { store } from '@/infra/store';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
@@ -137,6 +140,29 @@ const FLASH_MS = 1600;
 
 type ScrollPlan = 'bottom' | 'keep' | { id: string } | null;
 
+type Wire = {
+  type?: string;
+  messages?: ChatLine[];
+  count?: number;
+  error?: string;
+  wait?: number;
+  channel?: string;
+  emoji?: string;
+  who?: string;
+  on?: boolean;
+  react?: string;
+  reader?: boolean;
+} & Partial<ChatLine>;
+
+interface RtHold {
+  topic: string;
+  release: Release;
+  offs: (() => void)[];
+  synced: boolean;
+}
+
+const EVICTED_WORDS = 'too many chats are open in this browser, close one to bring this back';
+
 export function isValidNick(nick: string): boolean {
   return NICK_RE.test(nick.trim());
 }
@@ -209,6 +235,7 @@ export class ChatRoom {
   private historyHeld = false;
   private greeted = false;
   private ws: WebSocket | null = null;
+  private rt: RtHold | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private leaving: ReturnType<typeof setTimeout> | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -288,7 +315,7 @@ export class ChatRoom {
     const nick = me ? '' : store.get(nickAtom).trim();
     this.loadHistory();
     const same = sameOwner(this.owner, owner) && this.sameSpeaker(me, nick);
-    if (this.ws && same) {
+    if ((this.ws || this.rt) && same) {
       if (!this.greeted && me !== undefined) {
         this.me = me;
         this.nick = nick;
@@ -317,6 +344,7 @@ export class ChatRoom {
         this.scrollPlan = 'bottom';
         store.set(this.linesAtom, mergeLines(lines, store.get(this.linesAtom)));
         store.set(this.loadedAtom, true);
+        this.rtSync();
       },
       (err: unknown) => {
         if (this.historyRun !== run) return;
@@ -359,6 +387,7 @@ export class ChatRoom {
       this.ws.close();
     }
     this.ws = null;
+    this.dropRt();
     for (const lost of this.inFlight.splice(0)) this.restore(lost, null);
     this.resetHistory();
     this.clearResults();
@@ -438,12 +467,23 @@ export class ChatRoom {
       this.showNotice('log in to react');
       return;
     }
+    const on = !(line.reactions ?? []).some((r) => r.emoji === emoji && reacted(r, me));
+    if (this.rt) {
+      if (store.get(this.phaseAtom) !== 'open') {
+        this.showNotice('chat is down, try again');
+        return;
+      }
+      const topic = this.server ? chatTopicOf(`${this.server}/${line.channel ?? this.channel}`) : this.rt.topic;
+      void rtAsk({ type: 'react', topic, id: line.id, emoji, on }).then((answer) => {
+        if (answer.type === 'nack') this.showNotice(REACT_WORDS[answer.error] ?? answer.error);
+      });
+      return;
+    }
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       this.showNotice('chat is down, try again');
       return;
     }
-    const on = !(line.reactions ?? []).some((r) => r.emoji === emoji && reacted(r, me));
     const frame: Record<string, unknown> = { type: 'react', id: line.id, emoji, on };
     if (this.server) frame.channel = line.channel ?? this.channel;
     record(`/chat/${this.key}`, 'out', frame);
@@ -526,7 +566,8 @@ export class ChatRoom {
     const images = idsOf(pictures);
     const clip = this.attach.video();
     const video = clip?.video ?? null;
-    if (!ws || ws.readyState !== WebSocket.OPEN || (!text && images.length === 0 && !video)) return;
+    const live = this.rt ? store.get(this.phaseAtom) === 'open' : ws !== null && ws.readyState === WebSocket.OPEN;
+    if (!live || (!text && images.length === 0 && !video)) return;
     if (chars(text) > MAX_CHAT_CHARS) {
       this.showNotice('too long');
       return;
@@ -545,11 +586,18 @@ export class ChatRoom {
     const words = encodeEmotes(text);
     const say: Record<string, unknown> = images.length ? { type: 'say', text: words, image: images[0], images } : { type: 'say', text: words };
     if (video) say.video = video.id;
-    if (this.server) say.channel = this.channel;
     const reply = store.get(this.replyAtom);
     if (reply) say.reply = reply.id;
-    record(`/chat/${this.key}`, 'out', say);
-    ws.send(JSON.stringify(say));
+    if (this.rt) {
+      const topic = this.server ? chatTopicOf(`${this.server}/${this.channel}`) : this.rt.topic;
+      void rtAsk({ ...say, type: 'say', topic }).then((answer) => {
+        if (answer.type === 'nack') this.onError(answer.error, answer.wait, typeof this.me === 'string' ? this.me : null);
+      });
+    } else if (ws) {
+      if (this.server) say.channel = this.channel;
+      record(`/chat/${this.key}`, 'out', say);
+      ws.send(JSON.stringify(say));
+    }
     this.inFlight.push({ text, images, reply, ...this.attach.take() });
     store.set(this.draftAtom, '');
     store.set(this.replyAtom, null);
@@ -591,6 +639,10 @@ export class ChatRoom {
       store.set(this.phaseAtom, 'off');
       return;
     }
+    if (rtOn && !owner) {
+      this.connectRt(known, nick);
+      return;
+    }
 
     this.loadHistory();
     store.set(this.phaseAtom, 'connecting');
@@ -626,54 +678,14 @@ export class ChatRoom {
     };
     ws.onmessage = (e) => {
       if (this.ws !== ws) return;
-      let msg: {
-        type?: string;
-        messages?: ChatLine[];
-        count?: number;
-        error?: string;
-        wait?: number;
-        channel?: string;
-        emoji?: string;
-        who?: string;
-        on?: boolean;
-        react?: string;
-        reader?: boolean;
-      } & Partial<ChatLine>;
+      let msg: Wire;
       try {
         msg = JSON.parse(String(e.data));
       } catch {
         return;
       }
       record(source, 'in', msg);
-      const tagged = this.server && typeof msg.channel === 'string' ? msg.channel : null;
-      if (msg.type === 'ready') {
-        store.set(this.readerAtom, msg.reader === true);
-      } else if (msg.type === 'message' && msg.id) {
-        const said = tokensAsTyped(msg.text ?? '');
-        const sent = this.inFlight.findIndex(
-          (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
-        );
-        if (sent >= 0) releaseAttached(this.inFlight.splice(sent, 1)[0]!);
-        const line = fromWire(msg as ChatLine);
-        if (tagged !== null && tagged !== this.channel) this.shelfAppend(tagged, line);
-        else {
-          this.appendLine(line);
-          if (sent >= 0) this.toLatest();
-        }
-      } else if (msg.type === 'count' && typeof msg.count === 'number') {
-        if (tagged !== null) {
-          this.counts.set(tagged, msg.count);
-          if (tagged === this.channel) store.set(this.countAtom, msg.count);
-        } else store.set(this.countAtom, msg.count);
-      } else if (msg.type === 'react' && typeof msg.id === 'string' && typeof msg.emoji === 'string' && typeof msg.who === 'string') {
-        this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
-      } else if (msg.type === 'delete' && typeof msg.id === 'string') {
-        this.removeLine(msg.id, tagged);
-      } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
-        this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
-      } else if (msg.type === 'error' && msg.error) {
-        this.onError(msg.error, msg.wait, typeof this.me === 'string' ? this.me : null);
-      }
+      this.onWire(msg, this.server && typeof msg.channel === 'string' ? msg.channel : null);
     };
     ws.onclose = () => {
       if (this.ws !== ws) return;
@@ -684,6 +696,146 @@ export class ChatRoom {
         if (this.joins.size > 0) this.connect();
       }, RECONNECT_MS);
     };
+  }
+
+  private onWire(msg: Wire, tagged: string | null) {
+    if (msg.type === 'ready') {
+      store.set(this.readerAtom, msg.reader === true);
+    } else if (msg.type === 'message' && msg.id) {
+      const said = tokensAsTyped(msg.text ?? '');
+      const sent = this.inFlight.findIndex(
+        (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
+      );
+      if (sent >= 0) releaseAttached(this.inFlight.splice(sent, 1)[0]!);
+      const line = fromWire(msg as ChatLine);
+      if (tagged !== null && tagged !== this.channel) this.shelfAppend(tagged, line);
+      else {
+        this.appendLine(line);
+        if (sent >= 0) this.toLatest();
+      }
+    } else if (msg.type === 'count' && typeof msg.count === 'number') {
+      if (tagged !== null) {
+        this.counts.set(tagged, msg.count);
+        if (tagged === this.channel) store.set(this.countAtom, msg.count);
+      } else store.set(this.countAtom, msg.count);
+    } else if (msg.type === 'react' && typeof msg.id === 'string' && typeof msg.emoji === 'string' && typeof msg.who === 'string') {
+      this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
+    } else if (msg.type === 'delete' && typeof msg.id === 'string') {
+      this.removeLine(msg.id, tagged);
+    } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
+      this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
+    } else if (msg.type === 'error' && msg.error) {
+      this.onError(msg.error, msg.wait, typeof this.me === 'string' ? this.me : null);
+    }
+  }
+
+  private connectRt(known: string | null | undefined, nick: string) {
+    this.loadHistory();
+    const topic = chatTopicOf(this.server ? `${this.server}/${EVERY_CHANNEL}` : this.key);
+    this.me = known;
+    this.nick = typeof known === 'string' ? '' : nick;
+    this.greeted = true;
+    store.set(this.readerAtom, !this.server && typeof known !== 'string' && !isValidNick(nick));
+    store.set(this.phaseAtom, 'connecting');
+    const rt: RtHold = { topic, release: acquireTopic(topic), offs: [], synced: false };
+    this.rt = rt;
+    rt.offs.push(
+      listenTopic(topic, (frame) => {
+        if (this.rt === rt) this.onRt(frame);
+      }),
+      onRtFrame((frame) => {
+        if (this.rt === rt && frame.type === 'subbed') this.onRtSubbed(rt, frame as unknown as Subbed);
+      }),
+      onRtPhase((phase) => {
+        if (this.rt !== rt || phase === 'open') return;
+        rt.synced = false;
+        if (store.get(this.phaseAtom) === 'open') store.set(this.phaseAtom, 'closed');
+      })
+    );
+    if (rtHolds(topic)) this.rtOpened(rt);
+  }
+
+  private dropRt() {
+    const rt = this.rt;
+    this.rt = null;
+    if (!rt) return;
+    for (const off of rt.offs.splice(0)) off();
+    rt.release();
+  }
+
+  private onRtSubbed(rt: RtHold, frame: Subbed) {
+    if ((frame.topics ?? []).includes(rt.topic)) {
+      this.rtOpened(rt);
+      return;
+    }
+    const refused = (frame.refused ?? []).find((r) => r.topic === rt.topic);
+    if (refused) {
+      if (refused.error === 'slow down') return;
+      rt.synced = false;
+      store.set(this.phaseAtom, 'closed');
+      this.onError(refused.error, undefined, typeof this.me === 'string' ? this.me : null);
+      return;
+    }
+    if ((frame.evicted ?? []).includes(rt.topic) && store.get(this.phaseAtom) !== 'closed') {
+      rt.synced = false;
+      store.set(this.phaseAtom, 'closed');
+      this.showNotice(EVICTED_WORDS, 8000);
+    }
+  }
+
+  private rtOpened(rt: RtHold) {
+    if (store.get(this.phaseAtom) !== 'open') {
+      store.set(this.phaseAtom, 'open');
+      store.set(this.asStreamerAtom, this.me === this.key);
+      if (this.wasOpen) {
+        if (this.server) void this.refreshReactions();
+        else void this.refreshLatest();
+      }
+      this.wasOpen = true;
+    }
+    if (rt.synced) return;
+    rt.synced = true;
+    this.rtSync();
+  }
+
+  private rtSync() {
+    const rt = this.rt;
+    if (!rt || store.get(this.phaseAtom) !== 'open') return;
+    if (this.server) {
+      this.sendSince();
+      return;
+    }
+    const since = this.historyHeld ? this.sinceId() : undefined;
+    if (since) rtFill({ [rt.topic]: since });
+  }
+
+  private onRt(frame: RtFrame) {
+    const topic = typeof frame.topic === 'string' ? frame.topic : '';
+    if (frame.type === 'gap') {
+      void this.fillGap();
+      return;
+    }
+    const msg: Record<string, unknown> = { ...frame };
+    delete msg.topic;
+    this.onWire(msg as Wire, this.server ? channelOf(topic) : null);
+  }
+
+  private async fillGap() {
+    const server = this.server;
+    const link = this.rt;
+    try {
+      if (server) {
+        const pages = await api.groupMessages(server);
+        if (this.rt === link && this.server === server) this.seedChannels(pages);
+        return;
+      }
+      const fresh = await askLatest(this.key);
+      if (this.rt !== link) return;
+      if (this.pinned && this.savedTail) this.savedTail = mergeLines(this.savedTail, fresh);
+      else store.set(this.linesAtom, mergeLines(store.get(this.linesAtom), fresh));
+    } catch {
+      return;
+    }
   }
 
   private onError(error: string, wait: number | undefined, me: string | null) {
@@ -748,6 +900,10 @@ export class ChatRoom {
   }
 
   followChannel(name: string) {
+    if (this.rt) {
+      if (this.server) rtFresh(this.rt.topic);
+      return;
+    }
     const ws = this.ws;
     if (!this.server || !ws || ws.readyState !== WebSocket.OPEN) return;
     const join = { type: 'join', channel: name };
@@ -788,7 +944,7 @@ export class ChatRoom {
     } catch {
       return;
     }
-    if (this.server !== server || !this.ws) return;
+    if (this.server !== server || !(this.ws || this.rt)) return;
     for (const [channel, raw] of Object.entries(pages)) {
       if (!Array.isArray(raw)) continue;
       const fresh = new Map(raw.map((line) => [line.id, reactionsOf(line.reactions)]));
@@ -804,7 +960,7 @@ export class ChatRoom {
   }
 
   private async refreshLatest() {
-    const ws = this.ws;
+    const link = this.ws ?? this.rt;
     let fresh: ChatLine[];
     try {
       fresh = await askLatest(this.key);
@@ -813,7 +969,7 @@ export class ChatRoom {
     }
     const first = fresh[0];
     const last = fresh[fresh.length - 1];
-    if (this.ws !== ws || !first || !last) return;
+    if ((this.ws ?? this.rt) !== link || !first || !last) return;
     const byId = new Map(fresh.map((line) => [line.id, line]));
     const within = (id: string) => compareIds(id, first.id) >= 0 && compareIds(id, last.id) <= 0;
     const wear = (lines: ChatLine[]) =>
@@ -835,8 +991,7 @@ export class ChatRoom {
   }
 
   private sendSince() {
-    const ws = this.ws;
-    if (!this.server || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!this.server) return;
     const since: Record<string, string> = {};
     for (const [name, tail] of this.tails) {
       const last = tail[tail.length - 1];
@@ -848,6 +1003,14 @@ export class ChatRoom {
       if (last) since[this.channel] = last.id;
     }
     if (Object.keys(since).length === 0) return;
+    if (this.rt) {
+      if (store.get(this.phaseAtom) !== 'open') return;
+      const server = this.server;
+      rtFill(Object.fromEntries(Object.entries(since).map(([channel, id]) => [chatTopicOf(`${server}/${channel}`), id])));
+      return;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const frame = { type: 'since', since };
     record(`/chat/${this.key}`, 'out', frame);
     ws.send(JSON.stringify(frame));
@@ -1026,6 +1189,7 @@ export class ChatRoom {
 }
 
 export function reconnectChat() {
+  if (rtOn) rtIdentify();
   for (const room of rooms.values()) room.reconnect();
 }
 

@@ -9,6 +9,8 @@ import EventsWorker from '@/infra/events.worker?sharedworker';
 import { type ClientFrame, type FrameEntry, type FromWorker, type LinkPhase, parseServerFrame, type ServerFrame, TAB_PING_MS, type ToWorker } from '@/infra/frames';
 import { relayUrl } from '@/infra/relay';
 import { report } from '@/infra/report';
+import { acquireTopic, onRtFrame, onRtPhase, rtIdentify, rtOn, rtTransportAtom, startRt } from '@/infra/rt/client';
+import type { Release } from '@/infra/rt/refs';
 import { store } from '@/infra/store';
 
 const SOURCE = '/events';
@@ -252,11 +254,74 @@ class TabLink implements Link {
   }
 }
 
+const RT_OWN = new Set(['ready', 'subbed', 'ack', 'nack', 'authed', 'behind', 'beat', 'gap', 'error']);
+
+export function topicOfWatch(name: string): string {
+  if (name === '*') return 'streams:*';
+  if (name.startsWith('group:')) return name;
+  return `presence:${name}`;
+}
+
+export function watchOfTopic(topic: string): string | null {
+  if (topic === 'streams:*') return '*';
+  if (topic.startsWith('group:')) return topic;
+  if (topic.startsWith('presence:')) return topic.slice('presence:'.length);
+  return null;
+}
+
+class RtLink implements Link {
+  private readonly held = new Map<string, Release>();
+  private readonly offs: (() => void)[] = [];
+
+  constructor() {
+    startRt(nickForHello);
+    this.offs.push(
+      onRtFrame((frame) => {
+        if (typeof frame.topic === 'string' || RT_OWN.has(frame.type)) return;
+        dispatch(frame as unknown as ServerFrame);
+      }),
+      onRtPhase((phase) => setPhase(phase))
+    );
+    for (const name of allWanted()) this.watch(name);
+  }
+
+  hello() {
+    rtIdentify();
+  }
+
+  watch(name: string) {
+    if (this.held.has(name)) return;
+    this.held.set(name, acquireTopic(topicOfWatch(name)));
+  }
+
+  unwatch(name: string) {
+    const release = this.held.get(name);
+    this.held.delete(name);
+    release?.();
+  }
+
+  inspector(on: boolean) {
+    if (!on) replaceEntries([]);
+  }
+
+  close() {
+    for (const release of this.held.values()) release();
+    this.held.clear();
+    for (const off of this.offs.splice(0)) off();
+    setPhase('off');
+  }
+}
+
 let started = false;
 
 export function startEvents(): void {
   if (started) return;
   started = true;
+  if (rtOn) {
+    link = new RtLink();
+    store.set(eventsTransportAtom, store.get(rtTransportAtom) === 'worker' ? 'worker' : 'tab');
+    return;
+  }
   if (typeof SharedWorker === 'undefined') {
     useTabLink('no SharedWorker here');
     return;
@@ -321,6 +386,18 @@ export function releasePresence(name: string): void {
 
 export function wantsPresence(name: string): boolean {
   return wanted(name);
+}
+
+export function holdTopic(topic: string): Release {
+  const name = watchOfTopic(topic);
+  if (name === null) return () => undefined;
+  holdPresence(name);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releasePresence(name);
+  };
 }
 
 store.sub(inspectorEnabledAtom, () => link?.inspector(store.get(inspectorEnabledAtom)));
