@@ -603,6 +603,38 @@ redeploy_frontend() {
   [ "$code" = 0 ] || swap_failed pages "publishing the pages failed (pages exit code: $code)"
 }
 
+cf_purge_call() {
+  local token="$1" zone="$2" body="$3" what="$4" out code errs
+  out="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+    | curl -s --max-time 10 --config - -X POST -H 'Content-Type: application/json' --data "$body" \
+      -w '\n%{http_code}' "https://api.cloudflare.com/client/v4/zones/$zone/purge_cache" 2>/dev/null)" || true
+  code="${out##*$'\n'}"
+  out="${out%$'\n'*}"
+  if [ "$code" = 200 ] && grep -q '"success":[[:space:]]*true' <<< "$out"; then
+    note "cloudflare: purged $what"
+    return 0
+  fi
+  errs="$(sed -n 's/.*"errors":[[:space:]]*\[\([^]]*\)\].*/\1/p' <<< "$out" \
+    | grep -o '"message":[[:space:]]*"[^"]*"' | sed 's/^"message":[[:space:]]*"//; s/"$//' | head -n 3 | paste -sd ';' - || true)"
+  warn "cloudflare purge of $what failed (HTTP ${code:-000}${errs:+: $errs}). the edge keeps the old html until its s-maxage runs out (60s, /watch 15s)"
+}
+
+purge_html_cache() {
+  local token zone origin host
+  token="$(env_file_value CF_PURGE_TOKEN)"
+  zone="$(env_file_value CF_ZONE_ID)"
+  origin="$(env_file_value PUBLIC_URL)"
+  origin="${origin%/}"
+  host="${origin#*://}"
+  host="${host%%/*}"
+  if [ -z "$token" ] || [ -z "$zone" ] || [ -z "$host" ]; then
+    note "cloudflare html purge skipped (CF_PURGE_TOKEN, CF_ZONE_ID or PUBLIC_URL not set in $ENV_FILE)"
+    return 0
+  fi
+  cf_purge_call "$token" "$zone" "{\"files\":[\"$origin/\",\"$origin/groups\",\"$origin/live\",\"$origin/login\",\"$origin/signup\"]}" "the html shell"
+  cf_purge_call "$token" "$zone" "{\"prefixes\":[\"$host/watch/\",\"$host/groups/\"]}" "$host/watch/ and $host/groups/"
+}
+
 reload_caddy() {
   local out n status
   for n in 1 2 3; do
@@ -698,7 +730,7 @@ redeploy_targets() {
   local t voice=0
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
-      frontend) redeploy_frontend; sync_caddy ;;
+      frontend) redeploy_frontend; sync_caddy; purge_html_cache ;;
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
       voice) ! voice_on || build_one video ;;
@@ -1073,6 +1105,7 @@ full_deploy() {
   pick_env_name
   if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
   compose_up
+  purge_html_cache
   local ok=1
   wait_for_health || ok=0
   if [ "$ok" -eq 1 ]; then sync_models; fi

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::sync::OnceLock;
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection, QueryRejection};
@@ -32,6 +33,7 @@ const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
 const MAX_ASSET_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ASSETS: i64 = 24;
 const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
+const WATCH_CACHE: &str = "public, max-age=0, s-maxage=15, must-revalidate";
 
 const AVATAR_IMG_CLASS: &str = "mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle";
 const VERIFIED_HTML: &str = r#"<span class="ml-2 text-increase" title="has an account: this really is them">✓</span>"#;
@@ -1098,7 +1100,20 @@ fn one_line(text: &str, max_chars: usize) -> String {
     cut
 }
 
-fn origin(headers: &HeaderMap) -> String {
+fn public_url() -> Option<&'static str> {
+    static PUBLIC_URL: OnceLock<Option<String>> = OnceLock::new();
+    PUBLIC_URL.get_or_init(|| env::var("PUBLIC_URL").ok().and_then(|v| clean_origin(&v))).as_deref()
+}
+
+fn clean_origin(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn origin(public_url: Option<&str>, headers: &HeaderMap) -> String {
+    if let Some(url) = public_url {
+        return url.to_owned();
+    }
     let proto = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("https");
     let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
     format!("{proto}://{host}")
@@ -1218,6 +1233,12 @@ fn page(status: StatusCode, html: String) -> Response {
     (status, [(header::CACHE_CONTROL, "no-cache")], Html(html)).into_response()
 }
 
+fn shared_page(html: String) -> Response {
+    let mut res = (StatusCode::OK, [(header::CACHE_CONTROL, WATCH_CACHE)], Html(html)).into_response();
+    res.headers_mut().remove(header::SET_COOKIE);
+    res
+}
+
 async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): Path<String>) -> Response {
     let shell = match read_shell().await {
         Ok(shell) => shell,
@@ -1256,7 +1277,7 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
         Err(_) if live => Presence::Streaming,
         Err(_) => Presence::Offline,
     };
-    page(StatusCode::OK, render(&shell, &profile, presence, &card, &origin(&headers)))
+    shared_page(render(&shell, &profile, presence, &card, &origin(public_url(), &headers)))
 }
 
 async fn watch_nobody() -> Response {
@@ -1472,6 +1493,36 @@ mod tests {
         let cut = one_line(&long, 200);
         assert_eq!(cut.chars().count(), 200);
         assert!(cut.ends_with('…'));
+    }
+
+    fn header<'a>(res: &'a Response, name: header::HeaderName) -> Option<&'a str> {
+        res.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    #[test]
+    fn only_a_rendered_watch_page_is_shared() {
+        let shared = shared_page(SHELL.into());
+        assert_eq!(shared.status(), StatusCode::OK);
+        assert_eq!(header(&shared, header::CACHE_CONTROL), Some("public, max-age=0, s-maxage=15, must-revalidate"));
+        assert!(shared.headers().get(header::SET_COOKIE).is_none());
+        let missing = page(StatusCode::NOT_FOUND, SHELL.into());
+        assert_eq!(header(&missing, header::CACHE_CONTROL), Some("no-cache"));
+        assert!(missing.headers().get(header::SET_COOKIE).is_none());
+        let fallback = page(StatusCode::OK, SHELL.into());
+        assert_eq!(header(&fallback, header::CACHE_CONTROL), Some("no-cache"));
+    }
+
+    #[test]
+    fn the_origin_is_public_url_when_set() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "evil.example".parse().unwrap());
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
+        let public = clean_origin(" https://nodentity.xyz/ ");
+        assert_eq!(public.as_deref(), Some("https://nodentity.xyz"));
+        assert_eq!(origin(public.as_deref(), &headers), "https://nodentity.xyz");
+        assert_eq!(clean_origin("  "), None);
+        assert_eq!(origin(None, &headers), "http://evil.example");
+        assert_eq!(origin(None, &HeaderMap::new()), "https://localhost");
     }
 
     #[test]
