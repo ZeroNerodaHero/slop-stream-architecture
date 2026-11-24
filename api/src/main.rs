@@ -1,4 +1,5 @@
 mod about_page;
+mod agent;
 mod analytics;
 mod auth;
 mod cf_purge;
@@ -884,6 +885,11 @@ async fn main() {
 
     if env::args().nth(1).as_deref() == Some("monitor") {
         monitor::run().await.expect("monitor");
+        return;
+    }
+
+    if env::args().nth(1).as_deref() == Some("agent") {
+        agent::run().await.expect("agent");
         return;
     }
 
