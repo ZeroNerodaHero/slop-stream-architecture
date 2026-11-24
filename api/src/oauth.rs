@@ -814,6 +814,9 @@ async fn signup_info(State(s): State<AppState>, headers: HeaderMap) -> ApiResult
 #[derive(Deserialize)]
 struct Pick {
     name: String,
+    /// The widget's single-use token (turnstile.rs). Left out while the check is off.
+    #[serde(default)]
+    turnstile_token: Option<String>,
 }
 
 /// `POST /api/oauth/signup {name}`: the account, named, with the provider linked, and logged in.
@@ -831,6 +834,10 @@ async fn signup_finish(State(s): State<AppState>, headers: HeaderMap, body: Resu
     if name.starts_with(&s.dummy_prefix) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
     }
+    // the human check is here and only here: `start` and `callback` stay ungated, as they are
+    // GETs the browser is redirected through (to the provider and back), with no page to draw
+    // a widget on, and no account exists until this step
+    crate::turnstile::verify(&s, body.turnstile_token.as_deref(), &auth::client_ip(&headers)).await?;
     auth::limit_signup(&s, &headers).await?;
     if auth::is_held(&s.db, &name, None).await? {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));

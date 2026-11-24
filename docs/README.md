@@ -21,3 +21,4 @@ the database is one file, `api/schema.sql`, applied by the api at boot to an emp
 
 - `overview.md` — the short one. what this is, how to deploy, test, and work on it. read this first.
 - `idea.md` — the product, not a build. ...
+- `cloudflare-turnstile.md` — the human check on signup and login: the widget, the env to turn it on, the one free-plan rate limiting rule, test keys, rollback.

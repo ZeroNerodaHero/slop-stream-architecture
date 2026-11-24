@@ -32,6 +32,7 @@ import { Button, buttonClassName } from '@/shared-components/Button';
 import { OAuthButtons, ProviderIcon } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useTurnstile } from '@/shared-components/Turnstile';
 import { INPUT } from '@/shared-components/input';
 import { BUTTON, Block, Field, PasswordInput, Status } from '@/shared-components/user-modal/parts';
 
@@ -60,6 +61,8 @@ function LoggedOut() {
   const [password, setPassword] = useState('');
   // a new password's rule, said under the box as it is typed; logging in asks none of it
   const problem = signingUp && password ? newPasswordProblem(password) : null;
+  // the human check (Turnstile.tsx): nothing while the api has it off
+  const human = useTurnstile('sec-turnstile');
 
   // Mount only: a stale error from the login page or an earlier open should not greet you here.
   useEffect(() => {
@@ -68,8 +71,10 @@ function LoggedOut() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (problem) return;
-    const ok = await (signingUp ? signup(name, password) : login(name, password));
+    if (problem || !human.ready) return;
+    const ok = await (signingUp ? signup(name, password, human.token) : login(name, password, human.token));
+    // the token is single-use, spent or not
+    human.spent();
     if (ok) {
       setPassword('');
       identityChanged('login');
@@ -112,8 +117,9 @@ function LoggedOut() {
             minLength={signingUp ? 8 : undefined}
           />
         </Field>
+        {human.widget}
         <div className="grid grid-cols-2 gap-2">
-          <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || !!problem}>
+          <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || !!problem || !human.ready}>
             {signingUp ? 'sign up' : 'log in'}
           </Button>
           <Button
