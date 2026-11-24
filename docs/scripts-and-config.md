@@ -44,6 +44,15 @@ recreated). video = every live stream ends (the script says so first).
 Afterwards the swapped containers are checked: running, healthy where the
 image has a check, or the script exits non-zero (no rollback).
 
+Right after the pages are published (a full deploy, `frontend`, or `--pull` when the
+pages changed) it purges the html from cloudflare, when `CF_PURGE_TOKEN`, `CF_ZONE_ID` and
+`PUBLIC_URL` are all set in .env: one POST for the exact shell urls (`/`, `/groups`, `/live`,
+`/login`, `/signup`) and one prefix purge for `<host>/watch/` and `<host>/groups/`, 10 s each.
+The publish deletes the old build's `/assets/*`, so an html the edge kept would name files that
+are gone. Any of the three unset: one "skipped" line. A failed purge is a warning with the HTTP
+status and cloudflare's error messages, never the token, and the deploy goes on: the edge drops
+the old html within its `s-maxage` (60 s, 15 s for `/watch/`). docs/cloudflare-cache-rules.md.
+
 Every run that ends well writes the commit it deployed to .deployed (gitignored).
 --pull diffs from there, not from HEAD, so a --pull that died in a build is
 picked up whole by the next one instead of reporting "nothing changed".
@@ -87,9 +96,10 @@ routes on `:443`:
 | `/chat/*` | `chat:4100` | text chat websocket, one per viewer |
 | `/events` | `events:4100` | presence and pushes, one per browser, open on every page; the api binary run as `api events`. an exact path. see `docs/status.md` |
 | `/thumb/*` | `video:7880` | the picture of each live stream, made on the video machine |
-| `/watch/*` | `api:4000` | the one page the api serves: the same `index.html` with a `<title>` and `og:*` tags for that name, so a shared link gets a preview card, and the profile filled in before react boots (`api/src/profile.rs`) |
+| `/watch/*` | `api:4000` | the one page the api serves: the same `index.html` with a `<title>` and `og:*` tags for that name, so a shared link gets a preview card, and the profile filled in before react boots (`api/src/profile.rs`). a 200 render is `public, max-age=0, s-maxage=15, must-revalidate`, so cloudflare may keep it 15 s (nothing in it is per viewer; its urls come from `PUBLIC_URL`, not the `Host` header, when that is set). an unknown name, a rename's 302 and the db/redis fallbacks are `no-cache` |
 | `/assets/*` | `/srv` | hashed vite assets, `immutable` for a year, but only on a hit (`@hit file`). brotli 11 is built beside each asset (`frontend/scripts/precompress.mjs`, `precompressed br`), the rest compressed on the fly: ~23% fewer bytes for the main bundle, which a cold load gets in tcp slow start (`docs/debugging.md`, "Watch startup timings") |
-| everything else | `/srv/index.html` | `Cache-Control: no-cache`, so a deploy never leaves someone running old js against a new api |
+| `/`, `/groups`, `/groups/*`, `/live`, `/login`, `/signup` | `/srv/index.html` | always the shell. `Cache-Control: public, max-age=0, s-maxage=60, must-revalidate`: the browser asks every time, cloudflare may answer for a minute (docs/cloudflare-cache-rules.md, "Cache HTML shell"), and `deploy.sh` purges it on every publish |
+| everything else | the file, or `/srv/index.html` | `Cache-Control: no-cache`, so a deploy never leaves someone running old js against a new api. `/oauth`, `/admin`, `/explore*`, unknown paths (the spa's 404) and real files like `/favicon.ico` stay here |
 
 `handle_errors`:
 
@@ -149,7 +159,7 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `OPS_TOKEN` | (empty) | a machine's key for /api/errors (Authorization: Bearer ...). empty = off.  make one: openssl rand -hex 32 16 characters at least: a shorter one is ignored, with a warn line in the api log |
 | `PUBLIC_URL`<br>`GOOGLE_CLIENT_ID`<br>`GOOGLE_CLIENT_SECRET`<br>`DISCORD_CLIENT_ID`<br>`DISCORD_CLIENT_SECRET` | (empty)<br>(empty)<br>(empty)<br>(empty)<br>(empty) | log in with google, discord (docs/accounts.md). empty = that provider is off, no button. PUBLIC_URL is the https origin people type, no trailing slash. each provider's console needs the redirect uri {PUBLIC_URL}/api/oauth/<google\|discord>/callback, exactly (https://hardasfuckin.org/api/oauth/google/callback, .../discord/callback). google refuses a bare ip and plain http (except localhost): this needs a real domain + cert. |
 | `TURNSTILE_ENABLED`<br>`TURNSTILE_SITE_KEY`<br>`TURNSTILE_SECRET` | `false`<br>(empty)<br>(empty) | cloudflare turnstile, a human check on signup and login (docs/cloudflare-turnstile.md). on only with TURNSTILE_ENABLED=true and both keys; the flag on with a key missing logs an error and stays off. the site key is public (the pages draw the widget with it); the secret never leaves the api. |
-| `CF_PURGE_TOKEN`<br>`CF_ZONE_ID` | (empty)<br>(empty) | cloudflare in front (docs/cloudflare-cache-rules.md): a takedown of a public picture or video purges its url (under PUBLIC_URL) from the edge. the token's only permission: Zone > Cache Purge, on this zone alone. either empty = no purge (the edge keeps it until its max-age runs out) |
+| `CF_PURGE_TOKEN`<br>`CF_ZONE_ID` | (empty)<br>(empty) | cloudflare in front (docs/cloudflare-cache-rules.md): a takedown of a public picture or video purges its url (under PUBLIC_URL) from the edge. the token's only permission: Zone > Cache Purge, on this zone alone. either empty = no purge (the edge keeps it until its max-age runs out). `scripts/deploy.sh` reads the same two (and PUBLIC_URL) from .env to purge the html after publishing the pages; unset = skipped |
 | `DUMMY_STREAMS`<br>`DUMMY_PASSWORD` | `0`<br>(empty) | fake streams for styling and debugging: gifs bouncing around, named dummy-mango, dummy-pixel, ... set a count and any password, then: ./scripts/deploy.sh dummy the password is what lets the dummy box publish dummy-* names. nobody else can. |
 | `DUMMY_NAMES` | (empty) | optional: your own names instead, comma separated |
 | `S3_ENDPOINT`<br>`S3_BUCKET`<br>`S3_REGION`<br>`S3_ACCESS_KEY`<br>`S3_SECRET_KEY` | `off`<br>`stream`<br>`us-east-1`<br>(empty)<br>(empty) | where objects go. off (the default): the s3 container in docker-compose (seaweedfs), bucket "stream", no aws bill. set a url to use a real bucket instead, and then the key, the secret and the bucket name. the container still runs either way; a url only changes where the api sends.   https://s3.us-east-1.amazonaws.com   https://<account>.r2.cloudflarestorage.com |

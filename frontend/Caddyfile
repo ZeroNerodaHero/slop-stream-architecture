@@ -98,6 +98,15 @@ http:// {
 		}
 	}
 
+	@shell path / /groups /groups/* /live /login /signup
+	handle @shell {
+		root * /srv
+		header Cache-Control "public, max-age=0, s-maxage=60, must-revalidate"
+		rewrite * /index.html
+		encode zstd gzip
+		file_server
+	}
+
 	handle {
 		root * /srv
 		header Cache-Control "no-cache"
