@@ -8,10 +8,10 @@ use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use serde_json::json;
 
-use crate::{auth, AppState};
+use crate::{auth, test_streamers, AppState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Key {
@@ -165,7 +165,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-pub(crate) async fn hit(redis: &ConnectionManager, key: &str, window_secs: i64) -> redis::RedisResult<(i64, i64)> {
+pub(crate) async fn hit(redis: &Redis, key: &str, window_secs: i64) -> redis::RedisResult<(i64, i64)> {
     let (n, ttl): (i64, i64) = redis::pipe()
         .atomic()
         .incr(key, 1)
@@ -176,7 +176,7 @@ pub(crate) async fn hit(redis: &ConnectionManager, key: &str, window_secs: i64) 
     Ok((n, ttl))
 }
 
-async fn note_name(redis: &ConnectionManager, key: &str, name: &str, max: i64, window_secs: i64) -> redis::RedisResult<Result<(), i64>> {
+async fn note_name(redis: &Redis, key: &str, name: &str, max: i64, window_secs: i64) -> redis::RedisResult<Result<(), i64>> {
     let (added, count, ttl): (i64, i64, i64) = redis::pipe()
         .atomic()
         .sadd(key, name)
@@ -204,7 +204,7 @@ fn slow_down(rule: Rule, ttl: i64) -> Response {
     too_many(ttl, &format!("too many requests. try again in {ttl}s"))
 }
 
-async fn check(redis: &ConnectionManager, rule: Rule, subject: &str) -> Option<Response> {
+async fn check(redis: &Redis, rule: Rule, subject: &str) -> Option<Response> {
     let key = format!("rl:route:{}:{subject}", rule.tier);
     match hit(redis, &key, rule.window_secs).await {
         Ok((n, ttl)) if n > rule.max => Some(slow_down(rule, ttl)),
@@ -225,10 +225,9 @@ pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next)
     let method = req.method().clone();
     let rule = api_rule(&method, &path);
 
-    if let (Some(given), Some(want)) = (query_password(req.uri().query()), s.dummy_password.as_deref()) {
-        if given == want {
-            return next.run(req).await;
-        }
+    let given = test_streamers::given_secret(req.headers(), query_password(req.uri().query()));
+    if test_streamers::skips_limits(&s.dummy_prefix, s.dummy_password.as_deref(), &path, &path_name(req.uri().path()), given.as_deref()) {
+        return next.run(req).await;
     }
 
     let mut account = None;
@@ -271,7 +270,7 @@ pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next)
 
 #[derive(Clone)]
 pub(crate) struct ByIp {
-    pub(crate) redis: ConnectionManager,
+    pub(crate) redis: Redis,
     pub(crate) rule: fn(&Method, &str) -> Rule,
 }
 
@@ -451,6 +450,29 @@ mod tests {
         assert_eq!(query_password(Some("session=1&password=s%40cret+x")).as_deref(), Some("s@cret x"));
         assert_eq!(query_password(Some("session=1&token=2")), None);
         assert_eq!(query_password(None), None);
+    }
+
+    #[test]
+    fn the_secret_skips_the_limits_only_on_a_dummy_names_own_routes() {
+        let skip = |matched: &str, path: &str, given: Option<&str>| {
+            test_streamers::skips_limits("dummy-", Some("s3cret"), matched, &path_name(path), given)
+        };
+        assert!(skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", Some("s3cret")));
+        assert!(skip("/api/streamers/{name}", "/api/streamers/Dummy-Mango", Some("s3cret")));
+        assert!(skip("/api/streamers/{name}/avatar", "/api/streamers/dummy-mango/avatar", Some("s3cret")));
+        assert!(!skip("/api/streams/{name}/go-live", "/api/streams/billy/go-live", Some("s3cret")));
+        assert!(!skip("/api/streamers/{name}/avatar", "/api/streamers/billy/avatar", Some("s3cret")));
+        assert!(!skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", Some("nope")));
+        assert!(!skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", None));
+        assert!(!skip("/api/login", "/api/login", Some("s3cret")));
+        assert!(!skip("/api/groups/{group}/join", "/api/groups/dummy-mango/join", Some("s3cret")));
+        assert!(!skip("/api/dm/{name}", "/api/dm/dummy-mango", Some("s3cret")));
+        let mut h = HeaderMap::new();
+        h.insert("x-dummy-password", HeaderValue::from_static("s3cret"));
+        let given = test_streamers::given_secret(&h, query_password(Some("session=1")));
+        assert!(skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", given.as_deref()));
+        let given = test_streamers::given_secret(&HeaderMap::new(), query_password(Some("password=s3cret")));
+        assert!(skip("/api/streams/{name}/go-live", "/api/streams/dummy-mango/go-live", given.as_deref()));
     }
 
     #[test]

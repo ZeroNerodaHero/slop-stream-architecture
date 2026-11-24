@@ -598,7 +598,10 @@ search, chat images, error reports) still apply on top of these.
 What is not counted: a request with no X-Forwarded-For. Caddy sets it on everything it
 passes, so one without it came from inside the compose network (video's heartbeat and
 `attached` for its publishers, the tests, the dummy box's internal calls). And a
-reserved-name request carrying the dummy password, the fake streams' box.
+request carrying the dummy password (the `X-Dummy-Password` header, or `?password=`) on a
+route of a name under `DUMMY_PREFIX` (`/api/streamers/{name}...`, `/api/streams/{name}/...`):
+the fake streams' box. The password on any other route is counted (`test_streamers::skips_limits`,
+docs/test-streamers.md).
 
 `RATE_LIMITS=off` in the environment turns the route limits off (a load test, a seed run
 against a dev box). The handlers' own counts stay.
@@ -754,8 +757,18 @@ blocking tail needs. Lifted out of the chat with no change of behaviour; see doc
 
 `pub`: Message and frame cap, set on the upgrade so axum refuses a bigger one before any parser sees it.
 
-`pub`: A ping this often. A socket that sent nothing back (pong, text, anything)
-for IDLE_LIMIT is a vanished peer and is dropped, so it stops being counted.
+`pub`: A ping this often (20s). A socket that sent nothing back (pong, text, anything)
+for IDLE_LIMIT (45s) is a vanished peer and is dropped, so it stops being counted.
+`Heartbeat` is the pair as one future: `next()` is `Ping` every PING_EVERY and `Silent` IDLE_LIMIT
+after the last `heard()`, on tokio's clock, so a test with paused time walks it exactly. The cut is
+at 45s from the last word, not at the first ping after it.
+
+`IpSlots` / `IpSlot`: sockets one address holds open in one process. `take` before the upgrade, the
+slot is dropped with the socket's task, so a panic or an abort gives it back. Events caps 20, chat 32.
+No `x-forwarded-for` (inside the compose network) is no slot and no cap.
+
+`locked`: a std mutex locked through a poison: a handler that panicked holding it must not wedge
+every other socket. The registries behind it never wait on the network while held.
 
 `pub`: After SIGTERM: how long `run` waits for the sockets to say goodbye.
 
@@ -771,6 +784,30 @@ the handler would sit in the write for as long as the kernel keeps the socket.
 the default 500ms response timeout would cut every block short.
 
 `pub`: "1729000000000-3" -> (1729000000000, 3). Orders the same way redis does.
+
+## `api/src/test_streamers.rs`
+
+The dummy box's names as test streamers (docs/test-streamers.md).
+
+`shown_sql!`: `NOT ($n::boolean AND <row>.is_test)`, the one fragment every list query adds; with
+the switch bound `false` it is true for every row, so the answer is what it was.
+
+`fn hide_from_env`: `HIDE_TEST_STREAMERS`, `1` or `true` in any case. Read once per process.
+
+`fn secret_ok`: The dummy password, compared in constant time.
+
+`fn given_secret`: The `X-Dummy-Password` header, else the `?password=` query.
+
+`fn skips_limits`: Whether the route limits let this request through uncounted: the right secret, a
+route of a name, and that name under the prefix.
+
+`async fn mark`: The row for a dummy name, flagged. Called by `may_write` once the password passed.
+
+`async fn hidden`: Whether this name is to be treated as nobody here. No query while the switch is off.
+
+`async fn tests_among`: Which of these names are test rows (home's live list).
+
+`struct DummySecret`: The extractor the write routes take in place of `Query<PasswordQuery>`.
 
 ## `api/src/turnstile.rs`
 

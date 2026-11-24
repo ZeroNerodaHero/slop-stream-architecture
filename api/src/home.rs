@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +31,7 @@ struct Home {
     client: redis::Client,
     http: reqwest::Client,
     video_url: String,
+    hide_test: bool,
     table: Arc<Mutex<HashMap<String, Live>>>,
 }
 
@@ -51,6 +52,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
         client,
         http,
         video_url: video_url.trim_end_matches('/').to_owned(),
+        hide_test: crate::test_streamers::hide_from_env(),
         table: Arc::new(Mutex::new(HashMap::new())),
     };
     home.heal().await;
@@ -63,10 +65,12 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
         .route("/api/streams", get(list))
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .layer(axum::middleware::map_response(crate::media::no_store_by_default))
+        .layer(axum::middleware::from_fn(crate::timings::http))
         .with_state(home);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("home on {addr}");
+    crate::timings::serve();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router).with_graceful_shutdown(crate::wait_for_signal()).await?;
     Ok(())
@@ -80,6 +84,14 @@ async fn snapshot(h: &Home) -> ApiResult {
     let mut live: Vec<(String, Live)> = h.table.lock().await.iter().map(|(n, l)| (n.clone(), l.clone())).collect();
     if live.is_empty() {
         return Ok(Json(json!([])));
+    }
+    if h.hide_test {
+        let names: Vec<String> = live.iter().map(|(n, _)| n.clone()).collect();
+        let tests = crate::test_streamers::tests_among(&h.db, &names).await?;
+        drop_tests(&mut live, &tests);
+        if live.is_empty() {
+            return Ok(Json(json!([])));
+        }
     }
     live.sort_by(|a, b| match (a.1.since, b.1.since) {
         (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.0.cmp(&b.0)),
@@ -97,6 +109,10 @@ async fn snapshot(h: &Home) -> ApiResult {
         json!({ "name": name, "bio": bio, "since": l.since, "verified": l.verified, "avatar": avatar, "thumbs": pictures, "viewers": l.viewers, "badge": badge })
     });
     Ok(Json(Value::Array(out.collect())))
+}
+
+fn drop_tests(live: &mut Vec<(String, Live)>, tests: &HashSet<String>) {
+    live.retain(|(n, _)| !tests.contains(n));
 }
 
 async fn cards_of(db: &PgPool, names: &[String]) -> Result<HashMap<String, (String, Option<i64>)>, sqlx::Error> {
@@ -242,5 +258,23 @@ async fn heal_every(home: Home) {
     loop {
         tick.tick().await;
         home.heal().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn live() -> Live {
+        Live { session: None, since: None, verified: false, viewers: None, added: Instant::now() }
+    }
+
+    #[test]
+    fn a_test_streamer_leaves_the_live_list() {
+        let mut list = vec![("billy".to_owned(), live()), ("dummy-mango".to_owned(), live()), ("ann".to_owned(), live())];
+        drop_tests(&mut list, &HashSet::new());
+        assert_eq!(list.len(), 3);
+        drop_tests(&mut list, &HashSet::from(["dummy-mango".to_owned()]));
+        assert_eq!(list.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["billy", "ann"]);
     }
 }

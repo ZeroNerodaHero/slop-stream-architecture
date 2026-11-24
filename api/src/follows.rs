@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::auth::{self, client_ip, Me};
 use crate::notify;
 use crate::presence::{self, Presence, Status, SEEN_WINDOW_MS};
+use crate::test_streamers::shown_sql;
 use crate::{live_set, ApiError, ApiResult, AppState, Name};
 
 const FOLLOWS_PER_LOGIN: i64 = 500;
@@ -164,19 +165,25 @@ fn followed_json((name, verified, avatar, bio, followed_at, mutual, _, oauth_ver
     json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "followed_at": followed_at, "mutual": mutual })
 }
 
-async fn following(State(s): State<AppState>, Me(me): Me) -> ApiResult {
-    let me = me.ok_or_else(not_logged_in)?;
-    let rows: Vec<FollowedRow> = sqlx::query_as(concat!(
+async fn following_rows(db: &PgPool, me: Uuid, hide: bool) -> Result<Vec<FollowedRow>, sqlx::Error> {
+    sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, f.followed_at,
                 EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = s.id AND b.followed_id = $1), s.status, ",
         crate::oauth::linked_sql!("s"),
         " FROM follows f JOIN streamers s ON s.id = f.followed_id
-         WHERE f.follower_id = $1
-         ORDER BY f.followed_at DESC",
+         WHERE f.follower_id = $1 AND ",
+        shown_sql!("s", "$2"),
+        " ORDER BY f.followed_at DESC",
     ))
-    .bind(me.id)
-    .fetch_all(&s.db)
-    .await?;
+    .bind(me)
+    .bind(hide)
+    .fetch_all(db)
+    .await
+}
+
+async fn following(State(s): State<AppState>, Me(me): Me) -> ApiResult {
+    let me = me.ok_or_else(not_logged_in)?;
+    let rows = following_rows(&s.db, me.id, s.hide_test).await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.6)).collect();
     let words = words(&s, &people).await?;
     let mut list: Vec<(u8, usize, Value)> = rows
@@ -212,6 +219,44 @@ fn search_pattern(q: &str) -> String {
 
 type HitRow = (String, bool, Option<i64>, String, bool, String, bool);
 
+async fn search_rows(db: &PgPool, q: &str, me: Option<Uuid>, hide: bool) -> Result<Vec<HitRow>, sqlx::Error> {
+    sqlx::query_as(concat!(
+        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status, ",
+        crate::oauth::linked_sql!("s"),
+        " FROM streamers s
+         WHERE s.name LIKE $4 AND ",
+        shown_sql!("s", "$5"),
+        " ORDER BY s.name = $1 DESC, starts_with(s.name, $1) DESC, (s.password_hash IS NOT NULL) DESC, s.name
+         LIMIT $3",
+    ))
+    .bind(q)
+    .bind(me)
+    .bind(SEARCH_LIMIT)
+    .bind(search_pattern(q))
+    .bind(hide)
+    .fetch_all(db)
+    .await
+}
+
+async fn people_rows(db: &PgPool, me: Option<Uuid>, hide: bool) -> Result<Vec<HitRow>, sqlx::Error> {
+    sqlx::query_as(concat!(
+        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, ",
+        crate::oauth::linked_sql!("s"),
+        " FROM streamers s
+         WHERE ",
+        shown_sql!("s", "$3"),
+        " ORDER BY (s.password_hash IS NOT NULL) DESC, s.updated_at DESC
+         LIMIT $2",
+    ))
+    .bind(me)
+    .bind(PEOPLE_SCAN)
+    .bind(hide)
+    .fetch_all(db)
+    .await
+}
+
 async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Result<Query<SearchQuery>, QueryRejection>) -> ApiResult {
     let Query(q) = q?;
     let q = clean_query(&q.q);
@@ -219,21 +264,7 @@ async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Re
         return Ok(Json(json!([])));
     }
     crate::auth::limit(&s, &format!("rl:search:ip:{}", client_ip(&headers)), SEARCH_WINDOW_SECS, SEARCH_PER_MINUTE, "too many searches. wait a minute").await?;
-    let rows: Vec<HitRow> = sqlx::query_as(concat!(
-        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status, ",
-        crate::oauth::linked_sql!("s"),
-        " FROM streamers s
-         WHERE s.name LIKE $4
-         ORDER BY s.name = $1 DESC, starts_with(s.name, $1) DESC, (s.password_hash IS NOT NULL) DESC, s.name
-         LIMIT $3",
-    ))
-    .bind(&q)
-    .bind(me.as_ref().map(|a| a.id))
-    .bind(SEARCH_LIMIT)
-    .bind(search_pattern(&q))
-    .fetch_all(&s.db)
-    .await?;
+    let rows = search_rows(&s.db, &q, me.as_ref().map(|a| a.id), s.hide_test).await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
     let words = words(&s, &people).await?;
     let out = rows.into_iter().map(|(name, verified, avatar, bio, following, _, oauth_verified)| {
@@ -244,18 +275,7 @@ async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Re
 }
 
 async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
-    let rows: Vec<HitRow> = sqlx::query_as(concat!(
-        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, ",
-        crate::oauth::linked_sql!("s"),
-        " FROM streamers s
-         ORDER BY (s.password_hash IS NOT NULL) DESC, s.updated_at DESC
-         LIMIT $2",
-    ))
-    .bind(me.as_ref().map(|a| a.id))
-    .bind(PEOPLE_SCAN)
-    .fetch_all(&s.db)
-    .await?;
+    let rows = people_rows(&s.db, me.as_ref().map(|a| a.id), s.hide_test).await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
     let words = words(&s, &people).await?;
     let mut list: Vec<(u8, usize, Value)> = rows
@@ -290,8 +310,8 @@ async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(list))
 }
 
-async fn recent_list(s: &AppState, me: Option<Uuid>) -> Result<Value, ApiError> {
-    let rows: Vec<RecentRow> = sqlx::query_as(concat!(
+async fn recent_rows(db: &PgPool, me: Option<Uuid>, hide: bool) -> Result<Vec<RecentRow>, sqlx::Error> {
+    sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
                 EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at,
                 (SELECT count(*) FROM follows f WHERE f.followed_id = s.id), ",
@@ -311,13 +331,20 @@ async fn recent_list(s: &AppState, me: Option<Uuid>) -> Result<Value, ApiError> 
              GROUP BY ended.id
          ) last
          JOIN streamers s ON s.id = last.id
-         ORDER BY last.ended_at DESC
+         WHERE ",
+        shown_sql!("s", "$3"),
+        " ORDER BY last.ended_at DESC
          LIMIT $2",
     ))
     .bind(me)
     .bind(RECENT_SCAN)
-    .fetch_all(&s.db)
-    .await?;
+    .bind(hide)
+    .fetch_all(db)
+    .await
+}
+
+async fn recent_list(s: &AppState, me: Option<Uuid>) -> Result<Value, ApiError> {
+    let rows = recent_rows(&s.db, me, s.hide_test).await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
     let words = words(s, &people).await?;
     let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at, followers, oauth_verified)| {
@@ -390,6 +417,69 @@ mod tests {
         let followed: Vec<Uuid> = edges_of(&pool, other).await.into_iter().map(|(id, _)| id).collect();
         assert_eq!(followed, vec![bare]);
         assert_eq!(stats(&pool, &new, Some(other)).await.unwrap(), Stats { followers: 1, following: false, follows_you: false });
+    }
+
+    async fn a_dummy(pool: &PgPool, name: &str) -> Uuid {
+        crate::test_streamers::mark(pool, name).await.unwrap();
+        sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1").bind(name).fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn the_following_list_hides_a_test_streamer_only_when_asked() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let fan = row(&pool, &format!("fan7-{run}"), Some("fan-hash")).await;
+        let human = row(&pool, &format!("human7-{run}"), Some("h")).await;
+        let dummy_name = format!("dummy-f{run}");
+        let dummy = a_dummy(&pool, &dummy_name).await;
+        for followed in [human, dummy] {
+            sqlx::query("INSERT INTO follows (follower_id, followed_id) VALUES ($1, $2)").bind(fan).bind(followed).execute(&pool).await.unwrap();
+        }
+        let names = |rows: Vec<FollowedRow>| rows.into_iter().map(|r| r.0).collect::<Vec<_>>();
+        assert!(names(following_rows(&pool, fan, false).await.unwrap()).contains(&dummy_name));
+        assert_eq!(names(following_rows(&pool, fan, true).await.unwrap()), vec![format!("human7-{run}")]);
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![fan, human, dummy]).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn search_and_people_hide_a_test_streamer_only_when_asked() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let dummy_name = format!("dummy-s{run}");
+        let dummy = a_dummy(&pool, &dummy_name).await;
+        sqlx::query("UPDATE streamers SET updated_at = now() + interval '1 day' WHERE id = $1").bind(dummy).execute(&pool).await.unwrap();
+        let names = |rows: Vec<HitRow>| rows.into_iter().map(|r| r.0).collect::<Vec<_>>();
+        assert_eq!(names(search_rows(&pool, &dummy_name, None, false).await.unwrap()), vec![dummy_name.clone()]);
+        assert!(search_rows(&pool, &dummy_name, None, true).await.unwrap().is_empty());
+        let shown = names(people_rows(&pool, None, false).await.unwrap());
+        let hidden = names(people_rows(&pool, None, true).await.unwrap());
+        let bare_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM streamers WHERE password_hash IS NULL AND NOT is_test").fetch_one(&pool).await.unwrap();
+        let accounts: i64 = sqlx::query_scalar("SELECT count(*) FROM streamers WHERE password_hash IS NOT NULL").fetch_one(&pool).await.unwrap();
+        if accounts + bare_rows < PEOPLE_SCAN {
+            assert!(shown.contains(&dummy_name), "{shown:?}");
+        }
+        assert!(!hidden.contains(&dummy_name));
+        sqlx::query("DELETE FROM streamers WHERE id = $1").bind(dummy).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn recent_hides_a_test_streamer_only_when_asked() {
+        let pool = test_db().await;
+        let dummy_name = format!("dummy-r{}", std::process::id());
+        let dummy = a_dummy(&pool, &dummy_name).await;
+        sqlx::query("INSERT INTO sessions (name, token, verified, started_at, ended_at) VALUES ($1, 1, false, now() + interval '1 day', now() + interval '2 days')")
+            .bind(&dummy_name)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let names = |rows: Vec<RecentRow>| rows.into_iter().map(|r| r.0).collect::<Vec<_>>();
+        assert_eq!(names(recent_rows(&pool, None, false).await.unwrap()).first(), Some(&dummy_name));
+        assert!(!names(recent_rows(&pool, None, true).await.unwrap()).contains(&dummy_name));
+        sqlx::query("DELETE FROM sessions WHERE name = $1").bind(&dummy_name).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM streamers WHERE id = $1").bind(dummy).execute(&pool).await.unwrap();
     }
 
     #[test]

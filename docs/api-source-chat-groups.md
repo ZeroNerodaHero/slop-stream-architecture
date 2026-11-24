@@ -77,6 +77,16 @@ second. A click on and off again is two. Only a login reacts, so there is one ti
 
 `const SLOW_DOWN`: The words of a refused line. The frame carries the wait too (`slow`).
 
+`Rooms` / `Lease`: every room this process reads, each with the set of its live subscribers (an id per
+socket per room, and the ip it came from). `enter` puts one in the set and hands back a `Lease`;
+dropping the lease takes it out, so a handler that returns early, panics or is aborted leaves the same
+way as one that says goodbye, and nothing has to remember to call a leave. The count a room sends
+(`count`) and the per-ip cap are both read off the set at the time, never kept as a number beside it.
+The last lease out removes the room; its reader stops when its receivers are gone.
+
+`const MAX_CHAT_SOCKETS_PER_IP`: chat sockets one ip may hold open in this process, across all rooms
+(32), taken at the upgrade (`socket_slot`): past it the upgrade is a 429.
+
 `const MAX_SOCKETS_PER_IP`: Sockets one ip may hold in one room. The count is per socket; this keeps "open
 fifty tabs" from being fifty of it. (The rate is per speaker, so tabs share that.)
 
@@ -1250,7 +1260,8 @@ everything else, not axum's plain-text page.
 `pub`: Proof that you are the one who went live. From the query string, so the
 page can also send it with `sendBeacon` when the tab closes.
 
-`pub`: `?password=`: only needed to write a reserved (dummy) name. Everyone else sends nothing.
+`pub`: `?password=`: only needed to write a reserved (dummy) name. Everyone else sends nothing. The
+`X-Dummy-Password` header carries the same and wins over it (`test_streamers::DummySecret`, docs/test-streamers.md).
 
 `pub`: May whoever is behind `me` write `name`: go live as it, save its bio, set its picture.
 A reserved name belongs to the dummy box and wants its password, nothing else opens it

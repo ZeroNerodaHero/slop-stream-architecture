@@ -290,7 +290,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
     await waitStatus(s, /^watching$/);
     const label = await s.getAttribute('#pip', 'aria-label');
-    expect(!(await s.$eval('#pip', (b) => b.disabled)) && label === 'picture in picture', `the button is still off with the corner free (named "${label}")`);
+    expect(!(await s.$eval('#pip', (b) => b.disabled)) && label === 'pic in pic', `the button is still off with the corner free (named "${label}")`);
     await s.click('#pip');
     await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#pip-player', { timeout: 10000 });

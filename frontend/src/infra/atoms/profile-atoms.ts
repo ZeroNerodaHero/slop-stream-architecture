@@ -4,10 +4,10 @@ import { api, messageOf } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat, refaceLines } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
-import { socialsAtom, watchNameAtom, watchWelcomeAtom } from '@/infra/atoms/watch-atoms';
+import { socialsAtom, watchNameAtom, watchWelcomeAtom } from '@/infra/atoms/watch-state';
 import { type Welcome, welcomeOf } from '@/infra/atoms/welcome-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
-import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { cleanName, isValidName } from '@/infra/names';
 import { AVATAR_PICTURE, OFFLINE_PICTURE } from '@/infra/picture';
 import {
   cleanSocials,
@@ -52,14 +52,13 @@ export const myOfflineVersionAtom = atom((get) => (get(profileForAtom) === get(m
 
 export const canEditProfileAtom = atom((get) => {
   const name = get(myNameAtom);
-  if (!isValidName(name) || isDummyName(name)) return false;
+  if (!isValidName(name)) return false;
   return !get(profileVerifiedAtom) || get(meAtom) === name;
 });
 
 export const whyNotEditAtom = atom((get) => {
   const name = get(myNameAtom);
   if (!isValidName(name)) return 'pick a name first.';
-  if (isDummyName(name)) return 'a reserved name: it belongs to the fake streams, nobody writes it.';
   if (get(profileVerifiedAtom) && get(meAtom) !== name) return 'that name has an account. log in as it to change these.';
   return '';
 });

@@ -15,7 +15,7 @@ import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { INPUT } from '@/shared-components/input';
 import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
-import type { CardAction } from '@/shared-components/PersonCard';
+import type { CardAction } from '@/shared-components/peek';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 

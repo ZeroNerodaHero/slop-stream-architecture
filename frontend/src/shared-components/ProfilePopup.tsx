@@ -1,9 +1,8 @@
 import { RiArrowRightLine, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { homeStreamsAtom } from '@/infra/atoms/home-atoms';
 import { showSpeaker } from '@/infra/atoms/chat-atoms';
@@ -14,11 +13,9 @@ import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { closeProfilePopup, profilePopupAtom, type ProfilePopupTarget } from '@/infra/atoms/profile-popup-atoms';
 import { holdPresence, onEvents, releasePresence, wantsPresence } from '@/infra/events';
 import { useIsMobile } from '@/infra/mobile';
-import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setPopupPreview } from '@/infra/preview';
 import { cleanSocials } from '@/infra/socials';
 import { store } from '@/infra/store';
-import { About } from '@/shared-components/About';
 import { Badge } from '@/shared-components/Badge';
 import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { buttonClassName } from '@/shared-components/Button';
@@ -42,6 +39,8 @@ type PopupTab = 'about' | 'calendar' | 'socials';
 const POPUP_TABS: readonly PopupTab[] = ['about', 'calendar', 'socials'];
 const WORDS = 'text-sm font-semibold text-primaryBlue underline-offset-2 hover:underline';
 const SMALL = 'px-3 py-1.5 text-sm max-md:min-h-11';
+
+const About = lazy(() => import('@/shared-components/About').then((m) => ({ default: m.About })));
 
 export function ProfilePopup() {
   const target = useAtomValue(profilePopupAtom);
@@ -163,7 +162,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const backdrop = thumb !== null || avatar !== null ? <BlurredPicture name={name} version={avatar} src={thumb} /> : null;
   const picture = live || offline !== null || backdrop !== null;
   const socials = useMemo(() => cleanSocials(card?.socials), [card?.socials]);
-  const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
   const page = `/watch/${encodeURIComponent(name)}`;
 
   return (
@@ -203,7 +201,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
           </h2>
           <div id="profile-popup-meta" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-textSecondary">
             {card?.badge && <Badge group={card.badge} className="min-w-0" />}
-            {typeof card?.followers === 'number' && !isDummyName(name) && (
+            {typeof card?.followers === 'number' && (
               <span id="profile-popup-followers">
                 {card.followers} {card.followers === 1 ? 'follower' : 'followers'}
               </span>
@@ -235,7 +233,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
       </header>
 
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3 max-md:grid max-md:auto-cols-fr max-md:grid-flow-col max-md:items-stretch max-md:gap-x-2">
-        {!isDummyName(name) && <FollowButton id="profile-popup-follow" name={name} className="max-md:min-h-11" />}
+        <FollowButton id="profile-popup-follow" name={name} className="max-md:min-h-11" />
         {friend && (
           <button
             id="profile-popup-message"
@@ -337,7 +335,9 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
               </div>
               <div id={`profile-popup-panel-${tab}`} role="tabpanel" aria-labelledby={`profile-popup-tab-${tab}`} className="pt-4">
                 {tab === 'about' ? (
-                  <About key={name} name={name} doc={about} id="profile-popup-about" />
+                  <Suspense fallback={null}>
+                    <About key={name} name={name} id="profile-popup-about" />
+                  </Suspense>
                 ) : tab === 'calendar' ? (
                   <Calendar name={name} scope="popup" live={live} id="profile-popup-calendar" />
                 ) : (

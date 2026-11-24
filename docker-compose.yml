@@ -52,9 +52,15 @@ services:
     logging: *default-logging
     environment:
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+      STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}
+      STATS_BASIC_AUTH_HASH: ${STATS_BASIC_AUTH_HASH:-statsoff}
+      STATS_PUBLIC: ${STATS_PUBLIC:-}
     ports:
       - "80:80"
       - "443:443"
+    networks:
+      - default
+      - stats
     volumes:
       - ./frontend/Caddyfile:/etc/caddy/Caddyfile:ro
       - pages-data:/srv:ro
@@ -90,6 +96,7 @@ services:
       VIDEO_URL: http://video:7880
       PORT: "4000"
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
+      HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}
       ENV_NAME: ${ENV_NAME:-}
       ADMIN_NAMES: ${ADMIN_NAMES:-}
       OPS_TOKEN: ${OPS_TOKEN:-}
@@ -139,6 +146,7 @@ services:
       PORT: "4100"
       CHAT_PERSIST: ${CHAT_PERSIST:-}
       ADMIN_NAMES: ${ADMIN_NAMES:-}
+      HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}
       RUST_LOG: info
     depends_on:
       api:
@@ -193,6 +201,7 @@ services:
     command: ["home"]
     environment:
       RATE_LIMITS: ${RATE_LIMITS:-}
+      HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       VIDEO_URL: http://video:7880
@@ -205,6 +214,71 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4100 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  agent:
+    image: ${IMAGES:-}stream-api:${TAG:-latest}
+    container_name: agent
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["agent"]
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    environment:
+      RATE_LIMITS: ${RATE_LIMITS:-}
+      OPS_TOKEN: ${OPS_TOKEN:-}
+      PORT: "4300"
+      SAMPLE_EVERY_SECS: "15"
+      KEEP_SAMPLES: "240"
+      HOST_PROC: /host/proc
+      DISK_PATH: /disk
+      DOCKER_SOCKET: /var/run/docker.sock
+      TIMINGS_FROM: api=http://api:9300,chat=http://chat:9300,events=http://events:9300,home=http://home:9300
+      RUST_LOG: info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - agent-disk:/disk:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4300 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  stats:
+    image: ${IMAGES:-}stream-api:${TAG:-latest}
+    container_name: stats
+    profiles: ["stats"]
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["monitor"]
+    environment:
+      RATE_LIMITS: ${RATE_LIMITS:-}
+      TARGETS: ${STATS_TARGETS:-${ENV_NAME:-local}=https://frontend}
+      OPS_TOKENS: ${STATS_TOKENS:-}
+      OPS_TOKEN: ${OPS_TOKEN:-}
+      ALERT_WEBHOOK: ${STATS_ALERT_WEBHOOK:-}
+      PUBLIC: ${STATS_PUBLIC:-}
+      CHECK_EVERY_SECS: "15"
+      ERRORS_EVERY_SECS: "60"
+      METRICS_EVERY_SECS: "15"
+      DOWN_AFTER: "3"
+      PORT: "3002"
+      DATA_DIR: /data
+      RUST_LOG: info
+    networks:
+      - stats
+    volumes:
+      - stats-data:/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3002 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
       interval: 15s
       timeout: 3s
       start_period: 5s
@@ -300,6 +374,8 @@ services:
       DUMMY_STREAMS: ${DUMMY_STREAMS:-0}
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
       DUMMY_NAMES: ${DUMMY_NAMES:-}
+      DUMMY_CHAT: ${DUMMY_CHAT:-}
+      DUMMY_CHAT_INTERVAL_MS: ${DUMMY_CHAT_INTERVAL_MS:-}
       VIDEO_WS_URL: ws://video:7880/ws
       API_URL: http://api:4000
       CHAT_WS_URL: ws://chat:4100
@@ -337,6 +413,10 @@ services:
     ports:
       - "7883:7883/udp"
 
+networks:
+  default:
+  stats:
+
 volumes:
   database-data:
   s3-data:
@@ -344,3 +424,5 @@ volumes:
   pages-data:
   caddy-data:
   caddy-config:
+  agent-disk:
+  stats-data:

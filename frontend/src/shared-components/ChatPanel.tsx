@@ -38,7 +38,8 @@ import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
-import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { PersonCard } from '@/shared-components/PersonCard';
+import { usePeek } from '@/shared-components/peek';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { CHAT_GRIP, useChatWindowBar } from '@/shared-components/ChatSlot';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -197,15 +198,15 @@ function SpeakerFace({ line, room }: { line: ChatLine; room: ChatRoom }) {
   );
 }
 
-function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
+function Marks({ line, mine, small }: { line: ChatLine; mine: boolean; small: boolean }) {
   return (
     <>
       {line.groups.map((group) => (
-        <Badge key={group.name} group={group} card />
+        <Badge key={group.name} group={group} card size={small ? 'xs' : 'sm'} />
       ))}
       {line.streamer && (
         <Tooltip content="streamer">
-          <LiveMark role="img" aria-label="streamer" data-streamer-mark />
+          <LiveMark role="img" aria-label="streamer" data-streamer-mark size={small ? 'xs' : 'sm'} />
         </Tooltip>
       )}
       {mine && <span className="bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
@@ -464,7 +465,7 @@ export function EquesLine({ message, at, attrs }: { message: string; at: number;
             {EQUES}
           </span>
           <span className="ml-1 inline-flex items-center gap-1 align-middle">
-            <Badge group={BOT_BADGE} />
+            <Badge group={BOT_BADGE} size={shape === 'bubbles' ? 'xs' : 'sm'} />
           </span>
         </>
       }
@@ -568,7 +569,7 @@ export function RoomLines({
               <>
                 <Speaker line={line} room={room} />
                 <span className="ml-1 inline-flex items-center gap-1 align-middle">
-                  <Marks line={line} mine={mine} />
+                  <Marks line={line} mine={mine} small={shape === 'bubbles'} />
                 </span>
               </>
             }
@@ -847,7 +848,7 @@ export function ChatPanel({
             role="log"
             aria-live="polite"
             data-style={shape}
-            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm', shape === 'log' ? 'gap-1' : shape === 'bubbles' ? 'gap-px' : 'gap-0.5', shape === 'bubbles' ? 'leading-tight' : 'leading-snug')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
             {!waiting && !server && welcome && <WelcomeLine key={room.key} welcome={welcome} />}

@@ -15,7 +15,8 @@ use sqlx::PgPool;
 
 use crate::auth::Me;
 use crate::s3;
-use crate::{may_write, unique_violation, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
+use crate::test_streamers::DummySecret;
+use crate::{may_write, unique_violation, valid_name, ApiError, ApiResult, AppState, Name};
 
 const TEXT_MAX: usize = 10_000;
 const BLOCKS_MAX: usize = 40;
@@ -207,12 +208,11 @@ async fn put_page(
     State(s): State<AppState>,
     Name(name): Name,
     me: Me,
-    q: Result<Query<PasswordQuery>, QueryRejection>,
+    secret: DummySecret,
     body: Result<Json<PageBody>, JsonRejection>,
 ) -> ApiResult {
-    let Query(q) = q?;
     let Json(body) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "bad json body"))?;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     if body.blocks.len() > BLOCKS_MAX {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "40 blocks at most"));
     }
@@ -520,7 +520,8 @@ async fn put_file(
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let q = q.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "bad type. one of image, video, sound"))?.0;
-    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let secret = crate::test_streamers::given_secret(&headers, q.password.clone());
+    may_write(&s, &name, me.name(), secret.as_deref()).await?;
     let body = match body {
         Ok(body) => body,
         Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => {

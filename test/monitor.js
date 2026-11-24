@@ -15,6 +15,7 @@ const ENV = {
   ALERT_WEBHOOK: '',
   CHECK_EVERY_SECS: '2',
   ERRORS_EVERY_SECS: '3',
+  METRICS_EVERY_SECS: '2',
   DOWN_AFTER: '2',
   MONITOR_PORT: String(PORT)
 };
@@ -115,6 +116,61 @@ async function stateWhen(api, ready, what, ms = 40000) {
     return `${l.errors.length} report(s) pulled`;
   });
 
+  await step("the local box's host and container numbers come through the agent, or the page says why not", async () => {
+    const metricsOf = (st) => st.targets.find((t) => t.name === 'local').metrics || {};
+    if (!OPS_TOKEN) {
+      const s = await stateWhen(api, (st) => metricsOf(st).status, 'a first /api/metrics pull', 15000);
+      expect(metricsOf(s).status === 'no OPS_TOKEN for this box', `metrics.status "${metricsOf(s).status}"`);
+      return { skip: 'no OPS_TOKEN in .env, so the agent is not asked and the page says so' };
+    }
+    const s = await stateWhen(api, (st) => metricsOf(st).host && metricsOf(st).host.cpu_pct !== null && metricsOf(st).containers > 0, 'host and container numbers for local', 45000);
+    const m = metricsOf(s);
+    const h = m.host;
+    expect(!m.status, `metrics.status "${m.status}" (a 404 means the agent has no OPS_TOKEN or the Caddyfile has no /api/metrics route)`);
+    expect(h.mem_used > 0 && h.mem_used < h.mem_total, `memory ${h.mem_used} of ${h.mem_total}`);
+    expect(h.disk.length === 1 && h.disk[0].used > 0 && h.disk[0].used < h.disk[0].total, `disk ${JSON.stringify(h.disk)}`);
+    expect(h.cpu_pct >= 0 && h.cpu_pct <= 100, `cpu ${h.cpu_pct}`);
+    const series = await (await api.get(`${MON}/api/monitor/metrics?target=local&range=1h`)).json();
+    expect(series.t.length >= 1 && series.host.cpu_pct.length === series.t.length, `series: ${series.t.length} points`);
+    const apiBox = series.latest.containers.find((c) => c.name === 'api');
+    expect(apiBox && apiBox.state === 'running' && apiBox.mem_bytes > 0, `the api container: ${JSON.stringify(apiBox)}`);
+    expect(series.containers.api && series.containers.api.cpu_pct.length === series.t.length, 'no cpu series for the api container');
+    const bad = await api.get(`${MON}/api/monitor/metrics?target=local&range=2y`);
+    expect(bad.status() === 400, `range=2y answered ${bad.status()}`);
+    return `cpu ${h.cpu_pct}% · mem ${Math.round(h.mem_used / 1048576)} of ${Math.round(h.mem_total / 1048576)} MiB · ${m.containers} containers · ${series.t.length} points`;
+  });
+
+  await step("the local box's endpoint and call timings come through the agent, and the page lists them", async () => {
+    if (!OPS_TOKEN) return { skip: 'no OPS_TOKEN in .env, so the agent is not asked' };
+    for (let i = 0; i < 5; i++) await api.get(`${BASE}/api/streamers/timing-probe-${i}`);
+    const until = Date.now() + 45000;
+    let rows = [];
+    while (Date.now() < until) {
+      const res = await api.get(`${MON}/api/monitor/timings?range=1h&target=local`);
+      if (res.ok()) rows = (await res.json()).rows;
+      if (rows.some((r) => r.name === '/api/streamers/{name}') && rows.some((r) => r.kind === 'db')) break;
+      await sleep(1000);
+    }
+    const route = rows.find((r) => r.kind === 'http' && r.method === 'GET' && r.name === '/api/streamers/{name}');
+    expect(route, `no GET /api/streamers/{name} line in ${rows.length} rows (is TIMINGS_FROM set on the agent, and does the stack run this build?)`);
+    expect(route.n >= 5 && route.p50 > 0 && route.p99 >= route.p50 && route.max >= route.p99, `the route line: ${JSON.stringify(route)}`);
+    expect(!rows.some((r) => r.name.includes('timing-probe')), 'a raw path made it into the names');
+    expect(rows.some((r) => r.kind === 'db') && rows.some((r) => r.kind === 'redis'), `kinds: ${[...new Set(rows.map((r) => r.kind))]}`);
+    const detail = await (await api.get(`${MON}/api/monitor/timings/series?target=local&range=1h&key=${encodeURIComponent(route.key)}`)).json();
+    expect(detail.t.length >= 1 && detail.p95.length === detail.t.length, `detail: ${JSON.stringify(detail).slice(0, 200)}`);
+    const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${MON}/#box=local&q=streamers`, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('table.eps tr.ep', { timeout: 20000 });
+      await page.locator('table.eps tr.ep', { hasText: '/api/streamers/{name}' }).first().click();
+      await page.waitForSelector('table.eps tr.detail canvas', { timeout: 15000 });
+    } finally {
+      await browser.close();
+    }
+    return `${rows.length} lines, ${[...new Set(rows.map((r) => r.kind))].join('/')} · GET /api/streamers/{name} p50 ${route.p50} ms p99 ${route.p99} ms`;
+  });
+
   await step('the page shows both boxes with their status', async () => {
     const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
     try {
@@ -123,14 +179,20 @@ async function stateWhen(api, ready, what, ms = 40000) {
       await page.waitForSelector('[data-name="local"] .pill', { timeout: 15000 });
       const up = (await page.textContent('[data-name="local"] .pill')).trim();
       const down = (await page.textContent('[data-name="dead"] .pill')).trim();
-      const cards = await page.locator('.target').count();
+      const cards = await page.locator('.target[data-name]').count();
       const meta = (await page.textContent('#meta')).trim();
       expect(up === 'up' && down === 'down', `pills: local "${up}", dead "${down}"`);
       expect(cards === 2, `${cards} cards`);
       expect(/build/.test(meta), `header: "${meta}"`);
       const events = (await page.textContent('[data-name="dead"] ul')).trim();
       expect(/dead DOWN/.test(events), `dead's events on the page: "${events}"`);
-      return `"${meta}"`;
+      await page.click('#tabs button:has-text("local")');
+      expect(/box=local/.test(page.url()), `the url does not name the box: ${page.url()}`);
+      if (!OPS_TOKEN) return `"${meta}"`;
+      await page.waitForSelector('.tile canvas', { timeout: 15000 });
+      const tiles = await page.locator('.tile').count();
+      expect(tiles >= 7, `${tiles} graphs on local's tab`);
+      return `"${meta}", ${tiles} graphs on local's tab`;
     } finally {
       await browser.close();
     }
