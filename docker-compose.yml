@@ -54,6 +54,7 @@ services:
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}
       STATS_BASIC_AUTH_HASH: ${STATS_BASIC_AUTH_HASH:-statsoff}
+      STATS_PUBLIC: ${STATS_PUBLIC:-}
     ports:
       - "80:80"
       - "443:443"
@@ -260,6 +261,7 @@ services:
       OPS_TOKENS: ${STATS_TOKENS:-}
       OPS_TOKEN: ${OPS_TOKEN:-}
       ALERT_WEBHOOK: ${STATS_ALERT_WEBHOOK:-}
+      PUBLIC: ${STATS_PUBLIC:-}
       CHECK_EVERY_SECS: "15"
       ERRORS_EVERY_SECS: "60"
       METRICS_EVERY_SECS: "15"

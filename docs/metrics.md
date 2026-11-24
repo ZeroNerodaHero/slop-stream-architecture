@@ -1,6 +1,6 @@
 # metrics
 
-cpu, memory, disk and network for every container and every box, in our own code, on a page at https://stats.nodentity.xyz behind a password. built: the agent, the monitor's history, the page, the stats site, the deploy target. not built yet: alerts on the numbers, `/admin`'s "this box now" panel, video's own per-stream numbers (end of this page).
+cpu, memory, disk and network for every container and every box, in our own code, on a page at https://stats.nodentity.xyz, behind a password or, with an explicit `STATS_PUBLIC=true`, open to anyone. built: the agent, the monitor's history, the page, the stats site, the deploy target. not built yet: alerts on the numbers, `/admin`'s "this box now" panel, video's own per-stream numbers (end of this page).
 
 ## the shape
 
@@ -107,8 +107,8 @@ the monitor pulls `/api/metrics` from every box in its `TARGETS` every 15 s (`ME
 
 dns: a proxied cloudflare cname to `nodentity.xyz`, ssl mode full. the request reaches test-machine's caddy like every other, and caddy's `https://stats.nodentity.xyz` block (`frontend/Caddyfile`) takes it:
 
-- **always behind a password.** `basic_auth` with the user and bcrypt hash from `.env` (`STATS_BASIC_AUTH_USER`, `STATS_BASIC_AUTH_HASH`), passed to caddy by compose. never in the repo.
-- **fails closed.** either one empty or missing: every request is a 503 "stats is off", nothing is proxied, and caddy and the main site still start. compose hands caddy `statsoff` for a blank value (caddy's `{$VAR:default}` only covers an unset variable, and an empty user or hash would stop caddy parsing the whole file), and the block's `@off` matcher treats empty and `statsoff` alike.
+- **behind a password**, unless `STATS_PUBLIC=true` (below). `basic_auth` with the user and bcrypt hash from `.env` (`STATS_BASIC_AUTH_USER`, `STATS_BASIC_AUTH_HASH`), passed to caddy by compose. never in the repo.
+- **fails closed.** `STATS_PUBLIC` anything but `true` and either password value empty or missing: every request is a 503 "stats is off", nothing is proxied, and caddy and the main site still start. compose hands caddy `statsoff` for a blank value (caddy's `{$VAR:default}` only covers an unset variable, and an empty user or hash would stop caddy parsing the whole file), and the block's `@off` matcher treats empty and `statsoff` alike.
 - **`Cache-Control: private, no-store` on every answer**, the 401s and 503s included; the monitor's own header is dropped so there is one. cloudflare's cache rules respect the origin's header (`docs/cloudflare-cache-rules.md`), so nothing behind the password is kept at the edge. also `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`.
 - **the cert** is the one every other route uses, `/certs/cert.pem` from the `certs` container: self-signed, `CN=stream <PUBLIC_IP>`. the `*.nodentity.xyz` let's encrypt cert a browser sees is cloudflare's edge cert, not the origin's; there is no acme on the box (`auto_https off`), and none is needed: "full" accepts a self-signed origin. to make it strict later, put a cloudflare origin ca cert for `nodentity.xyz, *.nodentity.xyz` in the certs volume and switch the zone to full (strict); that covers the stats host with no change here.
 
@@ -116,13 +116,29 @@ dns: a proxied cloudflare cname to `nodentity.xyz`, ssl mode full. the request r
 
 | | how | without the password or token |
 |---|---|---|
-| the page and `/api/monitor*` | `https://stats.nodentity.xyz` only. the `stats` container publishes no port and sits on its own compose network, `stats`, with caddy and nothing else: not the api, not the database, not a host port | 401 (or 503 while off) |
+| the page and `/api/monitor*` | `https://stats.nodentity.xyz` only. the `stats` container publishes no port and sits on its own compose network, `stats`, with caddy and nothing else: not the api, not the database, not a host port | 401 (or 503 while off); anyone, with `STATS_PUBLIC=true` |
 | the agent's numbers | `https://<any host>/api/metrics` on the main site. the agent publishes no port | 404 with no `OPS_TOKEN` on the box, 401 with a wrong one |
 | the agent and the monitor's `/health` | inside docker only | — |
 
 on another box the `https://stats.nodentity.xyz` block exists too but dns does not point there; with no `STATS_BASIC_AUTH_*` in its `.env` it answers 503 anyway.
 
 a wrong password costs caddy one bcrypt check (cost 14, most of a second of cpu); a right one is cached. if anyone hammers the login, a cloudflare rate-limiting rule on `http.host eq "stats.nodentity.xyz"` (say 30 requests per 10 s per ip) stops it at the edge. the page itself makes about one request every 5 s.
+
+### public, no password (`STATS_PUBLIC=true`)
+
+an explicit opt-in for while the numbers are fine for anyone to see. in `.env` on test-machine:
+
+```
+STATS_PUBLIC=true
+```
+
+then `./scripts/deploy.sh stats`. caddy is recreated (a second or two), and the `stats` container is started if it was not running.
+
+- exactly `true`, lowercase. anything else (`TRUE`, `yes`, `1`) is not public: the site goes by the password settings as before, and with those blank it is still a 503. `deploy.sh` warns about any other value.
+- what goes public: the page, `GET /api/monitor` and `GET /api/monitor/metrics`. they only read; any other method is a 405. the box names, their urls in `STATS_TARGETS`, builds, uptimes, events and the host and container numbers are on it.
+- what does not: the error reports. a report names the visitor's ip, login and user agent and the page they were on (`docs/debugging.md`), so with `STATS_PUBLIC=true` the monitor (which gets the same value as `PUBLIC`) leaves them out of `/api/monitor` and the page says how many are stored. they show again behind the password.
+- unchanged: the agent's `/api/metrics` on every box still wants the box's `OPS_TOKEN`; the docker socket is still read-only and `GET` only; `Cache-Control: private, no-store` is on every answer, so cloudflare keeps nothing; the monitor's own per-ip rate limit counts each visitor by the ip caddy resolved from cloudflare.
+- `STATS_BASIC_AUTH_*` are ignored while it is on, and keep working the moment it is off: empty `STATS_PUBLIC` (or set it to `false`) and `./scripts/deploy.sh stats`.
 
 ### set the password
 
@@ -174,6 +190,7 @@ in the root `.env` (`.env.example` has them all, empty):
 |---|---|
 | `STATS_BASIC_AUTH_USER` | the stats site's user: letters, digits, `. _ @ -`. empty: the site is off |
 | `STATS_BASIC_AUTH_HASH` | the bcrypt hash of its password, from `caddy hash-password`, in single quotes. empty: off |
+| `STATS_PUBLIC` | `true`: the stats site with no password, error reports left off. anything else: the password settings decide |
 | `STATS_TARGETS` | the boxes to watch, `name=url` comma separated. empty: this box alone, `<ENV_NAME>=https://frontend` |
 | `STATS_TOKENS` | `name=token` for boxes whose `OPS_TOKEN` is not this box's |
 | `STATS_ALERT_WEBHOOK` | where the monitor posts down and up (discord or slack style). empty: the page and the log only |
