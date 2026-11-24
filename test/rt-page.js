@@ -152,6 +152,28 @@ function established(port) {
       await three.close();
       return `"${before}" while pressed, ${want} after; ${line.replace('[rt perf] ', '')}`;
     });
+
+    await step('with no flag a page is on /rt; ?rt=0 still gets the legacy /chat socket', async () => {
+      const plain = await browser.newContext({ ignoreHTTPSErrors: true });
+      const d = await plain.newPage();
+      const own = [];
+      d.on('websocket', (ws) => own.push(new URL(ws.url()).pathname));
+      await d.goto(`${BASE}/watch/${ROOM}`);
+      await d.waitForFunction(() => /live/.test(document.querySelector('#chat-count')?.textContent || ''), null, W);
+      expect(!own.some((p) => p.startsWith('/chat/')), `the page opened ${JSON.stringify(own)}`);
+      await d.goto(`${BASE}/watch/${ROOM}?rt=0`);
+      await d.waitForFunction(() => /live/.test(document.querySelector('#chat-count')?.textContent || ''), null, W);
+      expect(own.some((p) => p === `/chat/${ROOM}`), `?rt=0 opened ${JSON.stringify(own)}`);
+      await d.goto(`${BASE}/watch/${ROOM}`);
+      await d.waitForFunction(() => /live/.test(document.querySelector('#chat-count')?.textContent || ''), null, W);
+      const legacy = own.filter((p) => p === `/chat/${ROOM}`).length;
+      expect(legacy === 2, `the opt-out was not remembered: ${JSON.stringify(own)}`);
+      await d.goto(`${BASE}/watch/${ROOM}?rt=1`);
+      await d.waitForFunction(() => /live/.test(document.querySelector('#chat-count')?.textContent || ''), null, W);
+      expect(own.filter((p) => p === `/chat/${ROOM}`).length === legacy, '?rt=1 did not bring /rt back');
+      await plain.close();
+      return `no page /chat socket by default, ${legacy} legacy loads with the opt-out, then /rt again`;
+    });
   } finally {
     await browser.close();
   }

@@ -158,10 +158,11 @@ export function rtWanted(href: string, storage: Pick<Storage, 'getItem' | 'setIt
     flag = null;
   }
   try {
-    if (flag === '1') storage?.setItem('rt', '1');
-    else if (flag === '0') storage?.removeItem('rt');
-    return storage?.getItem('rt') === '1' || flag === '1';
+    if (flag === '0') storage?.setItem('rt', '0');
+    else if (flag === '1') storage?.removeItem('rt');
+    if (flag === '0' || flag === '1') return flag === '1';
+    return storage?.getItem('rt') !== '0';
   } catch {
-    return flag === '1';
+    return flag !== '0';
   }
 }
