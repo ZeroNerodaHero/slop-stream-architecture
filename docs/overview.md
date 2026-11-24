@@ -31,6 +31,7 @@ nothing is compiled on the server. every push to `main` makes github build the f
 - `./scripts/deploy.sh voice` — only voice (drops every voice call). skipped while `VOICE_SECRET` is empty
 - `./scripts/deploy.sh` — everything again
 - `./scripts/deploy.sh --prune-deploy` — the disk is full of old builds and images: drop them first, then deploy
+- `./scripts/deploy.sh prune` — health check, then drop old app image tags (keeps what runs and the one before it) and dangling images. every deploy above does this at the end, only when the health check passed. `PRUNE_DRY_RUN=1` only prints. volumes, postgres, redis and seaweedfs are never touched (docs/scripts-and-config.md)
 
 ## building yourself
 

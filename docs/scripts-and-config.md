@@ -22,6 +22,8 @@ bring the stream lab up on this machine, or redeploy part of it.
                                 "only 2664MB free". volumes, containers and the swapfile stay
   ./scripts/deploy.sh 203.0.113.7       everything, with this ip
   ./scripts/deploy.sh passwd billy      a new password for an account (there is no email reset)
+  ./scripts/deploy.sh prune             check health, then drop old app image tags and dangling images
+                                (PRUNE_DRY_RUN=1 only prints what would go)
   PUBLIC_IP=10.0.0.5 ./scripts/deploy.sh
 ```
 
@@ -65,6 +67,36 @@ Every run that ends well writes the commit it deployed to .deployed (gitignored)
 picked up whole by the next one instead of reporting "nothing changed".
 After the health check, the demo models in random-media/vrms go into the bucket when the
 folder changed since they last did (scripts/models.sh; .models remembers the folder).
+
+### image prune after a deploy
+
+Every deploy that redeploys containers (a full deploy, any named service, `--pull` that
+found something to redeploy) ends with `post_deploy_prune`, and `./scripts/deploy.sh prune`
+runs the same step alone. It only runs once the health check passed; when it did not, it
+prints "skipping the image prune" and removes nothing, so the images from before stay for a
+rollback. The standalone `prune` runs the health check first and exits non-zero when it fails.
+
+What it does, between a `df -h /` before and after:
+
+- for each app image repository, `$IMAGES` + `stream-<x>` and the bare `stream-<x>` a `--build`
+  makes, for x in `APP_IMAGE_SERVICES` (pages, api, video, dummy: the only images
+  docker-compose.yml names after this stack; chat, events and home run the api image, voice the
+  video one), it ranks the tagged images by created time and keeps: every image a running
+  container uses, the image `TAG` names, the newest image older than each of those (the rollback),
+  and anything newer than them (pulled but not yet deployed). when none of them is present it
+  keeps the newest two. every other tag in that repository goes with a plain `docker rmi
+  <repo>:<tag>`, never `-f`, never by id; a refusal is printed and the run goes on.
+- an image any container uses, running or stopped, is never picked.
+- then `docker image prune -f` for dangling images (no `-a`, so unused third-party images stay).
+  in a `--build` deploy the previous build is untagged once `:latest` moves, so this drops it:
+  the rollback image is only kept for registry deploys, whose tags are commits.
+- third-party images (postgres, redis, seaweedfs, caddy, alpine/openssl) are never looked at:
+  only exact app repositories are listed, and `is_app_repo` refuses any name containing
+  postgres, redis, seaweed, caddy or openssl before each `rmi`. no volumes, no `docker system
+  prune`, no `docker volume`, no build cache (that is `--prune-deploy`).
+- `PRUNE_DRY_RUN=1` prints "would remove <repo:tag>" for each pick and the dangling count,
+  and removes nothing.
+- a prune that stumbles is a warning; it never fails the deploy.
 
 It also records the release it put up: the highest v<n> tag reaching HEAD (the
 github action numbers every push to main it built images for: v1, v2, ..., and

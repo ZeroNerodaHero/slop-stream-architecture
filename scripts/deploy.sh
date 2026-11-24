@@ -541,13 +541,112 @@ compose_up() {
   "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
   up_voice
   sync_caddy
-  prune_images
 }
 
-prune_images() {
-  local out
-  out="$("${DOCKER[@]}" image prune -f 2>/dev/null | tail -n 1 || true)"
-  note "untagged images from earlier builds removed (${out:-nothing to remove}). the build cache stays; ./scripts/deploy.sh --prune-deploy drops it first next time"
+APP_IMAGE_SERVICES="pages api video dummy"
+
+app_image_repos() {
+  local s
+  for s in $APP_IMAGE_SERVICES; do
+    [ -z "${IMAGES:-}" ] || printf '%sstream-%s\n' "$IMAGES" "$s"
+    printf 'stream-%s\n' "$s"
+  done | awk '!seen[$0]++'
+}
+
+is_app_repo() {
+  case "$1" in
+    ''|*postgres*|*redis*|*seaweed*|*caddy*|*openssl*) return 1 ;;
+  esac
+  app_image_repos | grep -qxF -- "$1"
+}
+
+container_image_ids() {
+  local -a ids=()
+  read -r -a ids <<< "$("${DOCKER[@]}" ps -q "$@" 2>/dev/null | tr '\n' ' ')" || true
+  [ ${#ids[@]} -gt 0 ] || return 0
+  "${DOCKER[@]}" inspect -f '{{.Image}}' "${ids[@]}" 2>/dev/null | sort -u || true
+}
+
+pick_stale_images() {
+  awk -v anchors="$1" -v busy="$2" '
+    BEGIN {
+      n = split(anchors, a, " "); for (i = 1; i <= n; i++) anchor[a[i]] = 1
+      n = split(busy, b, " "); for (i = 1; i <= n; i++) inuse[b[i]] = 1
+    }
+    NF >= 2 && !seen[$2]++ { id[++count] = $2 }
+    END {
+      last = 0
+      for (i = 1; i <= count; i++) {
+        if (id[i] in anchor) { keep[id[i]] = 1; if (i > 1) keep[id[i - 1]] = 1; last = i }
+      }
+      if (!last) { if (count >= 1) keep[id[count]] = 1; if (count >= 2) keep[id[count - 1]] = 1 }
+      else for (i = last + 1; i <= count; i++) keep[id[i]] = 1
+      for (i = 1; i <= count; i++) if (!(id[i] in keep) && !(id[i] in inuse)) print id[i]
+    }'
+}
+
+PRUNE_REMOVED=0
+PRUNE_FAILED=0
+
+prune_app_repo() {
+  local repo="$1" ids id rows target stale ref created
+  ids="$("${DOCKER[@]}" images --no-trunc --format '{{.ID}} {{.Tag}}' "$repo" 2>/dev/null | awk '$2 != "<none>" {print $1}' | sort -u || true)"
+  [ -n "$ids" ] || return 0
+  rows="$(for id in $ids; do
+    printf '%s %s\n' "$("${DOCKER[@]}" image inspect -f '{{.Created}}' "$id" 2>/dev/null || echo 0)" "$id"
+  done | sort)"
+  target="$("${DOCKER[@]}" image inspect -f '{{.Id}}' "$repo:${TAG:-latest}" 2>/dev/null || true)"
+  stale="$(printf '%s\n' "$rows" | pick_stale_images "$2 $target" "$3")"
+  if [ -z "$stale" ]; then note "$repo: nothing old beyond the one before what runs"; return 0; fi
+  for id in $stale; do
+    created="$(printf '%s\n' "$rows" | awk -v id="$id" '$2 == id {print $1; exit}')"
+    for ref in $("${DOCKER[@]}" image inspect -f '{{range .RepoTags}}{{println .}}{{end}}' "$id" 2>/dev/null | grep -F -- "$repo:" || true); do
+      [ "${ref%:*}" = "$repo" ] && is_app_repo "${ref%:*}" || continue
+      if [ "${PRUNE_DRY_RUN:-0}" = 1 ]; then
+        note "would remove $ref   (${id#sha256:} created $created)"
+        PRUNE_REMOVED=$(( PRUNE_REMOVED + 1 ))
+      elif "${DOCKER[@]}" rmi "$ref" >/dev/null 2>&1; then
+        note "removed $ref   (created $created)"
+        PRUNE_REMOVED=$(( PRUNE_REMOVED + 1 ))
+      else
+        note "kept $ref: docker rmi refused it (a container may still hold it)"
+        PRUNE_FAILED=$(( PRUNE_FAILED + 1 ))
+      fi
+    done
+  done
+}
+
+prune_old_images() {
+  local repo running busy out n
+  PRUNE_REMOVED=0; PRUNE_FAILED=0
+  say "pruning old app images: per stream-<x> image, what runs and the one before it stay$([ "${PRUNE_DRY_RUN:-0}" != 1 ] || echo "   (PRUNE_DRY_RUN=1: nothing is removed)")"
+  note "disk before:"
+  df -h / 2>/dev/null | sed 's/^/      /' || true
+  running="$(container_image_ids | tr '\n' ' ')"
+  busy="$(container_image_ids -a | tr '\n' ' ')"
+  while IFS= read -r repo; do
+    is_app_repo "$repo" || continue
+    prune_app_repo "$repo" "$running" "$busy"
+  done < <(app_image_repos)
+  if [ "${PRUNE_DRY_RUN:-0}" = 1 ]; then
+    n="$("${DOCKER[@]}" images -q -f dangling=true 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+    note "would run: ${DOCKER[*]} image prune -f   (${n:-0} dangling image(s))"
+    note "$PRUNE_REMOVED tag(s) would go"
+  else
+    out="$("${DOCKER[@]}" image prune -f 2>/dev/null | tail -n 1 || true)"
+    note "dangling images: ${out:-nothing to remove}"
+    note "$PRUNE_REMOVED old tag(s) removed$([ "$PRUNE_FAILED" = 0 ] || echo ", $PRUNE_FAILED refused and kept")"
+  fi
+  note "disk after:"
+  df -h / 2>/dev/null | sed 's/^/      /' || true
+}
+
+post_deploy_prune() {
+  if [ "$1" -ne 1 ]; then
+    say "skipping the image prune: the health check did not pass, so every image stays for a rollback"
+    return 0
+  fi
+  prune_old_images || warn "the image prune stumbled; the deploy itself is fine"
 }
 
 container_state() {
@@ -876,6 +975,7 @@ usage() {
   cat <<EOF
 ${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy|voice ...]
        ./scripts/deploy.sh passwd <name>
+       ./scripts/deploy.sh prune
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
@@ -909,6 +1009,9 @@ ${B}flags${N}
 
 ${B}other${N}
   ${B}passwd <name>${N}             print a new random password for that account. the only reset there is
+  ${B}prune${N}                     check health, then drop old stream-<x> image tags (keeps what runs and the
+                            one before it) and dangling images. every deploy that redeploys does this
+                            after its health check. PRUNE_DRY_RUN=1 only prints what would go
   ${B}-h, --help${N}                this
 
 ${B}notes${N}
@@ -928,14 +1031,14 @@ EOF
 }
 
 parse_args() {
-  IP_ARG=""; PULL=0; PRUNE=0; IMAGES_MODE=0; BUILD_MODE=0; TAG="${TAG:-}"; TARGETS=(); PASSWD_NAME=""
+  IP_ARG=""; PULL=0; PRUNE=0; IMAGES_MODE=0; BUILD_MODE=0; TAG="${TAG:-}"; TARGETS=(); PASSWD_NAME=""; PRUNE_ONLY=0
   local a want_name=0 want_tag=0
   for a in "$@"; do
     if [ "$want_name" = 1 ]; then PASSWD_NAME="$a"; want_name=0; continue; fi
     if [ "$want_tag" = 1 ]; then
       want_tag=0
       case "$a" in
-        -*|frontend|api|video|dummy|voice|pages|chat|events|home|passwd) ;;
+        -*|frontend|api|video|dummy|voice|pages|chat|events|home|passwd|prune) ;;
         *) if ! is_ipv4 "$a" && [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then TAG="$a"; continue; fi ;;
       esac
     fi
@@ -947,6 +1050,7 @@ parse_args() {
       --images=*) IMAGES_MODE=1; TAG="${a#--images=}" ;;
       --build) BUILD_MODE=1 ;;
       passwd) want_name=1 ;;
+      prune) PRUNE_ONLY=1 ;;
       frontend|api|video|dummy|voice) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
       chat|events|home) TARGETS+=("api") ;;
@@ -959,6 +1063,9 @@ parse_args() {
   if [ "$want_name" = 1 ]; then die "usage: ./scripts/deploy.sh passwd <name>"; fi
   if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ "$IMAGES_MODE" = 1 ] || [ "$BUILD_MODE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
     die "passwd goes alone: ./scripts/deploy.sh passwd $PASSWD_NAME"
+  fi
+  if [ "$PRUNE_ONLY" = 1 ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ "$IMAGES_MODE" = 1 ] || [ "$BUILD_MODE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ] || [ -n "$PASSWD_NAME" ]; }; then
+    die "prune goes alone: ./scripts/deploy.sh prune"
   fi
   if [ "$IMAGES_MODE" = 1 ] && [ "$BUILD_MODE" = 1 ]; then die "--images and --build: pick one"; fi
   if [ -n "$IP_ARG" ] && [ ${#TARGETS[@]} -gt 0 ]; then
@@ -1121,6 +1228,7 @@ full_deploy() {
   local ok=1
   wait_for_health || ok=0
   if [ "$ok" -eq 1 ]; then sync_models; fi
+  post_deploy_prune "$ok"
   show_result "$ok"
   if [ "$ok" -eq 1 ]; then record_deployed; record_release; fi
   [ "$ok" -eq 1 ]
@@ -1142,13 +1250,26 @@ partial_deploy() {
   redeploy_targets
   local -a swapped=(); read -r -a swapped <<< "$(swapped_containers)" || true
   [ ${#swapped[@]} -eq 0 ] || check_swapped "${swapped[@]}"
-  prune_images
   local ok=1
   wait_for_health || ok=0
   if [ "$ok" -eq 1 ]; then sync_models; fi
+  post_deploy_prune "$ok"
   say "containers"
   "${DOCKER[@]}" compose ps || true
   if [ "$ok" -eq 1 ]; then record_deployed; record_release; note "done. https://${PUBLIC_IP}/   (release ${RELEASE:-none}, build $BUILD)"; fi
+  [ "$ok" -eq 1 ]
+}
+
+prune_only() {
+  ensure_curl
+  load_public_ip_from_env
+  pick_docker_cmd
+  IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
+  [ -z "$IMAGES" ] || IMAGES="${IMAGES%/}/"
+  TAG="${TAG:-$(env_file_value TAG)}"
+  local ok=1
+  wait_for_health || ok=0
+  post_deploy_prune "$ok"
   [ "$ok" -eq 1 ]
 }
 
@@ -1172,6 +1293,11 @@ main() {
   if [ -n "$PASSWD_NAME" ]; then
     passwd_account "$PASSWD_NAME"
     exit 0
+  fi
+
+  if [ "$PRUNE_ONLY" = 1 ]; then
+    prune_only
+    exit $?
   fi
 
   if [ "$PULL" = 1 ]; then
