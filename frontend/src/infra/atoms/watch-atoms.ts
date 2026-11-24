@@ -102,6 +102,7 @@ const WS_PATH = '/ws';
 
 interface Warm {
   name: string;
+  url: string;
   pc: RTCPeerConnection;
   videoTransceivers: RTCRtpTransceiver[];
   offer: Promise<void>;
@@ -111,7 +112,7 @@ interface Warm {
 
 const WARM_MAX_MS = 8000;
 
-function makeWarm(name: string): Warm {
+function makeWarm(name: string, url = WS_PATH): Warm {
   const warmPc = new RTCPeerConnection();
   const videoTransceivers = Array.from({ length: VIDEO_SLOTS }, () => warmPc.addTransceiver('video', { direction: 'recvonly' }));
   warmPc.addTransceiver('audio', { direction: 'recvonly' });
@@ -121,9 +122,9 @@ function makeWarm(name: string): Warm {
     () => perfMark('offer'),
     () => undefined
   );
-  const ws = new WebSocket(relayUrl(WS_PATH));
+  const ws = new WebSocket(relayUrl(url));
   ws.addEventListener('open', () => perfMark('ws-open'), { once: true });
-  return { name, pc: warmPc, videoTransceivers, offer, ws, born: performance.now() };
+  return { name, url, pc: warmPc, videoTransceivers, offer, ws, born: performance.now() };
 }
 
 function closeWarm(w: Warm) {
@@ -182,7 +183,7 @@ function takeBoot(name: string): { warm: Warm; grant: Promise<WatchGrant> } | nu
   const boot = window.__bootWatch;
   if (!boot) return null;
   delete window.__bootWatch;
-  const warm: Warm = { name: boot.name, pc: boot.pc, videoTransceivers: boot.videoTransceivers, offer: boot.offer, ws: boot.ws, born: boot.born };
+  const warm: Warm = { name: boot.name, url: WS_PATH, pc: boot.pc, videoTransceivers: boot.videoTransceivers, offer: boot.offer, ws: boot.ws, born: boot.born };
   if (boot.name !== name || !isFresh(warm)) {
     closeWarm(warm);
     return null;
@@ -339,13 +340,15 @@ async function start(name: string): Promise<void> {
   if (fromPress || boot) perfMark('start');
   else perfBegin('start');
   early = fromPress ?? boot?.warm ?? (knownNotLive(name) ? null : makeWarm(name));
+  const asked = takePrefetched<WatchGrant>(grantKey(name))?.answer ?? boot?.grant ?? api.watch(name);
+  const ahead = early && handshake(name, early);
 
   let grant;
   try {
-    grant = await (takePrefetched<WatchGrant>(grantKey(name))?.answer ?? boot?.grant ?? api.watch(name));
+    grant = await asked;
   } catch {
     if (mine === attempt) {
-      dropEarly();
+      teardown();
       retryLater('cannot reach the server. retrying');
     }
     return;
@@ -353,7 +356,7 @@ async function start(name: string): Promise<void> {
   if (mine !== attempt) return;
   perfMark('grant');
   if (grant.name && grant.name !== name && isValidName(grant.name)) {
-    dropEarly();
+    teardown();
     store.set(watchRenamedToAtom, grant.name);
     return;
   }
@@ -371,20 +374,39 @@ async function start(name: string): Promise<void> {
   store.set(canModerateAtom, grant.can_moderate === true);
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
   if (!grant.live) {
-    dropEarly();
+    teardown();
     waitForLive(NOT_LIVE_MESSAGE);
     return;
   }
 
-  if (early && !isFresh(early)) dropEarly();
-  const warm = early ?? (early = makeWarm(name));
+  let shake = ahead && !ahead.failed() && ahead.warm.url === grant.url ? ahead : null;
+  if (!shake) {
+    if (ahead) teardown();
+    shake = handshake(name, (early = makeWarm(name, grant.url)));
+  }
+  await settle(shake);
+}
+
+interface Shake {
+  warm: Warm;
+  done: Promise<WebSocket | Error>;
+  failed: () => boolean;
+  show: () => void;
+}
+
+function handshake(name: string, warm: Warm): Shake {
   const myPc = warm.pc;
   pc = myPc;
   const { videoTransceivers } = warm;
-
   const main = new MediaStream();
   primary = main;
-  myPc.ontrack = (e) => {
+  let shown = false;
+  let sent = false;
+  let outcome: WebSocket | Error | null = null;
+  const heldTracks: RTCTrackEvent[] = [];
+  const heldMessages: RelayReply[] = [];
+
+  const onTrack = (e: RTCTrackEvent) => {
     if (e.track.kind === 'audio') main.addTrack(e.track);
     else {
       const slot = videoTransceivers.indexOf(e.transceiver);
@@ -395,20 +417,16 @@ async function start(name: string): Promise<void> {
     showPrimary();
     if (store.get(remoteStreamAtom) !== main) store.set(remoteStreamAtom, main);
   };
-  myPc.onconnectionstatechange = () => {
+  const onState = () => {
     if (pc !== myPc) return;
     const state = myPc.connectionState;
     if (state === 'connected') {
       if (connectTimer) clearTimeout(connectTimer);
       if (played) setPhase('watching', 'watching');
-      else {
-        setPhase('connected', 'connected, waiting for video');
-        perfMark('ice-connected');
-      }
+      else setPhase('connected', 'connected, waiting for video');
     } else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
     else if (state === 'failed') fail('connection failed. udp blocked?', myPc);
   };
-
   const onMessage = (msg: RelayReply) => {
     if (pc !== myPc) return;
     if (msg.error) fail(msg.error, myPc);
@@ -427,36 +445,79 @@ async function start(name: string): Promise<void> {
       }
     }
   };
+  const connecting = () => {
+    if (shown && sent && pc === myPc) setPhase('connecting', 'connecting');
+  };
 
-  try {
-    await warm.offer;
+  myPc.ontrack = (e) => {
+    if (shown) onTrack(e);
+    else heldTracks.push(e);
+  };
+  myPc.onconnectionstatechange = () => {
     if (pc !== myPc) return;
-    const socket = grant.url === WS_PATH && warm.ws.readyState <= WebSocket.OPEN ? warm.ws : undefined;
-    if (!socket) warm.ws.close();
-    setPhase('connecting', 'connecting');
-    ws = await connectRelay({
-      role: 'watch',
-      name,
-      pc: myPc,
-      url: grant.url,
-      socket,
-      onPhase: (phase) => {
-        if (phase !== 'ws-open' || !socket) perfMark(phase);
-      },
-      onMessage
-    });
-    if (early === warm) early = null;
-  } catch (err) {
-    if (pc !== myPc) return;
-    if (messageOf(err) === 'not live') {
+    if (myPc.connectionState === 'connected' && !played) perfMark('ice-connected');
+    if (shown) onState();
+  };
+
+  const done = warm.offer
+    .then(() => {
+      if (pc !== myPc) throw new Error('cancelled');
+      sent = true;
+      connecting();
+      return connectRelay({
+        role: 'watch',
+        name,
+        pc: myPc,
+        url: warm.url,
+        socket: warm.ws,
+        onPhase: (phase) => {
+          if (phase !== 'ws-open') perfMark(phase);
+        },
+        onMessage: (msg) => {
+          if (shown) onMessage(msg);
+          else heldMessages.push(msg);
+        }
+      });
+    })
+    .then(
+      (socket) => (outcome = socket),
+      (err) => (outcome = new Error(messageOf(err)))
+    );
+
+  return {
+    warm,
+    done,
+    failed: () => outcome instanceof Error,
+    show: () => {
+      shown = true;
+      connecting();
+      heldTracks.splice(0).forEach(onTrack);
+      heldMessages.splice(0).forEach(onMessage);
+      onState();
+    }
+  };
+}
+
+async function settle(shake: Shake) {
+  const myPc = shake.warm.pc;
+  shake.show();
+  const socket = await shake.done;
+  if (pc !== myPc) return;
+  if (socket instanceof Error) {
+    if (socket.message === 'not live') {
       teardown();
       waitForLive(NOT_LIVE_MESSAGE);
-    } else fail(`failed: ${messageOf(err)}`, myPc);
+    } else fail(`failed: ${socket.message}`, myPc);
     return;
   }
-
+  if (early === shake.warm) early = null;
+  ws = socket;
   ws.onclose = dropped;
-  if (pc === myPc) startWatchStats();
+  if (socket.readyState === WebSocket.CLOSED) {
+    dropped();
+    return;
+  }
+  startWatchStats();
 
   connectTimer = setTimeout(() => {
     if (pc === myPc && myPc.connectionState !== 'connected') fail('no video. udp blocked?', myPc);
