@@ -1937,7 +1937,8 @@
     resizeTimer = setTimeout(() => { for (const c of charts) draw(c); for (const c of tcharts) draw(c); }, 100);
   });
   tick();
-  setInterval(tick, 5000);
+  setInterval(() => { if (!document.hidden) tick(); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 })();
 </script>
 </body>
