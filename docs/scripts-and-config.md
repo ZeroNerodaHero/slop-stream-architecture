@@ -41,6 +41,13 @@ images, swaps only their containers. frontend = the pages; caddy keeps
 running, so live streams survive. api = a few seconds of 502, streams
 survive, and the s3 container is created first when it is missing (never
 recreated). video = every live stream ends (the script says so first).
+dummy = only the dummy container is swapped (onto the new image); video and
+api are left out of the `up`, on whatever image they run, unless
+DUMMY_PASSWORD in .env (or the shell) differs from the one in their running
+container's env (docker inspect), or the container is missing. then they are
+recreated too and the script says so: video ends every live stream. with
+--images, one whose image moved since it started is still left alone, with a
+warning naming the command that brings it the new password.
 Afterwards the swapped containers are checked: running, healthy where the
 image has a check, or the script exits non-zero (no rollback).
 

@@ -124,6 +124,7 @@ each is three gifs from `random-media/gifs` bouncing around like the dvd logo, d
 your own names: `DUMMY_NAMES=alice,bob,carol`.
 set it back to 0 and run it again to turn them off.
 the password is what lets the dummy box use `dummy-` names. nobody else can.
+video and the api check that password too, so `./scripts/deploy.sh dummy` recreates them only when `DUMMY_PASSWORD` in `.env` differs from what the running containers have, and says so: swapping video ends every live stream. otherwise only the dummy container is swapped, onto the new image, and video and the api keep running on whatever image they have.
 each fake stream costs a few percent of a core, at the lowest cpu priority on the box (nice 19, `cpu_shares: 128`), so real streams come first.
 
 ## test

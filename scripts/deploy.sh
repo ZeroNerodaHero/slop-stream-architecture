@@ -705,14 +705,23 @@ image_moved() {
 redeploy_dummy() {
   build_one dummy
   local -a also=() moved=()
-  local svc
+  local svc running wanted="${DUMMY_PASSWORD-$(env_file_value DUMMY_PASSWORD)}"
   for svc in video api; do
+    running="$("${DOCKER[@]}" inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$svc" 2>/dev/null | sed -n 's/^DUMMY_PASSWORD=/=/p' | tail -n 1 || true)"
+    [ "$running" != "=$wanted" ] || continue
     if [ "${IMAGES_MODE:-0}" = 1 ] && image_moved "$svc"; then moved+=("$svc"); else also+=("$svc"); fi
   done
-  say "swapping the dummy container$([ ${#also[@]} -eq 0 ] || echo " (${also[*]} too, recreated only if DUMMY_PASSWORD changed; video ends every live stream then)")"
+  local msg="swapping the dummy container"
+  if [ ${#also[@]} -gt 0 ]; then
+    msg="$msg and ${also[*]} (DUMMY_PASSWORD changed or the container is missing)"
+    [[ " ${also[*]} " != *" video "* ]] || msg="$msg; video ends every live stream"
+  elif [ ${#moved[@]} -eq 0 ]; then
+    msg="$msg only; video and api keep running as they are (DUMMY_PASSWORD unchanged)"
+  fi
+  say "$msg"
   "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} dummy ${also[@]+"${also[@]}"}
   if [ ${#moved[@]} -gt 0 ]; then
-    warn "the images moved since ${moved[*]} started, so they were left alone.
+    warn "DUMMY_PASSWORD changed, but the images moved since ${moved[*]} started, so they were left alone.
   a changed DUMMY_PASSWORD reaches them with:  ./scripts/deploy.sh ${moved[*]}   (video ends every live stream)"
   fi
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
