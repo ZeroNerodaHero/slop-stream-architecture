@@ -790,8 +790,13 @@ export interface PageWire {
 export const api = {
   /** The login cookie goes along on its own (httponly, same origin). Every field null for nobody. */
   me: () => request<MeInfo>('GET', '/api/me'),
-  signup: (name: string, password: string) => request<{ name: string }>('POST', '/api/signup', { name, password }),
-  login: (name: string, password: string) => request<{ name: string }>('POST', '/api/login', { name, password }),
+  /** `turnstile_token`: the human check's single-use token (Turnstile.tsx); left out while the check is off. */
+  signup: (name: string, password: string, turnstile_token?: string) =>
+    request<{ name: string }>('POST', '/api/signup', { name, password, turnstile_token }),
+  login: (name: string, password: string, turnstile_token?: string) =>
+    request<{ name: string }>('POST', '/api/login', { name, password, turnstile_token }),
+  /** Whether the human check is on, and the public site key its widget is drawn with. Public. */
+  turnstileConfig: () => request<{ enabled: boolean; siteKey: string | null }>('GET', '/api/config/turnstile'),
   logout: () => request<null>('POST', '/api/logout'),
   /** Every login of the account, this one included. */
   logoutAll: () => request<null>('POST', '/api/logout-all'),
@@ -803,7 +808,8 @@ export const api = {
   oauthUnlink: (provider: OAuthProvider) => request<null>('POST', `/api/oauth/${provider}/unlink`),
   /** The pending newcomer (after a provider login nobody here has): which provider, and a name to start from. 404 when there is none. */
   oauthSignupInfo: () => request<{ provider: OAuthProvider; suggested: string }>('GET', '/api/oauth/signup'),
-  oauthSignup: (name: string) => request<{ id: string; name: string }>('POST', '/api/oauth/signup', { name }),
+  oauthSignup: (name: string, turnstile_token?: string) =>
+    request<{ id: string; name: string }>('POST', '/api/oauth/signup', { name, turnstile_token }),
   /** The account's name changes; its logins, groups and pictures stay. Once a month, with the password, not while live. See docs/ids.md. */
   rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */

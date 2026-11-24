@@ -457,6 +457,9 @@ pub(crate) fn client_ip(headers: &HeaderMap) -> String {
 struct Credentials {
     name: String,
     password: String,
+    /// The widget's single-use token (turnstile.rs). Left out while the check is off.
+    #[serde(default)]
+    turnstile_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -534,6 +537,8 @@ async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
         return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
     }
     let password = clean_new_password(&body.password)?;
+    // after the free checks, before the signup counter and the hash
+    crate::turnstile::verify(&s, body.turnstile_token.as_deref(), &client_ip(&headers)).await?;
     limit_signup(&s, &headers).await?;
     // a name somebody renamed away from is theirs for a while yet (docs/ids.md)
     if is_held(&s.db, &name, None).await? {
@@ -570,6 +575,8 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<
     }
     let Some(password) = clean_password(&body.password) else { return Err(wrong()) };
     let ip = client_ip(&headers);
+    // before the counters and argon2: a bot without a token spends neither
+    crate::turnstile::verify(&s, body.turnstile_token.as_deref(), &ip).await?;
     let name_key = login_key(&ip, &name);
     let ip_key = format!("rl:login:ip:{ip}");
     // counted before the verify, not after: a parallel burst would otherwise all read
