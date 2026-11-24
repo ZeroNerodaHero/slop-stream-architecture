@@ -63,6 +63,7 @@ import { ChatImages } from '@/shared-components/ChatPanel';
 import { SearchField, SearchFilters, SearchHit, SearchResults, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
+import { useMentionComplete } from '@/shared-components/MentionComplete';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
@@ -630,6 +631,7 @@ export function FriendChat() {
     latest.current = { drafts, replies };
   }, [drafts, replies]);
   const emotes = useEmoteComplete({ value: draft, onChange: (next) => setDraft(next), input, id: 'friend-chat-emotes' });
+  const mentions = useMentionComplete({ value: draft, onChange: (next) => setDraft(next), input, id: 'friend-chat-mentions', emotes, ctx: null, first: dm });
   const hits = results?.name === name ? results : null;
   const search = useChatSearch(
     searchInput,
@@ -1113,17 +1115,18 @@ export function FriendChat() {
                   onChange={(e) => pickFiles(e.target.files)}
                 />
                 {emotes.list}
+                {mentions.list}
                 <input
                   ref={input}
                   id="friend-chat-text"
                   value={draft}
-                  {...emotes.box}
+                  {...mentions.box}
                   onChange={(e) => {
                     setDraft(e.target.value);
-                    emotes.box.onSelect(e);
+                    mentions.box.onSelect(e);
                   }}
                   onKeyDown={(e) => {
-                    if (emotes.box.onKeyDown(e)) return;
+                    if (mentions.box.onKeyDown(e)) return;
                     if (e.key === 'Escape') {
                       e.stopPropagation();
                       if (replyTo) setReply(null);

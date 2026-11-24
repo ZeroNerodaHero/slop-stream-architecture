@@ -38,6 +38,7 @@ import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
+import { useMentionComplete } from '@/shared-components/MentionComplete';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard } from '@/shared-components/PersonCard';
 import { usePeek } from '@/shared-components/peek';
@@ -772,6 +773,17 @@ export function ChatPanel({
   const wait = useCountdown(useAtomValue(room.waitAtom));
   const aside = useAtomValue(room.guestAtom) && !guest;
   const emotes = useEmoteComplete({ value: draft, onChange: (next) => room.setDraft(next), input: textRef, id: 'chat-emotes' });
+  const mentions = useMentionComplete({
+    value: draft,
+    onChange: (next) => room.setDraft(next),
+    input: textRef,
+    id: 'chat-mentions',
+    emotes,
+    ctx: server ? `chat:${name}/${channel}` : `chat:${name}`,
+    first: server ? null : name,
+    lines,
+    hide: BOT_GROUP
+  });
 
   useEffect(() => room.join(owner), [room, owner?.session, owner?.token, me]);
 
@@ -1026,6 +1038,7 @@ export function ChatPanel({
             )}
             <div className="relative flex items-center gap-2">
               {emotes.list}
+              {mentions.list}
               <Tooltip
                 content={
                   pictures.length >= MAX_CHAT_IMAGES
@@ -1053,13 +1066,13 @@ export function ChatPanel({
                   ref={textRef}
                   id="chat-text"
                   value={draft}
-                  {...emotes.box}
+                  {...mentions.box}
                   onChange={(e) => {
                     room.setDraft(e.target.value);
-                    emotes.box.onSelect(e);
+                    mentions.box.onSelect(e);
                   }}
                   onKeyDown={(e) => {
-                    if (emotes.box.onKeyDown(e)) return;
+                    if (mentions.box.onKeyDown(e)) return;
                     if (e.key === 'Escape' && replyTo) {
                       e.preventDefault();
                       e.stopPropagation();
