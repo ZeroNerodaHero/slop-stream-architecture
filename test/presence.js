@@ -30,9 +30,14 @@ const expect = (cond, what) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const compose = (cmd) => execSync(`docker compose ${cmd}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const online = () => {
-  const raw = compose(`exec -T events bash -c 'exec 3<>/dev/tcp/127.0.0.1/4100; printf "GET /online HTTP/1.0\\r\\n\\r\\n" >&3; cat <&3'`);
+const onlineIn = (service) => {
+  const raw = compose(`exec -T ${service} bash -c 'exec 3<>/dev/tcp/127.0.0.1/4100; printf "GET /online HTTP/1.0\\r\\n\\r\\n" >&3; cat <&3'`);
   return JSON.parse(raw.slice(raw.indexOf('{')));
+};
+const online = () => {
+  const all = {};
+  for (const service of ['events', 'chat']) for (const [name, n] of Object.entries(onlineIn(service))) all[name] = (all[name] || 0) + n;
+  return all;
 };
 
 async function pollUntil(fn, until, { timeout, interval = 300, label }) {
@@ -208,7 +213,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.hover('#user-panel');
     await a.click('#inspector-open');
     await a.waitForSelector('#inspector-panel[open]', { timeout: 5000 });
-    await a.waitForSelector('#inspector-frames li[data-source="/events"][data-type="me"]', { timeout: 5000 });
+    await a.waitForSelector('#inspector-frames li[data-source="/events"][data-type="me"], #inspector-frames li[data-source="/rt"][data-type="me"]', { timeout: 5000 });
     await a.fill('#inspector-filter', 'invisible');
     await a.waitForFunction(() => {
       const rows = [...document.querySelectorAll('#inspector-frames li[data-source]')];
@@ -221,7 +226,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.hover('#user-panel');
     await a.waitForSelector('#inspector-open', { timeout: 15000 });
     await a.click('#inspector-open');
-    await a.waitForSelector(`#inspector-frames li[data-source="/chat/${CLAIMED}"]`, { timeout: 15000 });
+    await a.waitForSelector(`#inspector-frames li[data-source="/chat/${CLAIMED}"], #inspector-frames li[data-source="/rt"][data-type="count"]`, { timeout: 15000 });
     await a.click('#inspector-close');
     return count;
   });
@@ -238,7 +243,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await shownIs(a2, '#my-presence', 'online', 5000);
     const cdp = await browser.newBrowserCDPSession();
     const { targetInfos } = await cdp.send('Target.getTargets');
-    const workers = targetInfos.filter((t) => t.type === 'shared_worker' && /events/.test(t.url));
+    const workers = targetInfos.filter((t) => t.type === 'shared_worker' && /events|rt\.worker/.test(t.url));
     await cdp.detach();
     expect(workers.length === 2, `${workers.length} events worker(s) for two browsers with three pages (want 2): ${workers.map((t) => t.url).join(', ')}`);
     if (!LOCAL) return `2 workers for 3 pages; /online is on the box`;

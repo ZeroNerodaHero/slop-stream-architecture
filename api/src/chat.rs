@@ -9,6 +9,7 @@ use axum::extract::{FromRef, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum::Json;
 use axum::Router;
 use crate::timings::Redis;
 use redis::streams::{StreamId, StreamMaxlen, StreamRangeReply, StreamReadOptions, StreamReadReply};
@@ -453,6 +454,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
 fn router(state: ChatState, limits: crate::ratelimit::ByIp) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/online", get(|State(s): State<ChatState>| async move { Json(s.gateway.online()) }))
         .route("/chat/{name}", get(ws))
         .route("/chat/{server}/{channel}", get(ws_channel))
         .merge(crate::rt::routes())

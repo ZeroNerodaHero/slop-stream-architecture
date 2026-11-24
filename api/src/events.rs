@@ -890,10 +890,16 @@ async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgr
 }
 
 async fn online(State(g): State<Gateway>) -> Json<Value> {
-    let s = g.registry.lock();
-    let mut names: Vec<(&String, usize)> = s.own.iter().map(|(n, set)| (n, set.len())).collect();
-    names.sort();
-    Json(Value::Object(names.into_iter().map(|(n, count)| (n.clone(), json!(count))).collect()))
+    Json(g.online())
+}
+
+impl Gateway {
+    pub(crate) fn online(&self) -> Value {
+        let s = self.registry.lock();
+        let mut names: Vec<(&String, usize)> = s.own.iter().map(|(n, set)| (n, set.len())).collect();
+        names.sort();
+        Value::Object(names.into_iter().map(|(n, count)| (n.clone(), json!(count))).collect())
+    }
 }
 
 fn guest_name(nick: Option<&str>, dummy_prefix: &str) -> Result<Option<String>, Refused> {
