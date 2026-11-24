@@ -565,7 +565,8 @@ async fn sample_loop(app: App) {
                 vec![]
             }
         };
-        let timings = collector.collect(&mut problems).await;
+        let running: Option<Vec<&str>> = (!containers.is_empty()).then(|| containers.iter().filter(|c| c.state == "running").flat_map(|c| [Some(c.name.as_str()), c.service.as_deref()]).flatten().collect());
+        let timings = collector.collect(&mut problems, running.as_deref()).await;
         if problems != last_problems {
             for p in problems.iter().filter(|p| !last_problems.contains(p)) {
                 log::warn!("{p}");

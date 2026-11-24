@@ -484,10 +484,10 @@ async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, up
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| async move {
+        .on_upgrade(move |socket| crate::timings::session("ws", "/chat/{name}", async move {
             let _slot = slot;
             handle(s, name, None, ip, headers, socket).await
-        })
+        }))
         .into_response()
 }
 
@@ -500,18 +500,18 @@ async fn ws_channel(State(s): State<ChatState>, Path((server, channel)): Path<(S
     let ip = client_ip(&headers);
     if channel == EVERY_CHANNEL {
         return match server_of(&s.db, &server).await {
-            Ok(server) => upgrade.on_upgrade(move |socket| async move {
+            Ok(server) => upgrade.on_upgrade(move |socket| crate::timings::session("ws", "/chat/{server}/{channel}", async move {
                 let _slot = slot;
                 handle_server(s, server, ip, headers, socket).await
-            }),
+            })),
             Err(err) => refuse(upgrade, err),
         };
     }
     match crate::groups::channel_room(&s.db, &server, &channel).await {
-        Ok((server, room)) => upgrade.on_upgrade(move |socket| async move {
+        Ok((server, room)) => upgrade.on_upgrade(move |socket| crate::timings::session("ws", "/chat/{server}/{channel}", async move {
             let _slot = slot;
             handle(s, room, Some(server), ip, headers, socket).await
-        }),
+        })),
         Err(err) => refuse(upgrade, err),
     }
 }
@@ -818,6 +818,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
             }
             incoming = socket.recv() => {
                 beat.heard();
+                crate::timings::heard(&incoming);
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text.to_string(),
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
@@ -1548,6 +1549,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
             }
             incoming = socket.recv() => {
                 beat.heard();
+                crate::timings::heard(&incoming);
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text.to_string(),
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,

@@ -13,8 +13,14 @@ const DEFAULT_TIER: u8 = 2;
 
 #[derive(Deserialize)]
 struct Map {
-    tiers: BTreeMap<String, u8>,
+    services: BTreeMap<String, Service>,
     edges: Vec<MapEdge>,
+}
+
+#[derive(Deserialize)]
+struct Service {
+    tier: u8,
+    description: String,
 }
 
 #[derive(Deserialize)]
@@ -22,7 +28,17 @@ struct MapEdge {
     from: String,
     to: String,
     port: Option<u16>,
+    proto: Option<String>,
     what: String,
+    dir: Dir,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum Dir {
+    In,
+    Out,
+    Inter,
 }
 
 static STATIC: LazyLock<Map> = LazyLock::new(|| serde_json::from_str(MAP).expect("api/src/architecture.json reads"));
@@ -35,6 +51,7 @@ struct Edge {
     proto: Option<String>,
     what: String,
     via: &'static str,
+    dir: Dir,
     shared: Option<bool>,
     over: Vec<String>,
 }
@@ -43,19 +60,19 @@ fn outside(id: &str) -> bool {
     id == INTERNET || id == DOCKER
 }
 
-fn tier(map: &Map, c: &Container) -> u8 {
-    map.tiers.get(&c.name).or_else(|| c.service.as_ref().and_then(|s| map.tiers.get(s))).copied().unwrap_or(DEFAULT_TIER)
+fn service<'a>(map: &'a Map, c: &Container) -> Option<&'a Service> {
+    map.services.get(&c.name).or_else(|| c.service.as_ref().and_then(|s| map.services.get(s)))
 }
 
 fn find<'a>(cs: &'a [Container], want: &str) -> Option<&'a Container> {
     cs.iter().find(|c| c.name == want).or_else(|| cs.iter().find(|c| c.service.as_deref() == Some(want)))
 }
 
-fn link(from: &Container, to: &Container, port: Option<u16>, what: String, via: &'static str) -> Edge {
+fn link(from: &Container, to: &Container, port: Option<u16>, what: String, via: &'static str, dir: Dir) -> Edge {
     let a: BTreeSet<&String> = from.networks.iter().collect();
     let over: Vec<String> = to.networks.iter().filter(|n| a.contains(n)).cloned().collect();
     let known = !from.networks.is_empty() && !to.networks.is_empty();
-    Edge { from: from.name.clone(), to: to.name.clone(), port, proto: None, what, via, shared: known.then_some(!over.is_empty()), over }
+    Edge { from: from.name.clone(), to: to.name.clone(), port, proto: None, what, via, dir, shared: known.then_some(!over.is_empty()), over }
 }
 
 pub(crate) fn graph(s: &Sample) -> Value {
@@ -66,18 +83,18 @@ pub(crate) fn graph(s: &Sample) -> Value {
     for e in &map.edges {
         let (from, to) = (find(cs, &e.from), find(cs, &e.to));
         let edge = match (from, to) {
-            (Some(a), Some(b)) => link(a, b, e.port, e.what.clone(), "map"),
-            (Some(a), None) if outside(&e.to) => Edge { from: a.name.clone(), to: e.to.clone(), port: e.port, proto: None, what: e.what.clone(), via: "map", shared: None, over: vec![] },
-            (None, Some(b)) if outside(&e.from) => Edge { from: e.from.clone(), to: b.name.clone(), port: e.port, proto: None, what: e.what.clone(), via: "map", shared: None, over: vec![] },
+            (Some(a), Some(b)) => link(a, b, e.port, e.what.clone(), "map", e.dir),
+            (Some(a), None) if outside(&e.to) => Edge { from: a.name.clone(), to: e.to.clone(), port: e.port, proto: None, what: e.what.clone(), via: "map", dir: e.dir, shared: None, over: vec![] },
+            (None, Some(b)) if outside(&e.from) => Edge { from: e.from.clone(), to: b.name.clone(), port: e.port, proto: None, what: e.what.clone(), via: "map", dir: e.dir, shared: None, over: vec![] },
             _ => continue,
         };
-        edges.push(edge);
+        edges.push(Edge { proto: e.proto.clone(), ..edge });
     }
     for c in cs {
         for dep in &c.depends_on {
             let Some(d) = cs.iter().find(|d| d.service.as_deref() == Some(dep.as_str()) && d.project == c.project) else { continue };
             if !edges.iter().any(|e| e.from == c.name && e.to == d.name) {
-                edges.push(link(c, d, None, "starts after".into(), "depends_on"));
+                edges.push(link(c, d, None, "starts after".into(), "depends_on", Dir::Inter));
             }
         }
         for p in c.ports.iter().filter(|p| p.published.is_some() && !p.loopback) {
@@ -88,6 +105,7 @@ pub(crate) fn graph(s: &Sample) -> Value {
                 proto: Some(p.proto.clone()),
                 what: format!("published, to {}/{}", p.port, p.proto),
                 via: "published",
+                dir: Dir::In,
                 shared: None,
                 over: vec![],
             });
@@ -103,9 +121,11 @@ pub(crate) fn graph(s: &Sample) -> Value {
     let mut nodes: Vec<Value> = cs
         .iter()
         .map(|c| {
+            let known = service(map, c);
             json!({
                 "id": c.name, "name": c.name, "service": c.service, "project": c.project, "image": c.image,
-                "state": c.state, "health": c.health, "exit_code": c.exit_code, "tier": tier(map, c),
+                "state": c.state, "health": c.health, "exit_code": c.exit_code,
+                "tier": known.map(|k| k.tier).unwrap_or(DEFAULT_TIER), "description": known.map(|k| k.description.as_str()),
                 "networks": c.networks, "ports": c.ports, "cpu_pct": c.cpu_pct, "mem_bytes": c.mem_bytes, "mem_limit": c.mem_limit,
                 "rx_bps": c.rx_bps, "tx_bps": c.tx_bps, "restarts": c.restarts, "up_since": c.up_since, "outside": false,
             })
@@ -113,7 +133,8 @@ pub(crate) fn graph(s: &Sample) -> Value {
         .collect();
     for id in used {
         let name = if id == INTERNET { "internet" } else { "docker engine" };
-        nodes.push(json!({ "id": id, "name": name, "tier": map.tiers.get(id).copied().unwrap_or(0), "outside": true }));
+        let known = map.services.get(id);
+        nodes.push(json!({ "id": id, "name": name, "tier": known.map(|k| k.tier).unwrap_or(0), "description": known.map(|k| k.description.as_str()), "outside": true }));
     }
     let mut networks: BTreeMap<&String, Vec<&String>> = BTreeMap::new();
     for c in cs {
@@ -123,6 +144,7 @@ pub(crate) fn graph(s: &Sample) -> Value {
     }
     json!({
         "at": s.at,
+        "host": { "cpus": s.host.cpus, "mem_total": s.host.mem_total },
         "nodes": nodes,
         "edges": edges,
         "networks": networks.into_iter().map(|(name, members)| json!({ "name": name, "members": members })).collect::<Vec<_>>(),
@@ -149,7 +171,15 @@ mod tests {
     #[test]
     fn the_static_map_reads() {
         assert!(STATIC.edges.len() > 10);
-        assert_eq!(STATIC.tiers.get("frontend"), Some(&1));
+        assert_eq!(STATIC.services.get("frontend").map(|s| s.tier), Some(1));
+        for e in &STATIC.edges {
+            for id in [&e.from, &e.to] {
+                assert!(STATIC.services.contains_key(id), "{id} has no service in the map");
+            }
+        }
+        for (name, s) in &STATIC.services {
+            assert!(!s.description.trim().is_empty(), "{name} has no description");
+        }
     }
 
     #[test]
@@ -183,7 +213,11 @@ mod tests {
         let api_db = g["edges"].as_array().unwrap().iter().find(|e| e["from"] == "api" && e["to"] == "database").unwrap();
         assert_eq!((api_db["shared"].as_bool(), api_db["port"].as_u64()), (Some(true), Some(5432)));
         assert!(g["nodes"].as_array().unwrap().iter().any(|n| n["id"] == "(docker)" && n["outside"] == true));
-        assert_eq!(g["nodes"].as_array().unwrap().iter().find(|n| n["id"] == "monitor-test").unwrap()["tier"], 2);
+        let mon_node = g["nodes"].as_array().unwrap().iter().find(|n| n["id"] == "monitor-test").unwrap();
+        assert_eq!(mon_node["tier"], 2);
+        assert!(mon_node["description"].as_str().unwrap().starts_with("api monitor"), "found by its compose service");
+        let dir = |f: &str, t: &str| g["edges"].as_array().unwrap().iter().find(|e| e["from"] == f && e["to"] == t).unwrap()["dir"].clone();
+        assert_eq!((dir("frontend", "api"), dir("api", "database"), dir("(internet)", "frontend")), (json!("in"), json!("inter"), json!("in")));
         let stats = g["networks"].as_array().unwrap().iter().find(|n| n["name"] == "stream_stats").unwrap();
         assert_eq!(stats["members"], json!(["frontend"]));
     }

@@ -87,11 +87,8 @@ struct Redeemed {
 impl Api {
     async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response, ()> {
         let Some(secret) = &self.secret else { return Err(()) };
-        self.http
-            .post(format!("{}{path}", self.url))
-            .header("x-voice-secret", &**secret)
-            .json(body)
-            .send()
+        let req = self.http.post(format!("{}{path}", self.url)).header("x-voice-secret", &**secret).json(body);
+        crate::timings::call("POST", path, req)
             .await
             .map_err(|e| log::warn!("voice: api unreachable for {path}: {}", e.without_url()))
     }
@@ -600,7 +597,8 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/ws", get(ws))
         .route_layer(axum::middleware::from_fn_with_state(limits::Limits::default(), limits::layer))
         .route("/internal/voice", post(moderate))
-        .with_state(voice);
+        .with_state(voice)
+        .layer(axum::middleware::from_fn(crate::timings::http));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], ws_port));
     log::info!("voice: websocket on {addr}/ws");
@@ -961,9 +959,11 @@ async fn talk(
     let Some(kinds) = sending_kinds(offer, &joined.labels) else {
         return refuse(socket, "bad offer").await;
     };
+    let session = crate::timings::Session::open("webrtc", "call");
+    let connecting = Arc::new(crate::timings::Setup::start("webrtc", "call"));
     let dead = Arc::new(Notify::new());
     let linked = Arc::new(AtomicBool::new(false));
-    let peer = match voice_peer(voice, tag, dead.clone(), linked.clone()).await {
+    let peer = match voice_peer(voice, tag, dead.clone(), linked.clone(), connecting.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("{tag}: peer setup: {e}");
@@ -1001,7 +1001,10 @@ async fn talk(
     let muted = sat.muted.clone();
     let shown = Shower { kinds: Arc::new(Mutex::new(kinds.clone())), show: me.show.clone(), peer: Arc::downgrade(&peer) };
     let showing = shown.clone();
+    let ingest = crate::timings::line("session", "webrtc", "call", crate::timings::Dir::In);
+    let delivery = crate::timings::line("session", "webrtc", "call", crate::timings::Dir::Out);
     peer.on_track(Box::new(move |track, _, transceiver| {
+        let (ingest, delivery) = (ingest.clone(), delivery.clone());
         let mic = writer.clone();
         let mic_mid = mic_mid.clone();
         let muted = muted.clone();
@@ -1012,6 +1015,8 @@ async fn talk(
             }
             let mut numbering = Numbering::default();
             while let Ok((mut packet, _)) = track.read_rtp().await {
+                let size = crate::timings::packet_bytes(packet.payload.len());
+                ingest.count(1, size);
                 if muted.load(Ordering::SeqCst) {
                     numbering.skip();
                     continue;
@@ -1019,7 +1024,9 @@ async fn talk(
                 packet.header.sequence_number = numbering.of(packet.header.sequence_number);
                 packet.header.extension = false;
                 packet.header.extensions.clear();
-                let _ = mic.write_rtp(&packet).await;
+                if let Ok(written) = mic.write_rtp(&packet).await {
+                    crate::timings::delivered(&delivery, written, size);
+                }
             }
         });
         Box::pin(async {})
@@ -1109,6 +1116,7 @@ async fn talk(
                     break;
                 }
                 _ = dead.notified() => {
+                    session.fail();
                     let why = gone_word(linked.load(Ordering::SeqCst), voice.udp_port);
                     log::info!("{tag}: peer gone: {why}");
                     refuse(socket, &why).await;
@@ -1123,7 +1131,9 @@ async fn talk(
             }
         }
     }
+    connecting.done(false);
     let _ = peer.close().await;
+    drop(session);
 }
 
 fn on_of(kinds: &HashMap<String, Kind>) -> [bool; 2] {
@@ -1178,10 +1188,16 @@ impl Shower {
                 tokio::time::sleep(KEYFRAME_GAP).await;
             }
         });
+        let ingest = crate::timings::line("session", "webrtc", "screen", crate::timings::Dir::In);
+        let delivery = crate::timings::line("session", "webrtc", "screen", crate::timings::Dir::Out);
         while let Ok((mut packet, _)) = track.read_rtp().await {
             packet.header.extension = false;
             packet.header.extensions.clear();
-            let _ = out.write_rtp(&packet).await;
+            let size = crate::timings::packet_bytes(packet.payload.len());
+            ingest.count(1, size);
+            if let Ok(written) = out.write_rtp(&packet).await {
+                crate::timings::delivered(&delivery, written, size);
+            }
         }
         asking.abort();
     }
@@ -1357,7 +1373,7 @@ fn gone_word(linked: bool, udp_port: u16) -> String {
     }
 }
 
-async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>, linked: Arc<AtomicBool>) -> anyhow::Result<RTCPeerConnection> {
+async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>, linked: Arc<AtomicBool>, setup: Arc<crate::timings::Setup>) -> anyhow::Result<RTCPeerConnection> {
     let (media, registry) = voice_media_setup()?;
     let mut setting = SettingEngine::default();
     setting.set_udp_network(UDPNetwork::Muxed(voice.mux.clone()));
@@ -1393,9 +1409,11 @@ async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>, linked: Arc<Ato
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         log::info!("{tag}: peer {state}");
         if state == RTCPeerConnectionState::Connected {
+            setup.done(true);
             linked.store(true, Ordering::SeqCst);
         }
         if matches!(state, RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) {
+            setup.done(false);
             dead.notify_one();
         }
         Box::pin(async {})
