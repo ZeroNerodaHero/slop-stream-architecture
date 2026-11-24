@@ -87,6 +87,7 @@ export interface ChatLineShapeProps extends Place {
   reactions?: ReactNode;
   flash?: boolean;
   side?: ReactNode;
+  pending?: 'sending' | 'failed';
 }
 
 const ACTIONS_HIDDEN =
@@ -441,7 +442,8 @@ export function ChatLineShape({
   quote,
   reactions,
   flash = false,
-  side
+  side,
+  pending
 }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   const press = useLongPress();
@@ -450,6 +452,8 @@ export function ChatLineShape({
     'group/line relative transition-colors duration-700',
     actions && '[-webkit-touch-callout:none] [@media(hover:hover)]:hover:bg-primaryStroke/10 [@media(hover:none)]:select-none',
     mark && 'pr-8',
+    pending === 'sending' && 'opacity-50',
+    pending === 'failed' && 'opacity-70',
     flash ? 'bg-primaryBlue/15 duration-150' : press.open && 'bg-primaryStroke/15'
   );
   const p = (className: string, children: ReactNode) => (
