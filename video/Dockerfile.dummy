@@ -1,7 +1,3 @@
-# the fake streams: the same `video` binary run as `video dummy`, plus ffmpeg, a font and the gifs.
-# build context is the repo root (compose: context: ., dockerfile: video/Dockerfile.dummy).
-# the build stage is byte-for-byte the one in video/Dockerfile, so docker reuses its layers.
-
 FROM rust:1-bookworm AS build
 ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
@@ -21,10 +17,6 @@ COPY video/src video/src
 RUN touch video/src/main.rs \
  && cargo build --release --locked -p video
 
-# the gifs that bounce around the fake streams (random-media/gifs), shrunk once here to the size
-# and rate they are shown at: 144 tall, 15 fps, a palette of their own. the originals are up to
-# 640px at 50 fps, and decoding three of those per stream cost more than encoding the stream.
-# only the small ones go into the image (3 MB, not 24).
 FROM debian:bookworm-slim AS gifs
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 COPY random-media/gifs /in
@@ -36,7 +28,6 @@ RUN mkdir -p /out && cd /in && for f in *.gif; do \
     done
 
 FROM debian:bookworm-slim
-# a font for the name on the picture. ffmpeg itself is a static build, no libs needed.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/* \
@@ -44,8 +35,6 @@ RUN apt-get update \
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=gifs /out /usr/share/dummy-gifs
 COPY --from=build /src/target/release/video /usr/local/bin/video
-# the commit this was built from, same as the video image. compose passes it; unused here, but
-# docker warns about a build arg nobody declares.
 ARG BUILD=dev
 ENV BUILD=${BUILD}
 USER app
