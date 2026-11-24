@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 
 import { isSameOrigin, linkHref } from '@/infra/about';
 import { onlyEmotes, splitEmotes, useEmotes } from '@/infra/emotes';
+import { splitMentions } from '@/infra/mention-text';
 import { Emote } from '@/shared-components/Emote';
 import { ExternalLink, siteOf } from '@/shared-components/ExternalLink';
+import { Mention } from '@/shared-components/Mention';
 
 const LINK_RE =
   /(^|[^\p{L}\p{N}])((?:https?:\/\/|www\.)[^\s\u3001\u3002\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\u2026\u2014\u201c\u201d\uff08\uff09\u300c\u300d\u300e\u300f\u3010\u3011\u300a\u300b\u3008\u3009\uff3b\uff3d\uff5b\uff5d]+)/giu;
@@ -63,22 +65,43 @@ export function splitLinks(text: string): Part[] {
   return parts;
 }
 
-export function LinkedText({ text }: { text: string }) {
+export function LinkedText({ text, mentions }: { text: string; mentions?: readonly string[] }) {
   const parts = splitEmotes(text);
   const emotes = useEmotes(parts.flatMap((p) => (typeof p === 'string' ? [] : [p.id])));
   const jumbo = onlyEmotes(parts);
   return (
     <>
       {parts.map((part, i) =>
-        typeof part === 'string' ? <Links key={i} text={part} /> : <Emote key={i} id={part.id} name={part.name} info={emotes.get(part.id)} jumbo={jumbo} />
+        typeof part === 'string' ? (
+          <Links key={i} text={part} mentions={mentions} />
+        ) : (
+          <Emote key={i} id={part.id} name={part.name} info={emotes.get(part.id)} jumbo={jumbo} />
+        )
       )}
     </>
   );
 }
 
-function Links({ text }: { text: string }) {
+function Links({ text, mentions }: { text: string; mentions?: readonly string[] }) {
   const parts = splitLinks(text);
-  return <>{parts.map((part, i) => (typeof part === 'string' ? <Fragment key={i}>{part}</Fragment> : <TalkLink key={i} text={part.text} href={part.href} />))}</>;
+  return (
+    <>
+      {parts.map((part, i) =>
+        typeof part !== 'string' ? (
+          <TalkLink key={i} text={part.text} href={part.href} />
+        ) : mentions && mentions.length > 0 ? (
+          <Mentioned key={i} text={part} mentions={mentions} />
+        ) : (
+          <Fragment key={i}>{part}</Fragment>
+        )
+      )}
+    </>
+  );
+}
+
+function Mentioned({ text, mentions }: { text: string; mentions: readonly string[] }) {
+  const parts = splitMentions(text, mentions);
+  return <>{parts.map((part, i) => (typeof part === 'string' ? <Fragment key={i}>{part}</Fragment> : <Mention key={i} name={part.mention} text={part.text} />))}</>;
 }
 
 function TalkLink({ text, href }: { text: string; href: string }) {

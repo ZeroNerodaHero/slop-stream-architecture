@@ -31,6 +31,7 @@ export interface ChatLine {
   video?: ChatVideo | null;
   channel?: string;
   reply?: ChatReply;
+  mentions?: string[];
   reactions?: Reaction[];
   pending?: 'sending' | 'failed';
 }
