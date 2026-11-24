@@ -14,23 +14,30 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--t1); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+  main { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; margin-bottom: 16px; }
   header h1 { font-size: 20px; margin: 0; font-weight: 600; border-left: 4px solid var(--blue); padding-left: 10px; line-height: 1.1; }
   a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
   .muted { color: var(--t2); } .dim { color: var(--t3); } .note { color: var(--warn); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
   .yes { color: var(--up); } .no { color: var(--down); }
-  .bar-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; }
+  .bar-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
   .tabs { display: flex; flex-wrap: wrap; gap: 8px; flex: 1 1 auto; }
   button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 1px solid var(--blue); outline-offset: 1px; }
   .tab { display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1px solid var(--stroke); padding: 6px 12px; text-align: left; }
   .tab:hover { border-color: var(--t3); }
   .tab[aria-pressed="true"] { border-color: var(--blue); background: var(--bg3); }
   .tab small { color: var(--t2); font-size: 12px; }
+  .views { display: flex; gap: 0; border-bottom: 1px solid var(--stroke); margin-bottom: 20px; overflow-x: auto; }
+  .views button { background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 16px; color: var(--t2); font-weight: 500; white-space: nowrap; }
+  .views button:hover { color: var(--t1); }
+  .views button[aria-selected="true"] { color: var(--t1); border-bottom-color: var(--blue); }
+  .views button small { color: var(--t3); font-weight: 400; margin-left: 6px; font-size: 12px; }
   .dot { width: 9px; height: 9px; flex: none; background: var(--t3); }
   .dot.up { background: var(--up); } .dot.down { background: var(--down); }
-  .seg { display: flex; border: 1px solid var(--stroke); }
+  [hidden] { display: none !important; }
+  .seg { display: flex; flex-wrap: wrap; border: 1px solid var(--stroke); }
   .seg button { background: var(--bg2); border: 0; border-left: 1px solid var(--stroke); padding: 6px 12px; color: var(--t2); }
   .seg button:first-child { border-left: 0; }
   .seg button[aria-pressed="true"] { background: var(--bg3); color: var(--t1); }
@@ -51,13 +58,15 @@
   .down .grid { opacity: .55; }
   h2 { font-size: 13px; font-weight: 600; color: var(--t2); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 10px; }
   h3 { font-size: 12px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 6px; }
+  .sec-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 10px; }
+  .sec-head h2 { margin: 0; }
   ul { list-style: none; margin: 0; padding: 0; }
   li { padding: 3px 0; border-top: 1px solid var(--stroke); } li:first-child { border-top: 0; }
   .when { color: var(--t3); margin-right: 10px; }
   .ev-down, .ev-agent-down { color: var(--down); } .ev-up, .ev-agent-up { color: var(--up); } .ev-restart { color: var(--warn); } .ev-build { color: var(--blue); }
   table { width: 100%; border-collapse: collapse; }
   td, th { padding: 4px 8px 4px 0; border-top: 1px solid var(--stroke); vertical-align: top; text-align: left; }
-  th { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; border-top: 0; white-space: nowrap; }
+  th { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; border-top: 0; white-space: nowrap; vertical-align: bottom; }
   tr.err, tr.ctr { cursor: pointer; } tr.err:hover td, tr.ctr:hover td { background: var(--bg3); }
   pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 8px; padding: 8px; background: var(--bg); border: 1px solid var(--stroke); color: var(--t2); }
   .empty { color: var(--t3); padding: 6px 0; }
@@ -65,10 +74,12 @@
   .summary b { color: var(--t1); font-weight: 600; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
   .tile { background: var(--bg3); border: 1px solid var(--stroke); padding: 8px 10px 6px; min-width: 0; }
+  .tile.wide { grid-column: 1 / -1; }
   .tile .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .tile .label { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
   .tile .value { font-size: 13px; color: var(--t1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tile canvas { display: block; width: 100%; height: 72px; margin-top: 4px; }
+  .tile.wide canvas { height: 120px; }
   .legend { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--t3); }
   .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: 0; }
   .ctrs td { white-space: nowrap; }
@@ -79,17 +90,85 @@
   .ep-controls input { font: inherit; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 5px 10px; flex: 1 1 260px; min-width: 0; }
   .ep-controls input:focus { outline: none; border-color: var(--blue); }
   .seg.small button { padding: 4px 10px; font-size: 13px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .card { display: block; width: 100%; background: var(--bg3); border: 1px solid var(--stroke); padding: 10px 12px; text-align: left; min-width: 0; }
+  button.card:hover { border-color: var(--t3); }
+  .card[aria-pressed="true"] { border-color: var(--blue); }
+  .card.lead { grid-column: span 2; }
+  .card .c-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .card .c-kind { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  .card .c-big { font-size: 22px; font-weight: 600; line-height: 1.25; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card .c-big small { font-size: 12px; font-weight: 400; color: var(--t3); margin-left: 6px; }
+  .card .c-row { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--t2); font-variant-numeric: tabular-nums; }
+  .card .c-row b { font-weight: 500; }
+  .card .lat { width: 100%; margin: 8px 0 6px; }
   .eps td { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .eps th.num, .eps td.num { text-align: right; padding-right: 12px; }
-  .eps td.ep-name { max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
-  .eps th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+  .eps th.num, .eps td.num { text-align: right; padding-right: 10px; }
+  .eps td.ep-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  .eps .ktag { display: inline-block; min-width: 64px; margin-right: 6px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 12px; }
+  .eps th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
   .eps th button:hover, .eps th[aria-sort] button { color: var(--t1); }
   .eps tr.ep { cursor: pointer; } .eps tr.ep:hover td, .eps tr.ep.open td { background: var(--bg3); }
-  .eps td.spark canvas { display: block; width: 96px; height: 20px; margin-top: 2px; }
   .eps .detail td { background: var(--bg); padding: 10px; cursor: default; white-space: normal; }
   .eps .detail pre { margin-top: 0; }
+  .eps td.latc { padding-top: 7px; }
+  .g-ok { color: var(--up); } .g-warn { color: var(--warn); } .g-bad { color: var(--down); }
+  .lat { position: relative; width: 170px; height: 12px; background: var(--bg); border: 1px solid var(--stroke); }
+  .lat i { position: absolute; display: block; }
+  .lat .z { top: 0; bottom: 0; opacity: .12; }
+  .lat .z.ok { background: var(--up); } .lat .z.warn { background: var(--warn); } .lat .z.bad { background: var(--down); }
+  .lat .w { top: 5px; height: 1px; background: var(--t3); }
+  .lat .b1 { top: 2px; height: 6px; }
+  .lat .b2 { top: 3px; height: 4px; opacity: .6; }
+  .lat .m50 { top: 0; bottom: 0; width: 2px; background: var(--t1); }
+  .lat .mx { top: 1px; height: 8px; width: 1px; background: var(--t2); }
+  .bg-ok { background: var(--up); } .bg-warn { background: var(--warn); } .bg-bad { background: var(--down); } .bg-none { background: var(--blue); }
+  .axis { position: relative; width: 170px; height: 14px; margin-top: 2px; }
+  .axis span { position: absolute; top: 0; transform: translateX(-50%); font-size: 10px; color: var(--t3); text-transform: none; letter-spacing: 0; }
+  .share { position: relative; display: inline-block; width: 44px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
+  .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
+  .keyline { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--t3); margin-top: 8px; align-items: center; }
+  .keyline .lat { width: 120px; }
   .k-http { color: var(--blue); } .k-ws { color: var(--violet); } .k-db { color: var(--up); } .k-redis { color: var(--down); } .k-s3, .k-video, .k-voice { color: var(--warn); }
   .st-running { color: var(--up); } .st-exited, .st-dead { color: var(--down); } .st-restarting, .st-paused, .st-created { color: var(--warn); }
+  .arch-wrap { position: relative; width: max-content; }
+  .arch { display: block; }
+  .arch text { font: 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--t1); }
+  .arch .lane-box { fill: none; stroke: var(--stroke); }
+  .arch .lane-label { fill: var(--t3); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .arch .node { cursor: pointer; }
+  .arch .node rect.box { fill: var(--bg3); stroke-width: 1; }
+  .arch .node:hover rect.box, .arch .node.pinned rect.box { fill: rgb(40 45 58); }
+  .arch .node text.sub { fill: var(--t2); font-size: 11px; }
+  .arch .s-ok rect.box { stroke: var(--up); } .arch .s-ok rect.st { fill: var(--up); }
+  .arch .s-warn rect.box { stroke: var(--warn); } .arch .s-warn rect.st { fill: var(--warn); }
+  .arch .s-bad rect.box { stroke: var(--down); } .arch .s-bad rect.st { fill: var(--down); }
+  .arch .s-done rect.box { stroke: var(--t3); stroke-dasharray: 3 3; } .arch .s-done rect.st { fill: var(--t3); } .arch .s-done text { fill: var(--t2); }
+  .arch .s-outside rect.box { stroke: var(--blue); fill: var(--bg2); } .arch .s-outside rect.st { fill: var(--blue); }
+  .arch .edge path { fill: none; stroke: var(--t3); stroke-width: 1.25; }
+  .arch .edge.v-depends_on path { stroke-dasharray: 2 4; }
+  .arch .edge.v-published path { stroke: var(--blue); }
+  .arch .edge.cut path { stroke: var(--down); stroke-dasharray: 6 3; }
+  .arch .edge.off path { opacity: .35; }
+  .arch .elabel { display: none; }
+  .arch .elabel rect { fill: var(--bg); stroke: var(--stroke); }
+  .arch .elabel text { font-size: 10px; fill: var(--t2); }
+  .arch.labels .elabel, .arch .edge.hot .elabel { display: inline; }
+  .arch.focus .edge:not(.hot) { opacity: .1; }
+  .arch.focus .node:not(.hot) { opacity: .35; }
+  .arch .edge.hot path { stroke-width: 2; }
+  .arch .edge.hot.v-map path { stroke: var(--t1); }
+  .arch .edge.hot .elabel text { fill: var(--t1); }
+  .tip { position: absolute; z-index: 2; pointer-events: none; background: var(--bg); border: 1px solid var(--t3); padding: 8px 10px; font-size: 12px; line-height: 1.45; max-width: 340px; white-space: normal; }
+  .tip b { display: block; font-size: 13px; margin-bottom: 2px; }
+  .tip .row { color: var(--t2); }
+  .nets { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0; font-size: 12px; }
+  .nets button { background: var(--bg3); border: 1px solid var(--stroke); padding: 2px 8px; color: var(--t2); }
+  .nets button:hover, .nets button[aria-pressed="true"] { color: var(--t1); border-color: var(--t3); }
+  .nets i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 0; }
+  details.edges { margin-top: 10px; }
+  details.edges summary { cursor: pointer; color: var(--t2); font-size: 13px; }
+  details.edges td { white-space: nowrap; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -103,29 +182,53 @@
     <nav id="tabs" class="tabs" aria-label="boxes"></nav>
     <div id="ranges" class="seg" role="group" aria-label="range"></div>
   </div>
-  <div id="targets"></div>
-  <div id="endpoints"></div>
-  <div id="status"></div>
+  <div id="views" class="views" role="tablist" aria-label="what to show"></div>
+  <div id="main" role="tabpanel"></div>
 </main>
 <script>
 (() => {
-  const $targets = document.getElementById('targets');
   const $meta = document.getElementById('meta');
   const $asof = document.getElementById('asof');
   const $tabs = document.getElementById('tabs');
   const $ranges = document.getElementById('ranges');
-  const $endpoints = document.getElementById('endpoints');
-  const $status = document.getElementById('status');
+  const $views = document.getElementById('views');
+  const $main = document.getElementById('main');
 
   const RANGES = { '1h': { secs: 3600, every: 15000 }, '24h': { secs: 86400, every: 60000 }, '7d': { secs: 604800, every: 300000 } };
   const ALL = '';
-  const COLORS = { blue: 'rgb(79 139 255)', green: 'rgb(63 185 80)', red: 'rgb(248 81 73)', yellow: 'rgb(242 204 96)', violet: 'rgb(188 140 255)', grid: 'rgb(42 47 58)', hover: 'rgb(110 118 132)' };
+  const COLORS = { blue: 'rgb(79 139 255)', green: 'rgb(63 185 80)', red: 'rgb(248 81 73)', yellow: 'rgb(242 204 96)', violet: 'rgb(188 140 255)', grid: 'rgb(42 47 58)', hover: 'rgb(110 118 132)', t2: 'rgb(154 163 178)', t3: 'rgb(110 118 132)' };
+  const NET_COLORS = ['rgb(79 139 255)', 'rgb(63 185 80)', 'rgb(188 140 255)', 'rgb(242 204 96)', 'rgb(110 200 220)', 'rgb(240 140 90)', 'rgb(220 120 200)', 'rgb(160 200 90)'];
+  const TABS = [
+    { id: 'host', label: 'host' },
+    { id: 'containers', label: 'containers' },
+    { id: 'endpoints', label: 'endpoints' },
+    { id: 'calls', label: 'calls' },
+  ];
+  const KIND_LABEL = { http: 'http', db: 'postgres', redis: 'redis', s3: 's3', video: 'video', voice: 'voice', ws: 'websocket' };
+  const CALL_KINDS = ['db', 'redis', 's3', 'video', 'voice', 'ws'];
+  const LIMITS = { http: [100, 500], ws: [100, 500], db: [10, 100], redis: [2, 20], s3: [100, 1000], video: [100, 1000], voice: [100, 1000] };
+  const DEFAULT_SORT = 'sum_ms';
+  const LIMIT = 250;
+  const ARCH_EVERY = 15000;
 
   const el = (tag, cls, text) => {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     if (text !== undefined && text !== null) e.textContent = String(text);
     return e;
+  };
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const sv = (tag, attrs, text) => {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) if (v !== undefined && v !== null) e.setAttribute(k, String(v));
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  };
+  const button = (cls, text, onClick) => {
+    const b = el('button', cls, text);
+    b.type = 'button';
+    if (onClick) b.addEventListener('click', onClick);
+    return b;
   };
   const pad = (n) => String(n).padStart(2, '0');
   const human = (s) => {
@@ -156,54 +259,65 @@
     d.append(value instanceof Node ? value : el('span', null, value ?? '—'));
     return d;
   };
-  const ms = (v) => (!has(v) ? '—' : v < 1 ? `${Math.max(1, Math.round(v * 1000))} µs` : v < 10 ? `${v.toFixed(2)} ms` : v < 1000 ? `${v.toFixed(v < 100 ? 1 : 0)} ms` : `${(v / 1000).toFixed(2)} s`);
+  const ms = (v) => (!has(v) ? '—' : v === 0 ? '0' : v < 1 ? `${Math.max(1, Math.round(v * 1000))} µs` : v < 10 ? `${v.toFixed(2)} ms` : v < 1000 ? `${v.toFixed(v < 100 ? 1 : 0)} ms` : `${(v / 1000).toFixed(2)} s`);
+  const spent = (v) => (!has(v) ? '—' : v < 1000 ? ms(v) : v < 60000 ? `${(v / 1000).toFixed(1)} s` : v < 3600000 ? `${(v / 60000).toFixed(1)} min` : `${(v / 3600000).toFixed(1)} h`);
   const count = (v) => (!has(v) ? '—' : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e4 ? `${Math.round(v / 1e3)}k` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v));
   const rate = (v) => (!has(v) ? '—' : v === 0 ? '0' : v < 0.01 ? '<0.01' : v < 10 ? v.toFixed(2) : String(Math.round(v)));
+  const share = (v) => (!has(v) ? '—' : v >= 0.995 ? '100%' : v >= 0.1 ? `${Math.round(v * 100)}%` : v >= 0.001 ? `${(v * 100).toFixed(1)}%` : v > 0 ? '<0.1%' : '0%');
+  const decade = (d) => (d < -3 ? `${10 ** (d + 6)}ns`.replace('1000ns', '1µs') : d < 0 ? `${Math.round(10 ** (d + 3))}µs` : d < 3 ? `${10 ** d}ms` : `${10 ** (d - 3)}s`);
   const per = (secs) => ({ 60: 'minute', 900: '15 minutes', 3600: 'hour' })[secs] || `${secs}s`;
-  const last = (arr) => {
-    for (let i = (arr || []).length - 1; i >= 0; i--) if (has(arr[i])) return arr[i];
-    return null;
-  };
+  const blocking = (r) => / BLOCK$/.test(r.name || '');
+  const limitsOf = (r) => (blocking(r) ? null : LIMITS[r.kind] || null);
+  const grade = (v, lim) => (!has(v) || !lim ? '' : v < lim[0] ? 'ok' : v < lim[1] ? 'warn' : 'bad');
 
-  const sel = { box: null, range: '1h' };
+  const sel = { box: null, range: '1h', tab: 'host', cview: 'table', labels: false };
+  const views = {
+    endpoints: { name: 'endpoints', q: '', kind: '', target: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
+    calls: { name: 'calls', q: '', kind: '', target: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
+  };
   const expanded = new Set();
-  let state = null, series = null, cur = null, seriesKey = '', seriesAt = 0, lastOk = null;
+  const pinned = new Map();
+  const seriesCache = new Map();
+  const archCache = new Map();
+  const archBuilt = new Map();
+  const tm = { data: null, error: null, at: 0, key: '' };
+  let state = null, lastOk = null;
   const charts = [];
-  const KINDS = ['http', 'ws', 'db', 'redis', 's3', 'video', 'voice'];
-  const COLS = [
-    { id: 'target', label: 'box' },
-    { id: 'kind', label: 'kind' },
-    { id: 'method', label: 'method' },
-    { id: 'name', label: 'name' },
-    { id: 'src', label: 'where' },
-    { id: 'n', label: 'count', num: true, fmt: count },
-    { id: 'rate', label: '/s', num: true, fmt: rate },
-    { id: 'e4', label: '4xx', num: true, fmt: count, bad: 'note' },
-    { id: 'e5', label: '5xx', num: true, fmt: count, bad: 'no' },
-    { id: 'err', label: 'err', num: true, fmt: count, bad: 'no' },
-    { id: 'p50', label: 'p50', num: true, fmt: ms },
-    { id: 'p95', label: 'p95', num: true, fmt: ms },
-    { id: 'p99', label: 'p99', num: true, fmt: ms },
-    { id: 'max', label: 'max', num: true, fmt: ms },
-    { id: 'spark', label: 'p95 over the range', fixed: true },
-  ];
-  const ep = { q: '', kind: '', target: '', sort: 'n', dir: -1, open: null, data: null, error: null, at: 0, key: '', detail: null, ui: null };
-  const epCharts = [];
+  const tcharts = [];
 
   function readHash() {
     const p = new URLSearchParams(location.hash.slice(1));
     sel.box = p.has('box') ? p.get('box') : null;
     sel.range = RANGES[p.get('range')] ? p.get('range') : '1h';
-    ep.q = p.get('q') || '';
-    ep.kind = p.get('kind') || '';
-    if (ep.ui && ep.ui.search.value !== ep.q) ep.ui.search.value = ep.q;
+    let tab = p.get('tab');
+    if (!TABS.some((t) => t.id === tab)) {
+      const kind = p.get('kind');
+      tab = kind && kind !== 'http' ? 'calls' : p.has('q') || kind === 'http' ? 'endpoints' : 'host';
+    }
+    sel.tab = tab;
+    sel.cview = p.get('view') === 'arch' ? 'arch' : 'table';
+    const v = views[tab];
+    if (v) {
+      v.q = p.get('q') || '';
+      v.kind = v.name === 'calls' && CALL_KINDS.includes(p.get('kind')) ? p.get('kind') : '';
+      const s = p.get('sort') || '';
+      v.sort = s.replace(/^-/, '') || DEFAULT_SORT;
+      v.dir = s && !s.startsWith('-') ? 1 : -1;
+      if (v.ui && v.ui.search.value !== v.q) v.ui.search.value = v.q;
+    }
   }
   function writeHash() {
     const p = new URLSearchParams();
     if (sel.box !== null) p.set('box', sel.box);
+    if (sel.tab !== 'host') p.set('tab', sel.tab);
     if (sel.range !== '1h') p.set('range', sel.range);
-    if (ep.kind) p.set('kind', ep.kind);
-    if (ep.q) p.set('q', ep.q);
+    if (sel.tab === 'containers' && sel.cview === 'arch') p.set('view', 'arch');
+    const v = views[sel.tab];
+    if (v) {
+      if (v.kind) p.set('kind', v.kind);
+      if (v.q) p.set('q', v.q);
+      if (v.sort !== DEFAULT_SORT || v.dir !== -1) p.set('sort', `${v.dir < 0 ? '-' : ''}${v.sort}`);
+    }
     history.replaceState(null, '', p.toString() ? `#${p}` : location.pathname);
   }
   function boxShown() {
@@ -211,13 +325,15 @@
     if (sel.box !== null && (sel.box === ALL || state.targets.some((t) => t.name === sel.box))) return sel.box;
     return state.targets.length === 1 ? state.targets[0].name : ALL;
   }
-  function choose(box, range) {
-    if (box !== undefined) sel.box = box;
-    if (range !== undefined) sel.range = range;
+  function boxesShown() {
+    const shown = boxShown();
+    return shown === ALL ? state.targets.map((t) => t.name) : [shown];
+  }
+  function choose(change) {
+    Object.assign(sel, change);
     writeHash();
     render();
-    loadSeries(true);
-    if (range !== undefined) loadTimings(true);
+    loadVisible(true);
   }
 
   function draw(c) {
@@ -230,16 +346,30 @@
     const g = canvas.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    let max = fixed || 0;
-    for (const l of lines) for (const v of l.v || []) if (has(v) && v > max) max = v;
+    let max = fixed || 0, min = Infinity;
+    for (const l of lines) for (const v of l.v || []) if (has(v)) { if (v > max) max = v; if (v > 0 && v < min) min = v; }
     if (!max) max = 1;
     const x = (ts) => ((ts - t0) / (t1 - t0)) * w;
-    const y = (v) => h - 1.5 - (v / max) * (h - 3);
+    let y;
     g.strokeStyle = COLORS.grid;
     g.lineWidth = 1;
     g.beginPath();
-    g.moveTo(0, Math.round(y(max / 2)) + 0.5); g.lineTo(w, Math.round(y(max / 2)) + 0.5);
-    g.moveTo(0, h - 0.5); g.lineTo(w, h - 0.5);
+    if (c.log) {
+      const a = Math.floor(Math.log10(min === Infinity ? max / 10 : min));
+      const b = Math.max(Math.ceil(Math.log10(max)), a + 1);
+      y = (v) => h - 1.5 - ((Math.log10(Math.max(v, 10 ** a)) - a) / (b - a)) * (h - 3);
+      g.fillStyle = COLORS.t3;
+      g.font = '10px system-ui, sans-serif';
+      for (let d = a; d <= b; d++) {
+        const py = Math.round(y(10 ** d)) + 0.5;
+        g.moveTo(0, py); g.lineTo(w, py);
+        if (d < b) g.fillText(ms(10 ** d), 2, py - 2);
+      }
+    } else {
+      y = (v) => h - 1.5 - (v / max) * (h - 3);
+      g.moveTo(0, Math.round(y(max / 2)) + 0.5); g.lineTo(w, Math.round(y(max / 2)) + 0.5);
+      g.moveTo(0, h - 0.5); g.lineTo(w, h - 0.5);
+    }
     g.stroke();
     for (const l of lines) {
       g.strokeStyle = l.color;
@@ -247,7 +377,7 @@
       g.beginPath();
       let pen = false, prev = null;
       (l.v || []).forEach((v, i) => {
-        if (!has(v)) { pen = false; return; }
+        if (!has(v) || (c.log && v <= 0)) { pen = false; return; }
         if (prev !== null && t[i] - prev > gap * 2.5) pen = false;
         const px = x(t[i]), py = y(v);
         if (pen) g.lineTo(px, py); else g.moveTo(px, py);
@@ -264,14 +394,13 @@
     }
   }
 
-  function chart({ label, lines, max, now, value, read, thin, small, src, store }) {
-    const s = src || cur;
-    const t = s ? s.t : [];
+  function chart({ label, lines, max, now, value, read, thin, small, src, store, log }) {
+    const t = src ? src.t : [];
     const t1 = Math.floor(now / 1000), t0 = t1 - RANGES[sel.range].secs;
     const canvas = el('canvas');
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', label);
-    const c = { canvas, t, lines, t0, t1, gap: s ? s.bucket_secs : 15, max, hover: null, thin };
+    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log };
     (store || charts).push(c);
     if (small) return canvas;
     const tile = el('div', 'tile');
@@ -309,10 +438,8 @@
     card.dataset.name = t.name;
     const top = el('div', 'top');
     if (overview) {
-      const b = el('button', 'name', t.name);
-      b.type = 'button';
+      const b = button('name', t.name, () => choose({ box: t.name }));
       b.title = `graphs for ${t.name}`;
-      b.addEventListener('click', () => choose(t.name));
       top.append(b);
     } else {
       top.append(el('span', 'name', t.name));
@@ -400,10 +527,15 @@
     return card;
   }
 
+  function seriesFor(box) {
+    const c = seriesCache.get(box);
+    return c && c.data && c.data.range === sel.range ? c.data : null;
+  }
+
   function hostSection(t, now) {
     const sec = el('section', 'target');
     sec.append(el('h2', null, 'host'));
-    const s = cur;
+    const s = seriesFor(t.name);
     const latest = (s && s.latest) || null;
     const H = latest ? latest.host : (t.metrics && t.metrics.host) || null;
     const status = (s && s.status) || (t.metrics && t.metrics.status);
@@ -420,32 +552,34 @@
     const tiles = el('div', 'tiles');
     tiles.style.marginTop = '10px';
     tiles.append(
-      chart({ label: 'cpu', now, max: 100, read: pct1, value: `${pct1(H.cpu_pct)} · steal ${pct1(H.steal_pct)} · iowait ${pct1(H.iowait_pct)}`,
+      chart({ label: 'cpu', now, src: s, max: 100, read: pct1, value: `${pct1(H.cpu_pct)} · steal ${pct1(H.steal_pct)} · iowait ${pct1(H.iowait_pct)}`,
         lines: [{ name: 'busy', v: S.cpu_pct, color: COLORS.blue }, { name: 'steal', v: S.steal_pct, color: COLORS.red }, { name: 'iowait', v: S.iowait_pct, color: COLORS.yellow }] }),
-      chart({ label: 'load', now, max: H.cpus || 1, read: num, value: `${num(H.load1)} / ${num(H.load5)} / ${num(H.load15)}${H.cpus ? ` · ${H.cpus} cpus` : ''}`,
+      chart({ label: 'load', now, src: s, max: H.cpus || 1, read: num, value: `${num(H.load1)} / ${num(H.load5)} / ${num(H.load15)}${H.cpus ? ` · ${H.cpus} cpus` : ''}`,
         lines: [{ name: 'load1', v: S.load1, color: COLORS.blue }] }),
-      chart({ label: 'memory', now, max: H.mem_total, read: bytes, value: H.mem_total ? `${bytes(H.mem_used)} of ${bytes(H.mem_total)} (${pct1((100 * H.mem_used) / H.mem_total)})` : '—',
+      chart({ label: 'memory', now, src: s, max: H.mem_total, read: bytes, value: H.mem_total ? `${bytes(H.mem_used)} of ${bytes(H.mem_total)} (${pct1((100 * H.mem_used) / H.mem_total)})` : '—',
         lines: [{ name: 'used', v: S.mem_used, color: COLORS.violet }] }),
-      chart({ label: 'swap', now, max: H.swap_total || 0, read: bytes, value: H.swap_total ? `${bytes(H.swap_used)} of ${bytes(H.swap_total)}` : 'no swap',
+      chart({ label: 'swap', now, src: s, max: H.swap_total || 0, read: bytes, value: H.swap_total ? `${bytes(H.swap_used)} of ${bytes(H.swap_total)}` : 'no swap',
         lines: [{ name: 'used', v: S.swap_used, color: COLORS.yellow }] }),
-      chart({ label: `disk ${disk ? disk.mount : ''}`, now, max: disk ? disk.total : 0, read: bytes, value: disk ? `${bytes(disk.avail)} free of ${bytes(disk.total)} (${pct1((100 * disk.used) / disk.total)} used)` : '—',
+      chart({ label: `disk ${disk ? disk.mount : ''}`, now, src: s, max: disk ? disk.total : 0, read: bytes, value: disk ? `${bytes(disk.avail)} free of ${bytes(disk.total)} (${pct1((100 * disk.used) / disk.total)} used)` : '—',
         lines: [{ name: 'used', v: S.disk_used, color: COLORS.green }] }),
-      chart({ label: `network ${H.net ? H.net.iface : ''}`, now, read: bps, value: H.net ? `↓ ${bps(H.net.rx_bps)} · ↑ ${bps(H.net.tx_bps)}` : '—',
+      chart({ label: `network ${H.net ? H.net.iface : ''}`, now, src: s, read: bps, value: H.net ? `↓ ${bps(H.net.rx_bps)} · ↑ ${bps(H.net.tx_bps)}` : '—',
         lines: [{ name: 'in', v: S.rx_bps, color: COLORS.green }, { name: 'out', v: S.tx_bps, color: COLORS.blue }] }),
-      chart({ label: 'pressure (time stalled)', now, max: 5, read: pct1, value: `cpu ${pct1(H.pressure && H.pressure.cpu)} · mem ${pct1(H.pressure && H.pressure.memory)} · io ${pct1(H.pressure && H.pressure.io)}`,
+      chart({ label: 'pressure (time stalled)', now, src: s, max: 5, read: pct1, value: `cpu ${pct1(H.pressure && H.pressure.cpu)} · mem ${pct1(H.pressure && H.pressure.memory)} · io ${pct1(H.pressure && H.pressure.io)}`,
         lines: [{ name: 'cpu', v: S.psi_cpu, color: COLORS.blue }, { name: 'memory', v: S.psi_memory, color: COLORS.violet }, { name: 'io', v: S.psi_io, color: COLORS.yellow }] })
     );
     sec.append(tiles);
     return sec;
   }
 
-  function containerSection(t, now) {
+  function containerSection(t, now, titled) {
     const sec = el('section', 'target');
-    sec.append(el('h2', null, 'containers'));
-    const s = cur;
+    sec.append(el('h2', null, titled ? `containers · ${t.name}` : 'containers'));
+    const s = seriesFor(t.name);
+    const err = seriesCache.get(t.name) && seriesCache.get(t.name).error;
+    if (err) sec.append(el('p', 'note', err));
     const list = (s && s.latest && s.latest.containers) || [];
     if (!list.length) {
-      sec.append(el('p', 'empty', !s ? 'loading' : s.status || !s.latest ? 'no numbers from this box yet' : 'no containers reported (is the docker socket mounted?)'));
+      sec.append(el('p', 'empty', !s ? 'loading' : s.status || !s.latest ? `no numbers from this box yet${s.status ? `: ${s.status}` : ''}` : 'no containers reported (is the docker socket mounted?)'));
       return sec;
     }
     const C = s.containers || {};
@@ -455,6 +589,7 @@
     for (const h of ['container', 'state', 'up', 'restarts', 'cpu', 'memory', 'net ↓ / ↑', 'disk r / w', 'pids']) head.append(el('th', null, h));
     table.append(head);
     for (const c of list) {
+      const id = `${t.name}\u0000${c.name}`;
       const cs = C[c.name] || {};
       const tr = el('tr', 'ctr');
       const name = el('td');
@@ -462,11 +597,11 @@
       if (c.service && c.service !== c.name) name.append(el('span', 'dim', ` ${c.service}`));
       if (c.project && c.project !== 'stream') name.append(el('span', 'dim', ` (${c.project})`));
       name.title = c.image;
-      const st = el('td', `st-${c.state}`, c.state + (c.health && c.health !== 'healthy' ? ` · ${c.health}` : ''));
+      const st = el('td', c.state === 'exited' && c.exit_code === 0 ? 'dim' : `st-${c.state}`, c.state + (c.health && c.health !== 'healthy' ? ` · ${c.health}` : '') + (c.state === 'exited' && has(c.exit_code) ? ` (${c.exit_code})` : ''));
       const cell = (text, v, color, max) => {
         const td = el('td', 'cell mono');
         td.append(el('div', null, text));
-        if (s.t.length) td.append(chart({ label: text, lines: [{ v, color }], now, max, small: true, thin: true }));
+        if (s.t.length) td.append(chart({ label: text, lines: [{ v, color }], now, src: s, max, small: true, thin: true }));
         return td;
       };
       const restarts = el('td', c.restarts > 0 ? 'note mono' : 'mono', has(c.restarts) ? c.restarts : '—');
@@ -483,13 +618,13 @@
       table.append(tr);
       if (c.state !== 'running') continue;
       const detail = el('tr', 'detail');
-      detail.hidden = !expanded.has(c.name);
+      detail.hidden = !expanded.has(id);
       const td = el('td');
       td.colSpan = 9;
-      if (!detail.hidden) td.append(containerCharts(c, cs, now));
+      if (!detail.hidden) td.append(containerCharts(c, cs, now, s));
       detail.append(td);
       tr.addEventListener('click', () => {
-        if (expanded.has(c.name)) expanded.delete(c.name); else expanded.add(c.name);
+        if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
         render();
       });
       table.append(detail);
@@ -499,80 +634,336 @@
     return sec;
   }
 
-  function containerCharts(c, cs, now) {
+  function containerCharts(c, cs, now, src) {
     const tiles = el('div', 'tiles');
     tiles.append(
-      chart({ label: 'cpu (% of one core)', now, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
-      chart({ label: 'memory', now, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
-      chart({ label: 'network', now, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
-      chart({ label: 'disk io', now, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
-      chart({ label: 'pids', now, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
+      chart({ label: 'cpu (% of one core)', now, src, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
+      chart({ label: 'memory', now, src, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
+      chart({ label: 'network', now, src, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
+      chart({ label: 'disk io', now, src, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
+      chart({ label: 'pids', now, src, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
     );
     return tiles;
   }
 
-  function renderNav(shown) {
-    $tabs.replaceChildren();
-    if (state.targets.length > 1) {
-      const all = el('button', 'tab');
-      all.type = 'button';
-      all.setAttribute('aria-pressed', String(shown === ALL));
-      const up = state.targets.filter((t) => t.status === 'up').length;
-      all.append(el('span', null, 'all boxes'), el('small', null, `${up}/${state.targets.length} up`));
-      all.addEventListener('click', () => choose(ALL));
-      $tabs.append(all);
+  const nodeState = (n) => {
+    if (n.outside) return 'outside';
+    if (n.state === 'running') return n.health === 'unhealthy' ? 'bad' : n.health === 'starting' ? 'warn' : 'ok';
+    if (n.state === 'exited' && n.exit_code === 0) return 'done';
+    return ['restarting', 'created', 'paused'].includes(n.state) ? 'warn' : 'bad';
+  };
+  const portText = (p) => (p.published ? `${p.loopback ? 'loopback ' : ''}${p.published}→${p.port}/${p.proto}` : `${p.port}/${p.proto}`);
+
+  function archSection(t, now, titled) {
+    const A = archCache.get(t.name);
+    const data = A && A.data;
+    const key = data ? `${data.at}|${sel.labels}|${pinned.get(t.name) || ''}|${titled}|${(data.edges || []).length}` : '';
+    const built = archBuilt.get(t.name);
+    if (built && key && built.key === key) return built.sec;
+    const sec = el('section', 'target');
+    const head = el('div', 'sec-head');
+    head.append(el('h2', null, titled ? `architecture · ${t.name}` : 'architecture'));
+    sec.append(head);
+    if (A && A.error) sec.append(el('p', 'note', A.error));
+    if (!data) { sec.append(el('p', 'empty', 'loading')); return sec; }
+    if (data.status) sec.append(el('p', 'note', data.status));
+    if (!data.nodes.length) { sec.append(el('p', 'empty', 'no containers from this box yet')); return sec; }
+    if (!data.nodes.some((n) => n.networks && n.networks.length)) sec.append(el('p', 'note', 'this box\u2019s agent sends no networks or ports yet, so only the known connections are drawn and none is checked. ./scripts/deploy.sh stats (or api) on that box brings the agent up to date'));
+    const labels = el('div', 'seg small');
+    labels.setAttribute('role', 'group');
+    labels.setAttribute('aria-label', 'edge labels');
+    for (const [id, text] of [[false, 'labels on hover'], [true, 'all labels']]) {
+      const b = button(null, text, () => { sel.labels = id; render(); });
+      b.setAttribute('aria-pressed', String(sel.labels === id));
+      labels.append(b);
     }
-    for (const t of state.targets) {
-      const b = el('button', 'tab');
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(shown === t.name));
-      const H = t.metrics && t.metrics.host;
-      const disk = H && (H.disk || [])[0];
-      const mini = H ? `cpu ${pct1(H.cpu_pct)} · mem ${H.mem_total ? pct1((100 * H.mem_used) / H.mem_total) : '—'} · disk ${disk ? pct1((100 * disk.used) / disk.total) : '—'}` : '';
-      b.append(el('span', `dot ${t.status}`), el('span', null, t.name));
-      if (mini) b.append(el('small', null, mini));
-      b.addEventListener('click', () => choose(t.name));
-      $tabs.append(b);
+    head.append(labels);
+    sec.append(el('div', 'dim', `${data.nodes.filter((n) => !n.outside).length} containers, ${data.edges.length} connections · read ${ago(data.at, now)} · hover a container for its numbers, click to keep its connections lit`));
+
+    const netColor = new Map((data.networks || []).map((n, i) => [n.name, NET_COLORS[i % NET_COLORS.length]]));
+    const graph = archGraph(t, data, netColor, now);
+
+    const nets = el('div', 'nets');
+    nets.append(el('span', 'dim', 'networks'));
+    for (const n of data.networks || []) {
+      const b = button(null, null, null);
+      const sw = el('i');
+      sw.style.background = netColor.get(n.name);
+      b.append(sw, document.createTextNode(`${n.name} (${n.members.length})`));
+      b.title = n.members.join(', ');
+      b.addEventListener('mouseenter', () => graph.light(n.members));
+      b.addEventListener('mouseleave', () => graph.light(null));
+      b.addEventListener('focus', () => graph.light(n.members));
+      b.addEventListener('blur', () => graph.light(null));
+      nets.append(b);
     }
-    $ranges.replaceChildren();
-    $ranges.hidden = false;
-    for (const r of Object.keys(RANGES)) {
-      const b = el('button', null, r);
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(sel.range === r));
-      b.addEventListener('click', () => choose(undefined, r));
-      $ranges.append(b);
+    sec.append(nets);
+
+    const scroll = el('div', 'scroll');
+    scroll.append(graph.wrap);
+    sec.append(scroll);
+
+    const key2 = el('div', 'keyline');
+    const sample = (cls, text) => {
+      const s = el('span');
+      const svg = sv('svg', { width: 28, height: 8, class: 'arch', style: 'display: inline-block; vertical-align: 1px', 'aria-hidden': 'true' });
+      const g = sv('g', { class: `edge ${cls}` });
+      g.append(sv('path', { d: 'M0 4 L28 4' }));
+      svg.append(g);
+      s.append(svg, document.createTextNode(` ${text}`));
+      return s;
+    };
+    key2.append(
+      sample('v-map', 'known connection'), sample('v-depends_on', 'compose depends_on'), sample('v-published', 'published port'),
+      sample('cut', 'no shared network'), el('span', 'g-ok', '■ running'), el('span', 'g-warn', '■ starting or unhealthy'), el('span', 'g-bad', '■ stopped'), el('span', 'dim', '■ finished (exit 0)')
+    );
+    sec.append(key2);
+
+    const det = el('details', 'edges');
+    det.append(el('summary', null, 'every connection'));
+    const tw = el('div', 'scroll');
+    const table = el('table');
+    const hr = el('tr');
+    for (const h of ['from', 'to', 'port', 'what', 'how we know', 'over']) hr.append(el('th', null, h));
+    table.append(hr);
+    const nameOf = (id) => (data.nodes.find((n) => n.id === id) || { name: id }).name;
+    for (const e of data.edges) {
+      const tr = el('tr');
+      tr.append(
+        el('td', 'mono', nameOf(e.from)), el('td', 'mono', nameOf(e.to)),
+        el('td', 'mono', e.port ? `${e.port}${e.proto ? '/' + e.proto : ''}` : '—'),
+        el('td', null, e.what),
+        el('td', 'dim', { map: 'architecture.json', depends_on: 'compose depends_on', published: 'docker ports' }[e.via] || e.via),
+        el('td', e.shared === false ? 'no' : 'dim', e.shared === false ? 'no shared network' : e.over && e.over.length ? e.over.join(', ') : '—')
+      );
+      table.append(tr);
     }
+    tw.append(table);
+    det.append(tw);
+    sec.append(det);
+    archBuilt.set(t.name, { key, sec });
+    return sec;
   }
 
-  function render() {
-    if (!state) return;
-    charts.length = 0;
-    const now = Date.parse(state.now) + (Date.now() - state.received);
-    const m = state.monitor;
-    $meta.textContent = `build ${m.build} · up ${human(m.up_secs)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}`;
-    $targets.replaceChildren();
-    $status.replaceChildren();
-    if (!state.targets.length) {
-      $tabs.replaceChildren();
-      $ranges.hidden = true;
-      $endpoints.hidden = true;
-      $targets.append(el('p', 'empty', 'nothing to watch. STATS_TARGETS in .env (or TARGETS in monitor/.env), then deploy'));
-      return;
+  function archGraph(t, data, netColor, now) {
+    const COLW = 210, NODEW = 156, NODEH = 42, GAPY = 12, PADX = 16, LANEHEAD = 24, LANEPAD = 12;
+    const nodes = data.nodes.map((n) => ({ ...n }));
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const tiers = [...new Set(nodes.map((n) => n.tier))].sort((a, b) => a - b);
+    const col = new Map(tiers.map((tier, i) => [tier, i]));
+    const laneOf = (n) => (n.outside ? '' : n.project || '(no compose project)');
+    const laneNames = [...new Set(nodes.map(laneOf))];
+    const laneSize = (l) => nodes.filter((n) => laneOf(n) === l).length;
+    laneNames.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : laneSize(b) - laneSize(a) || a.localeCompare(b)));
+    const rank = (n) => ({ ok: 0, warn: 0, bad: 0, outside: 0, done: 1 })[nodeState(n)];
+    let y = 8;
+    const lanes = [];
+    for (const l of laneNames) {
+      const members = nodes.filter((n) => laneOf(n) === l);
+      const cols = new Map();
+      for (const n of members) {
+        const c = col.get(n.tier);
+        if (!cols.has(c)) cols.set(c, []);
+        cols.get(c).push(n);
+      }
+      let rows = 0;
+      for (const list of cols.values()) {
+        list.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+        list.forEach((n, i) => { n.x = PADX + col.get(n.tier) * COLW; n.y = y + LANEHEAD + i * (NODEH + GAPY); });
+        rows = Math.max(rows, list.length);
+      }
+      const h = LANEHEAD + rows * (NODEH + GAPY) - GAPY + LANEPAD;
+      lanes.push({ name: l, y, h });
+      y += h + 14;
     }
-    const shown = boxShown();
-    cur = series && series.target === shown && series.range === sel.range ? series : null;
-    renderNav(shown);
-    if (shown === ALL) {
-      for (const t of state.targets) $targets.append(statusCard(t, now, true));
-    } else {
-      const t = state.targets.find((x) => x.name === shown);
-      $targets.append(hostSection(t, now), containerSection(t, now));
-      $status.append(statusCard(t, now, false));
+    const W = PADX * 2 + tiers.length * COLW + 40;
+    const H = y;
+    const mid = `m-${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    const svg = sv('svg', { class: `arch${sel.labels ? ' labels' : ''}`, width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `containers of ${t.name} and how they connect` });
+    const defs = sv('defs');
+    for (const [id, color] of [['a-dim', COLORS.t3], ['a-hot', 'rgb(242 243 245)'], ['a-pub', COLORS.blue], ['a-cut', COLORS.red]]) {
+      const m = sv('marker', { id: `${mid}-${id}`, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+      m.append(sv('path', { d: 'M0 0 L8 4 L0 8 z', fill: color }));
+      defs.append(m);
     }
-    for (const c of charts) draw(c);
-    $endpoints.hidden = false;
-    epTable();
+    svg.append(defs);
+    for (const l of lanes) {
+      svg.append(sv('rect', { class: 'lane-box', x: 4.5, y: l.y + 0.5, width: W - 9, height: l.h }));
+      svg.append(sv('text', { class: 'lane-label', x: 12, y: l.y + 16 }, l.name === '' ? 'outside docker' : `compose project ${l.name}`));
+    }
+    const edgeLayer = sv('g');
+    const nodeLayer = sv('g');
+    svg.append(edgeLayer, nodeLayer);
+    const edgeEls = [];
+    const pairs = new Map();
+    for (const e of data.edges) {
+      const a = byId.get(e.from), b = byId.get(e.to);
+      if (!a || !b) continue;
+      const k = [e.from, e.to].sort().join('\u0000');
+      const nth = pairs.get(k) || 0;
+      pairs.set(k, nth + 1);
+      const ca = col.get(a.tier), cb = col.get(b.tier);
+      const ay = a.y + NODEH / 2 + (nth ? 6 : 0), by = b.y + NODEH / 2 + (nth ? 6 : 0);
+      let p0, p1, p2, p3;
+      if (cb > ca) {
+        p0 = [a.x + NODEW, ay]; p3 = [b.x, by];
+        const dx = (p3[0] - p0[0]) / 2;
+        p1 = [p0[0] + dx, p0[1]]; p2 = [p3[0] - dx, p3[1]];
+      } else if (cb < ca) {
+        p0 = [a.x, ay]; p3 = [b.x + NODEW, by];
+        const dx = Math.max(40, (p0[0] - p3[0]) / 2);
+        p1 = [p0[0] - dx, p0[1] + 18]; p2 = [p3[0] + dx, p3[1] + 18];
+      } else {
+        p0 = [a.x + NODEW, ay]; p3 = [b.x + NODEW, by];
+        const bulge = 26 + Math.min(70, Math.abs(by - ay) / 4);
+        p1 = [p0[0] + bulge, p0[1]]; p2 = [p3[0] + bulge, p3[1]];
+      }
+      const d = `M${p0[0]} ${p0[1]} C${p1[0]} ${p1[1]} ${p2[0]} ${p2[1]} ${p3[0]} ${p3[1]}`;
+      const off = (!a.outside && a.state !== 'running') || (!b.outside && b.state !== 'running');
+      const g = sv('g', { class: `edge v-${e.via}${e.shared === false ? ' cut' : ''}${off ? ' off' : ''}` });
+      const arrow = e.shared === false ? 'a-cut' : e.via === 'published' ? 'a-pub' : 'a-dim';
+      const path = sv('path', { d, 'marker-end': `url(#${mid}-${arrow})` });
+      const tip = sv('title', null, `${a.name} → ${b.name}${e.port ? ` :${e.port}${e.proto ? '/' + e.proto : ''}` : ''} · ${e.what}${e.shared === false ? ' · no shared docker network' : ''}`);
+      g.append(path, tip);
+      const text = e.port ? `:${e.port}${e.proto && e.proto !== 'tcp' ? '/' + e.proto : ''}` : e.via === 'depends_on' ? 'after' : '';
+      if (text) {
+        const mx = (p0[0] + 3 * p1[0] + 3 * p2[0] + p3[0]) / 8, my = (p0[1] + 3 * p1[1] + 3 * p2[1] + p3[1]) / 8;
+        const lab = sv('g', { class: 'elabel' });
+        const w = text.length * 6 + 8;
+        lab.append(sv('rect', { x: mx - w / 2, y: my - 8, width: w, height: 15 }), sv('text', { x: mx, y: my + 3, 'text-anchor': 'middle' }, text));
+        g.append(lab);
+      }
+      edgeLayer.append(g);
+      edgeEls.push({ e, g, path, arrow });
+    }
+    const nodeEls = new Map();
+    const wrap = el('div', 'arch-wrap');
+    const tipBox = el('div', 'tip');
+    tipBox.hidden = true;
+    const showTip = (n) => {
+      tipBox.replaceChildren();
+      tipBox.append(el('b', null, n.name));
+      const row = (text) => tipBox.append(el('div', 'row', text));
+      if (n.outside) {
+        row(n.id === '(internet)' ? 'anything that reaches a published port' : 'the docker engine on this box, through its socket');
+      } else {
+        row(`${n.state}${n.health ? ` · ${n.health}` : ''}${n.state === 'exited' && has(n.exit_code) ? ` · exit ${n.exit_code}` : ''}${n.up_since ? ` · up ${human(secsSince(n.up_since, now))}` : ''}${n.restarts ? ` · ${n.restarts} restarts` : ''}`);
+        if (n.state === 'running') {
+          row(`cpu ${pct1(n.cpu_pct)} of a core · memory ${bytes(n.mem_bytes)}${n.mem_limit ? ` of ${bytes(n.mem_limit)}` : ''}`);
+          row(`network ↓ ${bps(n.rx_bps)} · ↑ ${bps(n.tx_bps)}`);
+        }
+        row(`${n.project ? `project ${n.project} · ` : ''}service ${n.service || '—'}`);
+        row(`image ${n.image || '—'}`);
+        if (n.networks && n.networks.length) row(`networks ${n.networks.join(', ')}`);
+        if (n.ports && n.ports.length) row(`ports ${n.ports.map(portText).join(', ')}`);
+      }
+      const ins = data.edges.filter((e) => e.to === n.id).length, outs = data.edges.filter((e) => e.from === n.id).length;
+      row(`${outs} out, ${ins} in`);
+      tipBox.hidden = false;
+      tipBox.style.left = `${Math.max(0, Math.min(W - tipBox.offsetWidth, n.x + NODEW / 2 - tipBox.offsetWidth / 2))}px`;
+      tipBox.style.top = `${n.y + NODEH + 8 + tipBox.offsetHeight < H || n.y < tipBox.offsetHeight + 8 ? n.y + NODEH + 8 : n.y - tipBox.offsetHeight - 8}px`;
+    };
+    const light = (ids, center) => {
+      const on = ids && ids.length;
+      svg.classList.toggle('focus', !!on);
+      const set = new Set(ids || []);
+      for (const [id, g] of nodeEls) g.classList.toggle('hot', set.has(id));
+      for (const x of edgeEls) {
+        const hot = !!on && center !== undefined && (x.e.from === center || x.e.to === center);
+        x.g.classList.toggle('hot', hot);
+        x.path.setAttribute('marker-end', `url(#${mid}-${hot && x.arrow === 'a-dim' ? 'a-hot' : x.arrow})`);
+      }
+    };
+    const neighbours = (id) => [id, ...data.edges.filter((e) => e.from === id || e.to === id).map((e) => (e.from === id ? e.to : e.from))];
+    const rest = () => {
+      const p = pinned.get(t.name);
+      if (p && byId.has(p)) light(neighbours(p), p); else light(null);
+    };
+    for (const n of nodes) {
+      const s = nodeState(n);
+      const g = sv('g', { class: `node s-${s}${pinned.get(t.name) === n.id ? ' pinned' : ''}`, transform: `translate(${n.x} ${n.y})`, tabindex: 0, role: 'button', 'aria-label': `${n.name}, ${n.outside ? 'outside docker' : n.state}` });
+      g.append(sv('rect', { class: 'box', x: 0.5, y: 0.5, width: NODEW, height: NODEH }));
+      g.append(sv('rect', { class: 'st', x: 8, y: 9, width: 8, height: 8 }));
+      g.append(sv('text', { x: 22, y: 17 }, n.name.length > 20 ? `${n.name.slice(0, 19)}…` : n.name));
+      const sub = n.outside ? (n.id === '(internet)' ? 'published ports' : 'socket') : n.state === 'running' ? `${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state === 'exited' && has(n.exit_code) ? `exited (${n.exit_code})` : n.state;
+      g.append(sv('text', { class: 'sub', x: 22, y: 33 }, sub));
+      (n.networks || []).forEach((name, i) => {
+        g.append(sv('rect', { x: NODEW - 10 - i * 9, y: NODEH - 10, width: 6, height: 6, fill: netColor.get(name) || COLORS.t3 }));
+      });
+      g.addEventListener('mouseenter', () => { light(neighbours(n.id), n.id); showTip(n); });
+      g.addEventListener('mouseleave', () => { tipBox.hidden = true; rest(); });
+      g.addEventListener('focus', () => { light(neighbours(n.id), n.id); showTip(n); });
+      g.addEventListener('blur', () => { tipBox.hidden = true; rest(); });
+      const pin = () => {
+        pinned.set(t.name, pinned.get(t.name) === n.id ? null : n.id);
+        for (const [id, el2] of nodeEls) el2.classList.toggle('pinned', pinned.get(t.name) === id);
+        archBuilt.delete(t.name);
+      };
+      g.addEventListener('click', pin);
+      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(); } });
+      nodeLayer.append(g);
+      nodeEls.set(n.id, g);
+    }
+    wrap.append(svg, tipBox);
+    rest();
+    return { wrap, light: (ids) => (ids ? light(ids) : rest()) };
+  }
+
+  function scaleOf(values) {
+    const pos = values.filter((v) => has(v) && v > 0);
+    if (!pos.length) return { a: -1, b: 3 };
+    let a = Math.floor(Math.log10(Math.min(...pos)));
+    let b = Math.ceil(Math.log10(Math.max(...pos)));
+    if (b - a < 2) { a = Math.min(a, b - 2); }
+    if (b === a) b = a + 1;
+    return { a, b };
+  }
+  const at = (sc, v) => Math.max(0, Math.min(100, ((Math.log10(Math.max(v, 10 ** sc.a)) - sc.a) / (sc.b - sc.a)) * 100));
+
+  function latBar(r, sc) {
+    const box = el('div', 'lat');
+    const lim = limitsOf(r);
+    box.setAttribute('role', 'img');
+    box.setAttribute('aria-label', `p50 ${ms(r.p50)}, p95 ${ms(r.p95)}, p99 ${ms(r.p99)}, max ${ms(r.max)}`);
+    box.title = `p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)}${lim ? `\ngreen under ${ms(lim[0])}, red from ${ms(lim[1])}` : ''}`;
+    const span = (cls, from, to) => {
+      const i = el('i', cls);
+      i.style.left = `${from}%`;
+      i.style.width = `${Math.max(0, to - from)}%`;
+      box.append(i);
+      return i;
+    };
+    if (lim) {
+      span('z ok', 0, at(sc, lim[0]));
+      span('z warn', at(sc, lim[0]), at(sc, lim[1]));
+      span('z bad', at(sc, lim[1]), 100);
+    }
+    if (!has(r.p50)) return box;
+    const p50 = at(sc, r.p50), p95 = at(sc, r.p95 ?? r.p50), p99 = at(sc, r.p99 ?? r.p95 ?? r.p50), mx = at(sc, r.max ?? r.p99 ?? r.p50);
+    span('w', p99, mx);
+    span(`b1 bg-${grade(r.p95, lim) || 'none'}`, p50, Math.max(p95, p50 + 1));
+    span(`b2 bg-${grade(r.p99, lim) || 'none'}`, p95, Math.max(p99, p95 + 0.5));
+    const m = el('i', 'm50');
+    m.style.left = `calc(${p50}% - 1px)`;
+    box.append(m);
+    const x = el('i', 'mx');
+    x.style.left = `calc(${mx}% - 1px)`;
+    box.append(x);
+    return box;
+  }
+
+  function axis(sc, width) {
+    const ax = el('div', 'axis');
+    if (width) ax.style.width = width;
+    const step = Math.max(1, Math.ceil((sc.b - sc.a) / 4));
+    for (let d = sc.a; d <= sc.b; d += step) {
+      const s = el('span', null, decade(d));
+      s.style.left = `${at(sc, 10 ** d)}%`;
+      if (d === sc.a) s.style.transform = 'none';
+      if (d === sc.b) s.style.transform = 'translateX(-100%)';
+      ax.append(s);
+    }
+    return ax;
   }
 
   function segFill(box, items, current, pick) {
@@ -580,31 +971,33 @@
     if (box.dataset.sig !== sig) {
       box.dataset.sig = sig;
       box.replaceChildren(...items.map((i) => {
-        const b = el('button', null, i.label);
-        b.type = 'button';
+        const b = button(null, i.label, () => pick(i.id));
         b.dataset.id = i.id;
-        b.addEventListener('click', () => pick(i.id));
         return b;
       }));
     }
     for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.id === current));
   }
 
-  function epBuild() {
+  function timingBuild(v) {
     const sec = el('section', 'target');
-    sec.append(el('h2', null, 'endpoints and calls'));
+    const head = el('div', 'sec-head');
+    head.append(el('h2', null, v.name === 'endpoints' ? 'endpoints' : 'calls: postgres, redis, s3, video, voice, websocket'));
+    sec.append(head);
+    const cards = el('div', 'cards');
     const controls = el('div', 'ep-controls');
     const search = el('input');
     search.type = 'search';
-    search.placeholder = 'filter: route, query, command, box';
+    search.placeholder = 'filter';
     search.spellcheck = false;
     search.autocomplete = 'off';
-    search.setAttribute('aria-label', 'filter endpoints and calls');
-    search.value = ep.q;
-    search.addEventListener('input', () => { ep.q = search.value; writeHash(); epTable(); });
+    search.setAttribute('aria-label', v.name === 'endpoints' ? 'filter endpoints by route, method, where or box; every word must match' : 'filter calls by query, command, path, where or box; every word must match');
+    search.value = v.q;
+    search.addEventListener('input', () => { v.q = search.value; writeHash(); timingRender(v); });
     const kinds = el('div', 'seg small');
     kinds.setAttribute('role', 'group');
     kinds.setAttribute('aria-label', 'kind');
+    kinds.hidden = v.name !== 'calls';
     const boxes = el('div', 'seg small');
     boxes.setAttribute('role', 'group');
     boxes.setAttribute('aria-label', 'box');
@@ -617,50 +1010,140 @@
     const tbody = el('tbody');
     table.append(thead, tbody);
     wrap.append(table);
-    const foot = el('div', 'dim', 'click a row for its graphs. latency: to the response headers (http, ws), the statement (db), the command (redis), the request (s3, video, voice)');
-    foot.style.marginTop = '6px';
-    sec.append(controls, info, wrap, foot);
-    $endpoints.append(sec);
-    ep.ui = { search, kinds, boxes, info, thead, tbody };
+    const foot = el('div', 'keyline');
+    const demo = latBar({ kind: 'http', name: '', p50: 3, p95: 40, p99: 180, max: 900 }, { a: 0, b: 3 });
+    foot.append(
+      el('span', null, 'latency bar, log scale:'), demo,
+      el('span', null, 'white tick p50 · thick bar p50 to p95 · thin bar p95 to p99 · line to max · bar colour by p95 and p99 against the kind\u2019s limits, the tint behind it'),
+    );
+    const foot2 = el('div', 'dim', v.name === 'endpoints'
+      ? 'latency: to the response headers. share: of all http time in the view. click a row for its percentiles over time and its distribution'
+      : 'latency: the statement (postgres), the command (redis), the request (s3, video, voice), the upgrade (websocket). a blocking XREAD is as long as it waited, so it has no limits and stays out of the redis totals. share: of its kind\u2019s time. click a row for its percentiles over time and its distribution');
+    foot2.style.marginTop = '6px';
+    sec.append(cards, controls, info, wrap, foot, foot2);
+    v.ui = { sec, search, kinds, boxes, info, thead, tbody, cards };
   }
 
-  function epNow() {
-    return ep.data ? Date.parse(ep.data.now) + (Date.now() - ep.data.received) : Date.now();
+  function timingNow() {
+    return tm.data ? Date.parse(tm.data.now) + (Date.now() - tm.data.received) : Date.now();
   }
 
-  function epTable() {
+  function colsFor(v, multi) {
+    const E = v.name === 'endpoints';
+    const all = [
+      { id: 'target', label: 'box', show: multi },
+      { id: 'method', label: 'method', show: E },
+      { id: 'name', label: E ? 'route' : 'kind and call' },
+      { id: 'src', label: 'where' },
+      { id: 'n', label: 'count', num: true, fmt: count },
+      { id: 'rate', label: '/s', num: true, fmt: rate },
+      { id: 'sum_ms', label: 'total time', num: true, fmt: spent },
+      { id: 'share', label: 'share', num: true },
+      { id: 'mean', label: 'avg', num: true, fmt: ms, graded: true },
+      { id: 'p50', label: 'p50', num: true, fmt: ms, graded: true },
+      { id: 'p95', label: 'p95', num: true, fmt: ms, graded: true },
+      { id: 'p99', label: 'p99', num: true, fmt: ms, graded: true },
+      { id: 'max', label: 'max', num: true, fmt: ms, graded: true },
+      { id: 'lat', label: 'latency', fixed: true },
+      { id: 'e4', label: '4xx', num: true, fmt: count, bad: 'note', show: E },
+      { id: 'e5', label: '5xx', num: true, fmt: count, bad: 'no', show: E },
+      { id: 'err', label: 'errors', num: true, fmt: count, bad: 'no', show: !E },
+    ];
+    return all.filter((c) => c.show !== false);
+  }
+
+  function totalsFor(target) {
+    return ((tm.data && tm.data.totals) || []).filter((r) => (target ? r.target === target : r.target === null));
+  }
+
+  function card(r, sc, opts) {
+    const c = opts.onClick ? button(`card${opts.lead ? ' lead' : ''}`, null, opts.onClick) : el('div', `card${opts.lead ? ' lead' : ''}`);
+    if (opts.onClick) c.setAttribute('aria-pressed', String(!!opts.pressed));
+    const lim = limitsOf(r);
+    const head = el('div', 'c-head');
+    head.append(el('span', `c-kind k-${r.kind}`, KIND_LABEL[r.kind] || r.kind), el('span', 'dim', `${count(r.n)} ${r.kind === 'http' ? 'requests' : 'calls'} · ${rate(r.rate)}/s`));
+    const big = el('div', 'c-big', spent(r.sum_ms));
+    big.append(el('small', null, 'time spent'));
+    const row = el('div', 'c-row');
+    const errs = el('div', 'c-row');
+    const part = (into, k, v, g) => { const s = el('span'); s.append(document.createTextNode(`${k} `), el('b', g ? `g-${g}` : null, v)); into.append(s); };
+    part(row, 'p50', ms(r.p50), grade(r.p50, lim));
+    part(row, 'p95', ms(r.p95), grade(r.p95, lim));
+    part(row, 'p99', ms(r.p99), grade(r.p99, lim));
+    part(row, 'max', ms(r.max), grade(r.max, lim));
+    part(errs, 'avg', ms(r.mean), grade(r.mean, lim));
+    if (opts.shareOf) part(errs, 'share', share(r.sum_ms / opts.shareOf));
+    if (r.kind === 'http') {
+      errs.append(el('span', r.e5 ? 'no' : null, `5xx ${count(r.e5)}${r.n ? ` (${share(r.e5 / r.n)})` : ''}`), el('span', r.e4 ? 'note' : null, `4xx ${count(r.e4)}`));
+    } else {
+      errs.append(el('span', r.err ? 'no' : null, `errors ${count(r.err)}${r.n ? ` (${share(r.err / r.n)})` : ''}`));
+    }
+    c.append(head, big, latBar(r, sc), row, errs);
+    return c;
+  }
+
+  function timingCards(v, target) {
+    const ui = v.ui;
+    const tot = totalsFor(target);
+    const list = v.name === 'endpoints' ? tot.filter((r) => r.kind === 'http') : tot.filter((r) => r.kind !== 'http').sort((a, b) => b.sum_ms - a.sum_ms);
+    if (!list.length) { ui.cards.replaceChildren(); ui.cards.hidden = true; return; }
+    ui.cards.hidden = false;
+    const sc = scaleOf(list.flatMap((r) => [r.p50, r.max]));
+    if (v.name === 'endpoints') {
+      ui.cards.replaceChildren(...list.map((r) => card(r, sc, { lead: true })));
+      return;
+    }
+    const all = list.reduce((s, r) => s + r.sum_ms, 0);
+    ui.cards.replaceChildren(...list.map((r) => card(r, sc, {
+      shareOf: all, pressed: v.kind === r.kind,
+      onClick: () => { v.kind = v.kind === r.kind ? '' : r.kind; writeHash(); timingRender(v); },
+    })));
+  }
+
+  function timingRender(v) {
     if (!state || !state.targets.length) return;
-    if (!ep.ui) epBuild();
-    const ui = ep.ui;
-    epCharts.length = 0;
+    if (!v.ui) timingBuild(v);
+    const ui = v.ui;
+    tcharts.length = 0;
     const shown = boxShown();
     const multi = shown === ALL && state.targets.length > 1;
-    if (!multi) ep.target = '';
-    const target = shown === ALL ? ep.target : shown;
-    const rows = (ep.data && ep.data.rows) || [];
-    const kinds = KINDS.concat([...new Set(rows.map((r) => r.kind))].filter((k) => !KINDS.includes(k)).sort());
-    segFill(ui.kinds, [{ id: '', label: 'all' }, ...kinds.map((k) => ({ id: k, label: k }))], ep.kind, (k) => { ep.kind = k; writeHash(); epTable(); });
+    if (!multi) v.target = '';
+    const target = shown === ALL ? v.target : shown;
+    const rows = ((tm.data && tm.data.rows) || []).filter((r) => (v.name === 'endpoints' ? r.kind === 'http' : r.kind !== 'http'));
+    if (v.name === 'calls') {
+      const present = [...new Set(rows.map((r) => r.kind))];
+      const kinds = CALL_KINDS.filter((k) => present.includes(k) || k === v.kind).concat(present.filter((k) => !CALL_KINDS.includes(k)).sort());
+      segFill(ui.kinds, [{ id: '', label: 'all' }, ...kinds.map((k) => ({ id: k, label: KIND_LABEL[k] || k }))], v.kind, (k) => { v.kind = k; writeHash(); timingRender(v); });
+    }
     ui.boxes.hidden = !multi;
-    segFill(ui.boxes, multi ? [{ id: '', label: 'all boxes' }, ...state.targets.map((t) => ({ id: t.name, label: t.name }))] : [], ep.target, (b) => { ep.target = b; epTable(); });
+    segFill(ui.boxes, multi ? [{ id: '', label: 'all boxes' }, ...state.targets.map((t) => ({ id: t.name, label: t.name }))] : [], v.target, (b) => { v.target = b; timingRender(v); });
+    timingCards(v, target);
 
-    const words = ep.q.toLowerCase().split(/\s+/).filter(Boolean);
-    const list = rows.filter((r) => (!target || r.target === target) && (!ep.kind || r.kind === ep.kind)
-      && words.every((w) => `${r.target} ${r.kind} ${r.method} ${r.name} ${r.src}`.toLowerCase().includes(w)));
-    const col = COLS.find((c) => c.id === ep.sort && !c.fixed) || COLS[5];
+    const totals = new Map(totalsFor(target).map((r) => [r.kind, r]));
+    const words = v.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const list = rows.filter((r) => (!target || r.target === target) && (!v.kind || r.kind === v.kind)
+      && words.every((w) => `${r.target} ${r.kind} ${KIND_LABEL[r.kind] || ''} ${r.method} ${r.name} ${r.src}`.toLowerCase().includes(w)));
+    for (const r of list) {
+      const k = totals.get(r.kind);
+      r.share = k && k.sum_ms > 0 && !blocking(r) ? r.sum_ms / k.sum_ms : null;
+    }
+    const cols = colsFor(v, multi);
+    const col = cols.find((c) => c.id === v.sort && !c.fixed) || cols.find((c) => c.id === DEFAULT_SORT);
     list.sort((a, b) => {
+      if (col.id === 'sum_ms' && blocking(a) !== blocking(b)) return blocking(a) ? 1 : -1;
       const x = a[col.id], y = b[col.id];
-      if (!has(x) || x === '') return has(y) && y !== '' ? 1 : b.n - a.n;
-      if (!has(y) || y === '') return -1;
+      const nx = !has(x) || x === '', ny = !has(y) || y === '';
+      if (nx || ny) return nx && ny ? b.sum_ms - a.sum_ms : nx ? 1 : -1;
       const d = typeof x === 'number' ? x - y : String(x).localeCompare(String(y));
-      return d * ep.dir || b.n - a.n;
+      return d * v.dir || b.sum_ms - a.sum_ms;
     });
-    const LIMIT = 250;
-    const cols = COLS.filter((c) => c.id !== 'target' || multi);
+    const shownRows = list.slice(0, LIMIT);
+    const sc = scaleOf(shownRows.flatMap((r) => [r.p50, r.max]));
     const notes = [];
-    if (ep.error) notes.push(`could not refresh: ${ep.error}`);
-    if (ep.data) {
-      notes.push(`${list.length} of ${rows.length} lines over ${ep.data.range}${list.length > LIMIT ? `, showing the first ${LIMIT}` : ''}`);
-      for (const [box, n] of Object.entries(ep.data.dropped || {})) notes.push(`${box}: ${n} new lines dropped, the table holds 400 per box`);
+    if (tm.error) notes.push(`could not refresh: ${tm.error}`);
+    if (tm.data) {
+      notes.push(`${list.length} of ${rows.length} lines over ${tm.data.range}${list.length > LIMIT ? `, showing the first ${LIMIT}` : ''}`);
+      for (const [box, n] of Object.entries(tm.data.dropped || {})) notes.push(`${box}: ${n} new lines dropped, the table holds 400 per box`);
     }
     ui.info.textContent = notes.join(' · ');
 
@@ -668,18 +1151,19 @@
     const head = el('tr');
     for (const c of cols) {
       const th = el('th', c.num ? 'num' : null);
-      if (c.fixed) th.textContent = c.label;
+      if (c.id === 'lat') {
+        th.append(el('div', null, 'latency'), axis(sc));
+      } else if (c.fixed) th.textContent = c.label;
       else {
-        const b = el('button', null, c.label + (c.id === ep.sort ? (ep.dir < 0 ? ' ▼' : ' ▲') : ''));
-        b.type = 'button';
+        const b = button(null, c.label + (c.id === col.id ? (v.dir < 0 ? ' ▼' : ' ▲') : ''), () => {
+          if (col.id === c.id) v.dir = -v.dir;
+          else { v.sort = c.id; v.dir = c.num ? -1 : 1; }
+          writeHash();
+          timingRender(v);
+        });
         b.dataset.col = c.id;
         b.title = `sort by ${c.label}`;
-        if (c.id === ep.sort) th.setAttribute('aria-sort', ep.dir < 0 ? 'descending' : 'ascending');
-        b.addEventListener('click', () => {
-          if (ep.sort === c.id) ep.dir = -ep.dir;
-          else { ep.sort = c.id; ep.dir = c.num ? -1 : 1; }
-          epTable();
-        });
+        if (c.id === col.id) th.setAttribute('aria-sort', v.dir < 0 ? 'descending' : 'ascending');
         th.append(b);
       }
       head.append(th);
@@ -691,61 +1175,70 @@
     }
 
     const body = [];
-    const sparks = [];
-    if (!rows.length) {
+    const empty = (text) => {
       const tr = el('tr');
-      const td = el('td', 'empty', !ep.data ? 'loading' : 'no timings yet. each box sends them through its agent (TIMINGS_FROM in docker-compose.yml) once it runs this build');
+      const td = el('td', 'empty', text);
       td.colSpan = cols.length;
       tr.append(td);
       body.push(tr);
-    } else if (!list.length) {
-      const tr = el('tr');
-      const td = el('td', 'empty', 'nothing matches the filter');
-      td.colSpan = cols.length;
-      tr.append(td);
-      body.push(tr);
-    }
-    const now = epNow();
-    for (const r of list.slice(0, LIMIT)) {
+    };
+    if (!rows.length) empty(!tm.data ? (tm.error ? tm.error : 'loading') : 'no timings yet. each box sends them through its agent (TIMINGS_FROM in docker-compose.yml) once it runs this build');
+    else if (!list.length) empty('nothing matches the filter');
+    const now = timingNow();
+    for (const r of shownRows) {
       const id = `${r.target}\u0000${r.key}`;
-      const tr = el('tr', `ep${ep.open === id ? ' open' : ''}`);
+      const lim = limitsOf(r);
+      const tr = el('tr', `ep${v.open === id ? ' open' : ''}`);
+      tr.tabIndex = 0;
+      tr.setAttribute('aria-expanded', String(v.open === id));
       for (const c of cols) {
-        if (c.id === 'spark') {
-          const td = el('td', 'spark');
-          const canvas = el('canvas');
-          canvas.setAttribute('role', 'img');
-          canvas.setAttribute('aria-label', `p95 latency of ${r.name} over the range`);
-          td.append(canvas);
-          sparks.push({ canvas, t: r.spark.map((_, i) => i), lines: [{ v: r.spark, color: r.err > 0 ? COLORS.red : COLORS.blue }], t0: 0, t1: Math.max(1, r.spark.length - 1), gap: 1, max: 0, hover: null, thin: true });
+        if (c.id === 'lat') {
+          const td = el('td', 'latc');
+          td.append(latBar(r, sc));
           tr.append(td);
           continue;
         }
-        const v = r[c.id];
-        const cls = [c.num ? 'num mono' : '', c.id === 'name' ? 'ep-name mono' : '', c.id === 'kind' ? `k-${r.kind}` : '', c.bad && v > 0 ? c.bad : '', c.id === 'src' || c.id === 'method' ? 'dim' : ''].filter(Boolean).join(' ');
-        const td = el('td', cls, c.fmt ? c.fmt(v) : v || '—');
-        if (c.id === 'name') td.title = r.name;
+        if (c.id === 'share') {
+          const td = el('td', 'num mono');
+          const bar = el('span', 'share');
+          const fill = el('i');
+          fill.style.width = `${Math.round((r.share || 0) * 100)}%`;
+          bar.append(fill);
+          td.append(bar, document.createTextNode(share(r.share)));
+          tr.append(td);
+          continue;
+        }
+        const val = r[c.id];
+        const g = c.graded ? grade(val, lim) : '';
+        const cls = [c.num ? 'num mono' : '', c.id === 'name' ? 'ep-name mono' : '', c.bad && val > 0 ? c.bad : '', g ? `g-${g}` : '', c.id === 'src' || c.id === 'method' ? 'dim' : ''].filter(Boolean).join(' ');
+        const td = el('td', cls, c.fmt ? c.fmt(val) : val || '—');
+        if (c.id === 'name') {
+          td.title = `${KIND_LABEL[r.kind] || r.kind} ${r.name}`;
+          if (v.name === 'calls' && !v.kind) td.prepend(el('span', `ktag k-${r.kind}`, KIND_LABEL[r.kind] || r.kind));
+        }
         tr.append(td);
       }
-      tr.addEventListener('click', () => {
-        ep.open = ep.open === id ? null : id;
-        ep.detail = null;
-        epTable();
-        if (ep.open) loadDetail().then(epTable);
-      });
+      const toggle = () => {
+        v.open = v.open === id ? null : id;
+        v.detail = null;
+        timingRender(v);
+        if (v.open) loadDetail(v).then(() => timingRender(v));
+      };
+      tr.addEventListener('click', toggle);
+      tr.addEventListener('keydown', (e) => { if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } });
       body.push(tr);
-      if (ep.open === id) body.push(epDetail(r, cols.length, now));
+      if (v.open === id) body.push(timingDetail(v, r, cols.length, now));
     }
     ui.tbody.replaceChildren(...body);
-    for (const c of sparks) draw(c);
-    for (const c of epCharts) draw(c);
+    for (const c of tcharts) (c.hist ? drawHist : draw)(c);
   }
 
-  function epDetail(r, span, now) {
+  function timingDetail(v, r, span, now) {
     const tr = el('tr', 'detail');
     const td = el('td');
     td.colSpan = span;
-    td.append(el('pre', 'mono', `${r.kind}${r.method ? ' ' + r.method : ''} ${r.name}\n${r.target} · ${r.src} · ${count(r.n)} over ${ep.data.range} · ${rate(r.rate)}/s\nmean ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · 4xx ${r.e4} · 5xx ${r.e5} · all errors ${r.err}`));
-    const D = ep.detail;
+    td.append(el('pre', 'mono', `${KIND_LABEL[r.kind] || r.kind}${r.method ? ' ' + r.method : ''} ${r.name}\n${r.target} · ${r.src} · ${count(r.n)} over ${tm.data.range} · ${rate(r.rate)}/s · ${spent(r.sum_ms)} in all, ${share(r.share)} of its kind\navg ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · ${r.kind === 'http' ? `4xx ${r.e4} · 5xx ${r.e5} · ` : ''}all errors ${r.err}`));
+    const D = v.detail;
     const id = `${r.target}\u0000${r.key}`;
     if (!D || D.id !== id) td.append(el('div', 'empty', 'loading'));
     else if (D.error) td.append(el('div', 'note', D.error));
@@ -753,11 +1246,14 @@
       const src = { t: D.t, bucket_secs: D.bucket_secs };
       const tiles = el('div', 'tiles');
       tiles.append(
-        chart({ label: `latency per ${per(D.bucket_secs)}`, now, read: ms, src, store: epCharts, value: `p95 ${ms(r.p95)}`,
+        histTile(D, r),
+        chart({ label: `latency per ${per(D.bucket_secs)}, log scale`, now, read: ms, src, store: tcharts, value: `p95 ${ms(r.p95)}`, log: true,
           lines: [{ name: 'p50', v: D.p50, color: COLORS.green }, { name: 'p95', v: D.p95, color: COLORS.blue }, { name: 'p99', v: D.p99, color: COLORS.violet }, { name: 'max', v: D.max, color: COLORS.red }] }),
-        chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: count(r.n),
+        chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: count(r.n),
           lines: [{ name: 'count', v: D.n, color: COLORS.blue }] }),
-        chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: `${r.err + r.e4}`,
+        chart({ label: `time spent per ${per(D.bucket_secs)}`, now, read: spent, src, store: tcharts, value: spent(r.sum_ms),
+          lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }),
+        chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${r.err + r.e4}`,
           lines: [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }] })
       );
       td.append(tiles);
@@ -766,47 +1262,293 @@
     return tr;
   }
 
-  async function loadTimings(force) {
-    if (!state || !state.targets.length) return;
-    if (!force && ep.key === sel.range && Date.now() - ep.at < RANGES[sel.range].every) return;
-    ep.key = sel.range;
-    ep.at = Date.now();
-    try {
-      const res = await fetch(`/api/monitor/timings?range=${sel.range}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`GET /api/monitor/timings answered ${res.status}`);
-      const d = await res.json();
-      if (d.range !== sel.range) return;
-      d.received = Date.now();
-      ep.data = d;
-      ep.error = null;
-    } catch (e) {
-      ep.at = 0;
-      ep.error = e.message;
-    }
-    await loadDetail();
-    epTable();
+  function histTile(D, r) {
+    const tile = el('div', 'tile wide');
+    const head = el('div', 'head');
+    const hist = D.hist || [];
+    const total = hist.reduce((s, b) => s + b[2], 0);
+    const value = `${count(total)} calls over the range`;
+    const $value = el('span', 'value mono', value);
+    head.append(el('span', 'label', 'distribution, log scale'), $value);
+    const canvas = el('canvas');
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', `how ${count(total)} calls spread over latency, with p50 ${ms(r.p50)}, p95 ${ms(r.p95)} and p99 ${ms(r.p99)} marked`);
+    tile.append(head, canvas);
+    if (!hist.length) { tile.append(el('div', 'empty', 'no calls in the range')); return tile; }
+    const c = { hist: true, canvas, bars: hist, total, lim: limitsOf(r), marks: [['p50', r.p50, COLORS.green], ['p95', r.p95, COLORS.blue], ['p99', r.p99, COLORS.violet], ['max', r.max, COLORS.red]], hover: null };
+    tcharts.push(c);
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const i = c.pick ? c.pick(e.clientX - rect.left) : -1;
+      if (i < 0) return;
+      c.hover = i;
+      drawHist(c);
+      const below = hist.slice(0, i + 1).reduce((s, b) => s + b[2], 0);
+      $value.textContent = `${ms(hist[i][0])} – ${ms(hist[i][1])} · ${count(hist[i][2])} calls · ${share(below / total)} at or under`;
+    });
+    canvas.addEventListener('mouseleave', () => { c.hover = null; drawHist(c); $value.textContent = value; });
+    return tile;
   }
 
-  async function loadDetail() {
-    const id = ep.open;
+  function drawHist(c) {
+    const { canvas, bars, marks, lim } = c;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const g = canvas.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const lo = Math.max(bars[0][0], 0.0005);
+    const sc = scaleOf([lo, bars[bars.length - 1][1]]);
+    const bottom = h - 14, top = 14;
+    const x = (v) => (at(sc, v) / 100) * w;
+    const peak = Math.max(...bars.map((b) => b[2]));
+    g.strokeStyle = COLORS.grid;
+    g.fillStyle = COLORS.t3;
+    g.font = '10px system-ui, sans-serif';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let d = sc.a; d <= sc.b; d++) {
+      const px = Math.round(x(10 ** d)) + 0.5;
+      g.moveTo(px, top); g.lineTo(px, bottom);
+      const label = ms(10 ** d);
+      const tw = g.measureText(label).width;
+      g.fillText(label, Math.min(Math.max(0, px - tw / 2), w - tw), h - 2);
+    }
+    g.moveTo(0, bottom + 0.5); g.lineTo(w, bottom + 0.5);
+    g.stroke();
+    const tone = { ok: COLORS.green, warn: COLORS.yellow, bad: COLORS.red, '': COLORS.blue };
+    c.pick = (px) => {
+      for (let i = 0; i < bars.length; i++) if (px >= x(Math.max(bars[i][0], lo)) - 1 && px <= x(bars[i][1]) + 1) return i;
+      return -1;
+    };
+    bars.forEach((b, i) => {
+      const x0 = x(Math.max(b[0], lo)), x1 = Math.max(x0 + 1.5, x(b[1]) - 0.5);
+      const bh = Math.max(1, (b[2] / peak) * (bottom - top));
+      g.globalAlpha = c.hover === null || c.hover === i ? 0.85 : 0.45;
+      g.fillStyle = tone[grade((b[0] + b[1]) / 2, lim)];
+      g.fillRect(x0, bottom - bh, x1 - x0, bh);
+    });
+    g.globalAlpha = 1;
+    let lastX = -100;
+    for (const [name, v, color] of marks) {
+      if (!has(v) || v <= 0) continue;
+      const px = Math.round(x(v)) + 0.5;
+      g.strokeStyle = color;
+      g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(px, top - 2); g.lineTo(px, bottom); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = color;
+      const tw = g.measureText(name).width;
+      const lx = Math.max(lastX + 4, Math.min(px - tw / 2, w - tw));
+      g.fillText(name, lx, 10);
+      lastX = lx + tw;
+    }
+  }
+
+  function renderNav(shown) {
+    $tabs.replaceChildren();
+    if (state.targets.length > 1) {
+      const all = button('tab', null, () => choose({ box: ALL }));
+      all.setAttribute('aria-pressed', String(shown === ALL));
+      const up = state.targets.filter((t) => t.status === 'up').length;
+      all.append(el('span', null, 'all boxes'), el('small', null, `${up}/${state.targets.length} up`));
+      $tabs.append(all);
+    }
+    for (const t of state.targets) {
+      const b = button('tab', null, () => choose({ box: t.name }));
+      b.setAttribute('aria-pressed', String(shown === t.name));
+      const H = t.metrics && t.metrics.host;
+      const disk = H && (H.disk || [])[0];
+      const mini = H ? `cpu ${pct1(H.cpu_pct)} · mem ${H.mem_total ? pct1((100 * H.mem_used) / H.mem_total) : '—'} · disk ${disk ? pct1((100 * disk.used) / disk.total) : '—'}` : '';
+      b.append(el('span', `dot ${t.status}`), el('span', null, t.name));
+      if (mini) b.append(el('small', null, mini));
+      $tabs.append(b);
+    }
+    $ranges.replaceChildren();
+    $ranges.hidden = sel.tab === 'containers' && sel.cview === 'arch';
+    for (const r of Object.keys(RANGES)) {
+      const b = button(null, r, () => choose({ range: r }));
+      b.setAttribute('aria-pressed', String(sel.range === r));
+      $ranges.append(b);
+    }
+    const target = shown === ALL ? null : shown;
+    const tot = totalsFor(target);
+    const badge = (kinds) => {
+      const rows = tot.filter((r) => kinds(r.kind));
+      return rows.length ? `${count(rows.reduce((s, r) => s + r.n, 0))}` : '';
+    };
+    const sig = TABS.map((t) => t.id).join('|');
+    if ($views.dataset.sig !== sig) {
+      $views.dataset.sig = sig;
+      $views.replaceChildren(...TABS.map((t) => {
+        const b = button(null, null, () => choose({ tab: t.id }));
+        b.id = `view-${t.id}`;
+        b.dataset.id = t.id;
+        b.setAttribute('role', 'tab');
+        b.setAttribute('aria-controls', 'main');
+        b.addEventListener('keydown', (e) => {
+          const i = TABS.findIndex((x) => x.id === t.id);
+          const j = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i + TABS.length - 1) % TABS.length : -1;
+          if (j < 0) return;
+          e.preventDefault();
+          choose({ tab: TABS[j].id });
+          document.getElementById(`view-${TABS[j].id}`).focus();
+        });
+        return b;
+      }));
+    }
+    for (const b of $views.children) {
+      const id = b.dataset.id;
+      const on = id === sel.tab;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+      const extra = id === 'endpoints' ? badge((k) => k === 'http') : id === 'calls' ? badge((k) => k !== 'http') : '';
+      b.replaceChildren(document.createTextNode(TABS.find((x) => x.id === id).label));
+      if (extra) b.append(el('small', null, extra));
+    }
+    $main.setAttribute('aria-labelledby', `view-${sel.tab}`);
+  }
+
+  function containersTab(shown, now) {
+    const out = [];
+    const bar = el('div', 'sec-head');
+    const seg = el('div', 'seg');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'containers view');
+    for (const [id, label] of [['table', 'table and graphs'], ['arch', 'architecture']]) {
+      const b = button(null, label, () => choose({ cview: id }));
+      b.setAttribute('aria-pressed', String(sel.cview === id));
+      seg.append(b);
+    }
+    bar.append(seg, el('span', 'dim', sel.cview === 'arch' ? 'live from each box\u2019s docker engine (networks, ports, depends_on) and api/src/architecture.json' : ''));
+    bar.style.marginBottom = '16px';
+    out.push(bar);
+    const titled = shown === ALL;
+    for (const t of state.targets.filter((x) => shown === ALL || x.name === shown)) {
+      out.push(sel.cview === 'arch' ? archSection(t, now, titled) : containerSection(t, now, titled));
+    }
+    return out;
+  }
+
+  function render() {
+    if (!state) return;
+    charts.length = 0;
+    const now = Date.parse(state.now) + (Date.now() - state.received);
+    const m = state.monitor;
+    $meta.textContent = `build ${m.build} · up ${human(m.up_secs)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}${m.public ? ' · public' : ''}`;
+    if (!state.targets.length) {
+      $tabs.replaceChildren();
+      $ranges.hidden = true;
+      $views.hidden = true;
+      $main.replaceChildren(el('p', 'empty', 'nothing to watch. STATS_TARGETS in .env (or TARGETS in monitor/.env), then deploy'));
+      return;
+    }
+    $views.hidden = false;
+    const shown = boxShown();
+    renderNav(shown);
+    const v = views[sel.tab];
+    if (v) {
+      if (!v.ui) timingBuild(v);
+      if ($main.firstChild !== v.ui.sec || $main.childNodes.length !== 1) $main.replaceChildren(v.ui.sec);
+      timingRender(v);
+      return;
+    }
+    if (sel.tab === 'containers') {
+      $main.replaceChildren(...containersTab(shown, now));
+    } else if (shown === ALL) {
+      $main.replaceChildren(...state.targets.map((t) => statusCard(t, now, true)));
+    } else {
+      const t = state.targets.find((x) => x.name === shown);
+      $main.replaceChildren(hostSection(t, now), statusCard(t, now, false));
+    }
+    for (const c of charts) draw(c);
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`GET ${url.split('?')[0]} answered ${res.status}`);
+    const d = await res.json();
+    d.received = Date.now();
+    return d;
+  }
+
+  async function loadSeries(box, force) {
+    const key = `${box}|${sel.range}`;
+    const c = seriesCache.get(box) || {};
+    if (!force && c.key === key && Date.now() - c.at < RANGES[sel.range].every) return false;
+    seriesCache.set(box, { ...c, key, at: Date.now() });
+    try {
+      const s = await getJson(`/api/monitor/metrics?target=${encodeURIComponent(box)}&range=${sel.range}`);
+      const cur = seriesCache.get(box);
+      if (cur.key === key) { cur.data = s; cur.error = null; }
+    } catch (e) {
+      const cur = seriesCache.get(box);
+      cur.at = 0;
+      cur.error = `could not load the graphs: ${e.message}`;
+    }
+    return true;
+  }
+
+  async function loadArch(box, force) {
+    const c = archCache.get(box) || {};
+    if (!force && Date.now() - (c.at || 0) < ARCH_EVERY) return false;
+    archCache.set(box, { ...c, at: Date.now() });
+    try {
+      const d = await getJson(`/api/monitor/architecture?target=${encodeURIComponent(box)}`);
+      Object.assign(archCache.get(box), { data: d, error: null });
+    } catch (e) {
+      Object.assign(archCache.get(box), { at: 0, error: `could not load the architecture: ${e.message}` });
+    }
+    return true;
+  }
+
+  async function loadTimings(force) {
+    if (!force && tm.key === sel.range && Date.now() - tm.at < RANGES[sel.range].every) return false;
+    tm.key = sel.range;
+    tm.at = Date.now();
+    try {
+      const d = await getJson(`/api/monitor/timings?range=${sel.range}`);
+      if (d.range !== sel.range) return false;
+      tm.data = d;
+      tm.error = null;
+    } catch (e) {
+      tm.at = 0;
+      tm.error = e.message;
+    }
+    return true;
+  }
+
+  async function loadDetail(v) {
+    const id = v.open;
     if (!id) return;
     const [target, key] = id.split('\u0000');
     try {
-      const res = await fetch(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(key)}&range=${sel.range}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`GET /api/monitor/timings/series answered ${res.status}`);
-      const d = await res.json();
-      if (ep.open === id) ep.detail = { ...d, id };
+      const d = await getJson(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(key)}&range=${sel.range}`);
+      if (v.open === id) v.detail = { ...d, id };
     } catch (e) {
-      if (ep.open === id) ep.detail = { id, error: `could not load the graphs: ${e.message}` };
+      if (v.open === id) v.detail = { id, error: `could not load the graphs: ${e.message}` };
     }
+  }
+
+  async function loadVisible(force) {
+    if (!state || !state.targets.length) return;
+    const shown = boxShown();
+    const jobs = [];
+    if (sel.tab === 'host' && shown !== ALL) jobs.push(loadSeries(shown, force));
+    if (sel.tab === 'containers') for (const b of boxesShown()) jobs.push(sel.cview === 'arch' ? loadArch(b, force) : loadSeries(b, force));
+    const v = views[sel.tab];
+    if (v) jobs.push(loadTimings(force).then(async (changed) => { if (changed && v.open) await loadDetail(v); return changed; }));
+    if (!jobs.length) return;
+    const changed = await Promise.all(jobs);
+    if (changed.some(Boolean)) render();
   }
 
   async function loadState() {
     try {
-      const res = await fetch('/api/monitor', { cache: 'no-store' });
-      if (!res.ok) throw new Error(`GET /api/monitor answered ${res.status}`);
-      state = await res.json();
-      state.received = Date.now();
+      state = await getJson('/api/monitor');
       lastOk = Date.now();
       $asof.textContent = '';
       render();
@@ -815,35 +1557,18 @@
     }
   }
 
-  async function loadSeries(force) {
-    const box = boxShown();
-    if (!state || box === ALL) return;
-    const key = `${box}|${sel.range}`;
-    if (!force && key === seriesKey && Date.now() - seriesAt < RANGES[sel.range].every) return;
-    seriesKey = key;
-    seriesAt = Date.now();
-    try {
-      const res = await fetch(`/api/monitor/metrics?target=${encodeURIComponent(box)}&range=${sel.range}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`GET /api/monitor/metrics answered ${res.status}`);
-      const s = await res.json();
-      if (`${s.target}|${s.range}` !== `${boxShown()}|${sel.range}`) return;
-      series = s;
-      render();
-    } catch (e) {
-      seriesAt = 0;
-      $asof.textContent = `could not load the graphs: ${e.message}`;
-    }
-  }
-
   async function tick() {
     await loadState();
-    await Promise.all([loadSeries(false), loadTimings(false)]);
+    await loadVisible(false);
   }
 
   readHash();
-  window.addEventListener('hashchange', () => { readHash(); render(); loadSeries(true); loadTimings(true); });
+  window.addEventListener('hashchange', () => { readHash(); render(); loadVisible(true); });
   let resizeTimer = null;
-  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { for (const c of charts) draw(c); epTable(); }, 100); });
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { for (const c of charts) draw(c); const v = views[sel.tab]; if (v) timingRender(v); }, 100);
+  });
   tick();
   setInterval(tick, 5000);
 })();

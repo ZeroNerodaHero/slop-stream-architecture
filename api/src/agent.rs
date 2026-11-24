@@ -97,6 +97,53 @@ pub(crate) struct Container {
     pub(crate) read_bps: Option<f64>,
     pub(crate) write_bps: Option<f64>,
     pub(crate) pids: Option<u64>,
+    pub(crate) exit_code: Option<i64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) networks: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) ports: Vec<Port>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) depends_on: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(default)]
+pub(crate) struct Port {
+    pub(crate) port: u16,
+    pub(crate) proto: String,
+    pub(crate) published: Option<u16>,
+    pub(crate) loopback: bool,
+}
+
+fn parse_ports(summary: &Value) -> Vec<Port> {
+    let mut seen: Vec<(Port, bool)> = vec![];
+    for p in summary.get("Ports").and_then(Value::as_array).into_iter().flatten() {
+        let Some(port) = p.get("PrivatePort").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok()) else { continue };
+        let proto = p.get("Type").and_then(Value::as_str).unwrap_or("tcp").to_owned();
+        let published = p.get("PublicPort").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok());
+        let local = p.get("IP").and_then(Value::as_str).is_some_and(|ip| ip.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback()));
+        let key = Port { port, proto, published, loopback: false };
+        match seen.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, all_local)) => *all_local &= local,
+            None => seen.push((key, local)),
+        }
+    }
+    let mut out: Vec<Port> = seen.into_iter().map(|(p, local)| Port { loopback: p.published.is_some() && local, ..p }).collect();
+    out.sort();
+    out
+}
+
+fn parse_networks(summary: &Value) -> Vec<String> {
+    let mut out: Vec<String> = summary.pointer("/NetworkSettings/Networks").and_then(Value::as_object).map(|m| m.keys().cloned().collect()).unwrap_or_default();
+    out.sort();
+    out
+}
+
+fn parse_depends_on(label: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = label.unwrap_or("").split(',').filter_map(|d| d.split(':').next()).map(str::trim).filter(|d| !d.is_empty()).map(str::to_owned).collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -433,6 +480,9 @@ async fn one_container(socket: String, summary: Value) -> Option<(String, Contai
         project: label("com.docker.compose.project"),
         image: summary.get("Image").and_then(Value::as_str).unwrap_or("").to_owned(),
         state: state.clone(),
+        networks: parse_networks(&summary),
+        ports: parse_ports(&summary),
+        depends_on: parse_depends_on(label("com.docker.compose.depends_on").as_deref()),
         ..Default::default()
     };
     if let Ok(inspect) = docker_get(&socket, &format!("/containers/{id}/json")).await {
@@ -440,6 +490,8 @@ async fn one_container(socket: String, summary: Value) -> Option<(String, Contai
         c.health = str_at(&inspect, &["State", "Health", "Status"]).map(str::to_owned);
         if state == "running" {
             c.up_since = time_at(&inspect, &["State", "StartedAt"]);
+        } else {
+            c.exit_code = inspect.pointer("/State/ExitCode").and_then(Value::as_i64);
         }
     }
     if state != "running" {
@@ -723,6 +775,27 @@ mod tests {
         let mut restarted = Container::default();
         container_rates(&mut restarted, Some(&rb), &ra);
         assert_eq!((restarted.cpu_pct, restarted.rx_bps), (None, None));
+    }
+
+    #[test]
+    fn networks_ports_and_depends_on_from_the_list() {
+        let summary = json!({
+            "Ports": [
+                { "IP": "0.0.0.0", "PrivatePort": 443, "PublicPort": 443, "Type": "tcp" },
+                { "IP": "::", "PrivatePort": 443, "PublicPort": 443, "Type": "tcp" },
+                { "IP": "127.0.0.1", "PrivatePort": 3002, "PublicPort": 3002, "Type": "tcp" },
+                { "PrivatePort": 4000, "Type": "tcp" },
+                { "IP": "0.0.0.0", "PrivatePort": 7882, "PublicPort": 7882, "Type": "udp" }
+            ],
+            "NetworkSettings": { "Networks": { "stream_stats": { "IPAddress": "172.18.0.4" }, "stream_default": { "IPAddress": "172.19.0.2" } } }
+        });
+        let ports = parse_ports(&summary);
+        let p = |port: u16, proto: &str, published: Option<u16>, loopback: bool| Port { port, proto: proto.into(), published, loopback };
+        assert_eq!(ports, vec![p(443, "tcp", Some(443), false), p(3002, "tcp", Some(3002), true), p(4000, "tcp", None, false), p(7882, "udp", Some(7882), false)]);
+        assert_eq!(parse_networks(&summary), vec!["stream_default", "stream_stats"]);
+        assert!(!serde_json::to_string(&ports).unwrap().contains("127.0.0.1"));
+        assert_eq!(parse_depends_on(Some("redis:service_healthy:false,database:service_healthy:true")), vec!["database", "redis"]);
+        assert!(parse_depends_on(None).is_empty());
     }
 
     #[test]

@@ -164,14 +164,43 @@ async function stateWhen(api, ready, what, ms = 40000) {
     const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto(`${MON}/#box=local&q=streamers`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${MON}/#box=local&tab=endpoints&q=streamers`, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('table.eps tr.ep', { timeout: 20000 });
+      await page.locator('table.eps th', { hasText: 'p99' }).first().click();
+      expect(/sort=-p99/.test(page.url()), `the url does not carry the sort: ${page.url()}`);
       await page.locator('table.eps tr.ep', { hasText: '/api/streamers/{name}' }).first().click();
       await page.waitForSelector('table.eps tr.detail canvas', { timeout: 15000 });
     } finally {
       await browser.close();
     }
-    return `${rows.length} lines, ${[...new Set(rows.map((r) => r.kind))].join('/')} · GET /api/streamers/{name} p50 ${route.p50} ms p99 ${route.p99} ms`;
+    const totals = (await (await api.get(`${MON}/api/monitor/timings?range=1h&target=local`)).json()).totals;
+    const http = totals.find((t) => t.kind === 'http');
+    expect(http && http.n >= 5 && http.sum_ms > 0 && http.p95 > 0, `the http total: ${JSON.stringify(http)}`);
+    return `${rows.length} lines, ${[...new Set(rows.map((r) => r.kind))].join('/')} · GET /api/streamers/{name} p50 ${route.p50} ms p99 ${route.p99} ms · http p95 ${http.p95} ms`;
+  });
+
+  await step("the local box's containers as a graph, with no addresses in it", async () => {
+    if (!OPS_TOKEN) return { skip: 'no OPS_TOKEN in .env, so the agent is not asked' };
+    const res = await api.get(`${MON}/api/monitor/architecture?target=local`);
+    expect(res.ok(), `architecture answered ${res.status()}`);
+    const body = await res.text();
+    const g = JSON.parse(body);
+    const apiNode = g.nodes.find((n) => n.name === 'api');
+    expect(apiNode && apiNode.state === 'running', `the api node: ${JSON.stringify(apiNode)}`);
+    expect(g.edges.some((e) => e.to === apiNode.id && e.port === 4000), 'no edge into api:4000');
+    expect(!/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/.test(body), 'an ip address in the architecture');
+    expect((await api.get(`${MON}/api/monitor/architecture?target=nobody`)).status() === 404, 'an unknown box is not a 404');
+    const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${MON}/#box=local&tab=containers&view=arch`, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('svg g.node', { timeout: 20000 });
+      const nodes = await page.locator('svg g.node').count();
+      expect(nodes >= g.nodes.length, `${nodes} nodes drawn of ${g.nodes.length}`);
+    } finally {
+      await browser.close();
+    }
+    return `${g.nodes.length} nodes, ${g.edges.length} edges, ${g.networks.length} networks`;
   });
 
   await step('the page shows both boxes with their status', async () => {

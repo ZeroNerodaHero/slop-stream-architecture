@@ -749,6 +749,26 @@ async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Respons
 }
 
 #[derive(Deserialize)]
+struct TargetQuery {
+    target: String,
+}
+
+async fn architecture(State(app): State<App>, Query(q): Query<TargetQuery>) -> Response {
+    let m = app.metrics.lock().await;
+    let Some(h) = m.get(&q.target) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
+    };
+    let mut out = match &h.latest {
+        Some(s) => crate::architecture::graph(s),
+        None => json!({ "at": null, "nodes": [], "edges": [], "networks": [] }),
+    };
+    out["target"] = json!(q.target);
+    out["status"] = json!(h.status);
+    out["now"] = json!(Utc::now());
+    Json(out).into_response()
+}
+
+#[derive(Deserialize)]
 struct TimingQuery {
     target: Option<String>,
     key: Option<String>,
@@ -772,15 +792,21 @@ async fn timing_table(State(app): State<App>, Query(q): Query<TimingQuery>) -> R
     let now = Utc::now().timestamp();
     let m = app.metrics.lock().await;
     let mut rows = vec![];
+    let mut totals = vec![];
+    let mut all = timings::Totals::default();
     let mut dropped = serde_json::Map::new();
     for t in app.cfg.targets.iter().filter(|t| q.target.as_ref().is_none_or(|want| *want == t.name)) {
         if let Some(h) = m.get(&t.name) {
-            rows.extend(h.timings.table(tier, now, &t.name));
+            let (r, kinds) = h.timings.table(tier, now, &t.name);
+            rows.extend(r);
+            totals.extend(kinds.rows(Some(&t.name)));
+            all.merge(&kinds);
             if h.timings.dropped() > 0 {
                 dropped.insert(t.name.clone(), json!(h.timings.dropped()));
             }
         }
     }
+    totals.extend(all.rows(None));
     Json(json!({
         "range": range,
         "bucket_secs": timings::TIERS[tier].1,
@@ -788,6 +814,7 @@ async fn timing_table(State(app): State<App>, Query(q): Query<TimingQuery>) -> R
         "targets": app.cfg.targets.iter().map(|t| &t.name).collect::<Vec<_>>(),
         "dropped": dropped,
         "rows": rows,
+        "totals": totals,
     }))
     .into_response()
 }
@@ -797,8 +824,9 @@ async fn timing_series(State(app): State<App>, Query(q): Query<TimingQuery>) -> 
         Ok(t) => t,
         Err(res) => return res,
     };
+    let now = Utc::now().timestamp();
     let m = app.metrics.lock().await;
-    let found = q.target.as_ref().and_then(|t| m.get(t)).zip(q.key.as_ref()).and_then(|(h, key)| h.timings.detail(key, tier));
+    let found = q.target.as_ref().and_then(|t| m.get(t)).zip(q.key.as_ref()).and_then(|(h, key)| h.timings.detail(key, tier, now));
     match found {
         Some(mut v) => {
             v["target"] = json!(q.target);
@@ -924,6 +952,7 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/api/monitor/metrics", get(series))
         .route("/api/monitor/timings", get(timing_table))
         .route("/api/monitor/timings/series", get(timing_series))
+        .route("/api/monitor/architecture", get(architecture))
         .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
         .layer(axum::middleware::map_response(crate::agent::no_store))
         .with_state(app.clone());
