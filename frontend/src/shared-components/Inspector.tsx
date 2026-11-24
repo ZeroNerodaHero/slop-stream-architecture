@@ -21,6 +21,8 @@ import {
 import { eventsPhaseAtom, eventsTransportAtom } from '@/infra/events';
 import type { FrameEntry } from '@/infra/frames';
 import { useIsMobile } from '@/infra/mobile';
+import { Quality } from '@/shared-components/debug/Quality';
+import { Timings } from '@/shared-components/debug/Timings';
 import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -30,6 +32,9 @@ const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 320;
 const MIN_H = 200;
 const STUCK_PX = 40;
+const TABS = ['messages', 'timings', 'quality'] as const;
+
+type Tab = (typeof TABS)[number];
 
 const DIR_TONE: Record<FrameEntry['dir'], string> = {
   out: 'border-primaryBlue text-primaryBlue',
@@ -72,6 +77,7 @@ function InspectorPanel() {
   const [box, setBox] = useState<Box | null>(null);
   const [expanded, setExpanded] = useState<FrameEntry | null>(null);
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState<Tab>('messages');
   const tick = useAtomValue(framesTickAtom);
   const filter = useAtomValue(inspectorFilterAtom);
   const dirs = useAtomValue(inspectorDirsAtom);
@@ -98,7 +104,7 @@ function InspectorPanel() {
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el && stuck.current) el.scrollTop = el.scrollHeight;
-  }, [tick, filter, dirs, paused]);
+  }, [tick, filter, dirs, paused, tab]);
 
   function onScroll(e: UIEvent<HTMLUListElement>) {
     const el = e.currentTarget;
@@ -174,48 +180,66 @@ function InspectorPanel() {
         }}
         title={mobile ? undefined : 'drag to move'}
       >
-        <span className="font-semibold">messages</span>
+        <span id="inspector-tabs" role="tablist" aria-label="views" className="flex gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t}
+              id={`inspector-tab-${t}`}
+              type="button"
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setTab(t)}
+              className={cn('border px-2 py-0.5 text-xs uppercase tracking-wide', tab === t ? DIR_TONE.out : 'border-primaryStroke text-textTertiary')}
+            >
+              {t}
+            </button>
+          ))}
+        </span>
         <span className="text-xs text-textTertiary">
           /events {phase} · {transport === 'worker' ? 'one socket for the browser' : transport === 'tab' ? 'a socket for this tab' : 'no socket'}
         </span>
         <span className="ml-auto flex items-center gap-1">
-          <Tooltip content={paused ? 'resume' : 'pause the view (the recorder goes on)'}>
-            <button
-              id="inspector-pause"
-              type="button"
-              aria-pressed={paused}
-              aria-label={paused ? 'resume' : 'pause'}
-              onClick={toggleInspectorPaused}
-              className={cn(
-                'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
-                paused && 'border-primaryBlue text-primaryBlue'
-              )}
-            >
-              {paused ? <RiPlayLine aria-hidden size={16} /> : <RiPauseLine aria-hidden size={16} />}
-            </button>
-          </Tooltip>
-          <Tooltip content={copied ? 'copied' : 'copy the shown rows as json'}>
-            <button
-              id="inspector-copy"
-              type="button"
-              aria-label="copy as json"
-              onClick={copy}
-              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-            >
-              <RiFileCopyLine aria-hidden size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip content="clear">
-            <button
-              id="inspector-clear"
-              type="button"
-              aria-label="clear"
-              onClick={clearFrames}
-              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-            >
-              <RiDeleteBinLine aria-hidden size={16} />
-            </button>
-          </Tooltip>
+          {tab === 'messages' && (
+            <>
+              <Tooltip content={paused ? 'resume' : 'pause the view (the recorder goes on)'}>
+                <button
+                  id="inspector-pause"
+                  type="button"
+                  aria-pressed={paused}
+                  aria-label={paused ? 'resume' : 'pause'}
+                  onClick={toggleInspectorPaused}
+                  className={cn(
+                    'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
+                    paused && 'border-primaryBlue text-primaryBlue'
+                  )}
+                >
+                  {paused ? <RiPlayLine aria-hidden size={16} /> : <RiPauseLine aria-hidden size={16} />}
+                </button>
+              </Tooltip>
+              <Tooltip content={copied ? 'copied' : 'copy the shown rows as json'}>
+                <button
+                  id="inspector-copy"
+                  type="button"
+                  aria-label="copy as json"
+                  onClick={copy}
+                  className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+                >
+                  <RiFileCopyLine aria-hidden size={16} />
+                </button>
+              </Tooltip>
+              <Tooltip content="clear">
+                <button
+                  id="inspector-clear"
+                  type="button"
+                  aria-label="clear"
+                  onClick={clearFrames}
+                  className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+                >
+                  <RiDeleteBinLine aria-hidden size={16} />
+                </button>
+              </Tooltip>
+            </>
+          )}
           <Tooltip content="close">
             <button
               id="inspector-close"
@@ -230,7 +254,7 @@ function InspectorPanel() {
         </span>
       </header>
 
-      <div className="flex flex-wrap items-center gap-2 border-b border-primaryStroke px-3 py-2">
+      <div className={cn('flex flex-wrap items-center gap-2 border-b border-primaryStroke px-3 py-2', tab !== 'messages' && 'hidden')}>
         <input
           id="inspector-filter"
           value={filter}
@@ -267,7 +291,7 @@ function InspectorPanel() {
         id="inspector-frames"
         role="log"
         aria-live="off"
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-1 font-mono text-xs leading-5"
+        className={cn('min-h-0 flex-1 overflow-y-auto px-3 py-1 font-mono text-xs leading-5', tab !== 'messages' && 'hidden')}
       >
         {rows.length === 0 && (
           <li id="inspector-notice" className="py-2 font-sans text-textTertiary">
@@ -305,6 +329,9 @@ function InspectorPanel() {
           );
         })}
       </ul>
+
+      {tab === 'timings' && <Timings />}
+      {tab === 'quality' && <Quality />}
 
       {!mobile && (
         <div

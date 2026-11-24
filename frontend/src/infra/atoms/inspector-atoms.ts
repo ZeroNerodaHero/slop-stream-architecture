@@ -2,7 +2,7 @@ import { atom } from 'jotai';
 
 import { type FrameEntry, makeEntry, Ring } from '@/infra/frames';
 import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
-import { debug, setDebug } from '@/infra/debug-flag';
+import { debug, onDebugChange, setDebug } from '@/infra/debug-flag';
 import { store } from '@/infra/store';
 
 export const FRAME_DIRS = ['in', 'out', 'link'] as const;
@@ -116,6 +116,27 @@ function dropFrames() {
   store.set(inspectorOpenAtom, false);
   tick();
 }
+
+let collect: Promise<typeof import('@/infra/debug/collect')> | null = null;
+
+onDebugChange((on) => {
+  if (!on) {
+    void collect?.then(
+      (m) => m.stop(),
+      () => undefined
+    );
+    return;
+  }
+  collect ??= import('@/infra/debug/collect');
+  void collect.then(
+    (m) => {
+      if (debug.on) m.start();
+    },
+    () => {
+      collect = null;
+    }
+  );
+});
 
 setDebug(store.get(inspectorEnabledAtom));
 store.sub(inspectorEnabledAtom, () => {

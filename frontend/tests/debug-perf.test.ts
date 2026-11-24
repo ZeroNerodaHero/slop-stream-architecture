@@ -14,7 +14,7 @@ function ours(): string[] {
 
 test('with debug off the perf calls make no marks and hold nothing', () => {
   setDebug(false, false);
-  perfBegin('press');
+  perfBegin('press', 'cats');
   perfMark('first-frame');
   rtPerfBegin('chat:cats', 'press');
   rtPerfMark('chat:cats', 'subbed');
@@ -29,7 +29,7 @@ test('with debug off the perf calls make no marks and hold nothing', () => {
 test('with debug on the perf calls mark, and turning off clears every mark and map', () => {
   setDebug(true, false);
   assert.equal(debug.on, true);
-  perfBegin('press', 1);
+  perfBegin('press', 'dogs', 1);
   perfMark('mounted', 2);
   rtPerfBegin('chat:dogs', 'press', 1);
   rtPerfSay('k3', 1);
@@ -48,6 +48,7 @@ test('a finished run is forgotten and unfinished runs stay bounded', () => {
   rtPerfBegin('chat:a', 'press', 1);
   rtPerfMark('chat:a', 'subbed', 2);
   rtPerfMark('chat:a', 'history', 3);
+  rtPerfMark('chat:a', 'first-line', 4);
   assert.equal(rtPerfHeld().runs, 0);
   for (let i = 0; i < 500; i++) {
     rtPerfBegin(`chat:${i}`, 'press', i);

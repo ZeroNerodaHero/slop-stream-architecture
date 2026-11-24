@@ -13,7 +13,7 @@ export function AdvancedTab() {
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
           <span className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
             <label htmlFor="inspector">log messages</label>
-            <Info tip="the last 1000 socket, chat and video messages. tokens stripped, never leaves this browser" />
+            <Info tip="socket log, chat and stream timings, stream quality. never leaves this browser" />
           </span>
           <span className="flex items-center gap-1.5">
             <input id="inspector" type="checkbox" checked={inspectorOn} onChange={(e) => setInspectorEnabled(e.target.checked)} className={CHECKBOX} />
