@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { groupBanner, groupWords, type Server } from '@/infra/api';
@@ -40,7 +40,7 @@ export function GroupSquareFace({ server, corner, compact }: { server: Server; c
   );
 }
 
-export function GroupSquare({ server, id }: { server: Server; id: string }) {
+export const GroupSquare = memo(function GroupSquare({ server, id }: { server: Server; id: string }) {
   const live = server.live?.length ?? 0;
   return (
     <li>
@@ -59,4 +59,4 @@ export function GroupSquare({ server, id }: { server: Server; id: string }) {
       </Link>
     </li>
   );
-}
+});
