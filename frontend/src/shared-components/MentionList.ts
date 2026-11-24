@@ -1,7 +1,18 @@
 import type { createElement, ReactNode, RefObject, useEffect, useLayoutEffect, useState } from 'react';
 
 import type { Mention } from '@/infra/api';
-import { cachedMentions, cacheMentions, localMentions, MENTION_LIMIT, type MentionLine, mentionRows, mergeMentions, moveMention, nearMentions } from '@/infra/mentions';
+import {
+  askMentions,
+  cachedMentions,
+  cacheMentions,
+  localMentions,
+  MENTION_LIMIT,
+  type MentionLine,
+  mentionRows,
+  mergeMentions,
+  moveMention,
+  nearMentions
+} from '@/infra/mentions';
 import type { MentionLink } from '@/shared-components/MentionComplete';
 
 const DEBOUNCE_MS = 150;
@@ -39,7 +50,8 @@ export function mentionList({ h, useState, useEffect, useLayoutEffect }: Mention
     const [shut, setShut] = useState('');
     const [, setGot] = useState(0);
     const query = at.query;
-    const map = server && query ? link.cache(server) : null;
+    const local = localMentions(lines, query, { first, me, hide });
+    const map = server && askMentions(server, me, query, local.length) ? link.cache(server) : null;
     const known = map ? cachedMentions(map, query) : undefined;
     const asked = !map || known !== undefined;
 
@@ -62,7 +74,7 @@ export function mentionList({ h, useState, useEffect, useLayoutEffect }: Mention
     }, [asked, server, query, map, search]);
 
     const fresh = known ?? (map ? nearMentions(map, query) : []);
-    const found = mergeMentions(localMentions(lines, query, { first, me, hide }), fresh);
+    const found = mergeMentions(local, fresh);
     const key = `${at.start}:${query}`;
     const open = found.length > 0 && key !== shut;
     const lit = sel.key === key ? Math.min(sel.at, found.length - 1) : 0;

@@ -90,3 +90,8 @@ export function moveMention(at: number, key: 'ArrowUp' | 'ArrowDown', count: num
 export function mentionRows(count: number): number[] {
   return Array.from({ length: count }, (_, i) => count - 1 - i);
 }
+
+export function askMentions(server: string | null, me: string | null | undefined, query: string, local: number, limit = MENTION_LIMIT): boolean {
+  if (!server || !me) return false;
+  return query !== '' || local < limit;
+}

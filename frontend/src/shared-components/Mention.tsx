@@ -23,6 +23,7 @@ export function Mention({ name, text }: { name: string; text: string }) {
       onFocus={(e) => peek.focus(e, e.currentTarget.closest(COLUMN))}
       onBlur={peek.blur}
       onKeyDown={peek.keyDown}
+      className="relative [@media(hover:hover)]:group-hover/line:z-20"
     >
       <ProfileLink person={person} className={cn('font-medium text-primaryBlue underline-offset-2 hover:underline', self && 'bg-primaryBlue/15 px-0.5')}>
         {text}
