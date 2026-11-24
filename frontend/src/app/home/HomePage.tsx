@@ -50,7 +50,7 @@ const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:b
 
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
-function Thumb({ name, first }: { name: string; first: boolean }) {
+function Thumb({ name, eager }: { name: string; eager: boolean }) {
   const [src, setSrc] = useState(() => stills.src(name, []));
   const [missing, setMissing] = useState(false);
   const wait = useRef<number | null>(null);
@@ -68,9 +68,9 @@ function Thumb({ name, first }: { name: string; first: boolean }) {
       alt=""
       draggable={false}
       data-thumb={name}
-      loading={first ? 'eager' : 'lazy'}
-      fetchPriority={first ? 'high' : 'auto'}
-      decoding={first ? 'auto' : 'async'}
+      loading={eager ? 'eager' : 'lazy'}
+      fetchPriority={eager ? 'high' : 'auto'}
+      decoding={eager ? 'auto' : 'async'}
       className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {
         if (wait.current !== null) return;
@@ -137,12 +137,12 @@ function Card({
   onEnter,
   onLeave,
   idPrefix = '',
-  first = false
+  eager = false
 }: {
   stream: LiveStream;
   now: number;
   featured: boolean;
-  first?: boolean;
+  eager?: boolean;
   playing: boolean;
   onEnter: (pointer: string) => void;
   onLeave: () => void;
@@ -167,13 +167,13 @@ function Card({
                 name={stream.name}
                 version={stream.avatar}
                 src={stills.src(stream.name, thumbs)}
-                loading={first ? 'eager' : 'lazy'}
-                fetchPriority={first ? 'high' : 'auto'}
+                loading={eager ? 'eager' : 'lazy'}
+                fetchPriority={eager ? 'high' : 'auto'}
               />
             ) : (
               <>
                 {stream.avatar !== null && <BlurredPicture name={stream.name} version={stream.avatar} />}
-                <Thumb name={stream.name} first={first} />
+                <Thumb name={stream.name} eager={eager} />
               </>
             )}
             {playing && <PreviewVideo name={stream.name} />}
@@ -583,8 +583,8 @@ export function HomePage() {
         <div id="list" className={cn(!list?.length && 'hidden')}>
           {featured.length > 0 && (
             <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
-              {featured.map((stream, i) => (
-                <Card key={stream.name} stream={stream} now={now} featured first={i === 0} playing onEnter={() => undefined} onLeave={() => undefined} />
+              {featured.map((stream) => (
+                <Card key={stream.name} stream={stream} now={now} featured eager playing onEnter={() => undefined} onLeave={() => undefined} />
               ))}
             </div>
           )}

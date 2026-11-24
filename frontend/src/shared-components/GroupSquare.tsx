@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
-import { groupImage, groupWords, type Server } from '@/infra/api';
+import { groupBanner, groupWords, type Server } from '@/infra/api';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { cn } from '@/utils/cn';
 
 export const GROUP_SQUARE_BOX = 'aspect-square border border-primaryStroke bg-backgroundSecondary';
 
 export function GroupSquareFace({ server, corner, compact }: { server: Server; corner?: ReactNode; compact?: boolean }) {
-  const banner = groupImage(server.name, 'banner', server.banner);
+  const banner = groupBanner(server.name, server.banner, 'square');
   const words = groupWords(server);
   return (
     <>
@@ -16,7 +16,7 @@ export function GroupSquareFace({ server, corner, compact }: { server: Server; c
         className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105 group-focus-visible:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
         style={{ backgroundColor: server.color }}
       >
-        {banner && <img src={banner} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />}
+        {banner && <img src={banner.src} srcSet={banner.srcSet} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />}
       </span>
       <span className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
       <GroupMark

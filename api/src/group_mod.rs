@@ -5,6 +5,9 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::{ImageFormat, ImageReader, Limits};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -27,6 +30,10 @@ const MAX_ROLES: i64 = 20;
 const MAX_ICON: usize = 256 * 1024;
 const MAX_BANNER: usize = 1024 * 1024;
 const JPEG: [u8; 3] = [0xFF, 0xD8, 0xFF];
+const BANNER_WIDTHS: [u32; 3] = [640, 1280, 1920];
+const BANNER_SQUARES: [u32; 2] = [320, 640];
+const BANNER_QUALITY: u8 = 80;
+const BANNER_MAX_SOURCE_SIDE: u32 = 8192;
 
 struct Held {
     owner: bool,
@@ -1615,9 +1622,133 @@ async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): 
     Ok(Json(json!({ "icon": version })))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BannerCut {
+    Wide(u32),
+    Square(u32),
+}
+
+impl BannerCut {
+    fn all() -> impl Iterator<Item = BannerCut> {
+        BANNER_WIDTHS.into_iter().map(BannerCut::Wide).chain(BANNER_SQUARES.into_iter().map(BannerCut::Square))
+    }
+
+    fn from_query(q: Option<&str>) -> Result<Option<BannerCut>, ApiError> {
+        let bad = || ApiError::new(StatusCode::BAD_REQUEST, "no such banner size");
+        let mut cut = None;
+        for (name, value) in q.unwrap_or("").split('&').filter_map(|pair| pair.split_once('=')) {
+            let make = match name {
+                "w" => BannerCut::Wide,
+                "sq" => BannerCut::Square,
+                _ => continue,
+            };
+            let wanted = make(value.parse().map_err(|_| bad())?);
+            if cut.is_some() || !BannerCut::all().any(|known| known == wanted) {
+                return Err(bad());
+            }
+            cut = Some(wanted);
+        }
+        Ok(cut)
+    }
+
+    fn key(self, group: &str, version: i64) -> String {
+        match self {
+            BannerCut::Wide(w) => format!("groups/{group}/banner-{version}-w{w}.jpg"),
+            BannerCut::Square(side) => format!("groups/{group}/banner-{version}-sq{side}.jpg"),
+        }
+    }
+
+    fn draw(self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let mut reader = ImageReader::with_format(std::io::Cursor::new(bytes), ImageFormat::Jpeg);
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(BANNER_MAX_SOURCE_SIDE);
+        limits.max_image_height = Some(BANNER_MAX_SOURCE_SIDE);
+        limits.max_alloc = Some(256 * 1024 * 1024);
+        reader.limits(limits);
+        let img = reader.decode().map_err(|_| "not a jpeg")?;
+        let (w, h) = (img.width(), img.height());
+        if w == 0 || h == 0 {
+            return Err("empty picture");
+        }
+        let drawn = match self {
+            BannerCut::Wide(want) => {
+                let width = want.min(w);
+                let height = ((u64::from(h) * u64::from(width) + u64::from(w) / 2) / u64::from(w)).max(1) as u32;
+                img.resize_exact(width, height, FilterType::Lanczos3)
+            }
+            BannerCut::Square(want) => {
+                let side = w.min(h);
+                img.crop_imm((w - side) / 2, (h - side) / 2, side, side).resize_exact(want.min(side), want.min(side), FilterType::Lanczos3)
+            }
+        };
+        let mut out = Vec::new();
+        JpegEncoder::new_with_quality(&mut out, BANNER_QUALITY).encode_image(&drawn.to_rgb8()).map_err(|_| "could not encode")?;
+        Ok(out)
+    }
+}
+
+async fn banner_version(db: &sqlx::PgPool, group: &str) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM banner_at))::bigint FROM groups WHERE name = $1").bind(group).fetch_optional(db).await.map(Option::flatten)
+}
+
+async fn drop_banner_cuts(s: &AppState, group: &str, version: i64) {
+    for cut in BannerCut::all() {
+        let _ = s3::delete(&s.s3, &cut.key(group, version)).await;
+    }
+}
+
+pub(crate) async fn drop_banner(s: &AppState, group: &str) {
+    if let Ok(Some(version)) = banner_version(&s.db, group).await {
+        drop_banner_cuts(s, group, version).await;
+    }
+    let _ = s3::delete(&s.s3, &banner_key(group)).await;
+}
+
+async fn read_banner_cut(s: &AppState, group: &str, cut: BannerCut) -> Result<Response, ApiError> {
+    let Some(version) = banner_version(&s.db, group).await? else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no picture"));
+    };
+    let key = cut.key(group, version);
+    match s3::get(&s.s3, &key).await {
+        Ok(Some(bytes)) => return Ok(jpeg_out(bytes)),
+        Ok(None) => {}
+        Err(e) => log::warn!("s3 banner cut {key}: {e}"),
+    }
+    let original = match s3::get(&s.s3, &banner_key(group)).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(ApiError::new(StatusCode::NOT_FOUND, "no picture")),
+        Err(e) => {
+            log::error!("s3 group picture {group}: {e}");
+            return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not load the picture"));
+        }
+    };
+    let (original, drawn) = tokio::task::spawn_blocking(move || {
+        let drawn = cut.draw(&original);
+        (original, drawn)
+    })
+    .await
+    .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not load the picture"))?;
+    match drawn {
+        Ok(bytes) => {
+            if let Err(e) = s3::put(&s.s3, &key, &bytes, "image/jpeg").await {
+                log::warn!("s3 banner cut {key}: {e}");
+            }
+            Ok(jpeg_out(bytes))
+        }
+        Err(why) => {
+            log::warn!("banner cut {key}: {why}");
+            Ok(jpeg_out(original))
+        }
+    }
+}
+
 async fn get_banner(State(s): State<AppState>, Path(group): Path<String>, RawQuery(q): RawQuery) -> Result<Response, ApiError> {
     let group = server(&s.db, &group).await?;
-    crate::media::versioned_cache(read_picture(&s, &group, &banner_key(&group), "banner_at").await, q.as_deref())
+    let read = match BannerCut::from_query(q.as_deref())? {
+        Some(cut) => read_banner_cut(&s, &group, cut).await,
+        None => read_picture(&s, &group, &banner_key(&group), "banner_at").await,
+    };
+    crate::media::versioned_cache(read, q.as_deref())
 }
 
 async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
@@ -1625,7 +1756,11 @@ async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me)
     let group = server(&s.db, &group).await?;
     need_owner(&s, who.id, &group).await?;
     let body = jpeg_in(body, MAX_BANNER)?;
+    let before = banner_version(&s.db, &group).await?;
     let version = write_picture(&s, who, &headers, crate::moderate::UploadKind::GroupBanner, &group, &banner_key(&group), "banner_at", body).await?;
+    for old in before.into_iter().chain([version]) {
+        drop_banner_cuts(&s, &group, old).await;
+    }
     groups::tell(&s, &group, "banner", json!({ "banner": version })).await;
     Ok(Json(json!({ "banner": version })))
 }
@@ -1633,6 +1768,58 @@ async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn banner_jpeg(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8]));
+        let mut out = Vec::new();
+        JpegEncoder::new_with_quality(&mut out, 80).encode_image(&img).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_banner_size_is_one_of_the_known_ones() {
+        assert_eq!(BannerCut::from_query(None).unwrap(), None);
+        assert_eq!(BannerCut::from_query(Some("v=17")).unwrap(), None);
+        assert_eq!(BannerCut::from_query(Some("v=17&w=640")).unwrap(), Some(BannerCut::Wide(640)));
+        assert_eq!(BannerCut::from_query(Some("sq=320&v=17")).unwrap(), Some(BannerCut::Square(320)));
+        for bad in ["w=641", "w=", "w=abc", "sq=1280", "w=640&sq=320", "w=640&w=640"] {
+            assert_eq!(BannerCut::from_query(Some(bad)).unwrap_err().into_response().status(), StatusCode::BAD_REQUEST, "{bad}");
+        }
+    }
+
+    #[test]
+    fn each_version_has_its_own_cut() {
+        assert_eq!(BannerCut::Wide(1280).key("vips", 1_700_000_000), "groups/vips/banner-1700000000-w1280.jpg");
+        assert_eq!(BannerCut::Square(320).key("vips", 1_700_000_001), "groups/vips/banner-1700000001-sq320.jpg");
+        assert_ne!(BannerCut::Wide(640).key("vips", 1), BannerCut::Wide(640).key("vips", 2));
+    }
+
+    #[test]
+    fn a_banner_shrinks_to_its_box() {
+        let original = banner_jpeg(2560, 640);
+        for (cut, w, h) in [
+            (BannerCut::Wide(640), 640, 160),
+            (BannerCut::Wide(1920), 1920, 480),
+            (BannerCut::Square(320), 320, 320),
+            (BannerCut::Square(640), 640, 640),
+        ] {
+            let drawn = cut.draw(&original).unwrap();
+            assert!(drawn.starts_with(&JPEG));
+            assert!(drawn.len() < original.len(), "{cut:?}");
+            let back = image::load_from_memory_with_format(&drawn, ImageFormat::Jpeg).unwrap();
+            assert_eq!((back.width(), back.height()), (w, h), "{cut:?}");
+        }
+    }
+
+    #[test]
+    fn a_small_banner_is_never_blown_up() {
+        let original = banner_jpeg(800, 200);
+        let wide = image::load_from_memory(&BannerCut::Wide(1920).draw(&original).unwrap()).unwrap();
+        assert_eq!((wide.width(), wide.height()), (800, 200));
+        let square = image::load_from_memory(&BannerCut::Square(640).draw(&original).unwrap()).unwrap();
+        assert_eq!((square.width(), square.height()), (200, 200));
+        assert!(BannerCut::Wide(640).draw(b"not a jpeg").is_err());
+    }
 
     #[test]
     fn a_cursor_reads_back_what_it_wrote() {
