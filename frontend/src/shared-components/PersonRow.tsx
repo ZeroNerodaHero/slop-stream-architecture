@@ -59,7 +59,7 @@ export function PersonRow({ id, name, verified, oauthVerified, avatar, bio, pres
       onClick={onPick}
       title={bio || name}
       className={cn(
-        'flex min-w-0 flex-1 items-center gap-2.5 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
+        'flex min-w-0 flex-1 items-center gap-2.5 border border-transparent outline-none focus-visible:border-primaryBlue',
         card && 'gap-3'
       )}
     >

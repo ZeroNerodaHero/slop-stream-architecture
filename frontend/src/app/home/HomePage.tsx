@@ -368,7 +368,7 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
           <Link
             id={`recent-link-${p.name}`}
             to={to}
-            className="flex min-w-0 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+            className="flex min-w-0 border border-transparent outline-none focus-visible:border-primaryBlue"
           >
             <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
           </Link>
