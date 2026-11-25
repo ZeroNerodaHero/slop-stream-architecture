@@ -52,16 +52,16 @@ function PreviewChat({ className }: { className?: string }) {
 function StreamChatPreview({ side }: { side: ChatSide }) {
   if (side === 'modal') {
     return (
-      <span aria-hidden className="relative flex h-36 min-w-0 flex-1 items-center justify-center border border-primaryStroke bg-background p-2">
+      <span aria-hidden className="relative flex h-36 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-card border border-primaryStroke bg-background p-2">
         <span className="absolute inset-2 bg-black" />
-        <span className="relative flex h-[78%] w-[58%] flex-col border border-primaryStroke bg-backgroundSecondary">
+        <span className="relative flex h-[78%] w-[58%] flex-col border border-primaryStroke soft:rounded-[4px] bubble:rounded-[8px] bg-backgroundSecondary">
           <PreviewChat className="min-h-0 flex-1" />
         </span>
       </span>
     );
   }
   return (
-    <span aria-hidden className="flex h-36 min-w-0 flex-1 border border-primaryStroke bg-background p-2">
+    <span aria-hidden className="flex h-36 min-w-0 flex-1 overflow-hidden rounded-card border border-primaryStroke bg-background p-2">
       <span className="flex min-h-0 w-full flex-row">
         {side === 'left' && <PreviewChat className="w-[42%] border-r border-primaryStroke" />}
         <span className="min-w-0 flex-1 bg-black" />
@@ -74,7 +74,7 @@ function StreamChatPreview({ side }: { side: ChatSide }) {
 function PipChatPreview({ place }: { place: PipChatPlace }) {
   const side = place === 'left' || place === 'right';
   return (
-    <span aria-hidden className="flex h-36 min-w-0 flex-1 items-center justify-center border border-primaryStroke bg-background p-2">
+    <span aria-hidden className="flex h-36 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-card border border-primaryStroke bg-background p-2">
       <span className={cn('flex max-h-full', side ? 'w-full flex-row' : 'w-[72%] flex-col')}>
         {place === 'left' && <PreviewChat className="w-[46%] border-r border-primaryStroke" />}
         <span className="flex min-w-0 flex-1 flex-col">
@@ -168,14 +168,14 @@ function PreviewName({ mine }: { mine: boolean }) {
 function StylePreview({ style }: { style: ChatStyle }) {
   if (style === 'bubbles') {
     return (
-      <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
+      <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 overflow-hidden rounded-card border border-primaryStroke bg-background px-3">
         {PREVIEW_LINES.map(({ mine, words }, i) => (
           <span key={i} className="flex items-center gap-1.5">
             <PreviewClock shown={PREVIEW_LINES[i - 1]?.mine !== mine} />
             <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
               <span
                 className={cn(
-                  'flex h-5 items-center border px-1.5',
+                  'flex h-5 items-center rounded-control border px-1.5',
                   words,
                   mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
                 )}
@@ -190,7 +190,7 @@ function StylePreview({ style }: { style: ChatStyle }) {
   }
   if (style === 'blocks') {
     return (
-      <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
+      <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 overflow-hidden rounded-card border border-primaryStroke bg-background px-3">
         {PREVIEW_LINES.map(({ mine, words }, i) => {
           const first = PREVIEW_LINES[i - 1]?.mine !== mine;
           return (
@@ -212,7 +212,7 @@ function StylePreview({ style }: { style: ChatStyle }) {
     );
   }
   return (
-    <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 border border-primaryStroke bg-background px-3">
+    <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 overflow-hidden rounded-card border border-primaryStroke bg-background px-3">
       {PREVIEW_LINES.map(({ mine, words }, i) => (
         <span key={i} className="flex items-center gap-1.5">
           <PreviewClock />

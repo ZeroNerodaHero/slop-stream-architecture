@@ -303,7 +303,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
               <OfflinePicture id="profile-popup-offline" src={api.offlineUrl(name, offline)} className="w-full" />
             ) : (
               backdrop !== null && (
-                <span id="profile-popup-backdrop" className="relative block aspect-video w-full overflow-hidden border border-primaryStroke bg-black">
+                <span id="profile-popup-backdrop" className="relative block aspect-video w-full overflow-hidden rounded-card border border-primaryStroke bg-black">
                   {backdrop}
                 </span>
               )

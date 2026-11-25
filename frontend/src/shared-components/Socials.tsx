@@ -64,7 +64,7 @@ const CARD: Record<SocialsSize, string> = {
   large: 'gap-3 p-6 text-lg'
 };
 const LINK =
-  'border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
+  'rounded-control border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 
 interface SocialsProps {
   name: string;

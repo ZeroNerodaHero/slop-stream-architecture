@@ -125,7 +125,7 @@ export function EmotesSection({ server }: { server: string }) {
       ) : emotes.length === 0 ? (
         <p className="text-textTertiary">no emotes yet.</p>
       ) : (
-        <ul id="emote-list" className="flex flex-col divide-y divide-primaryStroke border border-primaryStroke">
+        <ul id="emote-list" className="flex flex-col divide-y divide-primaryStroke overflow-hidden rounded-card border border-primaryStroke">
           {emotes.map((emote) => {
             const editing = renaming?.id === emote.id ? renaming : null;
             const fault = editing ? nameFault(editing.name, emotes, emote.id) : null;

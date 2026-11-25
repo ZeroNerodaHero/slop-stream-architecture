@@ -95,7 +95,7 @@ export function AvatarLayer({ id, wide, voice }: AvatarLayerProps) {
         aria-hidden
         data-voice="0"
         style={wide ? { height: `${FILL * 100}%` } : { width: `${FILL * 100}%` }}
-        className="aspect-square overflow-hidden border-2 border-primaryStroke bg-backgroundTertiary transition-[transform,border-color] duration-75 data-[speaking]:border-primaryBlue motion-reduce:transition-none"
+        className="aspect-square overflow-hidden rounded-avatar border-2 border-primaryStroke bg-backgroundTertiary transition-[transform,border-color] duration-75 data-[speaking]:border-primaryBlue motion-reduce:transition-none"
       >
         {version !== null ? (
           <img src={api.avatarUrl(name, version)} alt="" draggable={false} className="block h-full w-full object-cover" />

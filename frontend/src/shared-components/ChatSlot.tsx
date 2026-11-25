@@ -359,7 +359,7 @@ export function ChatSlot({ tabbed = false, fluid = false, children }: { tabbed?:
       className={cn(
         modal
           ? cn(
-      'group fixed m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
+      'group fixed m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke md:rounded-panel bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
               'origin-center transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
               shown ? 'translate-x-0 scale-100 opacity-100' : cn('pointer-events-none scale-[0.98] opacity-0', fromLeft ? '-translate-x-3' : 'translate-x-3'),
               clear && 'chat-clear',

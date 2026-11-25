@@ -73,7 +73,7 @@ export function GroupsTab() {
           </Button>
         )}
         {loaded && mine.length === 0 && (
-          <div id="groups-empty" className="flex flex-col items-center gap-2 border border-dashed border-secondaryStroke px-4 py-8 text-sm text-textTertiary">
+          <div id="groups-empty" className="flex flex-col items-center gap-2 rounded-card border border-dashed border-secondaryStroke px-4 py-8 text-sm text-textTertiary">
             <RiGroupLine aria-hidden size={28} />
             no groups yet
             <Link id="groups-find" to="/groups" onClick={closeUserModal} className={buttonClassName('outline', undefined, 'sm')}>

@@ -168,7 +168,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
     <span
       data-embed={embed.provider}
       data-playing={playing || undefined}
-      className={cn('flex max-w-full flex-col border border-primaryStroke bg-backgroundSecondary', embed.tall ? 'w-[12rem]' : 'w-[28rem]')}
+      className={cn('flex max-w-full flex-col overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary', embed.tall ? 'w-[12rem]' : 'w-[28rem]')}
     >
       <span className={cn('relative block w-full overflow-hidden bg-black', embed.tall ? 'aspect-[9/16]' : 'aspect-video')}>
         {embed.player === null ? (
@@ -200,7 +200,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
                 <span className="absolute inset-x-3 bottom-2 truncate text-left text-xs text-white/80">{site + new URL(embed.href).pathname}</span>
               </>
             )}
-            <span className="relative flex h-12 w-12 items-center justify-center border border-white/30 bg-black/70 text-white transition-colors duration-150 group-hover/embed:bg-black/90 group-focus-visible/embed:border-primaryBlue">
+            <span className="relative flex h-12 w-12 items-center justify-center rounded-control border border-white/30 bg-black/70 text-white transition-colors duration-150 group-hover/embed:bg-black/90 group-focus-visible/embed:border-primaryBlue">
               <RiPlayFill aria-hidden size={26} />
             </span>
           </button>

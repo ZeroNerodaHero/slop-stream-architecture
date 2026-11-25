@@ -40,7 +40,7 @@ export function StreamStill({ name, className }: StreamStillProps) {
 
   const src = frame?.name === name ? frame.url : null;
   return (
-    <span ref={box} className={cn('relative block aspect-video shrink-0 overflow-hidden border border-primaryStroke bg-black', className)}>
+    <span ref={box} className={cn('relative block aspect-video shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-black', className)}>
       {src && <img src={src} alt="" draggable={false} data-still={name} className="absolute inset-0 h-full w-full object-cover" />}
     </span>
   );

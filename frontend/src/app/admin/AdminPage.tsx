@@ -63,7 +63,7 @@ function HealthCard({ health, error }: { health: Health | undefined; error: unkn
       </p>
     );
   return (
-    <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 border border-primaryStroke bg-backgroundSecondary px-5 py-4">
+    <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-card border border-primaryStroke bg-backgroundSecondary px-5 py-4">
       <span className="text-xl font-semibold">{health.env}</span>
       {health.version && (
         <span className="font-semibold" title={health.deployed_at ? `deployed ${new Date(health.deployed_at).toLocaleString()}` : 'the release deploy.sh put up'}>
@@ -111,7 +111,7 @@ function Row({ e, now }: { e: ClientError; now: number }) {
         <span className="w-[72px] shrink-0 text-sm text-textTertiary" title={when.toLocaleString()}>
           {ago(e.at, now)}
         </span>
-        <span className={cn('border px-2 py-0.5 text-xs font-medium uppercase tracking-wide', KIND_TONE[e.kind] ?? 'border-secondaryStroke text-textSecondary')}>
+        <span className={cn('rounded-control border px-2 py-0.5 text-xs font-medium uppercase tracking-wide', KIND_TONE[e.kind] ?? 'border-secondaryStroke text-textSecondary')}>
           {e.kind}
         </span>
         <span className="font-mono text-sm text-textSecondary">{e.page}</span>
@@ -136,7 +136,7 @@ function Row({ e, now }: { e: ClientError; now: number }) {
             </dl>
           )}
           {e.stack && (
-            <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap border border-primaryStroke bg-backgroundTertiary p-3 font-mono text-xs text-textSecondary">
+            <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap rounded-card border border-primaryStroke bg-backgroundTertiary p-3 font-mono text-xs text-textSecondary">
               {e.stack}
             </pre>
           )}
@@ -200,7 +200,7 @@ function SiteJannies() {
       ) : list.data && list.data.length === 0 ? (
         <p className="text-sm text-textTertiary">none yet.</p>
       ) : (
-        <ul className="max-w-[420px] border border-primaryStroke bg-backgroundSecondary px-4">
+        <ul className="max-w-[420px] rounded-card border border-primaryStroke bg-backgroundSecondary px-4">
           {(list.data ?? []).map((j) => (
             <li key={j.name} className="flex items-center gap-3 border-b border-primaryStroke py-1.5 last:border-b-0">
               <span className="min-w-0 flex-1 truncate font-semibold">{j.name}</span>
@@ -256,7 +256,7 @@ export function AdminPage() {
               type="button"
               onClick={() => setKind(k)}
               className={cn(
-                'border px-3 py-1 text-sm',
+                'rounded-control border px-3 py-1 text-sm',
                 k === kind ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textSecondary hover:text-textPrimary'
               )}
             >
@@ -273,7 +273,7 @@ export function AdminPage() {
           maxLength={300}
           autoComplete="off"
           spellCheck={false}
-          className="w-[200px] border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-sm text-textPrimary"
+          className="w-[200px] rounded-control border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-sm text-textPrimary"
         />
         <span className="text-sm text-textTertiary">
           {[errors.data && `${rows.length} of the last ${errors.data.length}`, polling ? `refreshes every ${POLL_MS / 1000}s` : 'reload to ask again', 'kept 14 days']
@@ -293,7 +293,7 @@ export function AdminPage() {
         </p>
       ) : null}
       {rows.length > 0 && (
-        <ul id="admin-errors" className="border border-primaryStroke bg-backgroundSecondary px-4">
+        <ul id="admin-errors" className="rounded-card border border-primaryStroke bg-backgroundSecondary px-4">
           {rows.map((e) => (
             <Row key={e.id} e={e} now={errors.dataUpdatedAt} />
           ))}

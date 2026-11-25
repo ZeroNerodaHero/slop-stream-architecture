@@ -236,7 +236,7 @@ export function ProfileTab() {
                 </span>
               </Tooltip>
             ) : (
-              <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
+              <span className="shrink-0 rounded-control border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
             )}
             {me && oauthVerified && <OAuthMark id="profile-oauth-verified" size={14} />}
             {me &&
@@ -372,10 +372,10 @@ export function ProfileTab() {
                   src={api.offlineUrl(name, offline)}
                   alt=""
                   draggable={false}
-                  className="aspect-video w-full border border-primaryStroke bg-black object-cover"
+                  className="aspect-video w-full rounded-card border border-primaryStroke bg-black object-cover"
                 />
               ) : (
-                <div className="flex aspect-video w-full flex-col items-center justify-center gap-1 border border-dashed border-secondaryStroke text-xs text-textTertiary">
+                <div className="flex aspect-video w-full flex-col items-center justify-center gap-1 rounded-card border border-dashed border-secondaryStroke text-xs text-textTertiary">
                   <RiCameraLine aria-hidden size={18} className="[@media(hover:none)]:hidden" />
                   16:9
                 </div>

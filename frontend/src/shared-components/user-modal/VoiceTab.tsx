@@ -220,7 +220,7 @@ function InputMeter() {
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="relative h-2 w-full overflow-hidden border border-primaryStroke bg-background"
+      className="relative h-2 w-full overflow-hidden rounded-control border border-primaryStroke bg-background"
     >
       <div ref={fill} className="h-full w-full origin-left scale-x-0 bg-primaryBlue data-[open]:bg-increase" />
       {gate > 0 && <div id="voice-input-gate" aria-hidden className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-textPrimary" style={{ left: `${gate * 100}%` }} />}
@@ -438,7 +438,7 @@ function CameraPreview({ deviceId, children }: { deviceId: string; children: Rea
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
-      <div className="relative aspect-video w-full max-w-xs shrink-0 overflow-hidden border border-primaryStroke bg-background sm:w-64 sm:max-w-none">
+      <div className="relative aspect-video w-full max-w-xs shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-background sm:w-64 sm:max-w-none">
         {on ? (
           <video
             ref={video}

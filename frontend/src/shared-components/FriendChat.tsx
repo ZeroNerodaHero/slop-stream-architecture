@@ -298,7 +298,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
                     type="button"
                     aria-label={`chat with ${f.name}${tab?.unread ? `, ${tab.unread} new` : ''}`}
                     onClick={() => openDm({ id: '', name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence })}
-                    className="flex min-h-14 w-full items-center gap-3 border border-transparent px-3 py-2 text-left focus-visible:border-primaryBlue focus-visible:outline-none active:bg-backgroundTertiary"
+                    className="flex min-h-14 w-full items-center gap-3 rounded-card border border-transparent px-3 py-2 text-left focus-visible:border-primaryBlue focus-visible:outline-none active:bg-backgroundTertiary"
                   >
                     <span className="relative block shrink-0">
                       <Face name={f.name} version={f.avatar} />

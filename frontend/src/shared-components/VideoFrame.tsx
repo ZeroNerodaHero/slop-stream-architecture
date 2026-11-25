@@ -45,7 +45,7 @@ export function VideoFrame({ id, streamAtom, videoRef, muted = true, volume, onP
       playsInline
       muted={muted}
       onPlaying={onPlaying}
-      className={cn('block aspect-video w-full border border-primaryStroke bg-black', className)}
+      className={cn('block aspect-video w-full rounded-card border border-primaryStroke bg-black', className)}
     />
   );
 }
