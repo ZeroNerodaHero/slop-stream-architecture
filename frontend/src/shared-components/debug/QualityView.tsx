@@ -2,9 +2,12 @@ import { type PointerEvent as ReactPointerEvent, useState } from 'react';
 
 import { niceTicks } from '@/infra/debug/stats';
 import { hoverWords } from '@/infra/debug/quality-header';
-import type { Gap, Layout } from '@/infra/debug/timeline';
+import { runAt, sessionColor } from '@/infra/debug/session-colors';
+import type { Gap, Layout, Run } from '@/infra/debug/timeline';
 import { useWidth } from '@/shared-components/debug/useWidth';
+import { Face } from '@/shared-components/Face';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { cn } from '@/utils/cn';
 
 export interface QualitySeries {
   key: string;
@@ -26,6 +29,7 @@ const CHART_H = 40;
 const NAMES_H = 16;
 const HEAD_H = 18;
 const BAR_W = 6;
+const FACE_ROOM = 40;
 
 const clock = (at: number) => new Date(at).toLocaleTimeString();
 
@@ -37,22 +41,20 @@ function gapWords(gap: Gap): string {
   return `stopped watching ${gap.name || 'a stream'} · ${clock(gap.from)} → ${gap.to === null ? 'now' : clock(gap.to)}`;
 }
 
-function linePath(values: readonly number[], layout: Layout, x: (v: number) => number, y: (v: number) => number): string {
+function linePath(values: readonly number[], run: Run, xs: readonly number[], x: (v: number) => number, y: (v: number) => number): string {
   let d = '';
-  for (const run of layout.runs) {
-    let open = false;
-    for (let i = run.from; i < run.to; i++) {
-      const v = values[i]!;
-      if (!Number.isFinite(v)) {
-        open = false;
-        continue;
-      }
-      const px = x(layout.xs[i]!).toFixed(1);
-      const py = y(v).toFixed(1);
-      if (open) d += `L${px} ${py}`;
-      else d += `M${px} ${py}l0.01 0`;
-      open = true;
+  let open = false;
+  for (let i = run.from; i < run.to; i++) {
+    const v = values[i]!;
+    if (!Number.isFinite(v)) {
+      open = false;
+      continue;
     }
+    const px = x(xs[i]!).toFixed(1);
+    const py = y(v).toFixed(1);
+    if (open) d += `L${px} ${py}`;
+    else d += `M${px} ${py}l0.01 0`;
+    open = true;
   }
   return d;
 }
@@ -60,14 +62,17 @@ function linePath(values: readonly number[], layout: Layout, x: (v: number) => n
 function Charts({ timeline }: { timeline: QualityTimeline }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
-  const { layout, series, t } = timeline;
+  const [frozen, setFrozen] = useState<QualityTimeline | null>(null);
+  const { layout, series, t } = frozen ?? timeline;
   const plot = Math.max(1, width - PAD_L - PAD_R);
   const x = (v: number) => PAD_L + (v / layout.span) * plot;
   const stack = NAMES_H + series.length * (HEAD_H + CHART_H);
   const at = hover !== null && hover < t.length ? hover : null;
+  const atColor = at !== null ? sessionColor(runAt(layout.runs, at)?.session ?? 0) : '';
 
   const pick = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'touch' || layout.xs.length === 0) return;
+    if (!frozen) setFrozen(timeline);
     const left = e.clientX - e.currentTarget.getBoundingClientRect().left;
     const want = ((left - PAD_L) / plot) * layout.span;
     let best = 0;
@@ -77,15 +82,26 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
 
   return (
     <div ref={ref} className="w-full">
-      <div id="profiler-readout" className="min-h-5 truncate font-mono text-textTertiary">
-        {at !== null
-          ? hoverWords(t[at]!, layout.runs.find((r) => at >= r.from && at < r.to)?.name ?? '')
-          : t.length > 0
-            ? `${clock(t[0]!)} → ${clock(t[t.length - 1]!)}`
-            : ''}
+      <div id="profiler-readout" className="flex min-h-5 items-baseline gap-2 font-mono text-textTertiary">
+        <span className="min-w-0 truncate">
+          {at !== null ? hoverWords(t[at]!, runAt(layout.runs, at)?.name ?? '') : t.length > 0 ? `${clock(t[0]!)} → ${clock(t[t.length - 1]!)}` : ''}
+        </span>
+        {frozen && (
+          <span id="profiler-paused" className="ml-auto shrink-0 text-[10px]">
+            paused
+          </span>
+        )}
       </div>
       {width > 0 && (
-        <div className="relative" style={{ height: stack }} onPointerMove={pick} onPointerLeave={() => setHover(null)}>
+        <div
+          className="relative"
+          style={{ height: stack }}
+          onPointerMove={pick}
+          onPointerLeave={() => {
+            setHover(null);
+            setFrozen(null);
+          }}
+        >
           {layout.runs.map((run, i) => {
             const next = layout.runs[i + 1];
             const left = x(run.x) + (i === 0 ? 0 : BAR_W);
@@ -94,10 +110,11 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
               <span
                 key={`${run.session}:${run.from}`}
                 data-session={run.session}
-                className="absolute top-0 truncate text-[10px] leading-4 text-textTertiary"
+                className={cn('absolute top-0 flex items-center gap-1 text-[10px] leading-4', sessionColor(run.session))}
                 style={{ left, maxWidth: Math.max(0, room) }}
               >
-                {run.name}
+                {run.name && room >= FACE_ROOM && <Face name={run.name} version={run.avatar} className="h-3.5 w-3.5 border-current text-[8px]" />}
+                <span className="min-w-0 truncate">{run.name}</span>
               </span>
             );
           })}
@@ -135,16 +152,19 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
                 <svg width={width} height={CHART_H} role="img" aria-label={`${s.label} over the watched time`} className="block">
                   <line x1={PAD_L} x2={PAD_L + plot} y1={CHART_H - 2} y2={CHART_H - 2} className="stroke-current text-primaryStroke" />
                   <line x1={PAD_L} x2={PAD_L + plot} y1={2} y2={2} strokeDasharray="2 3" className="stroke-current text-primaryStroke" />
-                  <path
-                    d={linePath(s.values, layout, x, y)}
-                    fill="none"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="stroke-current text-primaryBlue"
-                  />
+                  {layout.runs.map((run) => (
+                    <path
+                      key={`${run.session}:${run.from}`}
+                      d={linePath(s.values, run, layout.xs, x, y)}
+                      fill="none"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className={cn('stroke-current', sessionColor(run.session))}
+                    />
+                  ))}
                   {at !== null && Number.isFinite(s.values[at]) && (
-                    <circle cx={x(layout.xs[at]!)} cy={y(s.values[at]!)} r={2.5} className="fill-current text-textPrimary" />
+                    <circle cx={x(layout.xs[at]!)} cy={y(s.values[at]!)} r={2.5} className={cn('fill-current', atColor)} />
                   )}
                 </svg>
               </div>

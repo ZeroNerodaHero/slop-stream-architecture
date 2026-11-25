@@ -41,7 +41,7 @@ function QualityPanel() {
       label="quality"
       lead={
         <Tooltip content={word}>
-          <span id="quality-recording" role="img" aria-label={word} tabIndex={0} className={cn('h-2 w-2 shrink-0 focus-visible:outline-none', live ? 'bg-increase' : 'bg-decrease')} />
+          <span id="quality-recording" role="img" aria-label={word} tabIndex={0} className={cn('h-2 w-2 shrink-0 focus-visible:outline-none', live ? 'bg-increase' : 'border border-decrease')} />
         </Tooltip>
       }
       note={live ? <span id="quality-live" className="font-mono tabular-nums">{live}</span> : 'watched time, the gaps left out'}

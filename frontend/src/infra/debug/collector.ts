@@ -18,6 +18,7 @@ export interface TimingsDeps extends FeedDeps {
 export interface QualityDeps extends FeedDeps {
   watch: (fn: (stats: StreamStats | null) => void) => () => void;
   name: () => string;
+  avatar?: () => number | null;
   now: () => number;
 }
 
@@ -173,7 +174,7 @@ export class QualityCollector extends Feed {
     } else if (sessions && this.quality) {
       const name = this.deps.name();
       const current = sessions.current;
-      const session = current && current.name === name ? current : sessions.begin(name, now);
+      const session = current && current.name === name ? current : sessions.begin(name, now, this.deps.avatar?.() ?? null);
       const v = stats.video;
       this.quality.push(
         {

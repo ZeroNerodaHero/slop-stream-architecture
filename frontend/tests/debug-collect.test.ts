@@ -148,21 +148,21 @@ test('a session starts on the first stats, ends on null, and a new name starts t
   emit(stats(1));
   clock.now = 2000;
   emit(stats(2));
-  assert.deepEqual(collector.sessions!.list, [{ id: 0, name: 'dummy-a', start: 1000, end: null }]);
+  assert.deepEqual(collector.sessions!.list, [{ id: 0, name: 'dummy-a', avatar: null, start: 1000, end: null }]);
   clock.now = 3000;
   emit(null);
   clock.now = 4000;
   emit(null);
-  assert.deepEqual(collector.sessions!.list, [{ id: 0, name: 'dummy-a', start: 1000, end: 3000 }]);
+  assert.deepEqual(collector.sessions!.list, [{ id: 0, name: 'dummy-a', avatar: null, start: 1000, end: 3000 }]);
   clock.now = 10_000;
   emit(stats(3));
   clock.now = 11_000;
   clock.name = 'dummy-b';
   emit(stats(4));
   assert.deepEqual(collector.sessions!.list, [
-    { id: 0, name: 'dummy-a', start: 1000, end: 3000 },
-    { id: 1, name: 'dummy-a', start: 10_000, end: 11_000 },
-    { id: 2, name: 'dummy-b', start: 11_000, end: null }
+    { id: 0, name: 'dummy-a', avatar: null, start: 1000, end: 3000 },
+    { id: 1, name: 'dummy-a', avatar: null, start: 10_000, end: 11_000 },
+    { id: 2, name: 'dummy-b', avatar: null, start: 11_000, end: null }
   ]);
   assert.equal(collector.sessions!.current!.id, 2);
   assert.deepEqual(collector.quality!.series('session'), [0, 0, 1, 2]);

@@ -1,4 +1,4 @@
-import { watchStatsAtom } from '@/infra/atoms/watch-atoms';
+import { avatarAtom, watchStatsAtom } from '@/infra/atoms/watch-atoms';
 import { watchNameAtom } from '@/infra/atoms/watch-state';
 import { debug } from '@/infra/debug-flag';
 import { QualityCollector, TimingsCollector } from '@/infra/debug/collector';
@@ -23,6 +23,7 @@ export const quality = new QualityCollector({
     return store.sub(watchStatsAtom, () => fn(store.get(watchStatsAtom)));
   },
   name: () => store.get(watchNameAtom),
+  avatar: () => store.get(avatarAtom),
   now: () => Date.now(),
   schedule
 });
