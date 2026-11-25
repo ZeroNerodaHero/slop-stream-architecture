@@ -12,6 +12,7 @@ export interface PictureSpec {
   qualities: readonly number[];
   type?: 'image/png';
   max: number;
+  stored?: { width: number; height: number; type: string };
 }
 
 export const EMOTE_PICTURE: PictureSpec = {
@@ -20,7 +21,8 @@ export const EMOTE_PICTURE: PictureSpec = {
   size: { width: 128, height: 128 },
   qualities: [1],
   type: 'image/png',
-  max: 512 * 1024
+  max: 512 * 1024,
+  stored: { width: 128, height: 128, type: 'image/webp' }
 };
 
 export const GROUP_ICON: PictureSpec = {
@@ -44,7 +46,8 @@ export const AVATAR_PICTURE: PictureSpec = {
   where: 'beside your name, and in the preview of your link',
   size: { width: 256, height: 256 },
   qualities: [0.85],
-  max: 256 * 1024
+  max: 256 * 1024,
+  stored: { width: 96, height: 96, type: 'image/jpeg' }
 };
 
 export const THUMB_PICTURE: PictureSpec = {
@@ -75,6 +78,8 @@ export function aspectOf(spec: PictureSpec): number | null {
   return spec.size ? spec.size.width / spec.size.height : null;
 }
 
+export const MAX_ZOOM = 4;
+
 export function minSide(width: number, height: number): number {
   return Math.max(8, Math.min(width, height) * 0.02);
 }
@@ -102,19 +107,31 @@ export function scaleOf(rect: Rect, width: number, height: number): number {
   return Math.max(rect.w / width, rect.h / height);
 }
 
+export function zoomOf(rect: Rect, width: number, height: number): number {
+  return 1 / scaleOf(rect, width, height);
+}
+
 export function minScale(width: number, height: number, aspect: number | null): number {
   const f = smallest(aspect, minSide(width, height));
-  return Math.max(f.w / width, f.h / height);
+  return Math.max(f.w / width, f.h / height, 1 / MAX_ZOOM);
+}
+
+export function maxZoom(width: number, height: number, aspect: number | null): number {
+  return 1 / minScale(width, height, aspect);
 }
 
 export function scaledRect(rect: Rect, factor: number, aspect: number | null, width: number, height: number): Rect {
   const f = smallest(aspect, minSide(width, height));
   const most = Math.min(width / rect.w, height / rect.h);
-  const least = Math.max(f.w / rect.w, f.h / rect.h);
+  const least = Math.max(f.w / rect.w, f.h / rect.h, 1 / (MAX_ZOOM * scaleOf(rect, width, height)));
   const k = clamp(factor, Math.min(least, most), most);
   const w = rect.w * k;
   const h = rect.h * k;
   return movedRect({ x: rect.x + (rect.w - w) / 2, y: rect.y + (rect.h - h) / 2, w, h }, 0, 0, width, height);
+}
+
+export function zoomedRect(rect: Rect, zoom: number, aspect: number | null, width: number, height: number): Rect {
+  return scaledRect(rect, zoomOf(rect, width, height) / zoom, aspect, width, height);
 }
 
 export function cornerRect(from: Rect, sx: number, sy: number, dx: number, dy: number, aspect: number | null, width: number, height: number): Rect {
@@ -128,11 +145,17 @@ export function cornerRect(from: Rect, sx: number, sy: number, dx: number, dy: n
   if (aspect === null) {
     w = clamp(w, Math.min(f.w, roomW), roomW);
     h = clamp(h, Math.min(f.h, roomH), roomH);
+    if (Math.max(w / width, h / height) < 1 / MAX_ZOOM) {
+      const wide = roomW >= width / MAX_ZOOM && (w / width >= h / height || roomH < height / MAX_ZOOM);
+      if (wide) w = width / MAX_ZOOM;
+      else h = Math.min(roomH, height / MAX_ZOOM);
+    }
   } else {
     if (Math.abs(dx) >= Math.abs(dy) * aspect) h = w / aspect;
     else w = h * aspect;
     const most = Math.min(roomW, roomH * aspect);
-    w = clamp(w, Math.min(f.w, most), most);
+    const least = Math.max(f.w, Math.min(width, height * aspect) / MAX_ZOOM);
+    w = clamp(w, Math.min(least, most), most);
     h = w / aspect;
   }
   return { x: sx < 0 ? ax - w : ax, y: sy < 0 ? ay - h : ay, w, h };
