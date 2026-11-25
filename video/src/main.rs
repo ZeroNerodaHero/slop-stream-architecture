@@ -49,7 +49,7 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 use crate::fanout::{Feed, Meter, Viewer, ViewerTrack};
 use crate::media::{accept_simulcast, media_setup, opus_capability, vp8_capability};
 use crate::resend::Resend;
-use crate::simulcast::{level_of, parse_vp8, pinned_limits, start_level, Picker, Signals, Vp8, LEVELS};
+use crate::simulcast::{level_of, parse_vp8, pinned_limits, start_level, Frame, Picker, Signals, LEVELS};
 use crate::view::{Gate, View, MAX_STRIKES};
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 
@@ -680,7 +680,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                 packet.header.extension = false;
                 packet.header.extensions.clear();
                 let now = Instant::now();
-                let parsed = if vp8 { parse_vp8(&packet.payload) } else { Vp8::default() };
+                let parsed = if vp8 { parse_vp8(&packet.payload) } else { Frame::default() };
                 feed.arrived(level, packet.payload.len(), &parsed, &mut meter, now);
                 if let Some(tap) = &mut tap {
                     tap.feed(&packet);
@@ -1234,7 +1234,7 @@ async fn new_peer(
     resend: Option<Arc<Resend>>,
     setup: Arc<timings::Setup>,
 ) -> anyhow::Result<RTCPeerConnection> {
-    let (mut media, registry) = media_setup(role == Role::Publish, resend)?;
+    let (mut media, registry) = media_setup(role == Role::Publish, true, resend)?;
     if role == Role::Publish {
         accept_simulcast(&mut media)?;
     }

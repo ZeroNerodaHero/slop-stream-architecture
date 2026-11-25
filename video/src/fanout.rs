@@ -12,7 +12,7 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalContext, TrackLocalWriter
 use tokio::sync::Notify;
 
 use crate::resend::Resend;
-use crate::simulcast::{rewrite_payload, start_level, LayerView, Rewrite, Vp8, LEVELS, NO_LEVEL};
+use crate::simulcast::{rewrite_payload, start_level, LayerView, Rewrite, Frame, LEVELS, NO_LEVEL};
 use crate::view::View;
 
 const LIVE_WITHIN: Duration = Duration::from_millis(1000);
@@ -91,12 +91,12 @@ impl Feed {
         start_level(&self.views(Instant::now()), self.offered, pinned)
     }
 
-    pub fn arrived(&self, level: u8, size: usize, vp8: &Vp8, meter: &mut Meter, now: Instant) {
+    pub fn arrived(&self, level: u8, size: usize, frame: &Frame, meter: &mut Meter, now: Instant) {
         let layer = &self.layers[level as usize];
         layer.last_ms.store(self.ms(now), Ordering::Relaxed);
-        if vp8.keyframe {
+        if frame.keyframe {
             layer.keyframes.fetch_add(1, Ordering::Relaxed);
-            if let Some((_, height)) = vp8.size {
+            if let Some((_, height)) = frame.size {
                 layer.height.store(u32::from(height), Ordering::Relaxed);
             }
         }
@@ -128,7 +128,7 @@ impl Feed {
         *viewers = next.into();
     }
 
-    pub async fn forward(&self, level: u8, packet: &Packet, vp8: &Vp8, now: Instant) -> usize {
+    pub async fn forward(&self, level: u8, packet: &Packet, frame: &Frame, now: Instant) -> usize {
         let viewers = Arc::clone(&self.viewers.read().unwrap_or_else(|e| e.into_inner()));
         if viewers.is_empty() {
             return 0;
@@ -142,7 +142,7 @@ impl Feed {
             let target = viewer.target.load(Ordering::Relaxed);
             let admit = {
                 let mut rewrite = viewer.rewrite.lock().unwrap_or_else(|e| e.into_inner());
-                let admit = rewrite.admit(level, target, packet.header.sequence_number, packet.header.timestamp, vp8, now);
+                let admit = rewrite.admit(level, target, packet.header.sequence_number, packet.header.timestamp, frame, now);
                 if admit.is_some_and(|a| a.switched) {
                     viewer.current.store(level, Ordering::Relaxed);
                     viewer.switched_ms.store(self.ms(now), Ordering::Relaxed);
@@ -155,7 +155,7 @@ impl Feed {
             out.payload = if admit.pid_off == 0 && admit.tl0_off == 0 {
                 packet.payload.clone()
             } else {
-                cached(&mut cache, &packet.payload, vp8, admit.pid_off, admit.tl0_off)
+                cached(&mut cache, &packet.payload, frame, admit.pid_off, admit.tl0_off)
             };
             let n = viewer.track.write(&mut out, admit.switched).await;
             if n > 0 {
@@ -167,11 +167,11 @@ impl Feed {
     }
 }
 
-fn cached(cache: &mut [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS], payload: &bytes::Bytes, vp8: &Vp8, pid_off: u16, tl0_off: u8) -> bytes::Bytes {
+fn cached(cache: &mut [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS], payload: &bytes::Bytes, frame: &Frame, pid_off: u16, tl0_off: u8) -> bytes::Bytes {
     if let Some((_, _, bytes)) = cache.iter().flatten().find(|(p, t, _)| *p == pid_off && *t == tl0_off) {
         return bytes.clone();
     }
-    let bytes = rewrite_payload(payload, vp8, pid_off, tl0_off);
+    let bytes = rewrite_payload(payload, frame, pid_off, tl0_off);
     if let Some(free) = cache.iter_mut().find(|c| c.is_none()) {
         *free = Some((pid_off, tl0_off, bytes.clone()));
     }
