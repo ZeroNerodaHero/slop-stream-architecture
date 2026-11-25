@@ -1,4 +1,4 @@
-import { RiAddLine, RiArrowLeftSLine, RiArrowUpLine, RiCloseLine, RiImageAddLine, RiLoader4Line, RiSearchLine } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiArrowUpLine, RiCloseLine, RiLoader4Line, RiSearchLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -1092,22 +1092,21 @@ export function FriendChat() {
                 <label htmlFor="friend-chat-text" className="sr-only">
                   message {name}
                 </label>
-                <Tooltip content={pictures.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture or a video'}>
-                  <button
-                    type="button"
-                    id="friend-chat-picture"
-                    aria-label="picture or video"
-                    className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textTertiary hover:text-textPrimary disabled:opacity-40',
-                      IN_PILL,
-                      mobile && 'h-11 w-11'
-                    )}
-                    disabled={pictures.length >= MAX_CHAT_IMAGES}
-                    onClick={() => fileRef.current?.click()}
-                  >
-                    <RiImageAddLine size={18} aria-hidden />
-                  </button>
-                </Tooltip>
+                <button
+                  type="button"
+                  id="friend-chat-picture"
+                  aria-label="attach"
+                  aria-disabled={pictures.length >= MAX_CHAT_IMAGES || undefined}
+                  className={cn(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-100 focus-visible:border-primaryBlue focus-visible:outline-none bubble:focus-visible:border-primaryBlue',
+                    IN_PILL,
+                    mobile && 'h-11 w-11',
+                    pictures.length >= MAX_CHAT_IMAGES ? 'cursor-default opacity-40' : 'hover:bg-backgroundTertiary hover:text-textPrimary bubble:hover:bg-backgroundTertiary'
+                  )}
+                  onClick={() => (pictures.length >= MAX_CHAT_IMAGES ? showDmNotice(`${MAX_CHAT_IMAGES} pictures at most`) : fileRef.current?.click())}
+                >
+                  <RiAddLine size={18} aria-hidden />
+                </button>
                 <input
                   ref={fileRef}
                   id="friend-chat-picture-file"

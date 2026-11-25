@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiArrowUpLine, RiCloseLine, RiImageAddLine, RiLoader4Line } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiArrowUpLine, RiCloseLine, RiLoader4Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
@@ -1206,26 +1206,20 @@ export function ChatPanel({
             <div className={cn('relative flex items-center gap-2', PILL)}>
               {emotes.list}
               {mentions.list}
-              <Tooltip
-                content={
-                  pictures.length >= MAX_CHAT_IMAGES
-                    ? `${MAX_CHAT_IMAGES} pictures at most`
-                    : takesVideos
-                      ? 'add a picture or a video'
-                      : `add a picture. ${STREAM_VIDEO_OFF}`
-                }
+              <button
+                type="button"
+                id="chat-picture"
+                aria-label="attach"
+                aria-disabled={pictures.length >= MAX_CHAT_IMAGES || undefined}
+                className={cn(
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-100 focus-visible:border-primaryBlue focus-visible:outline-none bubble:focus-visible:border-primaryBlue',
+                  IN_PILL,
+                  pictures.length >= MAX_CHAT_IMAGES ? 'cursor-default opacity-40' : 'hover:bg-backgroundTertiary hover:text-textPrimary bubble:hover:bg-backgroundTertiary'
+                )}
+                onClick={() => (pictures.length >= MAX_CHAT_IMAGES ? room.showNotice(`${MAX_CHAT_IMAGES} pictures at most`) : fileRef.current?.click())}
               >
-                <button
-                  type="button"
-                  id="chat-picture"
-                  aria-label={takesVideos ? 'picture or video' : 'picture'}
-                  className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textTertiary disabled:opacity-40', IN_PILL)}
-                  disabled={pictures.length >= MAX_CHAT_IMAGES}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <RiImageAddLine size={20} aria-hidden />
-                </button>
-              </Tooltip>
+                <RiAddLine size={20} aria-hidden />
+              </button>
               <input ref={fileRef} id="chat-picture-file" type="file" accept={takesVideos ? ATTACH_ACCEPT : PICTURE_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
               <div className="relative flex min-w-0 flex-1">
                 <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
