@@ -201,7 +201,7 @@ join in that time is served by it. Past this the request is taken as lost.
 
 `const MAX_SDP_BYTES`: Biggest offer we accept. A real one is 5-20 KB (chrome: about 4.5 KB per video section).
 
-`const MAX_MEDIA_LINES`: Audio, the camera, three screens, and one to spare. Each costs a transceiver per peer.
+`const MAX_MEDIA_LINES`: Audio, the camera, three screens, and the camera's VP8 copy when it is VP9 (`docs/vp9.md`). Each costs a transceiver per peer.
 
 `const MAX_KIND_BYTES`: A slots frame: how long its `kind` and `label` strings may be.
 
@@ -320,10 +320,10 @@ come later could not be told apart.
 ## `video/src/media.rs`
 
 Codec and interceptor setup shared by the server and the dummy publisher.
-Opus and VP8 only: every browser has both, so a publisher cannot pick a codec
-some watcher lacks, and all watchers get the same bytes.
+Opus and VP8 for every peer, and VP9 profile 0 on publish peers. A VP9 camera
+also sends a VP8 copy, so a watcher that cannot decode VP9 gets VP8 (`docs/vp9.md`).
 
-`pub fn media_setup`: `twcc`: ask the remote side for transport-wide feedback. Only useful when the
+`pub fn media_setup`: `vp9`: also register VP9 profile 0 (publish peers). `twcc`: ask the remote side for transport-wide feedback. Only useful when the
 remote is a browser uploading to us; it adapts its bitrate to that feedback. `resend`: a watcher's own nack answerer (`video/src/resend.rs`) in place of the stock one, so nacks for packets from before a layer switch go unanswered; `None` keeps the stock one. It also registers the mid and rid header extensions a simulcast offer needs.
 
 `pub fn opus_voice_capability`: Opus for voice only: mono speech at a low bitrate, with DTX so silence costs
@@ -332,7 +332,7 @@ almost nothing. Never use it for the stream; music must not get DTX.
 `pub fn voice_media_setup`: Like `media_setup`, but for voice: the voice Opus for the mics, and VP8 for the cameras and
 screens shown in a voice channel, with TWCC so a browser sending one adapts its bitrate.
 
-Keyframes are read by `parse_vp8` in `video/src/simulcast.rs` (`simulcast.md`): the first packet of partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the VP8 frame tag clear. Anything short or malformed is not a keyframe.
+Keyframes are read by `parse_vp8` in `video/src/simulcast.rs` (`simulcast.md`): the first packet of partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the VP8 frame tag clear. `parse_vp9` takes B set, P clear, spatial id 0 (`vp9.md`). Anything short or malformed is not a keyframe.
 
 ## `video/src/thumbs.rs`
 

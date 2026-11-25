@@ -43,6 +43,7 @@ the database is one file, `api/schema.sql`, applied by the api at boot to an emp
 - `analytics.md` — built. a streamer's own stats on the **stats** tab of the user modal: viewers over time, peak and average, time live, watch time, unique viewers, follows while live, chat lines. logins only, nobody else's.
 - `voice.md` — built, off on the live box. voice channels in a group: who is in each on the group page's right, the call where the chat is, cameras and screens in it, `video voice` as the server.
 - `keyframes.md` — built. how video gets a joining watcher its first picture: keyframe requests to the publisher, not a cache of the last keyframe.
+- `vp9.md` — built. the camera in vp9 simulcast when the browser encodes it well, a small vp8 copy for watchers that cannot decode vp9, how each watcher's codec is picked from its own offer, the numbers.
 - `jannies.md` — who may clean a stream's chat, and only its chat. `api/src/janny.rs`.
 - `test-streamers.md` — built, backend only. the dummy box's fake streams as `streamers` rows flagged `is_test` (migration `0017-test-streamers.sql`), the dummy secret as an `X-Dummy-Password` header, the narrowed rate-limit skip, and `HIDE_TEST_STREAMERS`, which leaves them out of every list.
 - `rate-limits.md` — every route's limit (`api/src/ratelimit.rs`, `video/src/limits.rs`), the `429` with `Retry-After`, the numbers.
