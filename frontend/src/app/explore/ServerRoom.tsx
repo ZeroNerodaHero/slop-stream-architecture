@@ -2,6 +2,7 @@ import {
   RiAddLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
+  RiArrowRightUpLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiEmotionLine,
@@ -590,6 +591,10 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
   const count = room.pins?.[channel]?.length ?? 0;
   const canPin = room.perms.channels;
   const words = count === 0 ? 'pinned messages' : `pinned messages: ${count}`;
+  const jump = (id: string) => {
+    setOpen(false);
+    void serverChat(server).jumpToReply(id, channel);
+  };
 
   const where = `${server}/${channel}`;
   const [shownFor, setShownFor] = useState(where);
@@ -696,20 +701,18 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
                     className="relative flex items-start gap-2 px-3 py-1.5 transition-colors duration-150 focus-within:bg-backgroundTertiary hover:bg-backgroundTertiary"
                   >
                     <div className="min-w-0 flex-1">
-                      <button
-                        type="button"
-                        data-pin-open={pin.id}
-                        title={pin.pinned_by ? `pinned by ${pin.pinned_by}` : undefined}
-                        onClick={() => {
-                          setOpen(false);
-                          void serverChat(server).openLine(pin.id, channel);
-                        }}
-                        className="w-full text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
-                      >
-                        <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
-                        <span className="font-semibold text-primaryBlue">{pin.from}</span>
-                        {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
-                      </button>
+                      <Tooltip content={pin.pinned_by ? `pinned by ${pin.pinned_by}` : null}>
+                        <button
+                          type="button"
+                          data-pin-open={pin.id}
+                          onClick={() => jump(pin.id)}
+                          className="w-full text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
+                        >
+                          <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
+                          <span className="font-semibold text-primaryBlue">{pin.from}</span>
+                          {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
+                        </button>
+                      </Tooltip>
                       {pictures.length > 0 && (
                         <div data-pin-pictures={pin.id} className="relative z-10">
                           <ChatImages ids={pictures} small />
@@ -721,19 +724,32 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
                         </div>
                       )}
                     </div>
-                    {canPin && (
-                      <Tooltip content="unpin">
+                    <div className="flex shrink-0 gap-1">
+                      <Tooltip content="jump to message">
                         <button
                           type="button"
-                          data-pin-unpin={pin.id}
-                          aria-label="unpin"
-                          onClick={() => togglePin(server, channel, pin.id, false)}
-                          className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+                          data-pin-jump={pin.id}
+                          aria-label="jump to message"
+                          onClick={() => jump(pin.id)}
+                          className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke text-textTertiary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
                         >
-                          <RiUnpinLine aria-hidden size={14} />
+                          <RiArrowRightUpLine aria-hidden size={14} />
                         </button>
                       </Tooltip>
-                    )}
+                      {canPin && (
+                        <Tooltip content="unpin">
+                          <button
+                            type="button"
+                            data-pin-unpin={pin.id}
+                            aria-label="unpin"
+                            onClick={() => togglePin(server, channel, pin.id, false)}
+                            className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+                          >
+                            <RiUnpinLine aria-hidden size={14} />
+                          </button>
+                        </Tooltip>
+                      )}
+                    </div>
                   </li>
                 );
               })}
