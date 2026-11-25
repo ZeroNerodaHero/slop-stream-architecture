@@ -93,7 +93,7 @@ export interface ChatLineShapeProps extends Place {
 }
 
 const ACTIONS_HIDDEN =
-  'pointer-events-none opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 [@media(hover:hover)]:group-hover/line:pointer-events-auto [@media(hover:hover)]:group-hover/line:opacity-100 [@media(hover:hover)]:group-has-[[data-mention]:hover]/line:!pointer-events-none [@media(hover:hover)]:group-has-[[data-mention]:hover]/line:!opacity-0';
+  'pointer-events-none opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 [@media(hover:hover)]:group-hover/line:pointer-events-auto [@media(hover:hover)]:group-hover/line:opacity-100 [@media(hover:hover)]:[:has([data-mention]:hover)_&]:!pointer-events-none [@media(hover:hover)]:[:has([data-mention]:hover)_&]:!opacity-0';
 const ACTIONS_SHOWN = 'pointer-events-auto opacity-100';
 const LONG_PRESS_MS = 450;
 const PRESS_SLOP_PX = 10;
@@ -160,12 +160,39 @@ function useLongPress() {
   };
 }
 
+function underMention(bar: Element, x: number, y: number) {
+  return document.elementsFromPoint(x, y).some((el) => !bar.contains(el) && !!el.closest('[data-mention]'));
+}
+
 function Corner({ mark, actions, open, firstInList }: { mark?: ReactNode; actions?: ReactNode; open: boolean; firstInList?: boolean }) {
   const top = firstInList === undefined ? '-top-3.5 group-first/line:top-0' : firstInList ? 'top-0' : '-top-3.5';
+  const [yielding, setYielding] = useState(false);
+  useEffect(() => {
+    if (!yielding) return;
+    const done = () => setYielding(false);
+    const id = requestAnimationFrame(() => window.addEventListener('pointermove', done, { once: true, passive: true }));
+    return () => {
+      cancelAnimationFrame(id);
+      window.removeEventListener('pointermove', done);
+    };
+  }, [yielding]);
+  const yieldToMention = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    if (open || yielding || e.pointerType !== 'mouse') return;
+    if (underMention(e.currentTarget, e.clientX, e.clientY)) setYielding(true);
+  };
   return (
     <>
       {actions && (
-        <span data-line-actions className={cn('absolute right-2 z-10 flex items-center border border-primaryStroke bg-backgroundSecondary', top, open ? ACTIONS_SHOWN : ACTIONS_HIDDEN)}>
+        <span
+          data-line-actions
+          onPointerMove={yieldToMention}
+          className={cn(
+            'absolute right-2 z-10 flex items-center border border-primaryStroke bg-backgroundSecondary',
+            top,
+            open ? ACTIONS_SHOWN : ACTIONS_HIDDEN,
+            yielding && '!pointer-events-none !opacity-0'
+          )}
+        >
           {actions}
         </span>
       )}
