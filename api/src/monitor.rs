@@ -848,6 +848,37 @@ async fn timing_series(State(app): State<App>, Query(q): Query<TimingQuery>) -> 
     }
 }
 
+async fn pull_faults(client: &reqwest::Client, t: &Target, key: &str) -> Result<Value, String> {
+    let Some(token) = &t.token else { return Err("no OPS_TOKEN for this box".into()) };
+    let res = client.get(format!("{}/api/metrics", t.url)).query(&[("errors", key)]).bearer_auth(token).send().await.map_err(|e| error_text(&e))?;
+    let code = res.status().as_u16();
+    let body: Value = res.json().await.unwrap_or(Value::Null);
+    match code {
+        200 if body.get("rows").is_some_and(Value::is_array) => Ok(body),
+        200 => Err("that box's agent keeps no error history yet: its build predates it, redeploy it".into()),
+        401 => Err("401: token refused. OPS_TOKENS here and OPS_TOKEN in that box's .env must match".into()),
+        404 => Err("404: that box has no OPS_TOKEN for its agent".into()),
+        _ => Err(body.get("error").and_then(Value::as_str).map_or_else(|| format!("{code}"), str::to_owned)),
+    }
+}
+
+async fn timing_faults(State(app): State<App>, Query(q): Query<TimingQuery>) -> Response {
+    let (Some(name), Some(key)) = (q.target.as_ref(), q.key.as_ref()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "target and key" }))).into_response();
+    };
+    let Some(t) = app.cfg.targets.iter().find(|t| t.name == *name) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
+    };
+    match pull_faults(&app.boxes, t, key).await {
+        Ok(mut v) => {
+            v["target"] = json!(name);
+            v["key"] = json!(key);
+            Json(v).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
 fn view(t: &TargetState, public: bool) -> Value {
     let (errors, errors_status) = if public {
         (Vec::new(), Some(format!("{} stored, hidden: this page is public (STATS_PUBLIC), and a report names the visitor's ip and login", t.errors.len())))
@@ -965,6 +996,7 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/api/monitor/metrics", get(series))
         .route("/api/monitor/timings", get(timing_table))
         .route("/api/monitor/timings/series", get(timing_series))
+        .route("/api/monitor/timings/errors", get(timing_faults))
         .route("/api/monitor/architecture", get(architecture))
         .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
         .layer(axum::middleware::map_response(crate::agent::no_store))

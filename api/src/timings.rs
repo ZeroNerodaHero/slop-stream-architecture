@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::Relaxed};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::Message;
@@ -21,6 +21,8 @@ const MAX_KEYS: usize = 500;
 const MAX_NAME: usize = 200;
 const MAX_LINES: usize = 400;
 const PORT: u16 = 9300;
+const KEEP_FAULTS: usize = 100;
+const MAX_NOTE: usize = 300;
 pub(crate) const TIERS: [(&str, i64, usize); 3] = [("1h", 60, 60), ("24h", 900, 96), ("7d", 3600, 168)];
 
 pub(crate) fn bucket(us: u64) -> usize {
@@ -134,6 +136,68 @@ impl Timing {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct Fault {
+    pub(crate) at: i64,
+    pub(crate) code: String,
+    pub(crate) msg: String,
+    pub(crate) ms: f64,
+}
+
+#[derive(Default)]
+struct Faults {
+    err: VecDeque<Fault>,
+    e4: VecDeque<Fault>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Note(pub(crate) String);
+
+fn redact(word: &str) -> Option<&'static str> {
+    let core = word.trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\'' | '`'));
+    let core = core.trim_end_matches(['.', ':']);
+    if let Some((user, domain)) = core.split_once('@') {
+        if !user.is_empty() && domain.contains('.') {
+            return Some("<email>");
+        }
+    }
+    let host = core.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map_or(core, |(h, _)| h);
+    if host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok() {
+        return Some("<ip>");
+    }
+    let secretish = core.len() >= 24
+        && !core.starts_with('/')
+        && core.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '/' | '='))
+        && core.chars().any(|c| c.is_ascii_digit())
+        && core.chars().any(|c| c.is_ascii_alphabetic());
+    secretish.then_some("<secret>")
+}
+
+pub(crate) fn scrub(text: &str) -> String {
+    let mut out = String::new();
+    for word in text.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        match (redact(word), word.split_once('?')) {
+            (Some(tag), _) => out.push_str(tag),
+            (None, Some((path, _))) if word.contains("://") => {
+                out.push_str(path);
+                out.push_str("?…");
+            }
+            _ => out.push_str(word),
+        }
+        if out.len() > MAX_NOTE * 4 {
+            break;
+        }
+    }
+    if out.chars().count() > MAX_NOTE {
+        out = out.chars().take(MAX_NOTE - 1).collect::<String>();
+        out.push('…');
+    }
+    out
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Outcome {
     Ok,
@@ -165,6 +229,7 @@ struct Entry {
     sum_us: AtomicU64,
     max_us: AtomicU64,
     b: [AtomicU64; BUCKETS],
+    faults: Mutex<Faults>,
 }
 
 impl Entry {
@@ -185,7 +250,25 @@ impl Entry {
             sum_us: z(),
             max_us: z(),
             b: std::array::from_fn(|_| z()),
+            faults: Mutex::new(Faults::default()),
         }
+    }
+
+    fn note(&self, us: u64, outcome: Outcome, code: String, msg: &str) {
+        let fault = Fault { at: Utc::now().timestamp_millis(), code, msg: scrub(msg), ms: ms(us as f64) };
+        let mut f = self.faults.lock().unwrap_or_else(|e| e.into_inner());
+        let ring = if outcome == Outcome::Client { &mut f.e4 } else { &mut f.err };
+        if ring.len() >= KEEP_FAULTS {
+            ring.pop_front();
+        }
+        ring.push_back(fault);
+    }
+
+    fn faults(&self) -> Vec<Fault> {
+        let f = self.faults.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all: Vec<Fault> = f.err.iter().chain(f.e4.iter()).cloned().collect();
+        all.sort_by_key(|x| std::cmp::Reverse(x.at));
+        all
     }
 
     fn count(&self, bytes: usize) {
@@ -266,25 +349,72 @@ pub(crate) fn record_dir(kind: &'static str, method: &str, name: &str, dir: Dir,
     entry(kind, method, name, dir).add(micros(took), outcome);
 }
 
+pub(crate) fn record_noted(kind: &'static str, method: &str, name: &str, dir: Dir, took: Duration, outcome: Outcome, why: impl FnOnce() -> (String, String)) {
+    let e = entry(kind, method, name, dir);
+    let us = micros(took);
+    e.add(us, outcome);
+    if outcome != Outcome::Ok {
+        let (code, msg) = why();
+        e.note(us, outcome, code, &msg);
+    }
+}
+
+fn status_why(status: u16) -> (String, String) {
+    let reason = axum::http::StatusCode::from_u16(status).ok().and_then(|s| s.canonical_reason()).unwrap_or("");
+    (status.to_string(), reason.to_owned())
+}
+
+pub(crate) fn reqwest_why(res: &reqwest::Result<reqwest::Response>) -> (String, String) {
+    match res {
+        Ok(r) => status_why(r.status().as_u16()),
+        Err(e) => {
+            let code = if e.is_timeout() {
+                "timeout"
+            } else if e.is_connect() {
+                "connect"
+            } else if e.is_body() || e.is_decode() {
+                "body"
+            } else {
+                "failed"
+            };
+            let mut msg = vec![];
+            let mut cause = std::error::Error::source(e);
+            while let Some(c) = cause {
+                msg.push(c.to_string());
+                cause = c.source();
+            }
+            (code.to_owned(), if msg.is_empty() { code.to_owned() } else { msg.join(": ") })
+        }
+    }
+}
+
 pub(crate) struct Session {
     inbound: Arc<Entry>,
     outbound: Arc<Entry>,
     started: Instant,
     failed: AtomicBool,
+    why: Mutex<Option<String>>,
 }
 
 impl Session {
     pub(crate) fn open(proto: &'static str, name: &str) -> Session {
         let inbound = entry("session", proto, name, Dir::In);
         inbound.open.fetch_add(1, Relaxed);
-        Session { inbound, outbound: entry("session", proto, name, Dir::Out), started: Instant::now(), failed: AtomicBool::new(false) }
+        Session { inbound, outbound: entry("session", proto, name, Dir::Out), started: Instant::now(), failed: AtomicBool::new(false), why: Mutex::new(None) }
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         self.inbound.open.fetch_sub(1, Relaxed);
-        self.inbound.add(micros(self.started.elapsed()), if self.failed.load(Relaxed) { Outcome::Failed } else { Outcome::Ok });
+        let us = micros(self.started.elapsed());
+        if self.failed.load(Relaxed) {
+            self.inbound.add(us, Outcome::Failed);
+            let why = self.why.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
+            self.inbound.note(us, Outcome::Failed, "dropped".into(), &why);
+        } else {
+            self.inbound.add(us, Outcome::Ok);
+        }
     }
 }
 
@@ -304,13 +434,32 @@ pub(crate) fn heard(incoming: &Option<Result<Message, axum::Error>>) {
     let bytes = match incoming {
         Some(Ok(Message::Text(t))) => t.len(),
         Some(Ok(Message::Binary(b))) => b.len(),
-        Some(Err(_)) => {
-            let _ = SESSION.try_with(|s| s.failed.store(true, Relaxed));
+        Some(Err(e)) => {
+            let _ = SESSION.try_with(|s| {
+                s.failed.store(true, Relaxed);
+                *s.why.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+            });
             return;
         }
         _ => return,
     };
     let _ = SESSION.try_with(|s| s.inbound.count(bytes));
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FaultQuery {
+    kind: String,
+    #[serde(default)]
+    method: String,
+    name: String,
+    #[serde(default)]
+    dir: String,
+}
+
+fn faults_of(q: &FaultQuery) -> Value {
+    let key = line_key(&q.kind, &q.method, &q.name, &q.dir);
+    let found = REG.map.read().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+    json!({ "started": REG.started, "kept": KEEP_FAULTS, "rows": found.map(|e| e.faults()).unwrap_or_default() })
 }
 
 pub(crate) fn snapshot() -> Value {
@@ -339,17 +488,21 @@ pub(crate) async fn http(req: Request, next: Next) -> Response {
     let res = next.run(req).await;
     let status = res.status().as_u16();
     let kind = if status == 101 { "ws" } else { "http" };
-    record_dir(kind, method, path.as_deref().unwrap_or("(no route)"), dir, started.elapsed(), outcome(status));
+    record_noted(kind, method, path.as_deref().unwrap_or("(no route)"), dir, started.elapsed(), outcome(status), || {
+        let (code, reason) = status_why(status);
+        (code, res.extensions().get::<Note>().map_or(reason, |n| n.0.clone()))
+    });
     res
 }
 
 pub(crate) async fn call(kind: &'static str, method: &'static str, name: &'static str, req: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
     let started = Instant::now();
     let res = req.send().await;
-    record(kind, method, name, started.elapsed(), match &res {
+    let out = match &res {
         Ok(r) => outcome(r.status().as_u16()),
         Err(_) => Outcome::Failed,
-    });
+    };
+    record_noted(kind, method, name, default_dir(kind), started.elapsed(), out, || reqwest_why(&res));
     res
 }
 
@@ -359,7 +512,9 @@ pub(crate) fn serve() {
         return;
     }
     tokio::spawn(async move {
-        let router = Router::new().route("/timings", get(|| async { Json(snapshot()) }));
+        let router = Router::new()
+            .route("/timings", get(|| async { Json(snapshot()) }))
+            .route("/timings/errors", get(|axum::extract::Query(q): axum::extract::Query<FaultQuery>| async move { Json(faults_of(&q)) }));
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => {
                 log::info!("timings on 0.0.0.0:{port}/timings, for the agent");
@@ -409,12 +564,19 @@ fn pipeline_name(p: &redis::Pipeline) -> String {
     format!("{} {}{}", if p.is_transaction() { "MULTI" } else { "PIPELINE" }, shown, if words.len() > 4 { " …" } else { "" })
 }
 
+fn redis_why<T>(out: &redis::RedisResult<T>) -> (String, String) {
+    match out {
+        Ok(_) => ("ok".into(), String::new()),
+        Err(e) => (e.code().map_or_else(|| format!("{:?}", e.kind()), str::to_owned), e.to_string()),
+    }
+}
+
 impl redis::aio::ConnectionLike for Redis {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a redis::Cmd) -> redis::RedisFuture<'a, redis::Value> {
         Box::pin(async move {
             let started = Instant::now();
             let out = self.0.req_packed_command(cmd).await;
-            record("redis", "", &redis_name(cmd), started.elapsed(), if out.is_err() { Outcome::Failed } else { Outcome::Ok });
+            record_noted("redis", "", &redis_name(cmd), Dir::Inter, started.elapsed(), if out.is_err() { Outcome::Failed } else { Outcome::Ok }, || redis_why(&out));
             out
         })
     }
@@ -423,7 +585,7 @@ impl redis::aio::ConnectionLike for Redis {
         Box::pin(async move {
             let started = Instant::now();
             let out = self.0.req_packed_commands(pipeline, offset, count).await;
-            record("redis", "", &pipeline_name(pipeline), started.elapsed(), if out.is_err() { Outcome::Failed } else { Outcome::Ok });
+            record_noted("redis", "", &pipeline_name(pipeline), Dir::Inter, started.elapsed(), if out.is_err() { Outcome::Failed } else { Outcome::Ok }, || redis_why(&out));
             out
         })
     }
@@ -594,6 +756,49 @@ fn delta(cur: &Timing, prev: Option<&Timing>) -> Option<Timing> {
     d.active().then_some(d)
 }
 
+fn sources_from_env() -> Vec<(String, String)> {
+    env::var("TIMINGS_FROM")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|e| e.trim().split_once('='))
+        .map(|(k, v)| (k.trim().to_owned(), v.trim().trim_end_matches('/').to_owned()))
+        .filter(|(k, v)| !k.is_empty() && !v.is_empty())
+        .collect()
+}
+
+#[derive(Clone)]
+pub(crate) struct FaultLookup {
+    client: reqwest::Client,
+    from: Arc<Vec<(String, String)>>,
+}
+
+impl FaultLookup {
+    pub(crate) fn from_env() -> FaultLookup {
+        FaultLookup { client: reqwest::Client::builder().timeout(Duration::from_secs(3)).build().expect("http client"), from: Arc::new(sources_from_env()) }
+    }
+
+    pub(crate) async fn get(&self, key: &str) -> Result<Value, String> {
+        let mut parts = key.split('\u{1f}');
+        let (Some(src), Some(kind), Some(method), Some(name)) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+            return Err("errors: a line key, its source, kind, method and name split by U+001F".into());
+        };
+        let dir = parts.next().unwrap_or("");
+        let Some((_, url)) = self.from.iter().find(|(s, _)| s == src) else { return Err(format!("no timings source {src} on this box")) };
+        let res = self
+            .client
+            .get(format!("{url}/timings/errors"))
+            .query(&[("kind", kind), ("method", method), ("name", name), ("dir", dir)])
+            .send()
+            .await
+            .map_err(|e| format!("{src}: {}", reqwest_why(&Err(e)).1))?;
+        match res.status().as_u16() {
+            200 => res.json::<Value>().await.map_err(|e| format!("{src}: bad json: {e}")),
+            404 => Err(format!("{src} keeps no error history yet: its build predates it, redeploy it")),
+            code => Err(format!("{src} answered {code}")),
+        }
+    }
+}
+
 pub(crate) struct Collector {
     client: reqwest::Client,
     from: Vec<(String, String)>,
@@ -602,13 +807,7 @@ pub(crate) struct Collector {
 
 impl Collector {
     pub(crate) fn from_env() -> Collector {
-        let from = env::var("TIMINGS_FROM")
-            .unwrap_or_default()
-            .split(',')
-            .filter_map(|e| e.trim().split_once('='))
-            .map(|(k, v)| (k.trim().to_owned(), v.trim().trim_end_matches('/').to_owned()))
-            .filter(|(k, v)| !k.is_empty() && !v.is_empty())
-            .collect();
+        let from = sources_from_env();
         Collector { client: reqwest::Client::builder().timeout(Duration::from_secs(3)).build().expect("http client"), from, prev: HashMap::new() }
     }
 
@@ -957,6 +1156,45 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fault_note_keeps_no_secrets_and_stays_short() {
+        assert_eq!(scrub("connect to 10.0.0.7:6379 refused"), "connect to <ip> refused");
+        assert_eq!(scrub("no user (bob@example.com)."), "no user <email>");
+        assert_eq!(scrub("token 3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6 refused"), "token <secret> refused");
+        assert_eq!(scrub("GET https://s3.local/bucket/key?X-Amz-Signature=abc failed"), "GET https://s3.local/bucket/key?… failed");
+        assert_eq!(scrub("/api/streams/{name}/heartbeat answered"), "/api/streams/{name}/heartbeat answered");
+        let long = scrub(&"word ".repeat(200));
+        assert_eq!(long.chars().count(), MAX_NOTE);
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn errors_keep_the_last_hundred_of_each_class_newest_first_and_success_keeps_none() {
+        let why = || ("500".to_owned(), "boom".to_owned());
+        for _ in 0..5 {
+            record_noted("http", "GET", "/test-faults-ok", Dir::In, Duration::from_millis(1), Outcome::Ok, || panic!("no note on success"));
+        }
+        let q = |name: &str| FaultQuery { kind: "http".into(), method: "GET".into(), name: name.into(), dir: String::new() };
+        assert_eq!(faults_of(&q("/test-faults-ok"))["rows"].as_array().unwrap().len(), 0);
+        for i in 0..150u64 {
+            record_noted("http", "GET", "/test-faults", Dir::In, Duration::from_millis(i), Outcome::Server, why);
+        }
+        record_noted("http", "GET", "/test-faults", Dir::In, Duration::from_millis(2), Outcome::Client, || ("404".into(), "Not Found".into()));
+        let rows = faults_of(&q("/test-faults"))["rows"].as_array().unwrap().clone();
+        assert_eq!(rows.len(), KEEP_FAULTS + 1);
+        assert_eq!(rows.iter().filter(|r| r["code"] == "404").count(), 1);
+        assert_eq!(rows.iter().filter(|r| r["code"] == "500").map(|r| r["ms"].as_f64().unwrap()).fold(f64::MAX, f64::min), 50.0, "the oldest fifty went");
+        assert!(rows.windows(2).all(|w| w[0]["at"].as_i64() >= w[1]["at"].as_i64()));
+        assert_eq!(faults_of(&q("/test-no-such-line"))["rows"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_fault_lookup_wants_a_known_source() {
+        let l = FaultLookup { client: reqwest::Client::new(), from: Arc::new(vec![("api".into(), "http://127.0.0.1:1".into())]) };
+        assert!(l.get("nope").await.unwrap_err().contains("line key"));
+        assert!(l.get("chat\u{1f}http\u{1f}GET\u{1f}/x").await.unwrap_err().contains("no timings source chat"));
+    }
 
     #[test]
     fn buckets_are_log_linear_and_cover_their_values() {
