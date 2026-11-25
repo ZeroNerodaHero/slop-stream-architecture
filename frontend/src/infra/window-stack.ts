@@ -1,6 +1,6 @@
 import { WINDOW_IDS } from './debug/window-open.ts';
 
-export const STACK_IDS = [...WINDOW_IDS, 'chat', 'dm', 'corner', 'notifications'] as const;
+export const STACK_IDS = [...WINDOW_IDS, 'chat', 'dm', 'corner', 'notifications', 'voice'] as const;
 export type StackId = (typeof STACK_IDS)[number];
 
 export const STACK_BASE = 50;

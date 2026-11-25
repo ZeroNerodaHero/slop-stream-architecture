@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Windows stack, last clicked on top
 
-A floating or draggable window is anything that sits over the page on its own: the debug windows (messages, timings, quality), the floating stream chat (`ChatSlot` in modal), the DM window (`FriendChat`), the corner players (`MiniPlayer`), the notifications panel, and any new one.
+A floating or draggable window is anything that sits over the page on its own: the debug windows (messages, timings, quality), the floating stream chat (`ChatSlot` in modal), the DM window (`FriendChat`), the corner players (`MiniPlayer`), the notifications panel, the voice call window (`VoicePip`), and any new one.
 
 Every one of them:
 

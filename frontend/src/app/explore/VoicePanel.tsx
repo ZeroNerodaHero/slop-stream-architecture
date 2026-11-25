@@ -8,6 +8,7 @@ import {
   RiMicLine,
   RiMicOffLine,
   RiPencilLine,
+  RiPictureInPicture2Line,
   RiSignalWifi1Fill,
   RiSignalWifi2Fill,
   RiSignalWifiErrorLine,
@@ -19,6 +20,7 @@ import { useAtomValue } from 'jotai';
 import { type ReactNode, type Ref, useEffect, useRef, useState } from 'react';
 
 import { VoiceFailDialog, voiceFailWords } from '@/app/explore/VoiceFailDialog';
+import { useVoiceView } from '@/app/explore/VoiceRoom';
 import { canEditChannel, type Channel, type GroupRoom, isVoice, VOICE_CHANNEL_CAP, type VoiceMember } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { presenceOfAtom } from '@/infra/atoms/presence-atoms';
@@ -39,7 +41,9 @@ import {
   type VoiceStats,
   voiceStatsAtom
 } from '@/infra/atoms/voice-atoms';
+import { hideVoicePip, pipCallKey, showVoicePip, voicePipHiddenAtom } from '@/infra/atoms/voice-pip-atoms';
 import { type VoiceCall, voiceCallAtom } from '@/infra/atoms/voice-state';
+import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { useCardMod } from '@/shared-components/GroupMod';
 import { PersonCard } from '@/shared-components/PersonCard';
@@ -95,6 +99,9 @@ export function VoicePanel({
   const micButton = useRef<HTMLButtonElement>(null);
   const metering = inCall && !muted && !deaf && !serverMuted && (!ptt || talking);
   const [closedFail, setClosedFail] = useState<VoiceCall | null>(null);
+  const mobile = useIsMobile();
+  const middle = useVoiceView(room).view;
+  const pipHidden = useAtomValue(voicePipHiddenAtom) === pipCallKey(call);
   const failOpen = failed && closedFail !== call;
 
   useEffect(() => {
@@ -209,6 +216,11 @@ export function VoicePanel({
                       <RiPencilLine aria-hidden size={14} />
                     </button>
                   </Tooltip>
+                )}
+                {mine && inCall && !mobile && middle !== item.name && (
+                  <BarButton id="group-voice-pip" label={pipHidden ? 'show the call window' : 'hide the call window'} pressed={!pipHidden} onClick={pipHidden ? showVoicePip : hideVoicePip}>
+                    <RiPictureInPicture2Line aria-hidden size={14} />
+                  </BarButton>
                 )}
                 {mine && !failed && <Signal call={call} stats={stats} />}
               </div>
