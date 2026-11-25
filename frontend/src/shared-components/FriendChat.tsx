@@ -185,8 +185,10 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         onKeyDown={onKey}
         className={cn(SQUARE, 'rounded-control', selected ? SQUARE_ON : SQUARE_OFF)}
       >
-        <Face name={dm.name} version={dm.avatar} />
-        <PresenceSquare status={dm.presence} className={RING} />
+        <span className="relative flex">
+          <Face name={dm.name} version={dm.avatar} />
+          <PresenceSquare status={dm.presence} className={RING} />
+        </span>
         {dm.unread > 0 && (
           <span
             id={`friend-chat-unread-${dm.name}`}
