@@ -187,6 +187,10 @@
   .dr-body .tile.wide { grid-column: 1 / -1; }
   .dr-body .tile canvas { flex: none; height: 110px; }
   .dr-body .tile.wide canvas { height: 180px; }
+  .flist { max-height: 260px; overflow: auto; margin-top: 4px; font-size: 12px; }
+  .frow { display: grid; grid-template-columns: max-content 52px minmax(0, 1fr) max-content; gap: 10px; align-items: baseline; padding: 3px 0; border-top: 1px solid var(--stroke); }
+  .frow .fmsg { overflow-wrap: anywhere; user-select: text; }
+  .frow .fms { text-align: right; }
   .g-ok { color: var(--up); } .g-warn { color: var(--warn); } .g-bad { color: var(--down); }
   .share { position: relative; display: inline-block; width: 40px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
   .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
@@ -560,26 +564,25 @@
     b.setAttribute('aria-describedby', 'hint');
     return b;
   }
-  function keepHint(root) {
-    if (!hintAt || hintAt.isConnected) return;
-    const k = hintAt.dataset.k;
-    const was = hintAt;
-    const b = [...root.querySelectorAll('.info')].find((x) => x.dataset.k === k);
+  function holdHint(root) {
+    return hintAt && root.contains(hintAt) ? { k: hintAt.dataset.k, focused: document.activeElement === hintAt } : null;
+  }
+  function keepHint(root, held) {
+    if (!held) return;
+    const b = [...root.querySelectorAll('.info')].find((x) => x.dataset.k === held.k);
     if (!b) { hideHint(); return; }
+    if (held.focused) b.focus({ preventScroll: true });
     showHint(b);
-    if (was.dataset.focused) b.focus({ preventScroll: true });
   }
   document.addEventListener('pointerover', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) showHint(b); });
   document.addEventListener('pointerout', (e) => {
     const b = e.target.closest && e.target.closest('.info');
     if (b && b === hintAt && !b.contains(e.relatedTarget) && document.activeElement !== b) hideHint();
   });
-  document.addEventListener('focusin', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) { b.dataset.focused = '1'; showHint(b); } });
+  document.addEventListener('focusin', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) showHint(b); });
   document.addEventListener('focusout', (e) => {
     const b = e.target.closest && e.target.closest('.info');
-    if (!b) return;
-    delete b.dataset.focused;
-    if (b === hintAt && b.isConnected && !b.matches(':hover')) hideHint();
+    if (b && b === hintAt && !b.matches(':hover')) hideHint();
   });
   addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || $hint.hidden) return;
@@ -1819,6 +1822,36 @@
     return tm.data.rows.find((r) => r.target === target && r.key === key) || null;
   }
 
+  const faultTime = (at) => new Date(at).toLocaleString('en-US', { timeZone: CHICAGO, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+
+  function faultTile(F, summary) {
+    const t = el('div', 'tile wide');
+    const head = el('div', 'head');
+    const rows = F && Array.isArray(F.rows) ? F.rows : [];
+    head.append(el('span', 'label', 'errors'), el('span', 'value mono', `${summary}${rows.length ? ` · newest ${rows.length} kept, times in Chicago` : ''}`));
+    t.append(head);
+    if (!F) t.append(el('div', 'empty', 'loading'));
+    else if (F.error) t.append(el('div', 'note', `could not load the errors: ${F.error}`));
+    else if (!rows.length) t.append(el('div', 'empty', 'none kept: no errors since this process last started'));
+    else {
+      const list = el('div', 'flist');
+      list.setAttribute('role', 'list');
+      for (const f of rows) {
+        const code = String(f.code == null ? '' : f.code);
+        const row = el('div', 'frow');
+        row.setAttribute('role', 'listitem');
+        row.append(
+          el('span', 'mono dim', has(f.at) ? faultTime(f.at) : '—'),
+          el('span', `mono ${code.startsWith('4') ? 'note' : 'no'}`, code || '—'),
+          el('span', 'fmsg', typeof f.msg === 'string' && f.msg ? f.msg : '—'),
+          el('span', 'fms mono dim', has(f.ms) ? ms(f.ms) : '—'));
+        list.append(row);
+      }
+      t.append(list);
+    }
+    return t;
+  }
+
   function pairOf(r) {
     if (!r || r.kind !== 'session' || !tm.data) return null;
     return tm.data.rows.find((x) => x.target === r.target && x.kind === 'session' && x.method === r.method && x.name === r.name && x.src === r.src && x.dir !== r.dir) || null;
@@ -1828,7 +1861,10 @@
     const dr = v.ui.drawer;
     const keep = dr.querySelector('.dr-body');
     const scroll = keep ? keep.scrollTop : 0;
+    const keptList = dr.querySelector('.flist');
+    const listScroll = keptList ? keptList.scrollTop : 0;
     if (!v.open) {
+      if (hintAt && dr.contains(hintAt)) hideHint();
       dr.classList.remove('on');
       return;
     }
@@ -1891,7 +1927,7 @@
       stat('open now', count(I ? I.open : 0), null, 'connections open right now, at the latest reading.');
       stat('most open', count(I ? I.open_peak : 0), null, `the most connections open at the same time at any reading ${over}.`);
       stat('ended', count(I ? I.n : 0), null, `connections that closed ${over}, cleanly or not.`);
-      stat('dropped', count(I ? I.err : 0), I && I.err ? 'no' : null, `connections ${over} that ended on a read error instead of a clean close.`);
+      stat('dropped', count(I ? I.err : 0), I && I.err ? 'no' : null, `connections ${over} that broke instead of closing cleanly: a read error on a websocket, the peer going away on webrtc.`);
       for (const k of ['mean', 'p50', 'p95', 'p99', 'max']) {
         const n = k === 'mean' ? 'avg' : k;
         stat(n, spent(I ? I[k] : null), null, `${pctl(n, 'session length')} A session runs from connect to close; only connections that ended count.`);
@@ -1971,11 +2007,15 @@
             : [{ name: 'errors', v: D.err, color: COLORS.red }] });
         tile({ label: `time spent per ${per(secs)}`, read: spent, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }, true);
       }
+      body.append(faultTile(D.faults, S ? `${count(I ? I.err : 0)} dropped ${over}` : `${count(r.err)} ${r.err === 1 ? 'error' : 'errors'}${r.kind === 'http' ? ` · ${count(r.e4)} 4xx` : ''} ${over}`));
     }
+    const held = holdHint(dr);
     dr.replaceChildren(v.ui.grip, head, stats, body);
     body.scrollTop = scroll;
+    const list = body.querySelector('.flist');
+    if (list) list.scrollTop = listScroll;
     dr.classList.add('on');
-    keepHint(stats);
+    keepHint(stats, held);
   }
 
   function renderPicker(shown) {
@@ -2172,7 +2212,11 @@
 
   async function getJson(url) {
     const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`GET ${url.split('?')[0]} answered ${res.status}`);
+    if (!res.ok) {
+      let why = '';
+      try { why = (await res.json()).error || ''; } catch (e) { why = ''; }
+      throw new Error(`GET ${url.split('?')[0]} answered ${res.status}${why ? `: ${why}` : ''}`);
+    }
     const d = await res.json();
     d.received = Date.now();
     return d;
@@ -2246,10 +2290,16 @@
     if (!id) return;
     const [target, key] = id.split('\u0000');
     const get = (k) => getJson(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(k)}&range=${sel.range}`);
-    const pair = pairOf(findRow(id));
+    const row = findRow(id);
+    const pair = pairOf(row);
+    const fk = row && row.kind === 'session' && row.dir === 'out' ? (pair ? pair.key : null) : key;
+    const faults = fk
+      ? getJson(`/api/monitor/timings/errors?target=${encodeURIComponent(target)}&key=${encodeURIComponent(fk)}`)
+        .then((f) => ({ rows: (Array.isArray(f.rows) ? f.rows : []).filter((x) => x && typeof x === 'object'), kept: f.kept || 100 }), (e) => ({ error: e.message }))
+      : Promise.resolve({ rows: [], kept: 100 });
     try {
-      const [d, p] = await Promise.all([get(key), pair ? get(pair.key).catch(() => null) : null]);
-      if (v.open === id) v.detail = { ...normDetail(d), id, pair: p ? normDetail(p) : null };
+      const [d, p, f] = await Promise.all([get(key), pair ? get(pair.key).catch(() => null) : null, faults]);
+      if (v.open === id) v.detail = { ...normDetail(d), id, pair: p ? normDetail(p) : null, faults: f };
     } catch (e) {
       if (v.open === id) v.detail = { id, error: `could not load the graphs: ${e.message}` };
     }

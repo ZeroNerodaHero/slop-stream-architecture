@@ -139,10 +139,12 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        match self.2 {
+        let mut res = match self.2 {
             Some(secs) => ratelimit::too_many(secs, &self.1),
             None => (self.0, Json(json!({ "error": self.1 }))).into_response(),
-        }
+        };
+        res.extensions_mut().insert(timings::Note(self.1));
+        res
     }
 }
 

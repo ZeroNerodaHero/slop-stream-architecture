@@ -195,6 +195,7 @@ struct App {
     cfg: Arc<Config>,
     ring: Arc<Mutex<VecDeque<Sample>>>,
     started: Instant,
+    faults: crate::timings::FaultLookup,
 }
 
 fn rate(prev: u64, cur: u64, secs: f64) -> Option<f64> {
@@ -597,6 +598,7 @@ fn refuse(code: StatusCode, text: &str) -> Response {
 #[derive(Deserialize)]
 struct MetricsQuery {
     since: Option<String>,
+    errors: Option<String>,
 }
 
 async fn metrics(State(app): State<App>, headers: HeaderMap, Query(q): Query<MetricsQuery>) -> Response {
@@ -605,6 +607,12 @@ async fn metrics(State(app): State<App>, headers: HeaderMap, Query(q): Query<Met
     };
     if !token_ok(&headers, token) {
         return refuse(StatusCode::UNAUTHORIZED, "token refused");
+    }
+    if let Some(key) = q.errors.as_deref() {
+        return match app.faults.get(key).await {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => refuse(StatusCode::BAD_GATEWAY, &e),
+        };
     }
     let since = match q.since.as_deref().filter(|s| !s.is_empty()) {
         None => None,
@@ -689,7 +697,7 @@ pub async fn run() -> anyhow::Result<()> {
     if cfg.token.is_none() {
         log::warn!("no OPS_TOKEN: GET /api/metrics answers 404 to everyone. set OPS_TOKEN in .env");
     }
-    let app = App { cfg: cfg.clone(), ring: Arc::new(Mutex::new(VecDeque::with_capacity(cfg.keep + 1))), started: Instant::now() };
+    let app = App { cfg: cfg.clone(), ring: Arc::new(Mutex::new(VecDeque::with_capacity(cfg.keep + 1))), started: Instant::now(), faults: crate::timings::FaultLookup::from_env() };
     tokio::spawn(sample_loop(app.clone()));
     let router = Router::new()
         .route("/health", get(agent_health))

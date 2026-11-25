@@ -337,7 +337,7 @@ async fn send_with(
         Ok(r) => crate::timings::outcome(r.status().as_u16()),
         Err(_) => crate::timings::Outcome::Failed,
     };
-    crate::timings::record("s3", method, op, started.elapsed(), outcome);
+    crate::timings::record_noted("s3", method, op, crate::timings::Dir::Inter, started.elapsed(), outcome, || crate::timings::reqwest_why(&res));
     res.map_err(|e| e.to_string())
 }
 

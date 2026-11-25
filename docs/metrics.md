@@ -138,6 +138,7 @@ one screen high on every tab: the page itself never scrolls, only a long table o
 - the box, the tab, the range, the containers view, the search, the picked cards, the sort and the open row are in the url (`#box=test-machine&tab=calls&pick=inter%7Cdb&sort=-p99&range=24h`), so a link opens the same view. an old `#q=` or `#kind=` link opens endpoints or calls.
 - the status polls every 5 s, the graphs and the tables every 15 s, 60 s and 5 min. a tab only fetches what it shows.
 - every string through `textContent`: container names, images and error reports are not trusted.
+- scrollbars: 6 px, no arrows, a clear track and a faint thumb that brightens while the pointer is over its pane and more while it scrolls (a `scrolling` class for 0.7 s after a scroll). `::-webkit-scrollbar` in Safari and Chrome, `scrollbar-width: thin` and `scrollbar-color` in Firefox (only where `::-webkit-scrollbar` is unknown, since a Chrome that sees the standard pair ignores the webkit rules).
 - a tab left open across a deploy reloads itself when the monitor's build changes, so an old page never reads a new answer. every answer is checked as it comes in (a missing list is empty, a missing number is `—`), and a part of the page that still cannot draw says so in its own box while the rest keeps refreshing (`test/monitor-page.js`).
 
 ## endpoint and call timings
@@ -196,10 +197,35 @@ the tabs: **Endpoints** has what the processes serve, `http`, `ws` (the upgrade)
 - under the cards, small, how many lines of how many over the range.
 - the table: box (on "all"), method, name (with its kind and direction when more than one card shows), where, count, a second, open, msg/s and bytes/s (when sessions show), total time, share (of its kind's time), p99, max, 4xx and 5xx and errors. p99 and max are coloured against the kind's limits: http and ws 100 and 500 ms, webrtc setup 500 ms and 2 s, db 10 and 100 ms, redis 2 and 20 ms, s3, video, voice and api 100 ms and 1 s; green under the first, yellow to the second, red past it. a blocking read and a session have none; a session's p99 and max are how long it lasted. a header click sorts by that column, again the other way; total time first, with the sessions on top by how many are open. 250 rows at most; the search and the cards narrow it.
 - a row click opens its panel, which slides in from the right over half the table; the table stays on the left with that row lit, and a click on another row moves the panel to it. the head: the name, its kind, direction, box and process, which row of how many, ↑ and ↓ (or the arrow keys, j and k) for the row above or below, ✕ (or esc) to close. under it the numbers over the range: count, a second, total time, share, avg, p50, p95, p99, max, errors (and 4xx and 5xx for http). then the graphs, each with a crosshair and a box with the time (America/Chicago) and the values on hover: avg, p50, p95, p99 and max over time, ms on a log scale, with how many calls each point holds (avg is the point's time spent over its count); requests a second; errors; time spent. for a session: open now, the most open, ended, dropped, how long they lasted, messages and bytes a second each way, and as graphs the session length, the open connections, ended and dropped, and messages and bytes a second in and out (the line the other way is fetched with it).
+- every number in the panel's strip has an `i` beside its name: hover or focus it (tab) for what that number means in plain words, for the row's kind and the range shown (count, a second, total time and how it is timed, share, avg and the percentiles, errors, 4xx, 5xx; for a session open now, most open, ended, dropped, its length and messages and bytes each way). the box is drawn by the page, fixed to the window, so the panel cannot cut it; it flips above the icon near the bottom and stays inside the window at the edges. esc hides it first, a second esc closes the panel. a refresh that redraws the panel keeps it open on the same number.
+- the panel's last box is **errors**: the newest kept errors of that line (below), newest first, each with its time (Chicago), its code (a status, `dropped`, `timeout`, `connect`, a redis error code), its message and how long it took; 4xx in yellow, the rest red. its head has the range's counts beside how many are kept. the list scrolls in its own box. fetched with the panel's graphs, so on open and every refresh. a process built before the history says so in the box.
 - the panel's left edge is a handle: drag it (or focus it and press ← →) for a wider or narrower panel, from 360 px to 85% of the window; a double-click puts it back to half. the width is kept in the browser (`localStorage`, `stats.drawerWidth`, in px) and fitted to the window when the page loads and when the window changes size; the graphs in it redraw to the new width. the soft edge on its left is a gradient beside it, not a box shadow (the site has none).
 - the open row is in the url too (`&rowbox=vm2&row=<its key>`), so a link or a reload opens the same panel.
 
 `err` is every failure: a 5xx, an error from redis, no answer from s3, video or voice. `4xx` is apart, since a 404 on `/api/streamers/{name}` is a normal answer.
+
+### the error history
+
+every line in every process (`api/src/timings.rs`, `video/src/timings.rs`) keeps its last 100 errors and, apart, its last 100 4xx answers, so a flood of 404s cannot push the 5xx out. each is `at` (ms), `code`, `msg` and `ms` (how long it took). nothing happens on a success: the note is made only when the outcome is not ok, so the success path is the atomics it always was. the two rings are empty `VecDeque`s until a line's first error, so a line that never fails holds no memory for it; at most 500 lines × 200 notes × about 400 bytes.
+
+| where | code | msg |
+|---|---|---|
+| http, ws | the status | the api's own error message when the handler answered with one (`ApiError`, the text the client got: `database error`, `bad name`, never the cause behind it), else the status's reason (`Not Found`) |
+| s3, video, voice, api (calls) | the status, or `timeout`, `connect`, `body`, `failed` | the status's reason, or the error's causes without the url (a presigned url never shows) |
+| redis | the redis error code (`WRONGTYPE`) or kind (`IoError`) | the error |
+| a websocket session | `dropped` | the read error |
+| a webrtc session, setup | `dropped`, `failed` | `peer gone`, the voice reason, `peer failed before it connected`, `ended before it connected` |
+| db | — | none: sqlx logs no outcome, so a failed statement is not an error here |
+
+every message is cut to 300 characters and scrubbed before it is kept: an email becomes `<email>`, an ip (with or without a port) `<ip>`, a long run of letters and digits that looks like a token `<secret>`, a url's query `?…`.
+
+the path, all on demand (nothing is collected or stored until a panel asks):
+
+- the process: `GET :9300/timings/errors?kind=&method=&name=&dir=` (inside docker only, like `/timings`): `{ started, kept, rows }`, newest first.
+- the agent: `GET /api/metrics?errors=<line key>` with the box's `OPS_TOKEN`. the same path caddy already sends to the agent, so no caddy change. the key's first part names the process, which must be one of `TIMINGS_FROM`; the agent asks that process and answers what it says.
+- the monitor: `GET /api/monitor/timings/errors?target=<box>&key=<line key>`, the agent's answer plus `target` and `key`, or a 502 with what went wrong (`that box's agent keeps no error history yet`, `api keeps no error history yet`: a build from before it). public with the rest of `/api/monitor*` when `STATS_PUBLIC=true`, which is why the messages are only the ones above, scrubbed.
+
+the history is the process's: a restart starts it empty.
 
 ## stats.nodentity.xyz
 
