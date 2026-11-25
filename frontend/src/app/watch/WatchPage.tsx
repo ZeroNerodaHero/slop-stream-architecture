@@ -115,6 +115,51 @@ function useNarrowBody(on: boolean) {
   return [ref, narrow] as const;
 }
 
+const FIT_MIN = 240;
+
+function useFitWidth(on: boolean) {
+  const cell = useRef<HTMLDivElement | null>(null);
+  const tail = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const box = cell.current;
+    const main = box?.closest('main');
+    if (!on || !box || !main) return;
+    const measure = () => {
+      const player = box.firstElementChild;
+      if (!player) return;
+      const end = tail.current ?? player;
+      const top = box.getBoundingClientRect().top + window.scrollY;
+      const below = end.getBoundingClientRect().bottom - player.getBoundingClientRect().bottom;
+      const pad = parseFloat(getComputedStyle(main).paddingBottom) || 0;
+      const room = document.documentElement.clientHeight - top - below - pad;
+      const fit = Math.max(FIT_MIN, Math.floor((room * 16) / 9));
+      setWidth(fit < box.clientWidth ? fit : null);
+    };
+    let frame = 0;
+    const soon = () => {
+      if (!frame)
+        frame = window.requestAnimationFrame(() => {
+          frame = 0;
+          measure();
+        });
+    };
+    measure();
+    const watcher = new ResizeObserver(soon);
+    watcher.observe(box);
+    if (tail.current) watcher.observe(tail.current);
+    const header = main.querySelector('header');
+    if (header) watcher.observe(header);
+    window.addEventListener('resize', soon);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      watcher.disconnect();
+      window.removeEventListener('resize', soon);
+    };
+  }, [on]);
+  return [cell, tail, on ? width : null] as const;
+}
+
 let servedWithCard = location.pathname.startsWith('/watch/');
 
 function hintedLive(state: unknown): boolean {
@@ -204,6 +249,8 @@ export function WatchPage() {
   const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
   const chatTab = !mobile && narrow && chatSide !== 'modal';
+  const theater = !mobile && !chatTab;
+  const [fitCell, fitTail, fitWidth] = useFitWidth(theater && !!name);
   const cornerTaken = useAtomValue(publishPipAtom);
   const thumbs = useAtomValue(peeksAtom)[name]?.card.thumbs;
   const [brokenThumb, setBrokenThumb] = useState<string | null>(null);
@@ -277,7 +324,10 @@ export function WatchPage() {
 
   const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? phoneTabs : watchTabs;
   const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
-  const videoCap = chatTab && deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]';
+  const videoCap = chatTab
+    ? deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]'
+    : theater && 'mx-auto';
+  const fitStyle = fitWidth !== null ? { maxWidth: fitWidth } : undefined;
 
   const chipDots = phase === 'connecting' || phase === 'connected';
   const chipWords = chipDots
@@ -318,7 +368,7 @@ export function WatchPage() {
             id="player-loading"
             label="loading the stream"
             className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary bubble:border-transparent max-md:rounded-none max-md:border-t-0', videoCap)}
-            style={mobile ? strip.style : undefined}
+            style={mobile ? strip.style : fitStyle}
           >
             {backdrop ?? <Bone className="absolute inset-0" />}
             {playerChip}
@@ -329,7 +379,7 @@ export function WatchPage() {
             )}
           </Skeleton>
         ) : (
-          <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
+          <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : fitStyle}>
             <div className={cn('relative aspect-video w-full overflow-hidden rounded-panel border border-primaryStroke bg-black bubble:border-transparent max-md:rounded-none max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
               {shownThumb ? (
                 <img
@@ -372,7 +422,7 @@ export function WatchPage() {
           </div>
         )
       ) : (
-        <div ref={playerRef} data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
+        <div ref={playerRef} data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : fitStyle}>
           <SceneView
             id="scene"
             className={cn('max-md:rounded-none max-md:border-t-0', mobile && strip.frame)}
@@ -463,10 +513,27 @@ export function WatchPage() {
   const deskStatus = (
     <div className="relative">
       <StatusLine text={message} tone={tone} className="my-0 sr-only" />
-      <span className="sr-only">
-        <ViewerCount id="viewers" count={viewers} />
-        {followersCount}
-      </span>
+      {!theater && (
+        <span className="sr-only">
+          <ViewerCount id="viewers" count={viewers} />
+          {followersCount}
+        </span>
+      )}
+    </div>
+  );
+  const onAir = phase === 'watching' || phase === 'connecting' || phase === 'connected' || phase === 'reconnecting';
+  const headline = !name || phase === 'loading' || phase === 'bad-name' ? null : onAir ? 'live' : (NOT_LIVE_WORDS[presence] ?? 'offline');
+  const dot = (
+    <span aria-hidden className="text-textTertiary">
+      ·
+    </span>
+  );
+  const stripInfo = (
+    <div className="relative flex min-w-0 flex-1 items-baseline gap-2 whitespace-nowrap pb-1.5 text-sm bubble:pb-0">
+      {headline && <span className={cn('min-w-0 truncate font-semibold', onAir ? 'text-increase' : 'text-textPrimary')}>{headline}</span>}
+      {headline && viewers !== null && dot}
+      <ViewerCount id="viewers" count={viewers} className="shrink-0 text-textSecondary" />
+      {followersCount && <span className="sr-only">{followersCount}</span>}
     </div>
   );
 
@@ -573,9 +640,10 @@ export function WatchPage() {
       mobileSub={streamNumbers(name ? followers : null, viewers)}
       mobileEnd={rowEnd}
       wide
+      fluid
     >
-      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen)}>
-        <div className={cn('min-w-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-1')}>
+      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen, theater)}>
+        <div ref={fitCell} className={cn('min-w-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-1')}>
           {player}
           {deskStatus}
         </div>
@@ -583,32 +651,39 @@ export function WatchPage() {
         {deskTabs.length > 0 && (
           <div
             id="watch-tabs"
+            style={fitStyle}
             className={cn(
-              'mt-4 min-w-0',
+              'min-w-0',
+              theater ? 'mx-auto mt-2 w-full justify-self-center' : 'mt-4',
               chatSide === 'right' && 'beside:col-start-1 beside:mt-0',
               chatSide === 'left' && 'beside:col-start-2 beside:row-start-2 beside:mt-0',
-              'bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:p-3 bubble:pt-2'
+              theater && 'beside:mt-2',
+              'bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:p-3 bubble:pt-2',
+              theater && 'bubble:py-0'
             )}
           >
-            <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke bubble:border-transparent">
-              {deskTabs.map((t) => {
-                const on = t === deskTab;
-                return (
-                  <button
-                    key={t}
-                    id={`tab-${t}`}
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
-                    tabIndex={on ? 0 : -1}
-                    onClick={() => setTab(t)}
-                    className={cn(TAB, t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
-                  >
-                    {t}
-                  </button>
-                );
-              })}
+            <div ref={theater ? fitTail : undefined} id={theater ? 'watch-strip' : undefined} className={cn('flex border-b border-primaryStroke bubble:border-transparent', theater && 'min-h-12 items-end gap-4 bubble:items-center')}>
+              {theater && stripInfo}
+              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className={cn('flex gap-1', theater ? 'shrink-0' : 'flex-1')}>
+                {deskTabs.map((t) => {
+                  const on = t === deskTab;
+                  return (
+                    <button
+                      key={t}
+                      id={`tab-${t}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
+                      tabIndex={on ? 0 : -1}
+                      onClick={() => setTab(t)}
+                      className={cn(TAB, theater && 'text-sm', t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             {deskTab !== 'chat' && (
               <div id={`panel-${deskTab}`} role="tabpanel" aria-labelledby={`tab-${deskTab}`} className="pt-4">
@@ -637,7 +712,7 @@ export function WatchPage() {
             inert={chatTab && deskTab !== 'chat' ? true : undefined}
             className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
           >
-            <ChatSlot tabbed={chatTab}>
+            <ChatSlot tabbed={chatTab} fluid={theater}>
               <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
             </ChatSlot>
           </div>
