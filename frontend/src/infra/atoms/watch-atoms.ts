@@ -16,6 +16,7 @@ import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import { debug } from '@/infra/debug-flag';
 import { watchBeat } from '@/infra/watch-beat';
+import { currentView, onViewChange, ViewSender, viewFrame } from '@/infra/watch-view';
 import { perfBegin, perfMark } from '@/infra/watch-perf';
 import type { Tone } from '@/shared-components/StatusLine';
 
@@ -215,6 +216,9 @@ let attempt = 0;
 let played = false;
 let videoTracks: (MediaStreamTrack | undefined)[] = [];
 let primary: MediaStream | null = null;
+let viewSender: ViewSender | null = null;
+
+onViewChange((view) => viewSender?.update(view));
 
 function labelOfWatchTrack(trackId: string): string | undefined {
   for (const slot of store.get(slotsAtom)) {
@@ -521,6 +525,10 @@ async function settle(shake: Shake) {
     dropped();
     return;
   }
+  viewSender = new ViewSender((view) => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(viewFrame(view));
+  });
+  viewSender.update(currentView());
   startWatchStats();
 
   connectTimer = setTimeout(() => {
@@ -636,6 +644,8 @@ export function teardown() {
   if (retryTimer) clearTimeout(retryTimer);
   connectTimer = retryTimer = null;
   played = false;
+  viewSender?.reset();
+  viewSender = null;
   store.set(needsTapAtom, false);
   dropEarly();
   if (ws) {

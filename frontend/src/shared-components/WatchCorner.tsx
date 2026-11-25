@@ -27,6 +27,7 @@ import { pipAtom, watchNameAtom } from '@/infra/atoms/watch-state';
 import { api } from '@/infra/api';
 import { useIsMobile } from '@/infra/mobile';
 import { cleanName } from '@/infra/names';
+import { useShowsWatch } from '@/infra/watch-view';
 import { Button } from '@/shared-components/Button';
 import { cornerChatAtom, toggleCornerChat } from '@/shared-components/corner-chat';
 import { CORNER_BADGE, CornerPlayer } from '@/shared-components/CornerPlayer';
@@ -58,11 +59,13 @@ export function WatchCorner() {
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const visible = pip && name !== '' && !isWatchPageOf(pathname, name);
+  useShowsWatch(videoRef, visible, { small: true, fixed: true });
 
   return (
     <CornerPlayer
       prefix="pip"
-      visible={pip && name !== '' && !isWatchPageOf(pathname, name)}
+      visible={visible}
       label={`${name}, picture in picture`}
       name={name}
       to={`/watch/${encodeURIComponent(name)}`}

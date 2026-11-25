@@ -58,6 +58,7 @@ import { KbdDebug } from '@/shared-components/KbdDebug';
 import { api } from '@/infra/api';
 import { cleanName } from '@/infra/names';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
+import { useShowsWatch } from '@/infra/watch-view';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
 import { Calendar } from '@/shared-components/Calendar';
@@ -158,6 +159,7 @@ export function WatchPage() {
   const navigate = useNavigate();
   const { state } = useLocation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerRef = useRef<HTMLDivElement | null>(null);
   const [expectLive] = useState(() => {
     const reason = hintedLive(state) || servedWithCard;
     servedWithCard = false;
@@ -191,6 +193,7 @@ export function WatchPage() {
   const canModerate = useAtomValue(canModerateAtom) || myPage;
   const modActions = canModerate && name ? (line: ChatLine) => <ChatModActions name={name} line={line} me={me} /> : undefined;
   const phase = useAtomValue(watchPhaseAtom);
+  useShowsWatch(playerRef, phase !== 'waiting' && phase !== 'loading', { small: false, fixed: false });
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
   const layers = useAtomValue(watchLayersAtom);
@@ -369,7 +372,7 @@ export function WatchPage() {
           </div>
         )
       ) : (
-        <div data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
+        <div ref={playerRef} data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
           <SceneView
             id="scene"
             className={cn('max-md:rounded-none max-md:border-t-0', mobile && strip.frame)}
