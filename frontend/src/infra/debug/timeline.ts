@@ -1,6 +1,7 @@
 export interface Session {
   id: number;
   name: string;
+  avatar: number | null;
   start: number;
   end: number | null;
 }
@@ -8,6 +9,7 @@ export interface Session {
 export interface Run {
   session: number;
   name: string;
+  avatar: number | null;
   from: number;
   to: number;
   x: number;
@@ -38,9 +40,9 @@ export class SessionLog {
     return last && last.end === null ? last : null;
   }
 
-  begin(name: string, at: number): Session {
+  begin(name: string, at: number, avatar: number | null = null): Session {
     this.end(at);
-    const session: Session = { id: this.next++, name, start: at, end: null };
+    const session: Session = { id: this.next++, name, avatar, start: at, end: null };
     this.list.push(session);
     if (this.list.length > MAX_SESSIONS) this.list.splice(0, this.list.length - MAX_SESSIONS);
     return session;
@@ -73,7 +75,8 @@ export function layout(t: ArrayLike<number>, session: ArrayLike<number>, session
         gaps.push({ x, name: run.name, from: ended?.end ?? t[i - 1]!, to: next?.start ?? t[i]! });
         run.to = i;
       }
-      runs.push({ session: id, name: byId.get(id)?.name ?? '', from: i, to: t.length, x });
+      const s = byId.get(id);
+      runs.push({ session: id, name: s?.name ?? '', avatar: s?.avatar ?? null, from: i, to: t.length, x });
     } else {
       x += Math.max(0, t[i]! - t[i - 1]!);
     }

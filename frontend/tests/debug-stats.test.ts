@@ -46,8 +46,8 @@ test('ticks cover the max in round steps', () => {
 
 test('gaps between sessions collapse and carry the time off', () => {
   const sessions: Session[] = [
-    { id: 4, name: 'dummy-a', start: 1000, end: 3500 },
-    { id: 5, name: 'dummy-b', start: 60_000, end: null }
+    { id: 4, name: 'dummy-a', avatar: 7, start: 1000, end: 3500 },
+    { id: 5, name: 'dummy-b', avatar: null, start: 60_000, end: null }
   ];
   const t = [1000, 2000, 3000, 60_000, 61_000, 63_000];
   const session = [4, 4, 4, 5, 5, 5];
@@ -55,20 +55,20 @@ test('gaps between sessions collapse and carry the time off', () => {
   assert.deepEqual(l.xs, [0, 1000, 2000, 2000, 3000, 5000]);
   assert.equal(l.span, 5000);
   assert.deepEqual(l.runs, [
-    { session: 4, name: 'dummy-a', from: 0, to: 3, x: 0 },
-    { session: 5, name: 'dummy-b', from: 3, to: 6, x: 2000 }
+    { session: 4, name: 'dummy-a', avatar: 7, from: 0, to: 3, x: 0 },
+    { session: 5, name: 'dummy-b', avatar: null, from: 3, to: 6, x: 2000 }
   ]);
   assert.deepEqual(l.gaps, [{ x: 2000, name: 'dummy-a', from: 3500, to: 60_000 }]);
 });
 
 test('an ended last session leaves a gap open to now', () => {
-  const sessions: Session[] = [{ id: 0, name: 'dummy-a', start: 0, end: 2500 }];
+  const sessions: Session[] = [{ id: 0, name: 'dummy-a', avatar: null, start: 0, end: 2500 }];
   const l = layout([0, 1000, 2000], [0, 0, 0], sessions);
   assert.deepEqual(l.gaps, [{ x: 2000, name: 'dummy-a', from: 2500, to: null }]);
 });
 
 test('a session dropped from the list still lays out, timed by its samples', () => {
-  const sessions: Session[] = [{ id: 2, name: 'dummy-b', start: 9000, end: null }];
+  const sessions: Session[] = [{ id: 2, name: 'dummy-b', avatar: null, start: 9000, end: null }];
   const l = layout([1000, 2000, 9000], [1, 1, 2], sessions);
   assert.deepEqual(l.xs, [0, 1000, 1000]);
   assert.equal(l.runs[0]!.name, '');
@@ -88,8 +88,8 @@ test('the session log ends the open session when the next begins', () => {
   log.end(30);
   log.end(40);
   assert.deepEqual(log.list, [
-    { id: 0, name: 'dummy-a', start: 10, end: 20 },
-    { id: 1, name: 'dummy-b', start: 20, end: 30 }
+    { id: 0, name: 'dummy-a', avatar: null, start: 10, end: 20 },
+    { id: 1, name: 'dummy-b', avatar: null, start: 20, end: 30 }
   ]);
   assert.equal(log.current, null);
   log.clear();
