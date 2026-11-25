@@ -1,12 +1,13 @@
 import { type PointerEvent as ReactPointerEvent, useState } from 'react';
 
-import { niceTicks } from '@/infra/debug/stats';
+import type { Path } from '@/infra/debug/rings';
+import { niceTicks, summarize } from '@/infra/debug/stats';
 import { hoverWords } from '@/infra/debug/quality-header';
 import { runAt, sessionColor } from '@/infra/debug/session-colors';
 import type { Gap, Layout, Run } from '@/infra/debug/timeline';
 import { useWidth } from '@/shared-components/debug/useWidth';
 import { Face } from '@/shared-components/Face';
-import { Tooltip } from '@/shared-components/Tooltip';
+import { TIP_CARD, Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 export interface QualitySeries {
@@ -17,10 +18,18 @@ export interface QualitySeries {
   values: readonly number[];
 }
 
+export interface QualityDetails {
+  width: readonly number[];
+  height: readonly number[];
+  dropped: readonly number[];
+  route: readonly Path[];
+}
+
 export interface QualityTimeline {
   t: readonly number[];
   layout: Layout;
   series: readonly QualitySeries[];
+  details?: QualityDetails;
 }
 
 const PAD_L = 4;
@@ -59,6 +68,68 @@ function linePath(values: readonly number[], run: Run, xs: readonly number[], x:
   return d;
 }
 
+const CARD_GAP = 12;
+
+function spread(values: readonly number[], run: Run): [number, number, number] | null {
+  const seen = values.slice(run.from, run.to).filter((v) => Number.isFinite(v));
+  if (seen.length === 0) return null;
+  const s = summarize(seen);
+  return [s.min, s.median, s.max];
+}
+
+function extrasAt(details: QualityDetails | undefined, at: number): string[] {
+  if (!details) return [];
+  const out: string[] = [];
+  const w = details.width[at];
+  const h = details.height[at];
+  if (w && h) out.push(`res ${w}x${h}`);
+  const dropped = details.dropped[at];
+  if (dropped !== undefined && Number.isFinite(dropped)) out.push(`dropped ${dropped.toFixed(1)}/s`);
+  const route = details.route[at];
+  if (route) out.push(route);
+  return out;
+}
+
+function HoverCard({ timeline, at, px, width }: { timeline: QualityTimeline; at: number; px: number; width: number }) {
+  const { layout, series, t, details } = timeline;
+  const run = runAt(layout.runs, at);
+  const color = sessionColor(run?.session ?? 0);
+  const extras = extrasAt(details, at);
+  const flip = px > width / 2;
+  return (
+    <div
+      id="quality-hover"
+      role="tooltip"
+      className={cn('pointer-events-none absolute z-10 whitespace-nowrap', TIP_CARD)}
+      style={{ top: NAMES_H, ...(flip ? { right: width - px + CARD_GAP } : { left: px + CARD_GAP }) }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span aria-hidden className={cn('h-2 w-2 shrink-0 bg-current', color)} />
+        {run?.name && <Face name={run.name} version={run.avatar} className="h-3.5 w-3.5 text-[8px]" />}
+        <span>{run?.name || 'unknown'}</span>
+        <span className="font-mono font-normal text-textTertiary">{clock(t[at]!)}</span>
+      </div>
+      <div className="mt-1 grid grid-cols-[auto_auto_auto] items-baseline gap-x-3 font-mono font-normal tabular-nums">
+        {series.map((s) => {
+          const range = run ? spread(s.values, run) : null;
+          return (
+            <div key={s.key} data-hover-metric={s.key} className="contents">
+              <span className="text-textSecondary">{s.label}</span>
+              <span className="text-right text-textPrimary">
+                {fixed(s.values[at], s.digits)}
+                {s.unit && <span className="text-textTertiary"> {s.unit}</span>}
+              </span>
+              <span className="text-textTertiary">{range ? `${fixed(range[0], s.digits)} / ${fixed(range[1], s.digits)} / ${fixed(range[2], s.digits)}` : '-'}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-right font-mono text-[10px] font-normal text-textTertiary">min / med / max</div>
+      {extras.length > 0 && <div className="mt-0.5 font-mono font-normal text-textTertiary">{extras.join(' · ')}</div>}
+    </div>
+  );
+}
+
 function Charts({ timeline }: { timeline: QualityTimeline }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -75,6 +146,10 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
     if (!frozen) setFrozen(timeline);
     const left = e.clientX - e.currentTarget.getBoundingClientRect().left;
     const want = ((left - PAD_L) / plot) * layout.span;
+    if (want < layout.xs[0]! - (BAR_W / plot) * layout.span) {
+      setHover(null);
+      return;
+    }
     let best = 0;
     for (let i = 1; i < layout.xs.length; i++) if (Math.abs(layout.xs[i]! - want) < Math.abs(layout.xs[best]! - want)) best = i;
     setHover(best);
@@ -171,6 +246,7 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
             );
           })}
           {at !== null && <span aria-hidden className="pointer-events-none absolute bottom-0 w-px bg-textTertiary" style={{ left: x(layout.xs[at]!), top: NAMES_H }} />}
+          {at !== null && <HoverCard timeline={frozen ?? timeline} at={at} px={x(layout.xs[at]!)} width={width} />}
         </div>
       )}
     </div>
