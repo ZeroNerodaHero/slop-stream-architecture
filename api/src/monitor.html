@@ -166,9 +166,9 @@
   .dr-stats { flex: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 1px; background: var(--stroke); border-bottom: 1px solid var(--stroke); }
   .dr-stats div { background: var(--bg2); padding: 5px 10px; min-width: 0; }
   .dr-stats b { display: block; font-size: 10px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
-  .dr-stats b .info { margin-left: 4px; }
-  .info { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; padding: 0; border: 1px solid var(--t3); border-radius: 50%; background: none; color: var(--t3); font: 600 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: none; letter-spacing: 0; vertical-align: 1px; cursor: help; }
-  .info:hover, .info:focus-visible, .info.on { color: var(--t1); border-color: var(--blue); outline: none; }
+  .tipped { cursor: help; text-decoration: underline dotted rgb(110 118 132 / .6); text-decoration-thickness: 1px; text-underline-offset: 3px; transition: color .12s ease, text-decoration-color .12s ease; }
+  .tipped:hover, .tipped.on { color: var(--t2); text-decoration-color: rgb(154 163 178 / .8); }
+  .tipped:focus-visible { outline: 1px solid var(--blue); outline-offset: 2px; color: var(--t2); }
   .hint { position: fixed; z-index: 50; max-width: 260px; pointer-events: none; background: var(--bg); border: 1px solid var(--t3); padding: 6px 8px; font-size: 12px; line-height: 1.45; color: var(--t1); white-space: normal; }
   .hint b { display: block; font-size: 10px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
   @supports not selector(::-webkit-scrollbar) {
@@ -182,7 +182,7 @@
   ::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .1); border-radius: 3px; }
   :hover::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .25); }
   .scrolling::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / .4); }
-  .dr-stats span { display: block; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dr-stats > div > span { display: block; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dr-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 10px; align-content: start; }
   .dr-body .tile.wide { grid-column: 1 / -1; }
   .dr-body .tile canvas { flex: none; height: 110px; }
@@ -555,12 +555,11 @@
     hintAt = null;
     $hint.hidden = true;
   }
-  function infoButton(k, tip) {
-    const b = el('button', 'info', 'i');
-    b.type = 'button';
+  function tipped(k, tip) {
+    const b = el('span', 'tipped', k);
+    b.tabIndex = 0;
     b.dataset.k = k;
     b.dataset.tip = tip;
-    b.setAttribute('aria-label', `about ${k}`);
     b.setAttribute('aria-description', tip);
     b.setAttribute('aria-describedby', 'hint');
     return b;
@@ -570,19 +569,19 @@
   }
   function keepHint(root, held) {
     if (!held) return;
-    const b = [...root.querySelectorAll('.info')].find((x) => x.dataset.k === held.k);
+    const b = [...root.querySelectorAll('.tipped')].find((x) => x.dataset.k === held.k);
     if (!b) { hideHint(); return; }
     if (held.focused) b.focus({ preventScroll: true });
     showHint(b);
   }
-  document.addEventListener('pointerover', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) showHint(b); });
+  document.addEventListener('pointerover', (e) => { const b = e.target.closest && e.target.closest('.tipped'); if (b) showHint(b); });
   document.addEventListener('pointerout', (e) => {
-    const b = e.target.closest && e.target.closest('.info');
+    const b = e.target.closest && e.target.closest('.tipped');
     if (b && b === hintAt && !b.contains(e.relatedTarget) && document.activeElement !== b) hideHint();
   });
-  document.addEventListener('focusin', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) showHint(b); });
+  document.addEventListener('focusin', (e) => { const b = e.target.closest && e.target.closest('.tipped'); if (b) showHint(b); });
   document.addEventListener('focusout', (e) => {
-    const b = e.target.closest && e.target.closest('.info');
+    const b = e.target.closest && e.target.closest('.tipped');
     if (b && b === hintAt && !b.matches(':hover')) hideHint();
   });
   addEventListener('keydown', (e) => {
@@ -1922,8 +1921,8 @@
     const stats = el('div', 'dr-stats');
     const stat = (k, val, cls, tip) => {
       const d = el('div');
-      const b = el('b', null, k);
-      if (tip) b.append(infoButton(k, tip));
+      const b = el('b');
+      b.append(tip ? tipped(k, tip) : document.createTextNode(k));
       d.append(b, el('span', cls, val));
       stats.append(d);
     };
