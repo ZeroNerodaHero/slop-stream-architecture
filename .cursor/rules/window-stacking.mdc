@@ -1,0 +1,35 @@
+---
+description: Every floating or draggable window registers with the shared window stack and comes to the front on pointerdown; never hardcode a z-index for a window
+globs: frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# Windows stack, last clicked on top
+
+A floating or draggable window is anything that sits over the page on its own: the debug windows (messages, timings, quality), the floating stream chat (`ChatSlot` in modal), the DM window (`FriendChat`), the corner players (`MiniPlayer`), the notifications panel, and any new one.
+
+Every one of them:
+
+- registers with the shared stack in `frontend/src/infra/window-stack.ts` through `useStackedWindow(ref, id, on)` from `frontend/src/shared-components/useStackedWindow.ts` (debug windows get it through `useDialogBox`);
+- comes to the front on `pointerdown` anywhere inside it, and when it opens;
+- never carries a `z-*` class or a `zIndex` of its own. The stack paints `z-index` as `STACK_BASE + position`.
+
+A new window kind adds its id to `STACK_IDS`. The order holds each id once, so it never grows past the number of kinds, and each window drops out when it unmounts.
+
+The z scheme:
+
+- the page and its sticky bars: below 50
+- windows: `STACK_BASE` (50) up to below `STACK_CEILING` (60), one step per window kind
+- tooltips, menus, pickers, hover cards and dropdowns portaled to the body: `z-[60]`
+- dropdowns drawn inside a window stay inside it, so they are always above that window
+- modals (`showModal`, Settings): the browser's top layer, above everything
+
+If the window kinds outgrow the band, raise `STACK_CEILING` and the tooltip and menu `z-[60]` together. The `window-stack` test fails if they drift apart.
+
+```tsx
+const ref = useRef<HTMLElement | null>(null);
+useStackedWindow(ref, 'dm', !mobile);
+return <section ref={ref} className="fixed flex">…</section>;
+```
+
+Not this: `className="fixed z-50"` on a window, or `style={{ zIndex: 55 }}`.

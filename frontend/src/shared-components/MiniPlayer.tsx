@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { Component, type ErrorInfo, lazy, type ReactNode } from 'react';
+import { Component, type ErrorInfo, lazy, type ReactNode, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
@@ -10,6 +10,7 @@ import { useIsMobile } from '@/infra/mobile';
 import { report } from '@/infra/report';
 import { cn } from '@/utils/cn';
 import { isLivePage } from '@/shared-components/corner-chat';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { WhenUsed } from '@/shared-components/WhenUsed';
 
 class CornerCatch extends Component<{ at: string; children: ReactNode }, { failed: boolean; at: string }> {
@@ -59,11 +60,14 @@ export function MiniPlayer() {
   const sidebarOpen = useAtomValue(friendsOpenAtom);
   const mobile = useIsMobile();
   const { pathname } = useLocation();
+  const ref = useRef<HTMLDivElement | null>(null);
+  useStackedWindow(ref, 'corner');
   return (
     <div
+      ref={ref}
       id="corner-players"
       className={cn(
-        'pointer-events-none fixed bottom-6 z-50 flex flex-col items-end gap-3',
+        'pointer-events-none fixed bottom-6 flex flex-col items-end gap-3',
         side === 'right' && !mobile ? (sidebarOpen ? 'right-[324px]' : 'right-20') : 'right-6'
       )}
     >

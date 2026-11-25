@@ -76,6 +76,7 @@ import { ProfileLink, profilePath, useShowProfile } from '@/shared-components/Pr
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { IN_PILL, INPUT, INPUT_BUTTON, PILL } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
@@ -600,6 +601,7 @@ export function FriendChat() {
     return kept && fitted(kept);
   });
   const ref = useRef<HTMLElement | null>(null);
+  useStackedWindow(ref, 'dm', open && !mobile);
   const input = useRef<HTMLInputElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -1200,7 +1202,7 @@ export function FriendChat() {
       style={style}
       className={panelClassName(
         cn(
-          'group fixed z-50 flex text-base',
+          'group fixed flex text-base',
           !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-[324px]' : 'left-[324px]')
         )
       )}
