@@ -473,7 +473,7 @@ export function EquesLine({ message, at, attrs }: { message: string; at: number;
           </span>
         </>
       }
-      face={<img src="/icon-192.png?v=2" alt={EQUES} draggable={false} className="h-8 w-8 shrink-0 border border-primaryStroke object-cover" />}
+      face={<img src="/icon-192.png?v=3" alt={EQUES} draggable={false} className="h-8 w-8 shrink-0 border border-primaryStroke object-cover" />}
       words={
         <span className="whitespace-pre-wrap">
           <LinkedText text={message} />
