@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
-use crate::agent::{round, Container, Sample};
+use crate::agent::{round, ApiHealth, ApiRun, Container, Sample};
 use crate::timings;
 
 const PAGE: &str = include_str!("monitor.html");
@@ -26,6 +26,8 @@ const STORE_FILE: &str = "monitor.json";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEP_HOURS: usize = 24 * 7;
 const KEEP_EVENTS: usize = 200;
+const KEEP_POLLS: usize = 10;
+const POLL_PATH: &str = "/api/health";
 const KEEP_ERRORS: usize = 100;
 const ERRORS_PULL: usize = 50;
 const METRICS_FILE: &str = "metrics.json";
@@ -93,6 +95,7 @@ struct TargetState {
     reason: Option<String>,
     health: Option<Value>,
     hours: VecDeque<Hour>,
+    recent: VecDeque<ApiRun>,
     events: VecDeque<Event>,
     errors: Vec<Value>,
     errors_status: Option<String>,
@@ -286,7 +289,7 @@ struct Probe {
 
 async fn probe(client: &reqwest::Client, url: &str) -> Probe {
     let t0 = Instant::now();
-    let res = client.get(format!("{url}/api/health")).send().await;
+    let res = client.get(format!("{url}{POLL_PATH}")).send().await;
     let latency_ms = t0.elapsed().as_millis() as u64;
     match res {
         Err(e) => Probe { ok: false, status: None, latency_ms, body: None, reason: Some(error_text(&e)) },
@@ -406,6 +409,8 @@ fn apply(t: &mut TargetState, p: Probe, now: DateTime<Utc>, down_after: u32) -> 
         }
     }
 
+    t.recent.push_front(ApiRun { at: Some(now), ok: p.ok, status: p.status, ms: p.latency_ms, error: p.reason.as_deref().map(crate::agent::api_error) });
+    t.recent.truncate(KEEP_POLLS);
     t.checked_at = Some(now);
     t.latency_ms = Some(p.latency_ms);
     t.http_status = p.status;
@@ -737,11 +742,28 @@ struct SeriesQuery {
     range: Option<String>,
 }
 
+fn polled(app: &App, store: &Store, target: &str) -> Option<ApiHealth> {
+    let t = store.targets.iter().find(|t| t.name == target).filter(|t| !t.recent.is_empty())?;
+    Some(ApiHealth { from: "monitor".into(), path: POLL_PATH.into(), every_secs: app.cfg.check_every.as_secs(), runs: t.recent.iter().cloned().collect() })
+}
+
+fn with_poll(s: &Sample, poll: Option<ApiHealth>) -> Sample {
+    let mut s = s.clone();
+    if let Some(poll) = poll {
+        let i = s.containers.iter().position(|c| c.name == "api").or_else(|| s.containers.iter().position(|c| c.service.as_deref() == Some("api")));
+        if let Some(c) = i.map(|i| &mut s.containers[i]) {
+            c.api = Some(poll);
+        }
+    }
+    s
+}
+
 async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Response {
     let range = q.range.unwrap_or_else(|| "1h".into());
     let Some(tier) = TIERS.iter().position(|(name, _, _)| *name == range) else {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "range: 1h, 24h or 7d" }))).into_response();
     };
+    let poll = polled(&app, &*app.store.lock().await, &q.target);
     let m = app.metrics.lock().await;
     let Some(h) = m.get(&q.target) else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
@@ -751,7 +773,7 @@ async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Respons
     out["range"] = json!(range);
     out["bucket_secs"] = json!(TIERS[tier].1);
     out["now"] = json!(Utc::now());
-    out["latest"] = json!(h.latest);
+    out["latest"] = json!(h.latest.as_ref().map(|l| with_poll(l, poll)));
     out["status"] = json!(h.status);
     out["checked_at"] = json!(h.checked_at);
     out["agent"] = json!(h.agent);
@@ -764,12 +786,13 @@ struct TargetQuery {
 }
 
 async fn architecture(State(app): State<App>, Query(q): Query<TargetQuery>) -> Response {
+    let poll = polled(&app, &*app.store.lock().await, &q.target);
     let m = app.metrics.lock().await;
     let Some(h) = m.get(&q.target) else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
     };
     let mut out = match &h.latest {
-        Some(s) => crate::architecture::graph(s),
+        Some(s) => crate::architecture::graph(&with_poll(s, poll)),
         None => json!({ "at": null, "nodes": [], "edges": [], "networks": [] }),
     };
     out["target"] = json!(q.target);
@@ -1062,6 +1085,23 @@ mod tests {
         let (c, f) = t.hours.iter().fold((0, 0), |(c, f), h| (c + h.checks, f + h.failed));
         assert_eq!((c, f), (5, 3));
         assert_eq!(uptime(&t.hours, 24), Some(40.0));
+    }
+
+    #[test]
+    fn the_poll_keeps_its_last_ten_newest_first_and_lands_on_the_api_container() {
+        let mut t = TargetState::default();
+        for i in 0..12 {
+            apply(&mut t, if i == 11 { dead() } else { ok(10 + i, "aaa") }, at(i as i64 * 15), 3);
+        }
+        assert_eq!(t.recent.len(), KEEP_POLLS);
+        assert!(!t.recent[0].ok && t.recent[0].error.as_deref() == Some("no answer in 5s"));
+        assert!(t.recent[1].ok && t.recent[1].ms == 10 && t.recent[1].at == Some(at(150)));
+        let poll = ApiHealth { from: "monitor".into(), path: POLL_PATH.into(), every_secs: 15, runs: t.recent.iter().cloned().collect() };
+        let s = Sample { containers: vec![Container { name: "stream-api-1".into(), service: Some("api".into()), ..Default::default() }, Container { name: "chat".into(), ..Default::default() }], ..Default::default() };
+        let out = with_poll(&s, Some(poll));
+        assert_eq!(out.containers[0].api.as_ref().map(|a| a.runs.len()), Some(KEEP_POLLS));
+        assert!(out.containers[1].api.is_none());
+        assert!(with_poll(&s, None).containers.iter().all(|c| c.api.is_none()));
     }
 
     #[test]

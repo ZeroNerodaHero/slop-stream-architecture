@@ -13,7 +13,7 @@
     --bg: rgb(15 17 21); --bg2: rgb(24 27 34); --bg3: rgb(32 36 46);
     --t1: rgb(242 243 245); --t2: rgb(154 163 178); --t3: rgb(110 118 132);
     --blue: rgb(79 139 255); --stroke: rgb(42 47 58);
-    --up: rgb(63 185 80); --down: rgb(248 81 73); --warn: rgb(242 204 96); --violet: rgb(188 140 255);
+    --up: rgb(63 185 80); --down: rgb(248 81 73); --warn: rgb(242 204 96); --orange: rgb(240 140 90); --violet: rgb(188 140 255);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -64,7 +64,7 @@
   button.name { background: none; border: 0; padding: 0; }
   button.name:hover { color: var(--blue); }
   .pill { padding: 1px 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: rgb(15 17 21); }
-  .pill.up, .pill.ok { background: var(--up); } .pill.down, .pill.bad { background: var(--down); } .pill.unknown, .pill.done, .pill.outside { background: var(--t3); } .pill.warn { background: var(--warn); }
+  .pill.up, .pill.ok { background: var(--up); } .pill.down, .pill.bad { background: var(--down); } .pill.unknown, .pill.done, .pill.outside, .pill.none { background: var(--t3); } .pill.warn { background: var(--warn); }
   .bar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin: 10px 0 4px; }
   .bar i { display: block; height: 8px; background: var(--bg3); }
   .bar i.ok { background: var(--up); } .bar i.some { background: var(--warn); } .bar i.bad { background: var(--down); }
@@ -229,8 +229,32 @@
   .arch .node:hover rect.box, .arch .node.pinned rect.box { fill: rgb(40 45 58); }
   .arch .node.pinned rect.box { stroke-width: 2; }
   .arch .node text.sub { fill: var(--t2); font-size: 11px; }
+  .arch .node text.nm { font-size: 12px; }
+  .arch .divide { stroke: var(--stroke); }
+  .arch text.mlab { font-size: 9px; fill: var(--t3); letter-spacing: .05em; }
+  .arch text.mval { font-size: 10.5px; fill: var(--t2); font-variant-numeric: tabular-nums; }
+  .arch rect.seg:not(.on) { fill: rgb(255 255 255 / .08); }
+  .arch .s-done rect.seg:not(.on) { fill: rgb(255 255 255 / .04); }
+  .h-ok { background: var(--up); fill: var(--up); } .h-warn { background: var(--orange); fill: var(--orange); } .h-bad { background: var(--down); fill: var(--down); }
+  .h-none, .h-off { background: var(--t3); fill: var(--t3); } .h-off { opacity: .45; }
+  .ht-ok, .arch text.ht-ok { color: var(--up); fill: var(--up); } .ht-warn, .arch text.ht-warn { color: var(--orange); fill: var(--orange); } .ht-bad, .arch text.ht-bad { color: var(--down); fill: var(--down); }
+  .ht-none, .ht-off, .arch text.ht-none, .arch text.ht-off { color: var(--t3); fill: var(--t3); }
+  .hdots { display: inline-flex; gap: 3px; margin-right: 6px; vertical-align: 0; }
+  span.hd { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  span.hd.tipped { text-decoration: none; }
+  .hrows { display: grid; gap: 6px; font-size: 12px; }
+  .hhead { display: flex; align-items: center; gap: 6px; }
+  .hhead b { width: 46px; font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
+  .hsum { margin-left: 14px; color: var(--t2); overflow-wrap: anywhere; }
+  .hruns { display: flex; align-items: center; gap: 2px; margin: 3px 0 0 14px; }
+  .hruns i { display: block; width: 8px; height: 8px; background: var(--up); }
+  .hruns i.bad { background: var(--down); }
+  .hruns span { margin-left: 6px; font-size: 11px; }
+  .hout { margin: 2px 0 0 14px; font-size: 11px; color: var(--t3); overflow-wrap: anywhere; white-space: normal; user-select: text; }
+  .ctitle { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .arch .s-ok rect.box { stroke: var(--up); } .arch .s-ok rect.st { fill: var(--up); }
-  .arch .s-warn rect.box { stroke: var(--warn); } .arch .s-warn rect.st { fill: var(--warn); }
+  .arch .s-warn rect.box { stroke: var(--orange); } .arch .s-warn rect.st { fill: var(--orange); }
+  .arch .s-none rect.box { stroke: var(--t3); }
   .arch .s-bad rect.box { stroke: var(--down); } .arch .s-bad rect.st { fill: var(--down); }
   .arch .s-done rect.box { stroke: var(--t3); stroke-dasharray: 3 3; } .arch .s-done rect.st { fill: var(--t3); } .arch .s-done text { fill: var(--t2); }
   .arch .s-outside rect.box { stroke: var(--blue); fill: var(--bg2); } .arch .s-outside rect.st { fill: var(--blue); }
@@ -1012,6 +1036,90 @@
     return [bar, guard('containers', () => containerTable(now))];
   }
 
+  const SLOW_MS = { agent: 500, monitor: 1500 };
+  const G_RANK = { ok: 0, off: 0, none: 1, warn: 2, bad: 3 };
+  const tightBytes = (v) => (!has(v) ? '—' : v >= 10 * 1024 && v < 1024 ** 3 ? `${Math.round(v / (v >= 1024 ** 2 ? 1024 ** 2 : 1024))} ${v >= 1024 ** 2 ? 'MiB' : 'KiB'}` : bytes(v));
+  const agoSecs = (ref, iso) => (iso && has(ref) ? Math.max(0, Math.round((ref - Date.parse(iso)) / 1000)) : null);
+  const agoWord = (s) => (s === null ? 'never' : `${human(s)} ago`);
+  function dockerHealth(c, at, now) {
+    if (c.state !== 'running') return { g: 'off', word: c.state, tip: `not running (${c.state}), so docker runs no check`, sum: '', runs: [] };
+    if (!c.health) return { g: 'none', word: 'no check', tip: 'no healthcheck in its compose service or its image', sum: 'no healthcheck in its compose service or its image', runs: [] };
+    const k = obj(c.check), runs = list(k.runs), last = runs[0], every = k.interval_secs || null, streak = k.failing_streak || 0;
+    const stale = last && every ? agoSecs(at, last.at) > 2 * every : false;
+    const g = c.health === 'unhealthy' ? 'bad' : c.health === 'starting' || streak > 0 || stale ? 'warn' : 'ok';
+    const why = [];
+    if (streak > 0 && c.health !== 'unhealthy') why.push(`${streak} failed in a row`);
+    if (stale) why.push('no check in over twice its interval');
+    const facts = [
+      last ? `last check ${agoWord(agoSecs(now, last.at))}` : c.check ? 'no check has run yet' : 'this box\u2019s agent sends no check details yet',
+      every ? `every ${human(Math.round(every))}` : '',
+      streak ? `failing streak ${streak}` : '',
+      last && has(last.exit) ? `exit ${last.exit}` : '',
+    ].filter(Boolean);
+    const sum = [...why, ...facts].join(' · ');
+    return {
+      g, word: c.health, sum, tip: `${c.health}${sum ? ` · ${sum}` : ''}${last && last.output ? ` · “${last.output}”` : ''}`,
+      runs: runs.map((r) => ({ ok: r.exit === 0, text: `${agoWord(agoSecs(now, r.at))} · exit ${has(r.exit) ? r.exit : '?'}${has(r.ms) ? ` · ${r.ms} ms` : ''}${r.output ? ` · ${r.output}` : ''}` })),
+    };
+  }
+  function apiHealth(c, at, now, serverNow) {
+    if (c.state !== 'running') return { g: 'off', word: '—', tip: `not running (${c.state})`, sum: '', runs: [] };
+    const a = c.api;
+    if (!a || !list(a.runs).length) return { g: 'none', word: 'no endpoint', tip: 'no http health endpoint watched for it: the api\u2019s is the monitor\u2019s own poll, the others come from HEALTH_FROM on the box\u2019s agent', sum: 'none watched (the api\u2019s is the monitor\u2019s poll; the rest is HEALTH_FROM on the box\u2019s agent)', runs: [] };
+    const runs = a.runs, last = runs[0], every = a.every_secs || 15;
+    const who = a.from === 'monitor' ? 'the monitor' : 'the box\u2019s agent';
+    const age = agoSecs(a.from === 'monitor' ? serverNow : at, last.at);
+    const fails = runs.filter((r) => !r.ok).length;
+    const slow = last.ok && last.ms > (SLOW_MS[a.from] || 500);
+    const stale = age !== null && age > 2 * every + 5;
+    const g = !last.ok ? 'bad' : stale || slow || fails ? 'warn' : 'ok';
+    const word = !last.ok ? (last.status ? String(last.status) : 'down') : stale ? 'stale' : slow ? 'slow' : 'ok';
+    const why = [];
+    if (!last.ok && last.error) why.push(last.error);
+    if (slow) why.push(`slow, over ${SLOW_MS[a.from] || 500} ms`);
+    if (stale) why.push('no check in over twice its interval');
+    if (fails) why.push(`${fails} of the last ${runs.length} failed`);
+    const facts = [`${who} GETs ${a.path} every ${human(every)}`, `last ${agoWord(agoSecs(now, last.at))}${last.status ? `, ${last.status}` : ''} in ${ms(last.ms)}`];
+    const sum = [...why, ...facts].join(' · ');
+    return {
+      g, word, sum, tip: `${word} · ${sum}`,
+      runs: runs.map((r) => ({ ok: r.ok, text: `${agoWord(agoSecs(now, r.at))} · ${r.ok ? r.status || 'ok' : r.error || r.status || 'failed'} · ${ms(r.ms)}` })),
+    };
+  }
+  function healthDot(label, h) {
+    const d = el('span', `hd h-${h.g} tipped`);
+    d.dataset.k = label;
+    d.dataset.tip = h.tip;
+    d.setAttribute('role', 'img');
+    d.setAttribute('aria-label', `${label}: ${h.tip}`);
+    return d;
+  }
+  function healthBlock(dh, ah) {
+    const box = el('div', 'hrows');
+    for (const [label, h] of [['docker', dh], ['http', ah]]) {
+      const row = el('div', 'hrow');
+      const head = el('div', 'hhead');
+      head.append(el('span', `hd h-${h.g}`), el('b', null, label), el('span', `ht-${h.g}`, h.word));
+      row.append(head);
+      if (h.sum) row.append(el('div', 'hsum', h.sum));
+      if (h.runs.length) {
+        const strip = el('div', 'hruns');
+        strip.setAttribute('aria-label', `the last ${h.runs.length} results, newest first`);
+        for (const r of h.runs) {
+          const i = el('i', r.ok ? 'ok' : 'bad');
+          i.title = r.text;
+          strip.append(i);
+        }
+        const failed = h.runs.find((r) => !r.ok);
+        strip.append(el('span', 'dim', `last ${h.runs.length}, newest first`));
+        row.append(strip);
+        if (failed) row.append(el('div', 'hout mono', `last failure: ${failed.text}`));
+      }
+      box.append(row);
+    }
+    return box;
+  }
+
   function containerTable(now) {
     const boxes = boxesShown();
     const multi = boxes.length > 1;
@@ -1039,8 +1147,10 @@
       const c = seriesCache.get(box);
       if (c && c.error) notes.push(`${box}: ${c.error}`);
       if (s && s.status) notes.push(`${box}: ${s.status}`);
+      const at = s && s.latest ? Date.parse(s.latest.at) : NaN, serverNow = s && s.now ? Date.parse(s.now) : now;
       for (const ct of (s && s.latest && s.latest.containers) || []) {
-        if (words.every((w) => `${box} ${ct.name} ${ct.service || ''} ${ct.project || ''} ${ct.image || ''} ${ct.state}`.toLowerCase().includes(w))) rows.push({ box, c: ct, s });
+        if (!words.every((w) => `${box} ${ct.name} ${ct.service || ''} ${ct.project || ''} ${ct.image || ''} ${ct.state}`.toLowerCase().includes(w))) continue;
+        rows.push({ box, c: ct, s, dh: dockerHealth(ct, at, now), ah: apiHealth(ct, at, now, serverNow) });
       }
     }
     const split = el('div', 'split grow');
@@ -1057,7 +1167,7 @@
     const ccols = [
       ...(multi ? [{ id: 'box', label: 'box', get: (r) => r.box }] : []),
       { id: 'name', label: 'container', get: (r) => r.c.name },
-      { id: 'state', label: 'state', get: (r) => (STATE_RANK[r.c.state] ?? 7) * 10 + (r.c.state === 'running' && r.c.health && r.c.health !== 'healthy' ? 1 : 0) },
+      { id: 'state', label: 'state', get: (r) => (STATE_RANK[r.c.state] ?? 7) * 10 + Math.max(G_RANK[r.dh.g], G_RANK[r.ah.g]) },
       { id: 'up', label: 'up', num: true, get: (r) => (r.c.up_since && r.c.state === 'running' ? secsSince(r.c.up_since, now) : null) },
       { id: 'cpu', label: 'cpu', num: true, get: (r) => r.c.cpu_pct },
       { id: 'mem', label: 'memory', num: true, get: (r) => r.c.mem_bytes },
@@ -1106,7 +1216,12 @@
       if (c.service && c.service !== c.name) name.append(el('span', 'dim', ` ${c.service}`));
       if (c.project && c.project !== 'stream') name.append(el('span', 'dim', ` (${c.project})`));
       name.title = c.image || '';
-      const st = el('td', c.state === 'exited' && c.exit_code === 0 ? 'dim' : `st-${c.state}`, c.state + (c.health && c.health !== 'healthy' ? ` · ${c.health}` : '') + (c.state === 'exited' && has(c.exit_code) ? ` (${c.exit_code})` : ''));
+      const st = el('td', 'hcell');
+      const dots = el('span', 'hdots');
+      dots.append(healthDot('docker health', r.dh), healthDot('http health', r.ah));
+      st.append(dots, c.state === 'running'
+        ? el('span', `ht-${r.dh.g}`, r.dh.word)
+        : el('span', c.state === 'exited' && c.exit_code === 0 ? 'dim' : `st-${c.state}`, c.state + (c.state === 'exited' && has(c.exit_code) ? ` (${c.exit_code})` : '')));
       if (c.restarts > 0) st.append(el('span', 'note', ` · ${c.restarts} restart${c.restarts > 1 ? 's' : ''}`));
       const cell = (metric, text, v, color, max) => {
         const td = el('td', 'cell mono');
@@ -1136,7 +1251,10 @@
     const cs = (s.containers || {})[c.name] || {};
     const title = el('div', 'row');
     title.append(el('h2', null, `${c.name}${multi ? ` · ${picked.box}` : ''}`), el('span', c.state === 'running' ? 'st-running' : `st-${c.state}`, c.state));
-    right.append(title);
+    const head = el('div', 'ctitle');
+    head.append(title, healthBlock(picked.dh, picked.ah));
+    right.append(head);
+    requestAnimationFrame(() => { if (hintAt && !hintAt.isConnected) hideHint(); });
     const src = s;
     const det = (metric, spec) => keptChart(picked.box, `${c.name}\u0000detail-${metric}`, s, spec);
     right.append(
@@ -1149,9 +1267,9 @@
     return split;
   }
 
-  const nodeState = (n) => {
+  const nodeState = (n, at) => {
     if (n.outside) return 'outside';
-    if (n.state === 'running') return n.health === 'unhealthy' ? 'bad' : n.health === 'starting' ? 'warn' : 'ok';
+    if (n.state === 'running') return dockerHealth(n, at, at).g;
     if (n.state === 'exited' && n.exit_code === 0) return 'done';
     return ['restarting', 'created', 'paused'].includes(n.state) ? 'warn' : 'bad';
   };
@@ -1223,7 +1341,7 @@
     };
     key2.append(
       sample('d-in', DIR_NAME.in), sample('d-out', DIR_NAME.out), sample('d-inter', DIR_NAME.inter), sample('d-inter v-depends_on', 'depends_on'),
-      sample('cut', 'no shared network'), el('span', 'g-ok', '■ running'), el('span', 'g-warn', '■ starting'), el('span', 'g-bad', '■ stopped'), el('span', 'dim', '■ exit 0')
+      sample('cut', 'no shared network'), el('span', 'ht-ok', '■ healthy'), el('span', 'ht-warn', '■ starting, failing or stale'), el('span', 'ht-bad', '■ unhealthy or stopped'), el('span', 'ht-none', '■ no healthcheck'), el('span', 'dim', '▫ exit 0')
     );
     left.append(key2);
     shell.append(left, side);
@@ -1295,7 +1413,7 @@
         return;
       }
       const head = el('div', 'np-head');
-      const st = nodeState(n);
+      const st = nodeState(n, Date.parse(data.at));
       head.append(el('span', 'name', n.name));
       head.append(el('span', `pill ${st}`, n.outside ? 'outside' : n.state === 'running' ? (n.health || 'running') : n.state));
       if (n.up_since && n.state === 'running') head.append(el('span', 'muted', `up ${human(secsSince(n.up_since, when))}`));
@@ -1306,6 +1424,7 @@
       side.append(head);
       if (n.description) side.append(el('p', 'desc', n.description));
       if (!n.outside) {
+        side.append(el('h3', null, 'health'), healthBlock(dockerHealth(n, Date.parse(data.at), when), apiHealth(n, Date.parse(data.at), when, Date.parse(data.now))));
         side.append(el('h3', null, 'usage'));
         if (n.state === 'running') {
           const cpus = data.host.cpus, total = data.host.mem_total;
@@ -1366,104 +1485,208 @@
   }
 
   function archGraph(t, data, netColor, now, onPin) {
-    const COLW = 196, NODEW = 148, NODEH = 40, GAPY = 10, PADX = 14, LANEHEAD = 22, LANEPAD = 10;
-    const nodes = data.nodes.map((n) => ({ ...n }));
-    const byId = new Map(nodes.map((n) => [n.id, n]));
-    const tiers = [...new Set(nodes.map((n) => n.tier))].sort((a, b) => a - b);
+    const GAPY = 10, PADX = 14, LANEHEAD = 22, LANEPAD = 10;
+    const SIZES = { compact: { COLW: 196, NODEW: 148, NODEH: 40 }, rich: { COLW: 292, NODEW: 256, NODEH: 78 } };
+    const ARCH_MIN = 0.75, ARCH_MAX = 1.8, RICH_MIN_W = 1000, RICH_MIN_K = 0.95;
+    const at = Date.parse(data.at);
+    const tiers = [...new Set(data.nodes.map((n) => n.tier))].sort((a, b) => a - b);
     const col = new Map(tiers.map((tier, i) => [tier, i]));
     const laneOf = (n) => (n.outside ? '' : n.project || '(no compose project)');
-    const laneNames = [...new Set(nodes.map(laneOf))];
-    const laneSize = (l) => nodes.filter((n) => laneOf(n) === l).length;
+    const laneNames = [...new Set(data.nodes.map(laneOf))];
+    const laneSize = (l) => data.nodes.filter((n) => laneOf(n) === l).length;
     laneNames.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : laneSize(b) - laneSize(a) || a.localeCompare(b)));
-    const rank = (n) => ({ ok: 0, warn: 0, bad: 0, outside: 0, done: 1 })[nodeState(n)];
-    let y = 6;
-    const lanes = [];
-    for (const l of laneNames) {
-      const members = nodes.filter((n) => laneOf(n) === l);
-      const cols = new Map();
-      for (const n of members) {
-        const c = col.get(n.tier);
-        if (!cols.has(c)) cols.set(c, []);
-        cols.get(c).push(n);
+    const rank = (n) => (nodeState(n, at) === 'done' ? 1 : 0);
+    const layout = (m) => {
+      const { COLW, NODEH } = SIZES[m];
+      const nodes = data.nodes.map((n) => ({ ...n }));
+      let y = 6;
+      const lanes = [];
+      for (const l of laneNames) {
+        const cols = new Map();
+        for (const n of nodes.filter((x) => laneOf(x) === l)) {
+          const c = col.get(n.tier);
+          if (!cols.has(c)) cols.set(c, []);
+          cols.get(c).push(n);
+        }
+        let rows = 0;
+        for (const ns of cols.values()) {
+          ns.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+          ns.forEach((n, i) => { n.x = PADX + col.get(n.tier) * COLW; n.y = y + LANEHEAD + i * (NODEH + GAPY); });
+          rows = Math.max(rows, ns.length);
+        }
+        const h = LANEHEAD + rows * (NODEH + GAPY) - GAPY + LANEPAD;
+        lanes.push({ name: l, y, h });
+        y += h + 10;
       }
-      let rows = 0;
-      for (const ns of cols.values()) {
-        ns.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-        ns.forEach((n, i) => { n.x = PADX + col.get(n.tier) * COLW; n.y = y + LANEHEAD + i * (NODEH + GAPY); });
-        rows = Math.max(rows, ns.length);
-      }
-      const h = LANEHEAD + rows * (NODEH + GAPY) - GAPY + LANEPAD;
-      lanes.push({ name: l, y, h });
-      y += h + 10;
-    }
-    const W = PADX * 2 + tiers.length * COLW + 30;
-    const H = y;
+      return { m, nodes, byId: new Map(nodes.map((n) => [n.id, n])), lanes, W: PADX * 2 + tiers.length * COLW + 30, H: y, ...SIZES[m] };
+    };
+    const layouts = { compact: layout('compact'), rich: layout('rich') };
+    const cpus = (data.host && data.host.cpus) || null, memTotal = (data.host && data.host.mem_total) || null;
+    const busiest = Math.max(1e6, ...data.nodes.filter((n) => !n.outside && n.state === 'running').map((n) => (n.rx_bps || 0) + (n.tx_bps || 0)));
     const mid = `m-${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-    const svg = sv('svg', { class: 'arch', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `containers of ${t.name} and how they connect` });
-    const defs = sv('defs');
-    for (const [id, color] of [['a-inter', COLORS.t3], ['a-in', COLORS.blue], ['a-out', COLORS.violet], ['a-hot', COLORS.white], ['a-cut', COLORS.red]]) {
-      const m = sv('marker', { id: `${mid}-${id}`, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
-      m.append(sv('path', { d: 'M0 0 L8 4 L0 8 z', fill: color }));
-      defs.append(m);
-    }
-    svg.append(defs);
-    for (const l of lanes) {
-      svg.append(sv('rect', { class: 'lane-box', x: 4.5, y: l.y + 0.5, width: W - 9, height: l.h }));
-      svg.append(sv('text', { class: 'lane-label', x: 12, y: l.y + 15 }, l.name === '' ? 'outside docker' : `compose project ${l.name}`));
-    }
-    const edgeLayer = sv('g');
-    const nodeLayer = sv('g');
-    svg.append(edgeLayer, nodeLayer);
-    const edgeEls = [];
-    const pairs = new Map();
-    for (const e of data.edges) {
-      const a = byId.get(e.from), b = byId.get(e.to);
-      if (!a || !b) continue;
-      const k = [e.from, e.to].sort().join('\u0000');
-      const nth = pairs.get(k) || 0;
-      pairs.set(k, nth + 1);
-      const ca = col.get(a.tier), cb = col.get(b.tier);
-      const ay = a.y + NODEH / 2 + (nth ? 6 : 0), by = b.y + NODEH / 2 + (nth ? 6 : 0);
-      let p0, p1, p2, p3;
-      if (cb > ca) {
-        p0 = [a.x + NODEW, ay]; p3 = [b.x, by];
-        const dx = (p3[0] - p0[0]) / 2;
-        p1 = [p0[0] + dx, p0[1]]; p2 = [p3[0] - dx, p3[1]];
-      } else if (cb < ca) {
-        p0 = [a.x, ay]; p3 = [b.x + NODEW, by];
-        const dx = Math.max(40, (p0[0] - p3[0]) / 2);
-        p1 = [p0[0] - dx, p0[1] + 18]; p2 = [p3[0] + dx, p3[1] + 18];
-      } else {
-        p0 = [a.x + NODEW, ay]; p3 = [b.x + NODEW, by];
-        const bulge = 26 + Math.min(70, Math.abs(by - ay) / 4);
-        p1 = [p0[0] + bulge, p0[1]]; p2 = [p3[0] + bulge, p3[1]];
-      }
-      const d = `M${p0[0]} ${p0[1]} C${p1[0]} ${p1[1]} ${p2[0]} ${p2[1]} ${p3[0]} ${p3[1]}`;
-      const off = (!a.outside && a.state !== 'running') || (!b.outside && b.state !== 'running');
-      const g = sv('g', { class: `edge d-${e.dir} v-${e.via}${e.shared === false ? ' cut' : ''}${off ? ' off' : ''}` });
-      const arrow = e.shared === false ? 'a-cut' : `a-${e.dir}`;
-      const path = sv('path', { d, 'marker-end': `url(#${mid}-${arrow})` });
-      const tip = sv('title', null, `${a.name} → ${b.name}${edgePort(e) ? ' ' + edgePort(e) : ''} · ${e.what} · ${DIR_NAME[e.dir]}${e.shared === false ? ' · no shared docker network' : ''}`);
-      g.append(path, tip);
-      const text = edgePort(e) || (e.via === 'depends_on' ? 'after' : '');
-      if (text) {
-        const mx = (p0[0] + 3 * p1[0] + 3 * p2[0] + p3[0]) / 8, my = (p0[1] + 3 * p1[1] + 3 * p2[1] + p3[1]) / 8;
-        const lab = sv('g', { class: 'elabel' });
-        const w = text.length * 6 + 8;
-        lab.append(sv('rect', { x: mx - w / 2, y: my - 8, width: w, height: 15 }), sv('text', { x: mx, y: my + 3, 'text-anchor': 'middle' }, text));
-        g.append(lab);
-      }
-      edgeLayer.append(g);
-      edgeEls.push({ e, g, path, arrow });
-    }
-    const nodeEls = new Map();
     const wrap = el('div', 'arch-wrap');
     wrap.dataset.scroll = `arch-graph-${t.name}`;
     const tipBox = el('div', 'tip');
     tipBox.hidden = true;
+    let L = null, svg = null, nodeEls = new Map(), edgeEls = [];
+
+    const SEGS = 10;
+    const shortAge = (x) => (x === null ? 'never' : x < 60 ? `${x}s` : x < 3600 ? `${Math.floor(x / 60)}m` : x < 86400 ? `${Math.floor(x / 3600)}h` : `${Math.floor(x / 86400)}d`);
+    const stack = (n) => {
+      const memCap = n.mem_limit || memTotal;
+      const cpuF = has(n.cpu_pct) && cpus ? n.cpu_pct / (cpus * 100) : null;
+      const memF = has(n.mem_bytes) && memCap ? n.mem_bytes / memCap : null;
+      const net = (n.rx_bps || 0) + (n.tx_bps || 0);
+      const dh = dockerHealth(n, at, now), ah = apiHealth(n, at, now, Date.parse(data.now));
+      const lastAt = (h, x) => (x && list(x.runs)[0] ? shortAge(agoSecs(now, list(x.runs)[0].at)) : '');
+      return [
+        { label: 'CPU', f: cpuF, text: has(cpuF) ? pct1(cpuF * 100) : pct1(n.cpu_pct), title: `cpu ${pct1(n.cpu_pct)} of a core${cpus ? ` · ${pct1((n.cpu_pct || 0) / cpus)} of ${cpus} cpus` : ''}` },
+        { label: 'MEM', f: memF, text: `${tightBytes(n.mem_bytes)}${has(memF) ? ` ${pct1(memF * 100)}` : ''}`, title: `memory ${bytes(n.mem_bytes)}${memCap ? ` of ${bytes(memCap)}${n.mem_limit ? ' limit' : ' on the box'}` : ''}` },
+        { label: 'NET', f: net / busiest, split: net ? (n.rx_bps || 0) / net : 1, text: `${kbps(n.rx_bps || 0)}/${kbps(n.tx_bps || 0)}`, title: `network ↓ ${bps(n.rx_bps)} · ↑ ${bps(n.tx_bps)}, the meter against the busiest container, ${bps(busiest)}` },
+        { label: 'DOCK', h: dh, text: `${dh.word} ${lastAt(dh, n.check)}`.trim(), title: `docker health: ${dh.tip}` },
+        { label: 'API', h: ah, text: `${ah.word} ${lastAt(ah, n.api)}`.trim(), title: `http health: ${ah.tip}` },
+      ];
+    };
+    const segColor = (i) => (i < 6 ? COLORS.green : i < 8 ? COLORS.yellow : COLORS.red);
+    const nameLines = (name, room) => {
+      if (name.length <= room) return [name];
+      const cut = Math.max(name.lastIndexOf('-', room), name.lastIndexOf('_', room));
+      const i = cut > 3 ? cut + 1 : room;
+      const rest = name.slice(i);
+      return [name.slice(0, i), rest.length > room ? `${rest.slice(0, room - 1)}…` : rest];
+    };
+
+    const build = (m) => {
+      L = layouts[m];
+      const { W, H, NODEW, NODEH, byId } = L;
+      svg = sv('svg', { class: `arch arch-${m}`, width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `containers of ${t.name} and how they connect` });
+      const defs = sv('defs');
+      for (const [id, color] of [['a-inter', COLORS.t3], ['a-in', COLORS.blue], ['a-out', COLORS.violet], ['a-hot', COLORS.white], ['a-cut', COLORS.red]]) {
+        const mk = sv('marker', { id: `${mid}-${id}`, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+        mk.append(sv('path', { d: 'M0 0 L8 4 L0 8 z', fill: color }));
+        defs.append(mk);
+      }
+      svg.append(defs);
+      for (const l of L.lanes) {
+        svg.append(sv('rect', { class: 'lane-box', x: 4.5, y: l.y + 0.5, width: W - 9, height: l.h }));
+        svg.append(sv('text', { class: 'lane-label', x: 12, y: l.y + 15 }, l.name === '' ? 'outside docker' : `compose project ${l.name}`));
+      }
+      const edgeLayer = sv('g');
+      const nodeLayer = sv('g');
+      svg.append(edgeLayer, nodeLayer);
+      edgeEls = [];
+      nodeEls = new Map();
+      const pairs = new Map();
+      for (const e of data.edges) {
+        const a = byId.get(e.from), b = byId.get(e.to);
+        if (!a || !b) continue;
+        const k = [e.from, e.to].sort().join('\u0000');
+        const nth = pairs.get(k) || 0;
+        pairs.set(k, nth + 1);
+        const ca = col.get(a.tier), cb = col.get(b.tier);
+        const ay = a.y + NODEH / 2 + (nth ? 6 : 0), by = b.y + NODEH / 2 + (nth ? 6 : 0);
+        let p0, p1, p2, p3;
+        if (cb > ca) {
+          p0 = [a.x + NODEW, ay]; p3 = [b.x, by];
+          const dx = (p3[0] - p0[0]) / 2;
+          p1 = [p0[0] + dx, p0[1]]; p2 = [p3[0] - dx, p3[1]];
+        } else if (cb < ca) {
+          p0 = [a.x, ay]; p3 = [b.x + NODEW, by];
+          const dx = Math.max(40, (p0[0] - p3[0]) / 2);
+          p1 = [p0[0] - dx, p0[1] + 18]; p2 = [p3[0] + dx, p3[1] + 18];
+        } else {
+          p0 = [a.x + NODEW, ay]; p3 = [b.x + NODEW, by];
+          const bulge = 26 + Math.min(70, Math.abs(by - ay) / 4);
+          p1 = [p0[0] + bulge, p0[1]]; p2 = [p3[0] + bulge, p3[1]];
+        }
+        const d = `M${p0[0]} ${p0[1]} C${p1[0]} ${p1[1]} ${p2[0]} ${p2[1]} ${p3[0]} ${p3[1]}`;
+        const off = (!a.outside && a.state !== 'running') || (!b.outside && b.state !== 'running');
+        const g = sv('g', { class: `edge d-${e.dir} v-${e.via}${e.shared === false ? ' cut' : ''}${off ? ' off' : ''}` });
+        const arrow = e.shared === false ? 'a-cut' : `a-${e.dir}`;
+        const path = sv('path', { d, 'marker-end': `url(#${mid}-${arrow})` });
+        const tip = sv('title', null, `${a.name} → ${b.name}${edgePort(e) ? ' ' + edgePort(e) : ''} · ${e.what} · ${DIR_NAME[e.dir]}${e.shared === false ? ' · no shared docker network' : ''}`);
+        g.append(path, tip);
+        const text = edgePort(e) || (e.via === 'depends_on' ? 'after' : '');
+        if (text) {
+          const mx = (p0[0] + 3 * p1[0] + 3 * p2[0] + p3[0]) / 8, my = (p0[1] + 3 * p1[1] + 3 * p2[1] + p3[1]) / 8;
+          const lab = sv('g', { class: 'elabel' });
+          const w = text.length * 6 + 8;
+          lab.append(sv('rect', { x: mx - w / 2, y: my - 8, width: w, height: 15 }), sv('text', { x: mx, y: my + 3, 'text-anchor': 'middle' }, text));
+          g.append(lab);
+        }
+        edgeLayer.append(g);
+        edgeEls.push({ e, g, path, arrow });
+      }
+      for (const n of L.nodes) {
+        const s = nodeState(n, at);
+        const g = sv('g', { class: `node s-${s}${pinned.get(t.name) === n.id ? ' pinned' : ''}`, transform: `translate(${n.x} ${n.y})`, tabindex: 0, role: 'button', 'aria-label': `${n.name}, ${n.outside ? 'outside docker' : n.state}` });
+        g.append(sv('rect', { class: 'box', x: 0.5, y: 0.5, width: NODEW, height: NODEH }));
+        const wide = m === 'rich' && !n.outside;
+        if (n.outside) {
+          g.append(sv('rect', { class: 'st', x: 8, y: 10, width: 7, height: 7 }));
+        } else if (!wide) {
+          g.append(sv('rect', { class: `hd h-${dockerHealth(n, at, now).g}`, x: 8, y: 10, width: 6, height: 6 }));
+          g.append(sv('rect', { class: `hd h-${apiHealth(n, at, now, Date.parse(data.now)).g}`, x: 16, y: 10, width: 6, height: 6 }));
+        }
+        if (!wide) g.append(sv('text', { x: 28, y: 17 }, n.name.length > 17 ? `${n.name.slice(0, 16)}…` : n.name));
+        const sub = n.outside ? (n.id === '(internet)' ? 'published ports' : 'socket') : n.state === 'running' ? `${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state === 'exited' && has(n.exit_code) ? `exited (${n.exit_code})` : n.state;
+        if (wide) {
+          const LEFT = 102, LAB = 30, SEG_W = 4, SEG_GAP = 1;
+          g.append(sv('line', { class: 'divide', x1: LEFT - 4.5, y1: 6, x2: LEFT - 4.5, y2: NODEH - 6 }));
+          stack(n).forEach((r, i) => {
+            const y = 7 + i * 13;
+            const row = sv('g', { class: `meter${r.h ? ' mhealth' : ''}` });
+            row.append(sv('title', null, r.title));
+            row.append(sv('text', { class: 'mlab', x: LEFT, y: y + 8 }, r.label));
+            const x0 = LEFT + LAB;
+            if (r.h) {
+              row.append(sv('rect', { class: `hd h-${r.h.g}`, x: x0, y: y + 2, width: 7, height: 7 }));
+              row.append(sv('text', { class: `mval ht-${r.h.g}`, x: x0 + 11, y: y + 8 }, r.text));
+            } else {
+              const lit = !has(r.f) || n.state !== 'running' ? 0 : r.f > 0 ? Math.max(1, Math.min(SEGS, Math.round(r.f * SEGS))) : 0;
+              const rxLit = has(r.split) ? Math.round(lit * r.split) : null;
+              for (let j = 0; j < SEGS; j++) {
+                const on = j < lit;
+                const fill = !on ? null : has(rxLit) ? (j < rxLit ? COLORS.green : COLORS.red) : segColor(j);
+                row.append(sv('rect', { class: on ? 'seg on' : 'seg', x: x0 + j * (SEG_W + SEG_GAP), y: y + 2, width: SEG_W, height: 7, fill }));
+              }
+              row.append(sv('text', { class: 'mval', x: x0 + SEGS * (SEG_W + SEG_GAP) + 5, y: y + 8 }, n.state === 'running' ? r.text : '—'));
+            }
+            g.append(row);
+          });
+          const lines = nameLines(n.name, 13);
+          lines.forEach((line, i) => g.append(sv('text', { class: 'nm', x: 10, y: 19 + i * 15 }, line)));
+          if (n.state !== 'running') g.append(sv('text', { class: 'sub', x: 10, y: 19 + lines.length * 15 }, n.state === 'exited' && has(n.exit_code) ? `exited (${n.exit_code})` : n.state));
+        } else {
+          g.append(sv('text', { class: 'sub', x: 28, y: m === 'rich' ? 36 : 32 }, sub));
+        }
+        (n.networks || []).forEach((name, i) => {
+          g.append(sv('rect', { x: wide ? 10 + i * 9 : NODEW - 10 - i * 9, y: NODEH - (wide ? 13 : 10), width: 6, height: 6, fill: netColor.get(name) || COLORS.t3 }));
+        });
+        g.addEventListener('mouseenter', () => { around(n.id); showTip(n, g); });
+        g.addEventListener('mouseleave', () => { tipBox.hidden = true; rest(); });
+        g.addEventListener('focus', () => { around(n.id); showTip(n, g); });
+        g.addEventListener('blur', () => { tipBox.hidden = true; rest(); });
+        const toggle = () => {
+          const next = pinned.get(t.name) === n.id ? null : n.id;
+          pinned.set(t.name, next);
+          litEdge.set(t.name, null);
+          pin(next);
+          onPin();
+        };
+        g.addEventListener('click', toggle);
+        g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+        nodeLayer.append(g);
+        nodeEls.set(n.id, g);
+      }
+      tipBox.hidden = true;
+      wrap.replaceChildren(svg, tipBox);
+      rest();
+    };
+
     const showTip = (n, g) => {
       tipBox.replaceChildren(el('b', null, n.name));
-      const line = n.outside ? (n.id === '(internet)' ? 'published ports' : 'docker socket') : n.state === 'running' ? `${n.health || 'running'} · cpu ${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state;
+      const line = n.outside ? (n.id === '(internet)' ? 'published ports' : 'docker socket') : n.state === 'running' ? `${dockerHealth(n, at, now).word} · http ${apiHealth(n, at, now, Date.parse(data.now)).word} · cpu ${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state;
       tipBox.append(el('span', 'muted', line));
       tipBox.hidden = false;
       const wr = wrap.getBoundingClientRect(), gr = g.getBoundingClientRect();
@@ -1489,55 +1712,30 @@
       const lit = litEdge.get(t.name);
       if (lit) return just(lit);
       const p = pinned.get(t.name);
-      if (p && byId.has(p)) around(p); else paint(null);
+      if (p && L.byId.has(p)) around(p); else paint(null);
     };
     const pin = (id) => {
       for (const [nid, g] of nodeEls) g.classList.toggle('pinned', id === nid);
     };
-    for (const n of nodes) {
-      const s = nodeState(n);
-      const g = sv('g', { class: `node s-${s}${pinned.get(t.name) === n.id ? ' pinned' : ''}`, transform: `translate(${n.x} ${n.y})`, tabindex: 0, role: 'button', 'aria-label': `${n.name}, ${n.outside ? 'outside docker' : n.state}` });
-      g.append(sv('rect', { class: 'box', x: 0.5, y: 0.5, width: NODEW, height: NODEH }));
-      g.append(sv('rect', { class: 'st', x: 8, y: 9, width: 8, height: 8 }));
-      g.append(sv('text', { x: 22, y: 17 }, n.name.length > 19 ? `${n.name.slice(0, 18)}…` : n.name));
-      const sub = n.outside ? (n.id === '(internet)' ? 'published ports' : 'socket') : n.state === 'running' ? `${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state === 'exited' && has(n.exit_code) ? `exited (${n.exit_code})` : n.state;
-      g.append(sv('text', { class: 'sub', x: 22, y: 32 }, sub));
-      (n.networks || []).forEach((name, i) => {
-        g.append(sv('rect', { x: NODEW - 10 - i * 9, y: NODEH - 10, width: 6, height: 6, fill: netColor.get(name) || COLORS.t3 }));
-      });
-      g.addEventListener('mouseenter', () => { around(n.id); showTip(n, g); });
-      g.addEventListener('mouseleave', () => { tipBox.hidden = true; rest(); });
-      g.addEventListener('focus', () => { around(n.id); showTip(n, g); });
-      g.addEventListener('blur', () => { tipBox.hidden = true; rest(); });
-      const toggle = () => {
-        const next = pinned.get(t.name) === n.id ? null : n.id;
-        pinned.set(t.name, next);
-        litEdge.set(t.name, null);
-        pin(next);
-        onPin();
-      };
-      g.addEventListener('click', toggle);
-      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
-      nodeLayer.append(g);
-      nodeEls.set(n.id, g);
-    }
-    wrap.append(svg, tipBox);
-    const ARCH_MIN = 0.75, ARCH_MAX = 1.8;
     const fit = () => {
       const cw = wrap.clientWidth - 2, ch = wrap.clientHeight - 2;
       if (cw <= 0 || ch <= 0) return;
-      const k = Math.min(ARCH_MAX, Math.max(ARCH_MIN, Math.min(cw / W, ch / H)));
-      svg.style.width = `${Math.floor(W * k)}px`;
-      svg.style.height = `${Math.floor(H * k)}px`;
+      const R = layouts.rich;
+      const want = cw >= RICH_MIN_W && Math.min(cw / R.W, ch / R.H) >= RICH_MIN_K ? 'rich' : 'compact';
+      if (!L || L.m !== want) build(want);
+      const k = Math.min(ARCH_MAX, Math.max(ARCH_MIN, Math.min(cw / L.W, ch / L.H)));
+      svg.style.width = `${Math.floor(L.W * k)}px`;
+      svg.style.height = `${Math.floor(L.H * k)}px`;
       tipBox.hidden = true;
     };
+    build('compact');
     const watch = new ResizeObserver(fit);
     watch.observe(wrap);
-    rest();
     return {
       wrap,
       rest,
       pin,
+      mode: () => L.m,
       unwatch: () => watch.disconnect(),
       light: (ids) => (ids ? paint(ids, (e) => ids.includes(e.from) && ids.includes(e.to)) : rest()),
       edge: (e) => (e ? just(e) : rest()),
