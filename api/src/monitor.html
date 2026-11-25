@@ -111,8 +111,10 @@
   .ctrs td { white-space: nowrap; }
   .ctrs tr.ctr { cursor: pointer; } .ctrs tr.ctr:hover td, .ctrs tr.ctr.on td { background: var(--bg3); }
   .ctrs td.cell canvas { display: block; width: 72px; height: 18px; margin-top: 2px; }
-  .ctrs td.net { min-width: 140px; }
-  .netbar { position: relative; display: flex; width: 100%; min-width: 140px; height: 14px; margin-top: 2px; border-radius: 2px; overflow: hidden; }
+  .ctrs td.net { min-width: 250px; vertical-align: middle; }
+  .netrow { display: flex; align-items: center; gap: 8px; }
+  .nettotal { flex: none; width: 12ch; text-align: right; font-variant-numeric: tabular-nums; }
+  .netbar { position: relative; display: flex; flex: 1 1 auto; min-width: 120px; height: 14px; border-radius: 2px; overflow: hidden; }
   .netbar > i { display: block; height: 100%; opacity: .55; }
   .netbar > span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 14px; color: #fff; }
   .strip { flex: none; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; --card-w: clamp(142px, 11vw, 190px); --card-h: 82px; }
@@ -353,14 +355,16 @@
     const td = el('td', 'mono net');
     const a = has(rx) ? rx : 0, b = has(tx) ? tx : 0, total = a + b;
     if (!(total > 0)) { td.textContent = '—'; return td; }
-    td.append(el('div', null, bps(total)));
+    const row = el('div', 'netrow');
+    row.append(el('span', 'nettotal', bps(total)));
     const bar = el('div', 'netbar');
     bar.style.background = COLORS.grid;
     const seg = (v, color) => { const i = el('i'); i.style.width = `${(v / total) * 100}%`; i.style.background = color; return i; };
     const lbl = el('span');
     lbl.append(el('span', null, `↓ ${kbps(a)}`), el('span', null, `↑ ${kbps(b)}`));
     bar.append(seg(a, COLORS.green), seg(b, COLORS.red), lbl);
-    td.append(bar);
+    row.append(bar);
+    td.append(row);
     return td;
   };
   const Bps = (v) => (has(v) ? `${bytes(v)}/s` : '—');
