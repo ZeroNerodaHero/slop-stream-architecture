@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
   faceAtom,
@@ -28,13 +28,14 @@ const WORDS: Record<FaceReading, string> = {
   'camera-blocked': 'camera blocked'
 };
 
-const BARS: readonly { id: string; label: string; of: (marks: FaceMarks) => number }[] = [
-  { id: 'mouth', label: 'mouth open', of: (marks) => marks.mouth },
-  { id: 'blink', label: 'eyes shut', of: (marks) => marks.blink },
-  { id: 'smile', label: 'smile', of: (marks) => marks.smile },
-  { id: 'brows-up', label: 'brows up', of: (marks) => Math.max(0, marks.brows) },
-  { id: 'brows-down', label: 'brows down', of: (marks) => Math.max(0, -marks.brows) }
+const BARS: readonly { id: string; label: string; short: string; of: (marks: FaceMarks) => number }[] = [
+  { id: 'mouth', label: 'mouth open', short: 'mouth', of: (marks) => marks.mouth },
+  { id: 'blink', label: 'eyes shut', short: 'eyes', of: (marks) => marks.blink },
+  { id: 'smile', label: 'smile', short: 'smile', of: (marks) => marks.smile },
+  { id: 'brows-up', label: 'brows up', short: 'brow↑', of: (marks) => Math.max(0, marks.brows) },
+  { id: 'brows-down', label: 'brows down', short: 'brow↓', of: (marks) => Math.max(0, -marks.brows) }
 ];
+const COMPACT_PX = 240;
 const TURNS: readonly { id: string; label: string; of: (marks: FaceMarks) => number }[] = [
   { id: 'turn', label: 'turn', of: (marks) => marks.yaw },
   { id: 'nod', label: 'nod', of: (marks) => marks.pitch },
@@ -55,6 +56,8 @@ function RigBody({ place }: { place: Place }) {
   const picture = useAtomValue(rigPictureAtom);
   const sharing = useAtomValue(screenMaySeePageAtom);
   const lines = useAtomValue(faceLinesAtom);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const numbersRef = useRef<HTMLDivElement | null>(null);
@@ -65,6 +68,16 @@ function RigBody({ place }: { place: Place }) {
   const shown = picture && !sharing && stream !== null;
   const settings = stream?.getVideoTracks()[0]?.getSettings();
   const aspect = settings?.width && settings.height ? settings.width / settings.height : ASPECT;
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const read = () => setNarrow(root.getBoundingClientRect().width < COMPACT_PX);
+    read();
+    const watcher = new ResizeObserver(read);
+    watcher.observe(root);
+    return () => watcher.disconnect();
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -222,16 +235,17 @@ function RigBody({ place }: { place: Place }) {
 
   const words = WORDS[face];
   const tall = place === 'phone';
+  const compact = narrow && !tall;
   const note =
     sharing && picture
       ? "only you see this. your camera's picture is hidden while you share a screen: a share of this page would send it."
       : "only you see this. your camera's picture is not sent."
   return (
-    <div className="flex flex-col">
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 pb-1.5 pt-2">
+    <div ref={rootRef} data-compact={compact || undefined} className="flex flex-col">
+      <div className={cn('flex flex-wrap items-start gap-x-3 px-3 pb-1.5 pt-2', compact ? 'gap-y-1.5' : 'gap-y-2')}>
         <div
           id="rig-view"
-          className={cn('relative max-w-full shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-black', tall ? 'w-full' : 'h-16')}
+          className={cn('relative max-w-full shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-black', tall ? 'w-full' : compact ? 'h-12' : 'h-16')}
           style={{ aspectRatio: String(aspect) }}
         >
           <div className={cn('absolute inset-0', mirror && '-scale-x-100')}>
@@ -255,12 +269,12 @@ function RigBody({ place }: { place: Place }) {
             </p>
           )}
         </div>
-        <div ref={numbersRef} id="rig-numbers" className="flex min-w-[9rem] flex-1 flex-col gap-1.5">
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(5.5rem,1fr))] gap-x-3 gap-y-1">
+        <div ref={numbersRef} id="rig-numbers" className={cn('flex flex-1 flex-col', compact ? 'min-w-full gap-1' : 'min-w-[9rem] gap-1.5')}>
+          <div className={cn('grid', compact ? 'grid-cols-5 gap-x-1.5' : 'grid-cols-[repeat(auto-fit,minmax(5.5rem,1fr))] gap-x-3 gap-y-1')}>
             {BARS.map((bar) => (
               <div key={bar.id} className="flex min-w-0 flex-col gap-0.5">
-                <div className="flex items-baseline justify-between gap-2 text-xs">
-                  <span className="truncate text-textSecondary">{bar.label}</span>
+                <div className={cn('flex', compact ? 'flex-col gap-0.5 text-[10px] leading-tight' : 'items-baseline justify-between gap-2 text-xs')}>
+                  <span className="truncate text-textSecondary">{compact ? bar.short : bar.label}</span>
                   <span id={`rig-${bar.id}-value`} className="tabular-nums text-textPrimary">
                     0%
                   </span>
@@ -279,9 +293,9 @@ function RigBody({ place }: { place: Place }) {
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-3 gap-x-2 border-t border-primaryStroke pt-1.5">
+          <div className={cn('grid grid-cols-3 gap-x-2 border-t border-primaryStroke', compact ? 'pt-1' : 'pt-1.5')}>
             {TURNS.map((turn) => (
-              <div key={turn.id} className="flex min-w-0 items-baseline justify-between gap-1 text-xs">
+              <div key={turn.id} className={cn('flex min-w-0 items-baseline justify-between gap-1', compact ? 'text-[11px]' : 'text-xs')}>
                 <span className="truncate text-textSecondary">{turn.label}</span>
                 <span id={`rig-${turn.id}`} data-value="0" className="tabular-nums text-textPrimary">
                   0°
