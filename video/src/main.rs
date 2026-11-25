@@ -185,7 +185,8 @@ impl KeyframeAsks {
         let send = match ask {
             Ask::Lost => since(self.asked).is_none_or(|d| d >= KEYFRAME_GAP),
             Ask::Thumb => since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
-            Ask::Switch | Ask::Resume => !in_flight && since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
+            Ask::Switch => !in_flight && since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
+            Ask::Resume => since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
             Ask::Backup(connected) if seen != connected => false,
             Ask::Join | Ask::Backup(_) if in_flight => false,
             Ask::Join | Ask::Backup(_) => match join_recent {
@@ -1069,10 +1070,18 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
     let mut moving: Option<(Instant, Option<u8>)> = None;
     let mut asked: Option<Instant> = None;
     let mut resumed: Option<Instant> = None;
+    let mut reask: Option<Instant> = None;
     let mut view = View::Full;
     let joined = Instant::now();
     loop {
         tokio::select! {
+            _ = async { if let Some(at) = reask { tokio::time::sleep_until(at.into()).await } }, if reask.is_some() => {
+                reask = None;
+                if view != View::Hidden && resumed.is_some() && viewer.current().is_none() {
+                    reask = Some(Instant::now() + FORCED_KEYFRAME_GAP);
+                    hub.request_keyframe(&room, slot, viewer.target(), Ask::Resume).await;
+                }
+            }
             _ = viewer.view_changed() => {
                 let next = viewer.view();
                 if next == view {
@@ -1086,6 +1095,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                     moving = None;
                     asked = None;
                     resumed = None;
+                    reask = None;
                     continue;
                 }
                 let (cap, ceiling) = limits(next);
@@ -1105,6 +1115,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                     viewer.resume();
                     resumed = Some(now);
                     asked = Some(now);
+                    reask = Some(now + FORCED_KEYFRAME_GAP);
                     hub.request_keyframe(&room, slot, target, Ask::Resume).await;
                 } else if viewer.current() != Some(target) {
                     moving = Some((now, viewer.current()));
@@ -1150,8 +1161,8 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                         health.reset();
                     }
                 }
-                let pending = current.is_some_and(|c| c != target) || (current.is_none() && (target != start || resumed.is_some()));
-                if pending && asked.is_none_or(|at| now.saturating_duration_since(at) >= SWITCH_REASK) {
+                let pending = current.is_some_and(|c| c != target) || (current.is_none() && target != start);
+                if resumed.is_none() && pending && asked.is_none_or(|at| now.saturating_duration_since(at) >= SWITCH_REASK) {
                     asked = Some(now);
                     hub.request_keyframe(&room, slot, target, Ask::Switch).await;
                 }
@@ -1726,9 +1737,11 @@ mod tests {
     fn many_resumes_on_one_layer_share_one_keyframe_per_gap() {
         let t = Instant::now();
         let mut asks = KeyframeAsks::default();
-        let sent = (0..25u64).filter(|i| asks.decide(Ask::Resume, t + ms(i * 20), 0) == Plan::Send).count();
+        let sent = (0..15u64).filter(|i| asks.decide(Ask::Resume, t + ms(i * 20), 0) == Plan::Send).count();
         assert_eq!(sent, 1);
-        assert_eq!(asks.decide(Ask::Resume, t + FORCED_KEYFRAME_GAP, 1), Plan::Send);
+        let sent = (0..50u64).filter(|i| asks.decide(Ask::Resume, t + ms(300 + i * 20), 0) == Plan::Send).count();
+        assert_eq!(sent, 4);
+        assert_eq!(asks.decide(Ask::Resume, t + FORCED_KEYFRAME_GAP * 5, 1), Plan::Send);
         assert_eq!(asks.decide(Ask::Switch, t + FORCED_KEYFRAME_GAP + ms(100), 2), Plan::Skip);
         assert_eq!(asks.decide(Ask::Lost, t + FORCED_KEYFRAME_GAP + ms(100), 2), Plan::Skip);
         assert_eq!(asks.join_asked, None);

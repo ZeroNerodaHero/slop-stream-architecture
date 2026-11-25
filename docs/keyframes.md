@@ -15,6 +15,7 @@ every request goes through `Hub::request_keyframe` (`video/src/main.rs`), per sl
 | `Join` | a watcher sent a PLI or FIR in its first 3s (`JOIN_PLI_WINDOW`): it has no picture yet | below |
 | `Lost` | a watcher sent a PLI or FIR later (lost the picture) | none within `KEYFRAME_GAP`, 1.5s, of any request |
 | `Switch` | a watcher's layer changed and it waits for a keyframe on the new one; again every 500ms until it lands | not while one is on its way, none within `FORCED_KEYFRAME_GAP`, 300ms, of any request |
+| `Resume` | a watcher's player was hidden and is seen again (`watch-view.md`); again every 300ms until it lands | none within `FORCED_KEYFRAME_GAP`, 300ms, of any request, so many watchers coming back at once share a keyframe per layer |
 | `Thumb` | the thumbnail's ffmpeg has no picture (`thumbs.rs`) | none within `FORCED_KEYFRAME_GAP`, 300ms, of any request |
 | `Trailing` | the one extra request a burst of joins scheduled | below |
 

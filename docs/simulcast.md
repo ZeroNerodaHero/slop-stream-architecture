@@ -57,13 +57,13 @@ loss and nack windows restart when a switch lands. `Picker::decide` (pure, teste
 | healthy | loss < 2%, nack < 2%, remb not under the current rate |
 | climb | one up after healthy for the wait: 4s, 8s after a drop, doubled up to 32s when a climb fails within 10s, back to 4s after holding 30s |
 | layer gone | no packets for 1s: move to the nearest live one |
-| previews | capped at their start layer |
+| previews and small players | pinned: capped at the lowest offered layer, and if it goes quiet the next one up but never the top (`pinned_limits`, `watch-view.md`) |
 
 a decision sets the target and asks the publisher for a keyframe on that layer (`Ask::Switch`, `keyframes.md`), again every 500ms until it lands. chrome makes a keyframe on every layer for any one pli.
 
 ## joining
 
-`start_level`: a preview starts on the lowest live layer at least 360 tall; a watcher on the highest live layer whose rate fits 1.5 Mbps, which is 720 for a 1080 camera. before any rates are known, layer 1 if offered. the join and backup keyframe asks go to the start layer.
+`start_level`: a preview starts on the lowest live layer that is not the top one (the lowest offered before any is live); a watcher on the highest live layer whose rate fits 1.5 Mbps, which is 720 for a 1080 camera. before any rates are known, layer 1 if offered. the join and backup keyframe asks go to the start layer.
 
 ## measured locally
 

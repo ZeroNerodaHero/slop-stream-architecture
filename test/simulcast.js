@@ -19,6 +19,8 @@ const CLIP = process.env.CLIP || path.join(os.tmpdir(), 'stream-simulcast-1080.y
 const DOWNLINK_KBPS = Number(process.env.DOWNLINK_KBPS || 800);
 const RELAY_PORT = Number(process.env.RELAY_PORT || 17890);
 const SQUEEZE_MS = Number(process.env.SQUEEZE_MS || 10000);
+const HIDDEN_MS = Number(process.env.HIDDEN_MS || 8000);
+const RESUMES = Number(process.env.RESUMES || 8);
 const WS_URL = `ws://127.0.0.1:${WS_PORT}/ws`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
@@ -73,7 +75,7 @@ window.publishStats = async () => {
 };
 window.views = [];
 window.watch = async (name, url, preview = false, relay = 0) => {
-  const view = { t0: performance.now(), firstFrame: null, firstHeight: null, samples: [], closed: false };
+  const view = { t0: performance.now(), firstFrame: null, firstHeight: null, samples: [], frameTimes: [], closed: false };
   const pc = new RTCPeerConnection();
   view.pc = pc;
   pc.addTransceiver('video', { direction: 'recvonly' });
@@ -89,18 +91,26 @@ window.watch = async (name, url, preview = false, relay = 0) => {
     video.srcObject = new MediaStream([e.track]);
     const onFrame = (_, meta) => {
       if (view.firstFrame === null) { view.firstFrame = performance.now() - view.t0; view.afterAnswer = performance.now() - view.answered; view.firstHeight = meta.height; }
+      view.frameTimes.push([performance.now() - view.t0, meta.height]);
+      if (view.frameTimes.length > 4000) view.frameTimes.splice(0, 2000);
+      if (!view.closed) video.requestVideoFrameCallback(onFrame);
     };
     video.requestVideoFrameCallback(onFrame);
   };
   await pc.setLocalDescription(await pc.createOffer());
   const { ws, sdp } = await signal(url, preview ? { role: 'watch', name, sdp: pc.localDescription.sdp, preview: true } : { role: 'watch', name, sdp: pc.localDescription.sdp });
   view.ws = ws;
+  view.wsClosed = null;
+  view.wsErrors = [];
+  ws.addEventListener('message', (e) => { const m = JSON.parse(e.data); if (m.error) view.wsErrors.push(m.error); });
+  ws.addEventListener('close', () => { view.wsClosed = performance.now() - view.t0; });
   view.answered = performance.now();
   await pc.setRemoteDescription({ type: 'answer', sdp: relay ? sdp.replace(/ (\\d+) typ host/g, ' ' + relay + ' typ host') : sdp });
   const sample = async () => {
     if (view.closed) return;
     for (const s of (await pc.getStats()).values()) {
-      if (s.type === 'inbound-rtp' && s.kind === 'video') view.samples.push({ t: Math.round(performance.now() - view.t0), h: s.frameHeight || 0, frames: s.framesDecoded || 0, bytes: s.bytesReceived || 0, freeze: s.totalFreezesDuration || 0, lost: s.packetsLost || 0, kf: s.keyFramesDecoded || 0, pli: s.pliCount || 0 });
+      if (s.type === 'inbound-rtp' && s.kind === 'audio') view.audioBytes = s.bytesReceived || 0;
+      if (s.type === 'inbound-rtp' && s.kind === 'video') view.samples.push({ abytes: view.audioBytes || 0, t: Math.round(performance.now() - view.t0), h: s.frameHeight || 0, frames: s.framesDecoded || 0, bytes: s.bytesReceived || 0, freeze: s.totalFreezesDuration || 0, lost: s.packetsLost || 0, kf: s.keyFramesDecoded || 0, pli: s.pliCount || 0 });
     }
     setTimeout(sample, 100);
   };
@@ -108,6 +118,9 @@ window.watch = async (name, url, preview = false, relay = 0) => {
   window.views.push(view);
   return window.views.length - 1;
 };
+window.say = (i, text) => { const v = window.views[i]; v.ws.send(text); return Math.round(performance.now() - v.t0); };
+window.frameAfter = (i, t) => window.views[i].frameTimes.find(([at]) => at > t) || null;
+window.sock = (i) => ({ closed: window.views[i].wsClosed, errors: window.views[i].wsErrors });
 window.view = (i) => { const v = window.views[i]; return { firstFrame: v.firstFrame, afterAnswer: v.afterAnswer, firstHeight: v.firstHeight, samples: v.samples }; };
 window.unwatch = (i) => { const v = window.views[i]; v.closed = true; v.ws.close(); v.pc.close(); v.video.remove(); };
 </script>`;
@@ -295,7 +308,7 @@ async function joinTimes(page, name, preview = false) {
       check('new viewers start on a full-size layer', joins.heights.every((h) => h >= 720), joins.heights);
       const previews = await joinTimes(view, 'cam', true);
       results.previewFirstFrame = { medianMs: median(previews.times), p90Ms: pct(previews.times, 0.9), heights: previews.heights };
-      check('previews get the 360 layer', previews.heights.length === JOINS && previews.heights.every((h) => h === 360), results.previewFirstFrame);
+      check('previews get the lowest layer, 360', previews.heights.length === JOINS && previews.heights.every((h) => h === 360), results.previewFirstFrame);
 
       const id = await view.evaluate((u) => window.watch('cam', u), WS_URL);
       await sleep(9000);
@@ -306,6 +319,89 @@ async function joinTimes(page, name, preview = false) {
       check('a healthy viewer climbs from 720 to 1080', changes.length >= 2 && changes[0].h === 720 && changes[changes.length - 1].h === 1080, changes);
       check('the climb froze nothing', last.freeze === 0, last);
       await view.evaluate((i) => window.unwatch(i), id);
+    }
+
+    if (!process.env.SKIP_PAUSE) {
+      const top = MODE === 'simulcast' ? 1080 : 720;
+      const samples = async (i) => (await view.evaluate((i) => window.view(i), i)).samples;
+      const id = await view.evaluate((u) => window.watch('cam', u), WS_URL);
+      await waitFor(async () => (await samples(id)).at(-1)?.h === top, 20000);
+      await sleep(1500);
+      const pubBefore = await pub.evaluate(() => window.publishStats());
+      const a = (await samples(id)).at(-1);
+      await sleep(HIDDEN_MS);
+      const b = (await samples(id)).at(-1);
+      const hiddenAt = await view.evaluate((i) => window.say(i, '{"view":"hidden"}'), id);
+      await sleep(500);
+      const b2 = (await samples(id)).at(-1);
+      await sleep(HIDDEN_MS);
+      const c = (await samples(id)).at(-1);
+      const resumedAt = await view.evaluate((i) => window.say(i, '{"view":"full"}'), id);
+      const back = await waitFor(() => view.evaluate(([i, t]) => window.frameAfter(i, t), [id, resumedAt]), 5000, 20);
+      await sleep(2000);
+      const d = (await samples(id)).at(-1);
+      const rate = (x, y, key) => Math.round(((y[key] - x[key]) * 8) / (y.t - x.t));
+      const resumes = [back ? Math.round(back[0] - resumedAt) : null];
+      for (let n = 1; n < RESUMES; n++) {
+        await view.evaluate((i) => window.say(i, '{"view":"hidden"}'), id);
+        await sleep(2500);
+        const t = await view.evaluate((i) => window.say(i, '{"view":"full"}'), id);
+        const f = await waitFor(() => view.evaluate(([i, t]) => window.frameAfter(i, t), [id, t]), 5000, 20);
+        resumes.push(f ? Math.round(f[0] - t) : null);
+        await sleep(1500);
+      }
+      const e = (await samples(id)).at(-1);
+      const pubAfter = await pub.evaluate(() => window.publishStats());
+      const ok = resumes.filter((x) => x !== null);
+      results.hiddenViewer = {
+        hiddenMs: HIDDEN_MS,
+        visibleKbps: { video: rate(a, b, 'bytes'), audio: rate(a, b, 'abytes') },
+        hiddenKbps: { video: rate(b2, c, 'bytes'), audio: rate(b2, c, 'abytes') },
+        tailKBAfterPause: Math.round((b2.bytes - b.bytes) / 1000),
+        savedKBWhileHidden: Math.round(((b.bytes - a.bytes) * (c.t - b.t)) / (b.t - a.t) / 1000 - (c.bytes - b.bytes) / 1000),
+        resumeToFrameMs: { n: ok.length, medianMs: median(ok), p90Ms: pct(ok, 0.9), maxMs: Math.max(...ok), all: resumes },
+        heightAfterResume: back && back[1],
+        lostAcrossFirstPause: d.lost - b.lost,
+        lostAcrossAllPauses: e.lost - b.lost,
+        hiddenAtMs: hiddenAt,
+        publisherPlis: pubAfter.map((l, i) => ({ rid: l.rid || 'single', plis: l.pli - (pubBefore[i]?.pli || 0) }))
+      };
+      check('a hidden viewer gets no video', results.hiddenViewer.hiddenKbps.video < 5, results.hiddenViewer);
+      check('a hidden viewer keeps its audio', results.hiddenViewer.hiddenKbps.audio > 0.5 * results.hiddenViewer.visibleKbps.audio, results.hiddenViewer);
+      check('the picture is back within 600ms of every resume', ok.length === RESUMES && Math.max(...ok) < 600, results.hiddenViewer.resumeToFrameMs);
+      check('it comes back on the layer it had', back && back[1] === top, results.hiddenViewer);
+      check('sequence numbers run on across a pause', results.hiddenViewer.lostAcrossAllPauses < 20, results.hiddenViewer);
+
+      if (MODE === 'simulcast') {
+        await view.evaluate((i) => window.say(i, '{"view":"small"}'), id);
+        const low = await waitFor(async () => (await samples(id)).at(-1)?.h === 360, 4000);
+        const s0 = (await samples(id)).length;
+        await sleep(6000);
+        const pinned = (await samples(id)).slice(s0);
+        const bigAt = await view.evaluate((i) => window.say(i, '{"view":"full"}'), id);
+        const big = await waitFor(async () => (await samples(id)).filter((x) => x.t > bigAt).find((x) => x.h >= 720), 4000);
+        results.smallViewer = { on360: !!low, heldOnly360: pinned.every((x) => x.h === 360), fullAgainAfterMs: big ? big.t - bigAt : null };
+        check('a small player is pinned to the lowest layer', results.smallViewer.on360 && results.smallViewer.heldOnly360, results.smallViewer);
+        check('back to full size it lifts at once to a full-size layer', big !== null && big.t - bigAt < 1500, results.smallViewer);
+      }
+      await view.evaluate((i) => window.unwatch(i), id);
+
+      const flood = await view.evaluate((u) => window.watch('cam', u), WS_URL);
+      await waitFor(async () => (await samples(flood)).at(-1)?.frames > 0, 8000);
+      const floodWall = Date.now();
+      await view.evaluate((i) => { for (let n = 0; n < 60; n++) window.say(i, n % 2 ? '{"view":"full"}' : '{"view":"hidden"}'); window.say(i, '{"view":"hidden"}'); }, flood);
+      await sleep(3000);
+      const applied = sfu.lines.filter((l) => Number(l.split(' ')[0]) >= floodWall && /watch cam: slot 0 view /.test(l)).length;
+      const stillOpen = (await view.evaluate((i) => window.sock(i), flood)).closed === null;
+      const settled = (await samples(flood)).at(-1);
+      await sleep(1000);
+      const quiet = (await samples(flood)).at(-1).bytes - settled.bytes;
+      await view.evaluate((i) => { for (let n = 0; n < 20; n++) window.say(i, '{"view":"loud"}'); }, flood);
+      const shut = await waitFor(() => view.evaluate((i) => window.sock(i).closed !== null && window.sock(i), flood), 3000);
+      results.abuse = { toggles: 61, appliedViews: applied, landedHidden: quiet < 1000, closedOnGarbage: !!shut, errors: shut && shut.errors };
+      check('a flood of toggles is rate limited and lands on the last one', stillOpen && applied <= 10 && quiet < 1000, results.abuse);
+      check('garbage frames close the socket', !!shut && shut.errors.includes('bad frames'), results.abuse);
+      await view.evaluate((i) => window.unwatch(i), flood);
     }
 
     {
@@ -388,7 +484,7 @@ async function joinTimes(page, name, preview = false) {
   }
   if (process.env.LOG) fs.writeFileSync(process.env.LOG, sfu.lines.join('\n'));
   if (process.env.OUT) fs.writeFileSync(process.env.OUT, JSON.stringify(results, null, 2));
-  console.log(JSON.stringify({ publisherRamp: results.publisherRamp && { firstBytesMs: results.publisherRamp.firstBytesMs, settledMs: results.publisherRamp.settledMs }, firstFrame: results.firstFrame, previewFirstFrame: results.previewFirstFrame, healthyViewer: results.healthyViewer, squeezedViewer: results.squeezedViewer, switchMs: results.switchMs, dummyFirstFrame: results.dummyFirstFrame }, null, 1));
+  console.log(JSON.stringify({ publisherRamp: results.publisherRamp && { firstBytesMs: results.publisherRamp.firstBytesMs, settledMs: results.publisherRamp.settledMs }, firstFrame: results.firstFrame, previewFirstFrame: results.previewFirstFrame, healthyViewer: results.healthyViewer, hiddenViewer: results.hiddenViewer, smallViewer: results.smallViewer, abuse: results.abuse, squeezedViewer: results.squeezedViewer, switchMs: results.switchMs, dummyFirstFrame: results.dummyFirstFrame }, null, 1));
   console.log(failed ? 'FAIL' : 'PASS');
   process.exit(failed ? 1 : 0);
 })();
