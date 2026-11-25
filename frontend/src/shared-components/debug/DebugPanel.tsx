@@ -1,6 +1,7 @@
 import { RiCloseLine } from '@remixicon/react';
 import type { ReactNode } from 'react';
 
+import type { WindowId } from '@/infra/debug/window-store';
 import { useIsMobile } from '@/infra/mobile';
 import { FRAME, GRIP, useDialogBox } from '@/shared-components/debug/useDialogBox';
 import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
@@ -15,14 +16,14 @@ export function DebugPanel({
   onClose,
   children
 }: {
-  id: string;
+  id: WindowId;
   label: string;
   note: string;
   place: string;
   onClose: () => void;
   children: ReactNode;
 }) {
-  const { dialogRef, box, press } = useDialogBox();
+  const { dialogRef, box, press } = useDialogBox(id);
   const mobile = useIsMobile();
   useSheetBack(onClose);
 

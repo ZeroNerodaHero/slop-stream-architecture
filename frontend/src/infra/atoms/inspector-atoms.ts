@@ -3,6 +3,7 @@ import { type Atom, atom } from 'jotai';
 import { type FrameEntry, makeEntry, Ring } from '@/infra/frames';
 import { messagesEnabledAtom, qualityEnabledAtom, timingsEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { debug, type DebugFeature, onDebugChange, setDebug } from '@/infra/debug-flag';
+import { parseWindows, pick, restoreOpen, serialize, WINDOW_IDS, WINDOWS_KEY } from '@/infra/debug/window-open';
 import { store } from '@/infra/store';
 
 export const FRAME_DIRS = ['in', 'out', 'link'] as const;
@@ -181,3 +182,22 @@ function follow(enabled: Atom<boolean>, feature: DebugFeature, off: () => void) 
 follow(messagesEnabledAtom, 'messages', dropFrames);
 follow(timingsEnabledAtom, 'timings', closeTimings);
 follow(qualityEnabledAtom, 'quality', closeQuality);
+
+const OPEN = { messages: inspectorOpenAtom, timings: timingsOpenAtom, quality: qualityOpenAtom };
+
+function saveOpen() {
+  try {
+    localStorage.setItem(WINDOWS_KEY, serialize(pick((id) => store.get(OPEN[id]))));
+  } catch {
+  }
+}
+
+try {
+  const open = restoreOpen(parseWindows(localStorage.getItem(WINDOWS_KEY)), debug);
+  for (const id of WINDOW_IDS) {
+    store.set(OPEN[id], open[id]);
+    store.sub(OPEN[id], saveOpen);
+  }
+} catch {
+}
+saveOpen();

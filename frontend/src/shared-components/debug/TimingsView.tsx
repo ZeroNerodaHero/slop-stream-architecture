@@ -1,6 +1,11 @@
+import { RiArrowDownSLine } from '@remixicon/react';
+import { useState } from 'react';
+
 import type { MetricGroup } from '@/infra/debug/rings';
-import { niceTicks, type Summary } from '@/infra/debug/stats';
-import { useWidth } from '@/shared-components/debug/useWidth';
+import type { Summary } from '@/infra/debug/stats';
+import { type Axis, hotP95, loadSections, place, pool, routeParts, saveSections, sectionAxis, type SectionState } from '@/infra/debug/strip';
+import { Tooltip } from '@/shared-components/Tooltip';
+import { cn } from '@/utils/cn';
 
 export interface MetricRow {
   key: string;
@@ -16,16 +21,16 @@ export interface MetricGroupRows {
 }
 
 const GROUP_WORD: Record<MetricGroup, string> = {
-  chat: 'chat: ms from the press or the mount, and a say to its ack',
-  watch: 'watch: ms from the press',
-  api: 'api: ms from the request to the answer, by route, most asked first'
+  chat: 'ms from the press or the mount, and a say to its ack',
+  watch: 'ms from the press',
+  api: 'ms from the request to the answer, most asked first'
 };
 
-const LABEL_W = 120;
-const PAD_R = 12;
-const ROW = 30;
-const AXIS = 18;
-const COLUMNS: [string, keyof Summary][] = [
+const LABEL_CHARS = 20;
+const GRID = 'grid grid-cols-[11rem_minmax(0,1fr)_2.25rem_2.25rem_1.75rem] items-center gap-x-2';
+const GRID_API = 'grid grid-cols-[11rem_minmax(0,1fr)_2.25rem_2.25rem_1.75rem_1.75rem] items-center gap-x-2';
+const NUM = 'text-right font-mono tabular-nums';
+const TIP_FIELDS: [string, keyof Summary][] = [
   ['n', 'n'],
   ['min', 'min'],
   ['p25', 'p25'],
@@ -36,102 +41,188 @@ const COLUMNS: [string, keyof Summary][] = [
   ['max', 'max']
 ];
 
-const LABEL_CHARS = 20;
-
 const ms = (v: number) => (Number.isFinite(v) ? String(Math.round(v)) : '-');
 const short = (label: string) => (label.length > LABEL_CHARS ? `…${label.slice(-(LABEL_CHARS - 1))}` : label);
 
-function BoxPlot({ rows }: { rows: readonly MetricRow[] }) {
-  const [ref, width] = useWidth<HTMLDivElement>();
-  const ticks = niceTicks(Math.max(...rows.map((r) => r.summary.max)));
-  const top = ticks[ticks.length - 1]! || 1;
-  const plot = Math.max(1, width - LABEL_W - PAD_R);
-  const x = (v: number) => LABEL_W + (Math.max(0, v) / top) * plot;
-  const height = rows.length * ROW + AXIS;
+function storage(): Storage | null {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function Legend() {
   return (
-    <div ref={ref} className="w-full">
-      {width > 0 && (
-        <svg width={width} height={height} role="img" aria-label="box plot of the timings" className="block font-mono text-[10px]">
-          {ticks.map((v) => (
-            <line key={v} x1={x(v)} x2={x(v)} y1={0} y2={rows.length * ROW} className="stroke-current text-primaryStroke" />
-          ))}
-          {rows.map((r, i) => {
-            const y = i * ROW;
-            const mid = y + 11;
-            const s = r.summary;
-            return (
-              <g key={r.key} data-metric={r.key}>
-                <text x={0} y={mid + 3} className="fill-current font-sans text-textSecondary">
-                  {short(r.label)}
-                </text>
-                <line x1={x(s.min)} x2={x(s.max)} y1={mid} y2={mid} className="stroke-current text-textTertiary" />
-                <line x1={x(s.min)} x2={x(s.min)} y1={mid - 4} y2={mid + 4} className="stroke-current text-textTertiary" />
-                <line x1={x(s.max)} x2={x(s.max)} y1={mid - 4} y2={mid + 4} className="stroke-current text-textTertiary" />
-                <rect
-                  x={x(s.p25)}
-                  y={mid - 6}
-                  width={Math.max(1, x(s.p75) - x(s.p25))}
-                  height={12}
-                  fillOpacity={0.2}
-                  className="fill-current stroke-current text-primaryBlue"
-                />
-                <line x1={x(s.median)} x2={x(s.median)} y1={mid - 6} y2={mid + 6} strokeWidth={2} className="stroke-current text-primaryBlue" />
-                <circle cx={x(s.mean)} cy={mid} r={2.5} className="fill-current text-textPrimary" />
-                {r.recent.map((v, j) => (
-                  <circle key={j} cx={x(v)} cy={y + 24} r={1.5} fillOpacity={0.6} className="fill-current text-textSecondary" />
-                ))}
-              </g>
-            );
-          })}
-          {ticks.map((v, i) => (
-            <text key={v} x={x(v)} y={height - 4} textAnchor={i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle'} className="fill-current text-textTertiary">
-              {i === ticks.length - 1 ? `${v} ms` : v}
-            </text>
-          ))}
-        </svg>
-      )}
+    <div className="flex items-center gap-3 py-1.5 font-mono text-[10px] text-textTertiary">
+      <span className="flex items-center gap-1">
+        <span aria-hidden className="h-1.5 w-3 bg-primaryBlue" />
+        p25–p75
+      </span>
+      <span className="flex items-center gap-1">
+        <span aria-hidden className="h-2.5 w-0.5 bg-white" />
+        med
+      </span>
+      <span className="flex items-center gap-1">
+        <span aria-hidden className="h-2.5 w-0.5 bg-caution" />
+        p95
+      </span>
+      <span className="flex items-center gap-1">
+        <span aria-hidden className="h-1.5 w-3 bg-secondaryStroke" />
+        min–max
+      </span>
     </div>
   );
 }
 
+function Strip({ s, axis }: { s: Summary; axis: Axis }) {
+  const min = place(s.min, axis);
+  const p25 = place(s.p25, axis);
+  return (
+    <div className="relative h-1.5 bg-backgroundTertiary">
+      <span className="absolute inset-y-0 bg-secondaryStroke" style={{ left: `${min}%`, width: `${place(s.max, axis) - min}%` }} />
+      <span className="absolute inset-y-0 min-w-px bg-primaryBlue" style={{ left: `${p25}%`, width: `${place(s.p75, axis) - p25}%` }} />
+      <span className="absolute -inset-y-0.5 w-0.5 -translate-x-1/2 bg-white" style={{ left: `${place(s.median, axis)}%` }} />
+      <span className="absolute -inset-y-0.5 w-0.5 -translate-x-1/2 bg-caution" style={{ left: `${place(s.p95, axis)}%` }} />
+    </div>
+  );
+}
+
+function Label({ group, row }: { group: MetricGroup; row: MetricRow }) {
+  if (group !== 'api') return <span className="truncate text-textSecondary">{short(row.label)}</span>;
+  const { method, badge, path } = routeParts(row.key);
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span
+        className={cn(
+          'flex h-3 w-3 shrink-0 items-center justify-center border font-mono text-[8px] leading-none',
+          method === 'GET' ? 'border-secondaryStroke text-textTertiary' : 'border-primaryBlue text-primaryBlue'
+        )}
+      >
+        {badge}
+      </span>
+      <span className="truncate text-textSecondary">{short(path)}</span>
+    </span>
+  );
+}
+
+function Row({ group, row, axis }: { group: MetricGroup; row: MetricRow; axis: Axis }) {
+  const s = row.summary;
+  const tip = (
+    <span className="flex gap-2 font-mono font-normal tabular-nums">
+      {TIP_FIELDS.map(([word, field]) => (
+        <span key={word}>
+          <span className="text-textTertiary">{word}</span> {field === 'n' ? s.n : ms(s[field])}
+        </span>
+      ))}
+      <span className="text-textTertiary">ms</span>
+    </span>
+  );
+  return (
+    <Tooltip content={tip}>
+      <div data-metric={row.key} className={cn(group === 'api' ? GRID_API : GRID, 'h-4 hover:bg-backgroundTertiary')}>
+        <Label group={group} row={row} />
+        <Strip s={s} axis={axis} />
+        <span className={cn(NUM, 'text-textPrimary')}>{ms(s.median)}</span>
+        <span className={cn(NUM, hotP95(s) ? 'text-caution' : 'text-textSecondary')}>{ms(s.p95)}</span>
+        <span className={cn(NUM, 'text-textSecondary')}>{s.n}</span>
+        {group === 'api' && <span className={cn(NUM, row.errors ? 'text-decrease' : 'text-textTertiary')}>{row.errors ?? 0}</span>}
+      </div>
+    </Tooltip>
+  );
+}
+
+function Ticks({ group, axis }: { group: MetricGroup; axis: Axis }) {
+  const last = axis.ticks.length - 1;
+  return (
+    <div className={cn(group === 'api' ? GRID_API : GRID, 'h-4 font-mono text-[10px] text-textTertiary')}>
+      <span>ms</span>
+      <div className="relative h-full">
+        {axis.ticks.map((v, i) => (
+          <span key={v} className={cn('absolute top-0', i === 0 ? '' : i === last ? '-translate-x-full' : '-translate-x-1/2')} style={{ left: `${place(v, axis)}%` }}>
+            {v}
+          </span>
+        ))}
+      </div>
+      <span className="text-right">med</span>
+      <span className="text-right">p95</span>
+      <span className="text-right">n</span>
+      {group === 'api' && <span className="text-right">err</span>}
+    </div>
+  );
+}
+
+function Section({ g, open, onToggle }: { g: MetricGroupRows; open: boolean; onToggle: () => void }) {
+  const p = pool(g.rows);
+  const word = `${open ? 'collapse' : 'expand'} ${g.group}`;
+  const axis = sectionAxis(g.rows.map((r) => r.summary));
+  return (
+    <section data-group={g.group} className="border-b border-primaryStroke last:border-b-0">
+      <div className="flex h-[26px] cursor-pointer select-none items-center gap-2" onClick={onToggle}>
+        <Tooltip content={word}>
+          <button
+            id={`timings-toggle-${g.group}`}
+            type="button"
+            aria-label={word}
+            aria-expanded={open}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            className={cn(
+              'flex h-5 w-5 shrink-0 items-center justify-center border bg-backgroundSecondary hover:border-primaryBlue hover:text-primaryBlue',
+              open ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textSecondary'
+            )}
+          >
+            <RiArrowDownSLine aria-hidden size={14} className={open ? undefined : '-rotate-90'} />
+          </button>
+        </Tooltip>
+        <span className="font-semibold text-textPrimary">{g.group}</span>
+        <span className="text-textTertiary">{g.rows.length}</span>
+        <span className="min-w-0 flex-1 truncate text-textTertiary">{GROUP_WORD[g.group]}</span>
+        <span className="flex shrink-0 gap-3 font-mono tabular-nums text-textTertiary">
+          <span>
+            n <span className="text-textSecondary">{p.n}</span>
+          </span>
+          <span>
+            med <span className="font-semibold text-textPrimary">{ms(p.median)}</span>
+          </span>
+          <span>
+            p95 <span className="text-textSecondary">{ms(p.p95)}</span>
+          </span>
+          {g.group === 'api' && (
+            <span>
+              err <span className={p.errors ? 'text-decrease' : 'text-textSecondary'}>{p.errors}</span>
+            </span>
+          )}
+        </span>
+      </div>
+      {open && (
+        <div className="pb-2">
+          <Ticks group={g.group} axis={axis} />
+          {g.rows.map((r) => (
+            <Row key={r.key} group={g.group} row={r} axis={axis} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function TimingsView({ groups }: { groups: readonly MetricGroupRows[] }) {
+  const [sections, setSections] = useState<SectionState>(() => loadSections(storage()));
+  const toggle = (group: MetricGroup) => {
+    const next = { ...sections, [group]: !sections[group] };
+    setSections(next);
+    saveSections(storage(), next);
+  };
   const shown = groups.filter((g) => g.rows.length > 0);
   return (
-    <div id="profiler-timings" className="min-h-0 flex-1 overflow-y-auto px-3 py-1 text-xs leading-5">
+    <div id="profiler-timings" className="min-h-0 flex-1 overflow-y-auto px-3 pb-1 text-xs leading-4">
+      <Legend />
       {shown.length === 0 && <p className="py-2 text-textTertiary">nothing yet. a chat, a say, a watch or an api call shows up here when it finishes.</p>}
       {shown.map((g) => (
-        <section key={g.group} data-group={g.group} className="pb-3">
-          <div className="py-2 text-textTertiary">{GROUP_WORD[g.group]}</div>
-          <BoxPlot rows={g.rows} />
-          <table className="mt-2 w-full font-mono tabular-nums">
-            <thead>
-              <tr className="border-b border-primaryStroke text-textTertiary">
-                <th className="py-1 pr-2 text-left font-normal">metric</th>
-                {COLUMNS.map(([word]) => (
-                  <th key={word} className="py-1 pl-2 text-right font-normal">
-                    {word}
-                  </th>
-                ))}
-                {g.group === 'api' && <th className="py-1 pl-2 text-right font-normal">err</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {g.rows.map((r) => (
-                <tr key={r.key} data-metric={r.key} className="border-b border-primaryStroke/60 last:border-b-0">
-                  <td className="truncate py-1 pr-2 font-sans text-textSecondary">{r.label}</td>
-                  {COLUMNS.map(([word, field]) => (
-                    <td key={word} className={field === 'median' ? 'py-1 pl-2 text-right text-textPrimary' : 'py-1 pl-2 text-right text-textSecondary'}>
-                      {field === 'n' ? r.summary.n : ms(r.summary[field])}
-                    </td>
-                  ))}
-                  {g.group === 'api' && (
-                    <td className={r.errors ? 'py-1 pl-2 text-right text-textPrimary' : 'py-1 pl-2 text-right text-textSecondary'}>{r.errors ?? 0}</td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+        <Section key={g.group} g={g} open={sections[g.group]} onToggle={() => toggle(g.group)} />
       ))}
     </div>
   );
