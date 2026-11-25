@@ -205,8 +205,8 @@
   .st-running { color: var(--up); } .st-exited, .st-dead { color: var(--down); } .st-restarting, .st-paused, .st-created { color: var(--warn); }
   .archv { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
   .archl { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
-  .arch-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--stroke); }
-  .arch { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  .arch-wrap { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--stroke); }
+  .arch { display: block; flex: none; margin: auto; }
   .arch text { font: 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--t1); }
   .arch .lane-box { fill: none; stroke: var(--stroke); }
   .arch .lane-label { fill: var(--t3); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
@@ -1339,7 +1339,8 @@
     panel(now);
     const barParts = [caption, nets];
     bar.append(...barParts);
-    archBuilt.set(t.name, { key, shell, panel, error, barParts });
+    if (built) built.unwatch();
+    archBuilt.set(t.name, { key, shell, panel, error, barParts, unwatch: graph.unwatch });
     return shell;
   }
 
@@ -1500,11 +1501,23 @@
       nodeEls.set(n.id, g);
     }
     wrap.append(svg, tipBox);
+    const ARCH_MIN = 0.75, ARCH_MAX = 1.8;
+    const fit = () => {
+      const cw = wrap.clientWidth - 2, ch = wrap.clientHeight - 2;
+      if (cw <= 0 || ch <= 0) return;
+      const k = Math.min(ARCH_MAX, Math.max(ARCH_MIN, Math.min(cw / W, ch / H)));
+      svg.style.width = `${Math.floor(W * k)}px`;
+      svg.style.height = `${Math.floor(H * k)}px`;
+      tipBox.hidden = true;
+    };
+    const watch = new ResizeObserver(fit);
+    watch.observe(wrap);
     rest();
     return {
       wrap,
       rest,
       pin,
+      unwatch: () => watch.disconnect(),
       light: (ids) => (ids ? paint(ids, (e) => ids.includes(e.from) && ids.includes(e.to)) : rest()),
       edge: (e) => (e ? just(e) : rest()),
     };
