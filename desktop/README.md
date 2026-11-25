@@ -11,7 +11,33 @@ npm --prefix desktop install
 npm --prefix desktop run dev
 ```
 
-`dev` opens the window on https://nodentity.xyz too (`build.devUrl` in `src-tauri/tauri.conf.json`). To point it at a local vite, change `devUrl` to `http://localhost:42069` for the session and add that origin to `remote.urls` in `src-tauri/capabilities/main.json`.
+`dev` opens the window on https://nodentity.xyz too (`build.devUrl` in `src-tauri/tauri.conf.json`). To point it at a local vite, pass another `devUrl` for the session, as in [Against a local build](#against-a-local-build).
+
+## Native capture
+
+Inside the app the go live page uses native code for sound and screens. The web build never loads any of it: every path checks `inTauri()` first and imports `@tauri-apps/api` lazily.
+
+- **Desktop audio**: `add desktop audio` in the sound panel adds a `desktop audio` row to the mixer. macOS takes it from ScreenCaptureKit (the app's own sound is left out), Windows from a WASAPI loopback of the default output. Removing the row stops the capture.
+- **Mic**: the mic picker lists the devices cpal sees, and the one picked is captured natively, then runs through RNNoise, a noise gate and a limiter before the mixer. The mic row has toggles for noise suppression and the gate.
+- **Screens on macOS**: `share screen` lists displays and windows through ScreenCaptureKit and opens a picker. The picked one is captured at up to 1920 px wide and 30 fps, sent as JPEG frames and drawn into a canvas whose `captureStream` track goes out like a `getDisplayMedia` one. When listing fails (no permission) it falls back to `getDisplayMedia`. Windows keeps WebView2's `getDisplayMedia`.
+
+The commands (`start_desktop_audio`, `stop_desktop_audio`, `list_input_devices`, `start_mic`, `stop_mic`, `list_capture_sources`, `start_screen_capture`, `stop_screen_capture`) are allowed by the `native-capture` permission set in `src-tauri/permissions/native-capture.toml`, which `capabilities/main.json` grants to the main window.
+
+`main` is scoped to https://nodentity.xyz through `remote.urls`, so any other origin the window navigates to (an OAuth provider) gets none of these commands. PCM goes to the page as 20 ms chunks of 48 kHz f32 over a `Channel` as raw bytes: stereo for desktop audio, mono for the mic.
+
+macOS asks for Screen & System Audio Recording the first time the screen list or desktop audio starts, and for the Microphone the first time a mic opens. A refusal comes back as an error that names the setting to turn on; after allowing screen recording, quit and open the app again.
+
+### Against a local build
+
+Serve the frontend, point a dev window at it with an inline `devUrl`, and grant that origin the same permissions with an inline capability, so nothing localhost is committed:
+
+```sh
+npm --prefix frontend run build
+npm --prefix frontend run preview -- --port 4173
+npm --prefix desktop run dev -- --config '{"build":{"devUrl":"http://localhost:4173"},"app":{"security":{"capabilities":["main",{"identifier":"local","windows":["main"],"remote":{"urls":["http://localhost:4173/*"]},"permissions":["core:default","updater:default","process:allow-restart","native-capture"]}]}}}'
+```
+
+`vite preview` proxies `/api` and the sockets to `BACKEND` the same way `npm run dev` does, so going live from that window works against whatever backend `frontend/.env` names. `add desktop audio` and the mic toggles show in the sound panel once you are live.
 
 ## Build it locally
 

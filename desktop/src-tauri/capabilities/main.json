@@ -1,11 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "nodentity.xyz in the main window may check for, install and restart into updates",
+  "description": "nodentity.xyz in the main window may check for, install and restart into updates, and capture desktop audio, mics and screens natively",
   "windows": ["main"],
   "remote": {
     "urls": ["https://nodentity.xyz/*", "https://nodentity.xyz"]
   },
   "platforms": ["macOS", "windows", "linux"],
-  "permissions": ["core:default", "updater:default", "process:allow-restart"]
+  "permissions": ["core:default", "updater:default", "process:allow-restart", "native-capture"]
 }
