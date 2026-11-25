@@ -3,7 +3,7 @@ use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use webrtc::interceptor::nack::generator::Generator;
 use webrtc::interceptor::nack::responder::Responder;
 use webrtc::interceptor::registry::Registry;
-use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType};
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionCapability, RTPCodecType};
 use webrtc::rtp_transceiver::RTCPFeedback;
 
 pub fn opus_capability() -> RTCRtpCodecCapability {
@@ -64,6 +64,13 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     Ok((media, registry))
 }
 
+pub fn accept_simulcast(media: &mut MediaEngine) -> anyhow::Result<()> {
+    for uri in [webrtc::sdp::extmap::SDES_MID_URI, webrtc::sdp::extmap::SDES_RTP_STREAM_ID_URI] {
+        media.register_header_extension(RTCRtpHeaderExtensionCapability { uri: uri.to_owned() }, RTPCodecType::Video, None)?;
+    }
+    Ok(())
+}
+
 pub fn opus_voice_capability() -> RTCRtpCodecCapability {
     RTCRtpCodecCapability {
         mime_type: MIME_TYPE_OPUS.to_owned(),
@@ -102,27 +109,9 @@ pub fn voice_media_setup() -> anyhow::Result<(MediaEngine, Registry)> {
     Ok((media, registry))
 }
 
-pub fn is_vp8_keyframe(payload: &[u8]) -> bool {
-    let Some(&first) = payload.first() else { return false };
-    if first & 0x10 == 0 || first & 0x07 != 0 {
-        return false;
-    }
-    let mut at = 1;
-    if first & 0x80 != 0 {
-        let Some(&ext) = payload.get(at) else { return false };
-        at += 1;
-        if ext & 0x80 != 0 {
-            let Some(&id) = payload.get(at) else { return false };
-            at += if id & 0x80 != 0 { 2 } else { 1 };
-        }
-        if ext & 0x40 != 0 {
-            at += 1;
-        }
-        if ext & 0x30 != 0 {
-            at += 1;
-        }
-    }
-    payload.get(at).is_some_and(|tag| tag & 0x01 == 0)
+#[cfg(test)]
+fn is_vp8_keyframe(payload: &[u8]) -> bool {
+    crate::simulcast::parse_vp8(payload).keyframe
 }
 
 #[cfg(test)]
@@ -159,5 +148,11 @@ mod tests {
     #[test]
     fn voice_media_setup_works() {
         assert!(super::voice_media_setup().is_ok());
+    }
+
+    #[test]
+    fn publish_media_accepts_simulcast_rids() {
+        let (mut media, _) = super::media_setup(true).unwrap();
+        assert!(super::accept_simulcast(&mut media).is_ok());
     }
 }
