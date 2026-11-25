@@ -254,7 +254,7 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
 function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col sm:relative">
-      <div className="absolute right-4 top-4 z-10 flex flex-col items-center gap-1 max-sm:right-1 max-sm:top-px">
+      <div className="absolute right-3 top-3 z-10 max-sm:right-1 max-sm:top-px">
         <Tooltip content="close" at="left">
           <button
             id="user-modal-close"
@@ -270,9 +270,6 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
             <RiCloseLine aria-hidden size={20} />
           </button>
         </Tooltip>
-        <span aria-hidden className="hidden text-[10px] font-semibold uppercase tracking-wider text-textTertiary sm:block">
-          esc
-        </span>
       </div>
 
       <div
@@ -280,10 +277,10 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
         id={`panel-${tab}`}
         role="tabpanel"
         aria-labelledby={`tab-${tab}`}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:px-8 sm:py-5"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:pl-8 sm:pr-14 sm:py-5"
       >
-        <div className="max-w-[640px]">
-          <h2 id={`panel-${tab}-title`} className="mb-4 border-l-4 border-primaryBlue pl-3 pr-12 text-lg font-semibold leading-tight">
+        <div className="max-w-[760px]">
+          <h2 id={`panel-${tab}-title`} className="mb-4 border-l-4 border-primaryBlue pl-3 text-lg font-semibold leading-tight">
             {TABS[tab].label}
           </h2>
           <Suspense fallback={null}>
