@@ -187,6 +187,13 @@ export function setQualityEnabled(on: boolean) {
   store.set(storedQualityAtom, on);
 }
 
+const storedPerfAtom = atomWithStorage<unknown>('settings.debugPerf', false, undefined, { getOnInit: true });
+export const perfEnabledAtom = atom((get) => get(storedPerfAtom) === true);
+
+export function setPerfEnabled(on: boolean) {
+  store.set(storedPerfAtom, on);
+}
+
 const storedHideBotsAtom = atomWithStorage<unknown>('settings.hideBots', false, undefined, { getOnInit: true });
 export const hideBotsAtom = atom((get) => get(storedHideBotsAtom) === true);
 
