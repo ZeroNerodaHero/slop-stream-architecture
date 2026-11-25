@@ -494,6 +494,7 @@ export interface Health {
   s3_bucket?: string;
   s3_endpoint?: string;
   errors_dropped: number;
+  emotes?: number | null;
 }
 
 export interface ClientError {

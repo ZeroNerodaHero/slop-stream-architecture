@@ -85,6 +85,9 @@ function HealthCard({ health, error }: { health: Health | undefined; error: unkn
       <span className="text-textSecondary">
         live <span className="font-semibold text-textPrimary">{health.live ?? '—'}</span>
       </span>
+      <span id="admin-emotes" className="text-textSecondary">
+        emotes <span className="font-semibold text-textPrimary">{health.emotes ?? '—'}</span>
+      </span>
       <span className="text-textSecondary" title="since the api process started. it going backwards means a restart">
         api up {up(health.up_secs)}
       </span>
