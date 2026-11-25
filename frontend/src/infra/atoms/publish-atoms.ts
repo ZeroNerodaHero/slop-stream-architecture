@@ -48,12 +48,16 @@ import {
   FULL,
   imageBox,
   isVideoSource,
+  keptOf,
   movedBox,
   presetOf,
   ratioOf,
+  readKept,
   resizedBox,
+  restoredFrom,
   roleOf,
   sceneOf,
+  soloed,
   type Source,
   validPreset
 } from '@/infra/scene';
@@ -115,7 +119,10 @@ export const sentStreamAtom = (slot: number) => (slot === 0 ? cameraAtom : scree
 export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
 export const sourcesAtom = atom<Source[]>([]);
-export const sceneAtom = atom((get) => sceneOf(get(sourcesAtom)));
+const storedSoloAtom = atomWithStorage<unknown>('settings.liveCameraOnly', null, undefined, { getOnInit: true });
+export const cameraOnlyAtom = atom((get) => readKept(get(storedSoloAtom)) !== null);
+const sentSourcesAtom = atom((get) => (get(cameraOnlyAtom) ? soloed(get(sourcesAtom)) : get(sourcesAtom)));
+export const sceneAtom = atom((get) => sceneOf(get(sentSourcesAtom)));
 export const previewSlotAtom = atom((get) => get(sceneAtom).layers.find(isVideoLayer)?.slot ?? null);
 export const previewStreamAtom = atom((get) => {
   const slot = get(previewSlotAtom);
@@ -166,12 +173,17 @@ export const keptDemosAtom = atom<ReadonlyMap<string, string>>(new Map<string, s
 const MODEL_BACKGROUND = '#181b22';
 const storedModelAtom = atomWithStorage<unknown>('settings.model', null, undefined, { getOnInit: true });
 const storedFaceCameraAtom = atomWithStorage<unknown>('settings.faceCamera', '', undefined, { getOnInit: true });
+const storedMicAtom = atomWithStorage<unknown>('settings.mic', '', undefined, { getOnInit: true });
 const storedFaceMirrorAtom = atomWithStorage<unknown>('settings.faceMirror', true, undefined, { getOnInit: true });
 const storedFaceExpressionsAtom = atomWithStorage<unknown>('settings.faceExpressions', true, undefined, { getOnInit: true });
 const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', MODEL_BACKGROUND, undefined, { getOnInit: true });
 const storedRigPictureAtom = atomWithStorage<unknown>('settings.rigPicture', true, undefined, { getOnInit: true });
 export const faceCameraAtom = atom((get) => {
   const id = get(storedFaceCameraAtom);
+  return typeof id === 'string' ? id : '';
+});
+const micPickAtom = atom((get) => {
+  const id = get(storedMicAtom);
   return typeof id === 'string' ? id : '';
 });
 export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false);
@@ -328,7 +340,7 @@ export async function startMic(): Promise<void> {
   const generation = liveGeneration;
   let mic: MediaStream;
   try {
-    mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mic = await openMedia(false, true);
   } catch (err) {
     if (generation !== liveGeneration) return;
     const blocked = err instanceof DOMException && err.name === 'NotAllowedError';
@@ -428,17 +440,30 @@ const faceVideo = (deviceId: string): MediaTrackConstraints => ({
 
 const cameraVideo = (deviceId: string): MediaTrackConstraints => ({ ...CAMERA_VIDEO, ...(deviceId && { deviceId: { exact: deviceId } }) });
 
+const deviceGone = (err: unknown) => err instanceof DOMException && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError');
+
+async function openMedia(video: MediaTrackConstraints | false, audio: boolean): Promise<MediaStream> {
+  const mic = audio ? store.get(micPickAtom) : '';
+  if (mic) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video, audio: { deviceId: { exact: mic } } });
+    } catch (err) {
+      if (!deviceGone(err)) throw err;
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ video, audio });
+}
+
 async function openCamera(audio: boolean): Promise<MediaStream> {
   const picked = store.get(faceCameraAtom);
   if (picked) {
     try {
-      return await navigator.mediaDevices.getUserMedia({ video: cameraVideo(picked), audio });
+      return await openMedia(cameraVideo(picked), audio);
     } catch (err) {
-      const name = err instanceof DOMException ? err.name : '';
-      if (name !== 'OverconstrainedError' && name !== 'NotFoundError') throw err;
+      if (!deviceGone(err)) throw err;
     }
   }
-  return navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO, audio });
+  return openMedia(CAMERA_VIDEO, audio);
 }
 
 async function openFaceCamera(): Promise<MediaStreamTrack | null> {
@@ -484,6 +509,7 @@ export async function refreshMicDevices(): Promise<void> {
 }
 
 export async function setMicDevice(deviceId: string): Promise<void> {
+  store.set(storedMicAtom, deviceId);
   const had = store.get(cameraAtom);
   if (!had || had.getAudioTracks()[0]?.getSettings().deviceId === deviceId) return;
   const generation = liveGeneration;
@@ -716,10 +742,10 @@ interface OpenedForModel {
 
 async function openForModel(): Promise<OpenedForModel> {
   try {
-    const both = await navigator.mediaDevices.getUserMedia({ video: faceVideo(store.get(faceCameraAtom)), audio: true });
+    const both = await openMedia(faceVideo(store.get(faceCameraAtom)), true);
     return { mic: new MediaStream(both.getAudioTracks()), camera: both.getVideoTracks()[0] ?? null };
   } catch {
-    const mic = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+    const mic = await openMedia(false, true).catch(() => null);
     return { mic, camera: await openFaceCamera() };
   }
 }
@@ -1239,6 +1265,11 @@ function slotsChanged() {
 }
 
 function setSources(next: Source[]) {
+  const kept = readKept(store.get(storedSoloAtom));
+  if (kept) {
+    next = restoredFrom(kept, store.get(sourcesAtom), next);
+    store.set(storedSoloAtom, { ...kept, ...keptOf(next) });
+  }
   store.set(sourcesAtom, next);
   if (!sceneTimer) {
     sceneTimer = setTimeout(() => {
@@ -1267,6 +1298,19 @@ function rememberArrangement() {
   const roles = new Set(sources.filter((s) => s.shown).map((s) => roleOf(s, sources)));
   if (!roles.has('camera') || !roles.has('screen1')) return;
   store.set(storedLastAtom, presetOf('last', sources));
+}
+
+export function setCameraOnly(on: boolean) {
+  const kept = readKept(store.get(storedSoloAtom));
+  if (on === (kept !== null)) return;
+  store.set(selectedSourceAtom, null);
+  if (on) store.set(storedSoloAtom, keptOf(store.get(sourcesAtom)));
+  else {
+    store.set(storedSoloAtom, null);
+    const sources = store.get(sourcesAtom);
+    if (Object.keys(kept!).some((id) => !sources.some((s) => s.id === id))) setSources(arrangedAfterRemove(sources));
+  }
+  slotsChanged();
 }
 
 export function selectSource(id: string | null) {
@@ -1496,10 +1540,10 @@ function cameraScale(w: number): number {
 }
 
 async function tuneSenders() {
-  const sources = store.get(sourcesAtom);
+  const sources = store.get(sentSourcesAtom);
   const screens = store.get(screensAtom);
   const shown = sources.filter((s) => isVideoSource(s) && s.shown);
-  const stage = shown.reduce<Source | null>((best, s) => (!best || s.box.w * s.box.h > best.box.w * best.box.h ? s : best), null);
+  const stage = shown.reduce<Source | null>((best, s) => (!best || s.box.w * s.box.h >= best.box.w * best.box.h ? s : best), null);
   const camera = sources.find((s) => s.kind === 'camera');
   const height = cameraSender?.track?.getSettings().height;
   let top: Top | undefined;

@@ -1,10 +1,11 @@
 import { RiCloseLine, RiImageLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 
 import { api } from '@/infra/api';
-import { addStreamThumb, removeStreamThumb, streamNameAtom, streamThumbsAtom, thumbStatusAtom } from '@/infra/atoms/publish-atoms';
+import { addStreamThumb, removeStreamThumb, sceneAtom, streamNameAtom, streamThumbsAtom, thumbStatusAtom } from '@/infra/atoms/publish-atoms';
 import { livePanelsAtom, setLivePanel, setRail } from '@/infra/live-dock';
+import { frameOf } from '@/infra/scene-frame';
 import { Button } from '@/shared-components/Button';
 import { FOLD, FOLD_BUTTON, FOLD_OPEN, FOLD_SHUT, FoldButton } from '@/shared-components/live/Dock';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -12,11 +13,32 @@ import { cn } from '@/utils/cn';
 
 const MOST = 6;
 
+async function grabFrame(): Promise<boolean> {
+  const root = document.getElementById('scene');
+  const frame = root ? await frameOf(root) : null;
+  if (!frame) return false;
+  await addStreamThumb(new File([frame], 'frame.jpg', { type: 'image/jpeg' }));
+  return true;
+}
+
 export function ThumbnailsBody() {
   const name = useAtomValue(streamNameAtom);
   const thumbs = useAtomValue(streamThumbsAtom);
   const thumbStatus = useAtomValue(thumbStatusAtom);
+  const empty = useAtomValue(sceneAtom).layers.length === 0;
+  const [taking, setTaking] = useState(false);
+  const [missed, setMissed] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const full = thumbs.length >= MOST;
+  const saving = thumbStatus === 'saving';
+  const frameWhy = empty ? 'nothing on the preview to capture yet' : full ? '6 thumbnails at most: remove one first' : saving ? 'saving the last one' : null;
+  const takeFrame = async () => {
+    setTaking(true);
+    setMissed(false);
+    const took = await grabFrame().catch(() => false);
+    setTaking(false);
+    setMissed(!took);
+  };
   return (
     <div id="thumbs" className="flex flex-col gap-2">
       {thumbs.length > 0 ? (
@@ -60,16 +82,21 @@ export function ThumbnailsBody() {
           id="thumb-add"
           size="sm"
           variant="outline"
-          className="h-7 py-0 text-xs max-md:min-h-11"
-          disabled={thumbs.length >= MOST || thumbStatus === 'saving'}
+          className="h-7 min-w-0 flex-1 whitespace-nowrap px-2 py-0 text-xs max-md:min-h-11"
+          disabled={full || saving}
           onClick={() => fileRef.current?.click()}
         >
           {thumbs.length > 0 ? 'add another' : 'add a thumbnail'}
         </Button>
-        <span id="thumbstatus" className="min-w-0 truncate text-xs text-textSecondary" aria-live="polite">
-          {thumbStatus}
-        </span>
+        <Tooltip content={frameWhy ?? 'add the preview as it is now'}>
+          <Button id="thumb-frame" size="sm" className="h-7 min-w-0 flex-1 whitespace-nowrap px-2 py-0 text-xs max-md:min-h-11" disabled={frameWhy !== null || taking} onClick={() => void takeFrame()}>
+            use frame
+          </Button>
+        </Tooltip>
       </div>
+      <span id="thumbstatus" className="min-w-0 truncate text-xs text-textSecondary empty:-mt-2" aria-live="polite">
+        {missed ? 'the preview has no picture yet' : thumbStatus}
+      </span>
     </div>
   );
 }

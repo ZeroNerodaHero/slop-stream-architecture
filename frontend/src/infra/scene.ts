@@ -168,3 +168,43 @@ export function arrangedAfterRemove(sources: readonly Source[]): Source[] {
   if (videos.length !== 1) return [...sources];
   return sources.map((s) => (videos.includes(s) ? { ...s, box: FULL } : s));
 }
+
+export function soloed(sources: readonly Source[]): Source[] {
+  const face = sources.find((s) => roleOf(s, sources) === 'camera');
+  if (!face) return [...sources];
+  const at = sources.indexOf(face);
+  const alone = face.kind === 'avatar';
+  return sources.map((s, i) =>
+    s === face ? { ...s, box: FULL, shown: true, fit: s.kind === 'camera' ? 'cover' : s.fit } : alone || i > at ? { ...s, shown: false } : s
+  );
+}
+
+export interface KeptSource {
+  box: Box;
+  shown: boolean;
+  fit?: Fit;
+}
+export type KeptScene = Record<string, KeptSource>;
+
+export function keptOf(sources: readonly Source[]): KeptScene {
+  return Object.fromEntries(sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }) }]));
+}
+
+export function readKept(raw: unknown): KeptScene | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const kept: KeptScene = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    const k = value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+    const b = k?.box as Partial<Box> | undefined;
+    if (!k || !b || ![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue;
+    kept[id] = { box: clampBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }) };
+  }
+  return kept;
+}
+
+export function restoredFrom(kept: KeptScene, before: readonly Source[], next: readonly Source[]): Source[] {
+  return next.map((s) => {
+    const k = kept[s.id];
+    return k && !before.some((b) => b.id === s.id) ? { ...s, box: k.box, shown: k.shown, fit: k.fit } : s;
+  });
+}
