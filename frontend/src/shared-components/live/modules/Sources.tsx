@@ -21,9 +21,11 @@ import {
   addAvatar,
   addImage,
   cameraAtom,
+  cameraDeviceAtom,
   cameraOn,
   canShareScreenAtom,
   deleteImage,
+  faceCamerasAtom,
   fitSourceTo,
   hasAvatarAtom,
   hasCameraAtom,
@@ -34,11 +36,13 @@ import {
   moveSourceTo,
   placeImage,
   publishPhaseAtom,
+  refreshFaceCameras,
   removeSource,
   screenShareSupported,
   screenStreamAtom,
   selectedSourceAtom,
   selectSource,
+  setCamera,
   setSourceFit,
   shareScreen,
   sourceStatusAtom,
@@ -53,6 +57,7 @@ import type { Source } from '@/infra/scene';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { DevicePick } from '@/shared-components/live/DevicePick';
 import { DockPanel } from '@/shared-components/live/Dock';
 import { DragHandle, type DragHandleProps, useReorder } from '@/shared-components/Reorderable';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -67,7 +72,7 @@ const MENU_ITEM =
 
 function Thumb({ id, streamAtom }: { id: string; streamAtom: Atom<MediaStream | null> }) {
   const ref = useRef<HTMLVideoElement | null>(null);
-  return <VideoFrame id={id} streamAtom={streamAtom} videoRef={ref} muted className="h-7 w-12 shrink-0 border-primaryStroke object-cover" />;
+  return <VideoFrame id={id} streamAtom={streamAtom} videoRef={ref} muted className="h-7 w-12 shrink-0 rounded-control border-primaryStroke object-cover" />;
 }
 
 function AddMenu({ onModel }: { onModel: () => void }) {
@@ -220,7 +225,7 @@ function AddMenu({ onModel }: { onModel: () => void }) {
                         id={`library-${asset.id}`}
                         type="button"
                         aria-label="put this picture on the stream"
-                        className="block h-10 w-14 border border-primaryStroke bg-black transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
+                        className="block h-10 w-14 overflow-hidden rounded-control border border-primaryStroke bg-black transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
                         onClick={() => {
                           setOpen(false);
                           void placeImage(asset.id, 'picture');
@@ -233,7 +238,7 @@ function AddMenu({ onModel }: { onModel: () => void }) {
                           id={`library-delete-${asset.id}`}
                           type="button"
                           aria-label="delete this picture"
-                          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/pic:opacity-100"
+                          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-avatar border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/pic:opacity-100"
                           onClick={() => void deleteImage(asset.id)}
                         >
                           <RiCloseLine aria-hidden size={10} />
@@ -315,9 +320,9 @@ function Row({ source, hasCamera, handle, item }: RowProps) {
         className={cn('flex h-full min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none', !source.shown && 'opacity-60')}
       >
         {source.kind === 'image' ? (
-          <img src={api.assetUrl(name, source.asset ?? 0)} alt="" draggable={false} className="h-7 w-12 shrink-0 border border-primaryStroke bg-black object-contain" />
+          <img src={api.assetUrl(name, source.asset ?? 0)} alt="" draggable={false} className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-black object-contain" />
         ) : source.kind === 'avatar' ? (
-          <span className="flex h-7 w-12 shrink-0 items-center justify-center border border-primaryStroke bg-black">
+          <span className="flex h-7 w-12 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-black">
             <Face name={name} version={avatar} className="h-6 w-6 text-xs" />
           </span>
         ) : (
@@ -419,6 +424,28 @@ function SourceList({ sources }: { sources: Source[] }) {
   );
 }
 
+const refreshCameras = () => void refreshFaceCameras();
+
+function CameraPick() {
+  const hasCamera = useAtomValue(hasCameraAtom);
+  const devices = useAtomValue(faceCamerasAtom);
+  const current = useAtomValue(cameraDeviceAtom);
+  const model = useAtomValue(modelAtom);
+  return (
+    <DevicePick
+      id="camera-device"
+      label={model ? 'the camera that reads your face' : 'the camera that goes out'}
+      icon={RiVidiconLine}
+      value={current}
+      devices={devices}
+      fallback="default camera"
+      on={hasCamera || model !== null}
+      refresh={refreshCameras}
+      onPick={(id) => void setCamera(id)}
+    />
+  );
+}
+
 function SourceDetail({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
   const { label, kind, fill, canRemove, removeWords, removeLabel } = useSourceFacts(source);
   return (
@@ -447,6 +474,7 @@ function SourceDetail({ source, hasCamera }: { source: Source; hasCamera: boolea
           </Button>
         </Tooltip>
       </div>
+      {source.kind === 'camera' && <CameraPick />}
       <p className="text-xs text-textTertiary">drag it on the preview to move it</p>
     </div>
   );

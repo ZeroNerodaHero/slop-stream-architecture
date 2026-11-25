@@ -24,8 +24,8 @@ import {
 import type { Place } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { DevicePick } from '@/shared-components/live/DevicePick';
 import { DockPanel } from '@/shared-components/live/Dock';
-import { Select } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -145,25 +145,26 @@ export function MixerBody() {
   );
 }
 
+const refreshMics = () => void refreshMicDevices();
+
 function MicPick() {
   const hasMic = useAtomValue(hasMicAtom);
   const devices = useAtomValue(micDevicesAtom);
   const current = useAtomValue(micDeviceAtom);
-  useEffect(() => {
-    if (!hasMic) return;
-    const media = navigator.mediaDevices;
-    const refresh = () => void refreshMicDevices();
-    refresh();
-    media?.addEventListener('devicechange', refresh);
-    return () => media?.removeEventListener('devicechange', refresh);
-  }, [hasMic]);
   if (!hasMic) return <p className="px-3 py-2 text-sm text-textTertiary">no mic: the stream is silent</p>;
-  const options = devices.map((d) => ({ value: d.id, label: d.label }));
-  if (!options.some((o) => o.value === current)) options.unshift({ value: current, label: 'default mic' });
   return (
-    <div id="mic-pick" className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
-      <RiMicLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
-      <Select id="mic-device" label="the mic that goes out" value={current} options={options} onChange={(id) => void setMicDevice(id)} className="min-w-0 flex-1" />
+    <div className="px-3 py-2">
+      <DevicePick
+        id="mic-device"
+        label="the mic that goes out"
+        icon={RiMicLine}
+        value={current}
+        devices={devices}
+        fallback="default mic"
+        on={hasMic}
+        refresh={refreshMics}
+        onPick={(id) => void setMicDevice(id)}
+      />
     </div>
   );
 }

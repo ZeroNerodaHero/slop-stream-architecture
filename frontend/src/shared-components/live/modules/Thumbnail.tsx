@@ -23,14 +23,14 @@ export function ThumbnailsBody() {
         <ul className="m-0 grid list-none grid-cols-3 gap-1.5 p-0">
           {thumbs.map((id) => (
             <li key={id} className="group/thumb relative">
-              <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="block aspect-video w-full rounded-control border border-primaryStroke object-cover" />
+              <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="block aspect-video w-full rounded-card border border-primaryStroke object-cover" />
               <Tooltip content="remove">
                 <button
                   id={`thumb-remove-${id}`}
                   type="button"
                   aria-label="remove this thumbnail"
                   onClick={() => void removeStreamThumb(id)}
-                  className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none"
+                  className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-avatar border border-primaryStroke bg-backgroundSecondary text-textSecondary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none"
                 >
                   <RiCloseLine aria-hidden size={12} />
                 </button>

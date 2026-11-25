@@ -231,7 +231,7 @@ function RigBody({ place }: { place: Place }) {
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 pb-1.5 pt-2">
         <div
           id="rig-view"
-          className={cn('relative max-w-full shrink-0 overflow-hidden border border-primaryStroke bg-black', tall ? 'w-full' : 'h-16')}
+          className={cn('relative max-w-full shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-black', tall ? 'w-full' : 'h-16')}
           style={{ aspectRatio: String(aspect) }}
         >
           <div className={cn('absolute inset-0', mirror && '-scale-x-100')}>
@@ -249,7 +249,7 @@ function RigBody({ place }: { place: Place }) {
           {words && (
             <p
               id="rig-words"
-              className="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate border border-white/10 bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white"
+              className="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate rounded-control border border-white/10 bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white"
             >
               {words}
             </p>

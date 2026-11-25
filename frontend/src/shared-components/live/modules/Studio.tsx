@@ -1,19 +1,18 @@
-import { RiLinkM, RiMicLine, RiMicOffLine, RiPlayFill, RiStopFill } from '@remixicon/react';
+import { RiLinkM, RiPlayFill, RiStopFill } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
 import {
-  cameraAtom,
   canShareScreenAtom,
   canStartAtom,
   copyWatchUrl,
   goLive,
   isPublishingAtom,
   liveViewersAtom,
-  mixRowsAtom,
   publishMessageAtom,
+  publishPhaseAtom,
+  type PublishPhase,
   publishToneAtom,
   screenShareSupported,
-  setMixMuted,
   shareScreen,
   stopLive,
   streamNameAtom,
@@ -64,19 +63,29 @@ export function StartStop({ className = 'flex flex-col gap-2 p-2', prefix = '' }
   );
 }
 
-function LiveStatus({ prefix }: { prefix: string }) {
+const SHOWN_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting', 'stopped', 'failed'];
+
+function LiveStatus({ prefix, quiet = false }: { prefix: string; quiet?: boolean }) {
   const message = useAtomValue(publishMessageAtom);
   const tone = useAtomValue(publishToneAtom);
+  const phase = useAtomValue(publishPhaseAtom);
   const viewers = useAtomValue(liveViewersAtom);
+  const id = message ? (prefix ? `${prefix}-status` : 'status') : undefined;
+  if (quiet || !SHOWN_PHASES.includes(phase))
+    return (
+      <p id={id} aria-live="polite" className="sr-only">
+        {message}
+      </p>
+    );
   return (
     <p
-      id={message ? (prefix ? `${prefix}-status` : 'status') : undefined}
+      id={id}
       aria-live="polite"
-      className={cn('flex min-w-0 flex-1 items-center gap-1.5 text-xs', tone === 'live' ? 'text-increase' : tone === 'bad' ? 'text-decrease' : 'text-textSecondary')}
+      className={cn('flex min-w-0 items-center gap-1.5 text-xs', tone === 'live' ? 'text-increase' : tone === 'bad' ? 'text-decrease' : 'text-textSecondary')}
     >
       <span aria-hidden className={cn('block h-1.5 w-1.5 shrink-0 rounded-avatar', tone === 'live' ? 'bg-increase' : tone === 'bad' ? 'bg-decrease' : 'bg-textTertiary')} />
       <span className="min-w-0 truncate">
-        {message || 'getting ready'}
+        {message}
         {tone === 'live' && viewers !== null && (
           <span className="text-textSecondary">
             {' · '}
@@ -85,37 +94,6 @@ function LiveStatus({ prefix }: { prefix: string }) {
         )}
       </span>
     </p>
-  );
-}
-
-function MicMute() {
-  const camera = useAtomValue(cameraAtom);
-  const rows = useAtomValue(mixRowsAtom);
-  const track = camera?.getAudioTracks()[0];
-  const row = rows.find((r) => r.id === 'mic');
-  const muted = row?.muted ?? false;
-  const label = track ? track.label || 'default mic' : 'no mic';
-  if (!row)
-    return (
-      <Tooltip content={track ? `mic: ${label}` : 'no mic'}>
-        <span id="live-mic-line" role="img" aria-label={track ? `mic: ${label}` : 'no mic'} className="flex h-7 w-7 shrink-0 items-center justify-center text-textTertiary">
-          {track ? <RiMicLine aria-hidden size={16} /> : <RiMicOffLine aria-hidden size={16} />}
-        </span>
-      </Tooltip>
-    );
-  return (
-    <Tooltip content={muted ? 'muted. click to unmute' : `mic: ${label}. click to mute`}>
-      <button
-        id="live-mic-mute"
-        type="button"
-        aria-label={muted ? 'unmute the mic' : 'mute the mic'}
-        aria-pressed={muted}
-        onClick={() => setMixMuted('mic', !muted)}
-        className={cn(FOLD_BUTTON, muted && 'border-decrease text-decrease hover:border-decrease hover:text-decrease')}
-      >
-        {muted ? <RiMicOffLine aria-hidden size={16} /> : <RiMicLine aria-hidden size={16} />}
-      </button>
-    </Tooltip>
   );
 }
 
@@ -159,24 +137,35 @@ function RoundStart() {
   );
 }
 
+function CopyButton({ id }: { id: string }) {
+  const watchUrl = useAtomValue(watchUrlAtom);
+  const publishing = useAtomValue(isPublishingAtom);
+  const words = publishing ? 'the watch link is on its way' : 'the watch link is here once you are live';
+  return (
+    <Tooltip content={watchUrl ? null : words}>
+      <Button id={id} size="sm" className="w-full gap-1.5" disabled={!watchUrl} onClick={copyWatchUrl}>
+        <RiLinkM aria-hidden size={16} />
+        copy watch link
+      </Button>
+    </Tooltip>
+  );
+}
+
 export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; prefix?: string }) {
   const watchUrl = useAtomValue(watchUrlAtom);
   if (strip)
     return (
-      <div id="live-controls" className="flex flex-col items-center gap-1.5 border-b border-primaryStroke pb-2">
+      <div id="live-controls" className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke pb-2">
         <RoundStart />
         <CopyLink />
-        <MicMute />
+        <LiveStatus prefix="" quiet />
       </div>
     );
   return (
-    <section id={prefix ? `${prefix}-controls` : 'live-controls'} aria-label="studio" className="flex flex-col gap-2 border-b border-primaryStroke px-3 pb-3 pt-1">
+    <section id={prefix ? `${prefix}-controls` : 'live-controls'} aria-label="studio" className="relative flex flex-col gap-2 border-b border-primaryStroke px-3 pb-3 pt-1">
       <StartStop prefix={prefix} className="flex flex-col gap-1.5 [&>button:first-child]:h-10 [&>button:first-child]:rounded-control [&>button:first-child]:py-0" />
-      <div className="flex min-w-0 items-center gap-1.5">
-        <LiveStatus prefix={prefix} />
-        <MicMute />
-        <CopyLink id={prefix ? `${prefix}-copy` : 'copy'} />
-      </div>
+      <LiveStatus prefix={prefix} />
+      <CopyButton id={prefix ? `${prefix}-copy` : 'copy'} />
       {watchUrl && (
         <p id={prefix ? undefined : 'link'} className="truncate text-xs">
           <ExternalLink id={prefix ? undefined : 'watchurl'} href={watchUrl}>

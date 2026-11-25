@@ -166,7 +166,7 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
         <Tooltip content="the colour behind the model">
           <label className={WELL}>
             <RiPaintLine aria-hidden size={14} />
-            <span aria-hidden className="block h-1.5 w-4 border border-primaryStroke" style={{ backgroundColor: background }} />
+            <span aria-hidden className="block h-1.5 w-4 rounded-control border border-primaryStroke" style={{ backgroundColor: background }} />
             <input
               id="model-background"
               type="color"

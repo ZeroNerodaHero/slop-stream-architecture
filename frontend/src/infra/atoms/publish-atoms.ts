@@ -300,7 +300,7 @@ export async function startCamera(): Promise<void> {
   const generation = liveGeneration;
   let camera: MediaStream;
   try {
-    camera = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO, audio: true });
+    camera = await openCamera(true);
   } catch (err) {
     if (generation !== liveGeneration) return;
     if (err instanceof DOMException && err.name === 'NotAllowedError') {
@@ -308,7 +308,7 @@ export async function startCamera(): Promise<void> {
       return;
     }
     try {
-      camera = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO, audio: false });
+      camera = await openCamera(false);
     } catch {
       if (generation === liveGeneration) setPhase('no-camera', 'no camera');
       return;
@@ -371,7 +371,7 @@ export async function cameraOn(): Promise<void> {
   const generation = liveGeneration;
   let picture: MediaStream;
   try {
-    picture = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO });
+    picture = await openCamera(false);
   } catch (err) {
     if (generation !== liveGeneration) return;
     store.set(storedMicOnlyAtom, true);
@@ -426,6 +426,21 @@ const faceVideo = (deviceId: string): MediaTrackConstraints => ({
   ...(deviceId && { deviceId: { exact: deviceId } })
 });
 
+const cameraVideo = (deviceId: string): MediaTrackConstraints => ({ ...CAMERA_VIDEO, ...(deviceId && { deviceId: { exact: deviceId } }) });
+
+async function openCamera(audio: boolean): Promise<MediaStream> {
+  const picked = store.get(faceCameraAtom);
+  if (picked) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: cameraVideo(picked), audio });
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : '';
+      if (name !== 'OverconstrainedError' && name !== 'NotFoundError') throw err;
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO, audio });
+}
+
 async function openFaceCamera(): Promise<MediaStreamTrack | null> {
   const picked = store.get(faceCameraAtom);
   for (const deviceId of picked ? [picked, ''] : ['']) {
@@ -442,7 +457,7 @@ async function openFaceCamera(): Promise<MediaStreamTrack | null> {
   return null;
 }
 
-async function refreshFaceCameras() {
+export async function refreshFaceCameras(): Promise<void> {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     store.set(
@@ -858,7 +873,7 @@ export async function backToCamera(): Promise<void> {
   const generation = liveGeneration;
   let picture: MediaStream;
   try {
-    picture = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO });
+    picture = await openCamera(false);
   } catch (err) {
     if (generation === liveGeneration) store.set(sourceStatusAtom, err instanceof DOMException && err.name === 'NotAllowedError' ? 'camera blocked' : 'no camera');
     return;
@@ -910,6 +925,39 @@ export function watchFaceMarks(listener: (marks: FaceMarks) => void): () => void
 
 export function setRigPicture(on: boolean) {
   store.set(storedRigPictureAtom, on);
+}
+
+export const cameraDeviceAtom = atom((get) => {
+  const track = (get(modelAtom) ? get(readerCameraAtom) : get(cameraAtom))?.getVideoTracks()[0];
+  return track?.getSettings().deviceId || get(faceCameraAtom);
+});
+
+export async function setCamera(deviceId: string): Promise<void> {
+  if (modelSession) return setFaceCamera(deviceId);
+  store.set(storedFaceCameraAtom, deviceId);
+  const had = store.get(cameraAtom);
+  const old = had?.getVideoTracks()[0];
+  if (!had || !old || old.getSettings().deviceId === deviceId) return;
+  const generation = liveGeneration;
+  let picture: MediaStream;
+  try {
+    picture = await navigator.mediaDevices.getUserMedia({ video: cameraVideo(deviceId) });
+  } catch {
+    store.set(sourceStatusAtom, 'that camera would not open');
+    return;
+  }
+  const track = picture.getVideoTracks()[0];
+  if (!track || generation !== liveGeneration || store.get(cameraAtom) !== had || modelSession) {
+    picture.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  track.contentHint = 'motion';
+  await setCameraTrack(track);
+  store.set(cameraAtom, new MediaStream([...had.getAudioTracks(), track]));
+  old.stop();
+  store.set(sourceStatusAtom, '');
+  void tuneSenders();
+  void refreshFaceCameras();
 }
 
 export async function setFaceCamera(deviceId: string): Promise<void> {

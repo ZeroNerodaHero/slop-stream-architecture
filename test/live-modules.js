@@ -60,7 +60,7 @@ const present = (page) => page.evaluate((all) => Object.entries(all).filter(([, 
   const page = await context.newPage();
   await page.goto(BASE + '/live', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#live-desk', { timeout: 20000 });
-  await page.waitForFunction(() => document.querySelector('#mic-pick'), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#mic-device-pick'), null, { timeout: 20000 });
 
   await step('every module draws', async () => {
     const all = await present(page);
