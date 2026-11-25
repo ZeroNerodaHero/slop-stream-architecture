@@ -16,7 +16,7 @@ Do not build these.
 
 - stream keys, permission roles, email, password reset, oauth, 2fa (accounts are a name and a password, optional: see "accounts")
 - follows, vod, recording (the text chat is in: `chat.md`; who may clean it, `jannies.md`)
-- transcoding, simulcast, quality ladder, cdn
+- transcoding, quality ladder, cdn (browser simulcast of the camera is built: `simulcast.md`)
 - group calls where several people publish into one room
 - a second machine, a real fanout tier, TURN, ICE-TCP
 - mobile apps, OBS ingest, RTMP
@@ -72,7 +72,7 @@ flowchart LR
 
 Reject a second publisher on a name that already has one. First streamer keeps it until stop, tab close, or the connection fails.
 
-One quality. Every watcher gets whatever the streamer is sending.
+The camera goes out as up to three simulcast layers (360/720/1080 for a 1080 camera, 30fps, 2.5 Mbps on top) and each watcher gets one, picked from its loss, nacks and remb (`simulcast.md`). Screens are one quality: every watcher gets whatever the streamer is sending.
 
 ## processes
 
@@ -502,7 +502,7 @@ Pages keep stable ids and strings for these: `#start #stop #pick-name #share-scr
 ## known limits
 
 - One fan-out task per stream: roughly 150–200 watchers per stream on one core, then egress (~300 at 2.5 Mbps on 1 Gbps). That is the "add fanout computers" step, not this test.
-- No simulcast or downstream congestion control. A watcher on a bad link gets loss, not a lower quality.
+- Downstream congestion control is the camera's simulcast layer pick only. A watcher on a bad link gets a smaller camera layer; a screen still arrives as loss, and a link under the lowest layer gets loss too.
 - No rate limiting on the api or the socket, except the login, signup and error-report counters (see "accounts" and `debugging.md`) and the chat's token bucket per speaker (2 lines then one every 30s without an account, 3 then one every 3⅓s for a login; `chat.md`). Anyone can publish an unclaimed name, watch, or set an unclaimed bio, or be `online` as it (`status.md`: a free name's presence is anyone's, like its bio). Session rows grow with every go-live.
 - One `/events` socket per browser, open on every page, on the events process: a file descriptor each (`nofile` 65536 on the container), tens of kilobytes each. `GET /online` inside the network says how many. The gateway reads the `live:` key, not video, for `streaming`; video calling `stop` when a publisher leaves is what keeps that honest within ~15s of a crash, and the key is set at go-live, a second or two before video has the publisher, so the word can run that far ahead of the `live` fact (a watcher who asks on the word alone is answered not live and waits for the fact).
 - No cpu or memory limits on the containers: small vms vary, and a limit that kills `video` ends every stream at once. `video` and `dummy` carry `pids_limit: 256` (one ffmpeg per live stream, so room for ~25); watch `docker stats` for the rest.

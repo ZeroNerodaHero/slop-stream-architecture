@@ -6,13 +6,15 @@ a watcher can decode nothing until a keyframe: every vp8 delta frame refers to t
 
 ## who asks
 
-every request goes through `Hub::request_keyframe` (`video/src/main.rs`), per slot, with a reason (`Ask`):
+every request goes through `Hub::request_keyframe` (`video/src/main.rs`), per slot and simulcast layer (`simulcast.md`; each layer has its own ssrc, its own `KeyframeAsks` and its own count), with a reason (`Ask`). a join asks on the watcher's start layer. `RUST_LOG=video=debug` logs every request and its plan.
 
 | reason | when | its rule |
 |---|---|---|
 | `Join` | a watcher's ICE reaches `Connected` (the early ask); one per video slot it watches | below |
 | `Backup` | a watcher's peer reaches `Connected` (ICE and DTLS done); one per video slot it watches, with the slot's keyframe count at that moment | below |
-| `Lost` | a watcher sent a PLI or FIR (lost the picture) | none within `KEYFRAME_GAP`, 1.5s, of any request |
+| `Join` | a watcher sent a PLI or FIR in its first 3s (`JOIN_PLI_WINDOW`): it has no picture yet | below |
+| `Lost` | a watcher sent a PLI or FIR later (lost the picture) | none within `KEYFRAME_GAP`, 1.5s, of any request |
+| `Switch` | a watcher's layer changed and it waits for a keyframe on the new one; again every 500ms until it lands | not while one is on its way, none within `FORCED_KEYFRAME_GAP`, 300ms, of any request |
 | `Thumb` | the thumbnail's ffmpeg has no picture (`thumbs.rs`) | none within `FORCED_KEYFRAME_GAP`, 300ms, of any request |
 | `Trailing` | the one extra request a burst of joins scheduled | below |
 
@@ -32,20 +34,19 @@ so each watcher asks at most twice per slot, once each:
 
 ## the join rules
 
-the slot counts the keyframes it forwards (`is_vp8_keyframe` in `media.rs`, on the first packet of partition 0, read in the publish loop, one atomic add). each request notes the count. so `KeyframeAsks::decide` knows whether a keyframe is **on its way** (a request under `KEYFRAME_IN_FLIGHT`, 500ms, old, and nothing forwarded since) or **gone** (one was forwarded since).
+each layer counts the keyframes it forwards (`parse_vp8` in `simulcast.rs`, on the first packet of partition 0, read in the publish loop, one atomic add). each request notes the count. so `KeyframeAsks::decide` knows whether a keyframe is **on its way** (a request under `KEYFRAME_IN_FLIGHT`, 500ms, old, and nothing forwarded since) or **gone** (one was forwarded since).
 
 `Join` (early) and `Backup` share these, after the backup's own check above:
 
 1. a keyframe on its way: skip.
 2. no join-type request (`Join`, `Backup` or `Trailing`) in the last 300ms: this opens a gap. ask now, whatever else asked lately. a watcher's loss or the thumbnail may have been answered before this peer existed, and that keyframe is no use to it.
-3. a gap opened by an early `Join` gives **one re-ask**: the first backup in that gap that still needs a keyframe asks at once. this is the single-viewer case (its own early keyframe went by before its DTLS finished), and it waits for nothing. a gap opened by a backup or a trailing request gives none: its keyframe was asked for a watcher already connected.
-4. otherwise (a join-type request within 300ms, its keyframe gone, the re-ask spent or not given): schedule **one** trailing request at the end of the gap, shared by every join until then. when it fires it is skipped if a join asked since or a keyframe is on its way again. a backup that finds the trailing request already scheduled skips: it fires after this watcher connected.
+3. otherwise (a join-type request within 300ms, its keyframe gone): schedule **one** trailing request at the end of the gap, shared by every join until then. when it fires it is skipped if a join asked since or a keyframe is on its way again. a backup that finds the trailing request already scheduled skips: it fires after this watcher connected.
 
-so per slot, join-type requests are one opening each 300ms, at most one re-ask inside a gap an early ask opened, and the single trailing request (which opens the next gap). under a steady burst the trailing requests usually open the gaps and give no re-asks, so it stays near one per 300ms (3.3 keyframes/s), the bound before this. a watcher's backup never waits longer than the rest of one gap plus a publisher round trip, the same worst case as the single ask at `Connected` had, and no join waits out the 1.5s `KEYFRAME_GAP` for its browser's own PLI. before, a join inside 300ms of any request was dropped: the second wave of a go-live push (the `live` event makes every waiting watcher connect at once) often connected just after the first wave's keyframe went by and sat ~1.5s on a black picture. now it waits at most the rest of the gap plus one round trip to the publisher.
+so per slot and layer, join-type requests are one opening each 300ms and the single trailing request (which opens the next gap). there used to be one re-ask at once for the first backup inside a gap an early ask opened (the single-viewer case: its own early keyframe went by before its DTLS finished). chrome does not answer a second pli ~50ms after the first: the keyframe count did not move, the request sat "on its way" for 500ms, the watcher's own plis were then the 1.5s `Lost` kind, and a lone join waited ~1.7s for a picture (`test/simulcast.js`, both builds). now that backup takes the trailing request at the end of the gap, and the watcher's plis in its first 3s are joins, so a lone join gets its picture in ~350ms. under a steady burst the trailing requests usually open the gaps and give no re-asks, so it stays near one per 300ms (3.3 keyframes/s), the bound before this. a watcher's backup never waits longer than the rest of one gap plus a publisher round trip, the same worst case as the single ask at `Connected` had, and no join waits out the 1.5s `KEYFRAME_GAP` for its browser's own PLI. before, a join inside 300ms of any request was dropped: the second wave of a go-live push (the `live` event makes every waiting watcher connect at once) often connected just after the first wave's keyframe went by and sat ~1.5s on a black picture. now it waits at most the rest of the gap plus one round trip to the publisher.
 
 a request unanswered after 500ms is taken as lost (RTCP has no retransmission), and the next join or backup asks again.
 
-the tests beside `KeyframeAsks` in `main.rs` pin these: a backup asking again when the early keyframe went before connect, skipping one on its way or one forwarded after connect, one re-ask per early gap, and a burst of watchers (one ICE-connected every 10ms, connected 120ms later) staying within two requests per 300ms with every watcher getting a keyframe within 360ms of connecting.
+the tests beside `KeyframeAsks` in `main.rs` pin these: a backup asking again at the end of the gap when the early keyframe went before connect, skipping one on its way or one forwarded after connect, early backups sharing one trailing request, a switch asking at most once per gap, and a burst of watchers (one ICE-connected every 10ms, connected 120ms later) staying within two requests per 300ms with every watcher getting a keyframe within 360ms of connecting.
 
 ## a publisher that cannot be asked
 
@@ -56,7 +57,7 @@ the dummy (`video dummy`, `video/src/dummy.rs`) is ffmpeg encoding to rtp, and f
 the other way, which some sfus do: keep each slot's last keyframe and the packets after it (a GOP), and on join send that GOP to the new watcher at once, then live packets. no round trip to the publisher. it was looked at and not built:
 
 - **the cache is empty almost always.** keyframes come only on request. a cache bounded to ~2s or ~2-3MB per slot holds a whole GOP only within ~2s of the last keyframe, and past that it must be dropped (a GOP without its keyframe is useless). in a quiet room the next join finds nothing and asks the publisher anyway. the joins inside 2s of a keyframe are the burst case, which the trailing request above covers for one round trip and 300ms.
-- **fan-out is one shared track per slot.** every watcher of a slot is a binding of the same `TrackLocalStaticRTP`, and one `write_rtp` goes to all of them. a replay to one watcher needs a track per watcher (or a custom `TrackLocal`), the publish loop writing to each, and a way to know the moment a watcher's binding is up so the replay goes before its first live packet. that rebuilds the hot path every stream's packets go through.
+- **the replay needs per-watcher timing.** simulcast already gives every watcher its own `ViewerTrack` and sequence and timestamp offsets (`simulcast.md`), but a replay also needs a way to know the moment a watcher's binding is up so the replay goes before its first live packet, and its own pacing.
 - **the replay's timestamps.** the cached frames are up to 2s old and arrive in a burst. sent as they are, the browser's jitter buffer plays them at their own pace and the watcher sits ~2s behind live for good, or its timing gives up. they would need rewriting per watcher (squeezed together just behind the live timestamp) so the decoder runs through them and lands on live. how chrome, firefox and safari handle that was not tested: `test/` declares playwright but it is not installed, so no browser checked it.
 - **the burst itself.** 2-3MB at once to a new watcher overflows home routers and our shared udp buffer (4MB for every peer), and the nack responder keeps 512 packets per stream, fewer than a big GOP, so a lost early packet of the keyframe cannot be resent and the watcher sends a PLI anyway.
 

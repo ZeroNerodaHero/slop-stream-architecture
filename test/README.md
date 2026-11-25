@@ -17,3 +17,5 @@ the default suite is listed in `scripts/test.sh`: e2e, dup, chat, auth, groups, 
 `fixtures/` holds puppet models used by the vtuber tests.
 
 `voice-video.js` and `voice-spike.js` are not in the default suite; `./scripts/test.sh voice-video` runs the first. `voice-spike.js` needs `video voice` running with VOICE_DEV_OPEN=1 (VOICE_URL, default ws://127.0.0.1:7881/ws) and checks two browsers hear each other.
+
+`simulcast.js` is not in the default suite and needs no server: it starts its own `video` (a release build, `VIDEO_BIN`) on loopback with a mock api and checks the camera's simulcast layers, joins, layer switches under a squeeze and the dummy. `node test/simulcast.js`; `docs/simulcast.md` has the knobs.

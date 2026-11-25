@@ -39,6 +39,7 @@ import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
+import { applyLayers, MAX_FRAMERATE, sendEncodings, SINGLE_BITRATE, SINGLE_HEIGHT, type Top } from '@/infra/simulcast';
 import {
   arrangedAfterAdd,
   arrangedAfterRemove,
@@ -75,13 +76,12 @@ export type PublishPhase =
   | 'failed';
 
 const HEARTBEAT_MS = 15000;
-const VIDEO_MAX_BITRATE = 2_500_000;
 const CAMERA_SHARING_BITRATE = 500_000;
 const SCREENS_BITRATE = 3_000_000;
 const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting'];
 const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'mic-blocked', 'no-mic', 'failed'];
-const CAMERA_VIDEO: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
-const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } };
+const CAMERA_VIDEO: MediaTrackConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: MAX_FRAMERATE, max: MAX_FRAMERATE } };
+const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: MAX_FRAMERATE } };
 interface DisplayHints extends DisplayMediaStreamOptions {
   selfBrowserSurface?: 'include' | 'exclude';
   surfaceSwitching?: 'include' | 'exclude';
@@ -239,7 +239,7 @@ let modelSession: ModelSession | null = null;
 let faceCamera: MediaStreamTrack | null = null;
 const marksListeners = new Set<(marks: FaceMarks) => void>();
 let modelToken = 0;
-let cameraCap = VIDEO_MAX_BITRATE;
+let cameraCap = SINGLE_BITRATE;
 let imageCount = 0;
 let liveGeneration = 0;
 let profileName = '';
@@ -429,7 +429,7 @@ class ModelGone extends Error {}
 const faceVideo = (deviceId: string): MediaTrackConstraints => ({
   width: { ideal: 640 },
   height: { ideal: 480 },
-  frameRate: { ideal: 30 },
+  frameRate: { ideal: MAX_FRAMERATE, max: MAX_FRAMERATE },
   ...(deviceId && { deviceId: { exact: deviceId } })
 });
 
@@ -632,6 +632,7 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   if (stale()) return giveUp();
   session.track.contentHint = 'motion';
   if (cameraSender) await cameraSender.replaceTrack(session.track).catch(() => undefined);
+  void tuneSenders();
   if (stale()) return giveUp();
   const sound = before?.getAudioTracks() ?? opened?.mic?.getAudioTracks() ?? [];
   store.set(cameraAtom, new MediaStream([...sound, session.track]));
@@ -833,6 +834,7 @@ export async function backToCamera(): Promise<void> {
   const track = picture.getVideoTracks()[0]!;
   track.contentHint = 'motion';
   if (cameraSender) await cameraSender.replaceTrack(track).catch(() => undefined);
+  void tuneSenders();
   store.set(cameraAtom, new MediaStream([...had.getAudioTracks(), track]));
   dropModel();
   store.set(storedModelAtom, null);
@@ -929,15 +931,14 @@ export async function goLive(): Promise<void> {
     if (!gone()) onConnection(myPc.connectionState);
   };
 
-  const cameraInit: RTCRtpTransceiverInit = { direction: 'sendonly', streams: [camera], sendEncodings: [{ maxBitrate: VIDEO_MAX_BITRATE }] };
   const picture = camera.getVideoTracks()[0];
   if (picture) picture.contentHint = 'motion';
-  cameraSender = (picture ? myPc.addTransceiver(picture, cameraInit) : myPc.addTransceiver('video', cameraInit)).sender;
+  cameraSender = addCamera(myPc, camera, picture);
   const sound = mixer?.outputTrack ?? mic;
   if (sound) myPc.addTransceiver(sound, { direction: 'sendonly', streams: [camera] });
   else myPc.addTransceiver('audio', { direction: 'sendonly' });
   screenSenders = Array.from({ length: SCREEN_SLOTS }, (_, i) => {
-    const init: RTCRtpTransceiverInit = { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE }] };
+    const init: RTCRtpTransceiverInit = { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE, maxFramerate: MAX_FRAMERATE }] };
     const track = store.get(screenStreamAtom(i))?.getVideoTracks()[0];
     return (track ? myPc.addTransceiver(track, init) : myPc.addTransceiver('video', init)).sender;
   });
@@ -979,6 +980,18 @@ export async function goLive(): Promise<void> {
   startPublishStats();
   announceSlots();
   void tuneSenders();
+}
+
+function addCamera(myPc: RTCPeerConnection, camera: MediaStream, picture: MediaStreamTrack | undefined): RTCRtpSender {
+  const add = (encodings: RTCRtpEncodingParameters[]) => {
+    const init: RTCRtpTransceiverInit = { direction: 'sendonly', streams: [camera], sendEncodings: encodings };
+    return (picture ? myPc.addTransceiver(picture, init) : myPc.addTransceiver('video', init)).sender;
+  };
+  try {
+    return add(sendEncodings(picture?.getSettings().height));
+  } catch {
+    return add([{ maxBitrate: SINGLE_BITRATE, maxFramerate: MAX_FRAMERATE }]);
+  }
 }
 
 function sendHeartbeat() {
@@ -1348,13 +1361,13 @@ async function tuneSenders() {
   const shown = sources.filter((s) => isVideoSource(s) && s.shown);
   const stage = shown.reduce<Source | null>((best, s) => (!best || s.box.w * s.box.h > best.box.w * best.box.h ? s : best), null);
   const camera = sources.find((s) => s.kind === 'camera');
+  const height = cameraSender?.track?.getSettings().height;
   if (!screens.length || stage?.kind === 'camera') {
-    cameraCap = VIDEO_MAX_BITRATE;
-    await tune(cameraSender, { maxBitrate: VIDEO_MAX_BITRATE });
+    cameraCap = await tuneCamera(cameraSender, height);
   } else {
     const w = camera?.shown ? camera.box.w : 0.5;
-    cameraCap = Math.round(Math.min(CAMERA_SHARING_BITRATE, Math.max(CAMERA_MIN_BITRATE, CAMERA_BPS_PER_WIDTH * w)));
-    await tune(cameraSender, { maxBitrate: cameraCap, scale: cameraScale(w) });
+    const cap = Math.round(Math.min(CAMERA_SHARING_BITRATE, Math.max(CAMERA_MIN_BITRATE, CAMERA_BPS_PER_WIDTH * w)));
+    cameraCap = await tuneCamera(cameraSender, height, { height: Math.min(height || SINGLE_HEIGHT, SINGLE_HEIGHT) / cameraScale(w), maxBitrate: cap });
   }
   const stageScreen = stage?.kind === 'screen' ? stage.slot : screens.length ? screens[0]!.slot + 1 : null;
   for (const [i, sender] of screenSenders.entries()) {
@@ -1365,6 +1378,16 @@ async function tuneSenders() {
     if (i + 1 === stageScreen) await tune(sender, { maxBitrate: SCREENS_BITRATE - SIDE_SCREEN_BITRATE * (screens.length - 1) }, 'maintain-resolution');
     else await tune(sender, { maxBitrate: SIDE_SCREEN_BITRATE, maxFramerate: SIDE_SCREEN_FPS }, 'maintain-resolution');
   }
+}
+
+async function tuneCamera(sender: RTCRtpSender | null, height: number | undefined, top?: Top): Promise<number> {
+  if (!sender) return cameraCap;
+  const params = sender.getParameters();
+  if (!params.encodings?.length) return cameraCap;
+  const total = applyLayers(params.encodings, height, top);
+  delete params.degradationPreference;
+  await sender.setParameters(params).catch(() => undefined);
+  return total;
 }
 
 interface Encoding {
@@ -1380,8 +1403,7 @@ async function tune(sender: RTCRtpSender | null, { maxBitrate, scale = 1, maxFra
   if (!encoding) return;
   encoding.maxBitrate = maxBitrate;
   encoding.scaleResolutionDownBy = scale;
-  if (maxFramerate) encoding.maxFramerate = maxFramerate;
-  else delete encoding.maxFramerate;
+  encoding.maxFramerate = Math.min(maxFramerate ?? MAX_FRAMERATE, MAX_FRAMERATE);
   if (degradation) params.degradationPreference = degradation;
   else delete params.degradationPreference;
   await sender.setParameters(params).catch(() => undefined);
@@ -1430,7 +1452,7 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
     store.set(sourcesAtom, arrangedAfterRemove(sources.filter((s) => s.kind !== 'screen')));
     if (store.get(selectedSourceAtom)?.startsWith('s')) store.set(selectedSourceAtom, null);
   }
-  cameraCap = VIDEO_MAX_BITRATE;
+  cameraCap = SINGLE_BITRATE;
   cameraSender = null;
   screenSenders = [];
   store.set(liveViewersAtom, null);

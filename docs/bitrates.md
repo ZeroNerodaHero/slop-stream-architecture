@@ -1,6 +1,6 @@
 # big picture, small picture
 
-a plan, not a build. `spec.md` still says one quality. this is the later version, in small words.
+a plan, partly built another way: the camera is now browser simulcast, three layers made by the streamer's browser and picked per watcher by `video` (`simulcast.md`). the box-made rung below is still a plan. the "today" part is from before simulcast.
 
 ## today
 

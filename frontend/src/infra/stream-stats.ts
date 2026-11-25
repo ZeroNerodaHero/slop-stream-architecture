@@ -279,6 +279,49 @@ function videoOf(stat: Stat, id: string, all: Map<string, Stat>, prev: Map<strin
   };
 }
 
+function addOrNull(a: number | null, b: number | null): number | null {
+  return a === null ? b : b === null ? a : a + b;
+}
+
+function maxOrNull(a: number | null, b: number | null): number | null {
+  return a === null ? b : b === null ? a : Math.max(a, b);
+}
+
+export interface Layered {
+  trackId: string | undefined;
+  remoteLoss: number | null;
+  line: VideoLine;
+}
+
+export function mergeLayers<T extends Layered>(videos: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const v of videos) {
+    const at = v.trackId === undefined ? -1 : out.findIndex((o) => o.trackId === v.trackId);
+    if (at < 0) {
+      out.push(v);
+      continue;
+    }
+    const had = out[at]!;
+    const rank = (x: T) => [x.line.bitrate > 0 ? 1 : 0, x.line.height] as const;
+    const [a, b] = [rank(v), rank(had)];
+    const top = a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]) ? v : had;
+    out[at] = {
+      ...top,
+      remoteLoss: maxOrNull(had.remoteLoss, v.remoteLoss),
+      line: {
+        ...top.line,
+        bitrate: had.line.bitrate + v.line.bitrate,
+        lossPct: maxOrNull(had.line.lossPct, v.line.lossPct),
+        nackPerSec: addOrNull(had.line.nackPerSec, v.line.nackPerSec),
+        pliPerSec: addOrNull(had.line.pliPerSec, v.line.pliPerSec),
+        keyframesPerSec: addOrNull(had.line.keyframesPerSec, v.line.keyframesPerSec),
+        reason: had.line.reason && v.line.reason ? worse(had.line.reason, v.line.reason) : (had.line.reason ?? v.line.reason)
+      }
+    };
+  }
+  return out;
+}
+
 function audioLevel(stat: Stat, all: Map<string, Stat>, prev: Map<string, Counters>): number | null {
   const direct = num(stat.audioLevel);
   if (direct !== undefined) return direct;
@@ -373,18 +416,19 @@ function nextStats(m: Memory, report: RTCStatsReport, source: SamplerSource): St
 
   const prev = m.counters;
   const remotes = [...all.values()].filter((s) => s.type === 'remote-inbound-rtp');
-  const videos: BuiltVideo[] = [];
+  const layers: BuiltVideo[] = [];
   let audio: AudioLine | null = null;
   for (const [id, stat] of all) {
     if (stat.type !== rtpType) continue;
     if (stat.kind === 'video') {
       const built = videoOf(stat, id, all, prev, dt, direction, remotes);
-      if (built) videos.push(built);
+      if (built) layers.push(built);
     } else if (stat.kind === 'audio' && !audio) {
       audio = audioOf(stat, all, prev, dt, direction, source.audioMuted(), remotes);
     }
   }
 
+  const videos = mergeLayers(layers);
   const want = source.videoTrackId();
   if (want && want !== m.trackId) {
     m.trackId = want;

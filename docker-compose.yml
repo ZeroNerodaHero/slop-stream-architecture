@@ -240,6 +240,7 @@ services:
       DISK_PATH: /disk
       DOCKER_SOCKET: /var/run/docker.sock
       TIMINGS_FROM: api=http://api:9300,chat=http://chat:9300,events=http://events:9300,home=http://home:9300,video=http://video:9300,voice=http://voice:9300
+      HEALTH_FROM: "${HEALTH_FROM:-chat=http://chat:4100/health,events=http://events:4100/health,home=http://home:4100/health,video=http://video:7880/health,voice=http://voice:7881/health}"
       RUST_LOG: info
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
