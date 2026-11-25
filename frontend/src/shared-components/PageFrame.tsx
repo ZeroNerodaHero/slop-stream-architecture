@@ -51,6 +51,9 @@ function MobileHomeLink({ caret = false }: { caret?: boolean }) {
   );
 }
 
+const BUBBLE_HEADER =
+  'bubble:border-transparent bubble:px-3 bubble:pt-4 bubble:before:absolute bubble:before:inset-x-0 bubble:before:bottom-0 bubble:before:top-2 bubble:before:-z-10 bubble:before:rounded-panel bubble:before:bg-backgroundSecondary';
+
 function useOnLivePage(): boolean {
   const { pathname } = useLocation();
   return pathname.replace(/\/$/, '') === '/live';
@@ -192,8 +195,8 @@ export function PageFrame({
 
   if (person) {
     return (
-      <main ref={mainRef} className={cn('mx-auto px-5 pb-10 [--page-top:calc(var(--title-row,3.5rem)+0.5rem)]', width)}>
-        <header ref={headerRef} className="sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2">
+      <main ref={mainRef} className={cn('mx-auto px-5 pb-10 bubble:px-2 [--page-top:calc(var(--title-row,3.5rem)+0.5rem)]', width)}>
+        <header ref={headerRef} className={cn('sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2', BUBBLE_HEADER)}>
           <HomeLink square />
           {mobileStart}
           <div className="min-w-0 flex-1">
@@ -212,12 +215,12 @@ export function PageFrame({
   }
 
   return (
-    <main ref={mainRef} className={cn('mx-auto px-5 pb-10', titled && '[--page-top:calc(var(--title-row,4rem)+1.5rem)]', width)}>
+    <main ref={mainRef} className={cn('mx-auto px-5 pb-10 bubble:px-2', titled && '[--page-top:calc(var(--title-row,4rem)+1.5rem)]', width)}>
       <header
         ref={headerRef}
         className={cn(
           'sticky top-0 z-30 flex items-center gap-4 bg-background py-3',
-          titled ? 'mb-6 min-h-16 flex-wrap border-b border-primaryStroke' : 'h-16 -mb-16'
+          titled ? cn('mb-6 min-h-16 flex-wrap border-b border-primaryStroke', BUBBLE_HEADER) : 'h-16 -mb-16'
         )}
       >
         {title && (

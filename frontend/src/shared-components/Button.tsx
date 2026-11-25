@@ -34,7 +34,7 @@ const SIZES: Record<ButtonSize, string> = {
 
 export function buttonClassName(variant: ButtonVariant = 'secondary', className?: string, size: ButtonSize = 'md'): string {
   return cn(
-    'inline-flex items-center justify-center border font-semibold transition-colors duration-100',
+    'inline-flex items-center justify-center rounded-control border font-semibold transition-colors duration-100',
     SIZES[size],
     VARIANTS[variant],
     size === 'sm' && variant === 'secondary' && 'hover:border-secondaryStroke hover:bg-backgroundTertiary',

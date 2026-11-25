@@ -94,7 +94,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
     <div
       ref={frame}
       id={id}
-      className={cn('relative isolate aspect-video w-full overflow-hidden border border-primaryStroke bg-black', className)}
+      className={cn('relative isolate aspect-video w-full overflow-hidden rounded-panel border border-primaryStroke bg-black bubble:border-transparent', className)}
       onPointerDown={edit ? (e) => e.target === e.currentTarget && edit.onSelect(null) : undefined}
     >
       {layers.length === 0 && <div className="absolute inset-0">{mainVideo}</div>}

@@ -28,8 +28,8 @@ const TYPING_MS = 500;
 const PAGE = 10;
 
 const BOX =
-  'inline-flex cursor-pointer select-none items-center gap-[0.5em] border border-primaryStroke bg-background px-[0.5em] py-[0.33em] text-left text-textPrimary transition-colors duration-150 hover:border-secondaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
-const LIST = 'fixed left-0 top-0 z-[60] w-max overflow-y-auto overflow-x-hidden overscroll-contain border border-primaryStroke bg-backgroundSecondary py-1';
+  'inline-flex cursor-pointer select-none items-center gap-[0.5em] rounded-control border border-primaryStroke bg-background px-[0.5em] py-[0.33em] text-left text-textPrimary transition-colors duration-150 hover:border-secondaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+const LIST = 'fixed left-0 top-0 z-[60] w-max overflow-y-auto overflow-x-hidden overscroll-contain rounded-card border border-primaryStroke bg-backgroundSecondary py-1';
 const OPTION = 'flex cursor-pointer select-none items-center gap-[0.5em] whitespace-nowrap px-[0.5em] py-[0.33em] [@media(pointer:coarse)]:py-[0.75em]';
 
 function place(el: HTMLElement, anchor: HTMLElement) {

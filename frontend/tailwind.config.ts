@@ -5,7 +5,12 @@ export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     borderRadius: {
-      none: '0px'
+      none: '0px',
+      panel: 'var(--r-panel)',
+      control: 'var(--r-control)',
+      bubble: 'var(--r-bubble)',
+      avatar: 'var(--r-avatar)',
+      card: 'var(--r-card)'
     },
     boxShadow: {},
     extend: {
@@ -47,6 +52,8 @@ export default {
   },
   plugins: [
     plugin(({ addVariant }) => {
+      addVariant('soft', ':root[data-shape="soft"] &');
+      addVariant('bubble', ':root[data-shape="bubble"] &');
       addVariant('beside', ['@media (min-width: 1024px) { &:where(:not([data-chat] *, [data-chat])) }', '&:where([data-chat="beside"], [data-chat="beside"] *)']);
     })
   ]

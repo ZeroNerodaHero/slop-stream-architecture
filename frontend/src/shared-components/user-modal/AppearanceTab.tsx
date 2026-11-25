@@ -1,8 +1,22 @@
 import { useAtomValue } from 'jotai';
 
-import { customFrom, paletteAtom, setCustomColor, setTextSize, setTheme, TEXT_SIZES, type TextSize, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
+import {
+  customFrom,
+  paletteAtom,
+  setCustomColor,
+  setShape,
+  setTextSize,
+  setTheme,
+  SHAPES,
+  shapeAtom,
+  TEXT_SIZES,
+  type TextSize,
+  textSizeAtom,
+  themeAtom
+} from '@/infra/atoms/settings-atoms';
 import { contrast, hex, type Palette, PRESET_LABELS, PRESET_NAMES, PRESETS, type TokenName, TOKENS } from '@/infra/theme';
 import { Button } from '@/shared-components/Button';
+import { Segmented } from '@/shared-components/Segmented';
 import { FIELDSET, Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -21,17 +35,24 @@ const TOKEN_LABEL: Record<TokenName, string> = {
   decrease: 'danger'
 };
 
+const SHAPE_OPTIONS = SHAPES.map((value) => ({ value, label: value }));
+
+function ShapePicker() {
+  const shape = useAtomValue(shapeAtom);
+  return <Segmented id="shape" label="shape" options={SHAPE_OPTIONS} value={shape} onChange={setShape} />;
+}
+
 const css = (c: readonly number[]) => `rgb(${c.join(' ')})`;
 
 function Swatch({ palette }: { palette: Palette }) {
   return (
     <span
       aria-hidden
-      className="flex h-16 w-full min-w-0 items-center overflow-hidden p-1 max-md:h-12"
+      className="flex h-16 w-full min-w-0 items-center overflow-hidden p-1 soft:rounded-[4px] bubble:rounded-[8px] max-md:h-12"
       style={{ backgroundColor: css(palette.background), border: `1px solid ${css(palette.primaryStroke)}` }}
     >
       <span
-        className="flex h-full min-w-0 flex-1 items-center gap-1 px-1"
+        className="flex h-full min-w-0 flex-1 items-center gap-1 px-1 soft:rounded-[2px] bubble:rounded-[5px]"
         style={{
           backgroundColor: css(palette.backgroundSecondary),
           border: `1px solid ${css(palette.primaryStroke)}`
@@ -59,7 +80,10 @@ const SIZE_WORDS: Record<TextSize, string> = {
 
 function SizeSwatch({ size }: { size: TextSize }) {
   return (
-    <span aria-hidden className="flex h-16 w-full items-center justify-center border border-primaryStroke bg-background [--aa:1.75rem] max-md:h-9 max-md:[--aa:0.95rem]">
+    <span
+      aria-hidden
+      className="flex h-16 w-full items-center justify-center border border-primaryStroke bg-background soft:rounded-[4px] bubble:rounded-[8px] [--aa:1.75rem] max-md:h-9 max-md:[--aa:0.95rem]"
+    >
       <span className="font-semibold leading-none" style={{ fontSize: `calc(${size / 100} * var(--aa))` }}>
         Aa
       </span>
@@ -76,6 +100,13 @@ export function AppearanceTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
+      <fieldset className={FIELDSET}>
+        <legend className={SECTION_TITLE}>shape</legend>
+        <div>
+          <ShapePicker />
+        </div>
+      </fieldset>
+
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>theme</legend>
         <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">

@@ -80,7 +80,7 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
           role="toolbar"
           aria-orientation="vertical"
           aria-label={`moderate ${person.name}`}
-          className="absolute right-full top-0 -mr-px flex flex-col border border-primaryStroke bg-backgroundSecondary"
+          className="absolute right-full top-0 -mr-px flex flex-col overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary"
         >
           {actions.map((a) => (
             <Tooltip key={a.key} content={a.label} at="left">
@@ -105,7 +105,7 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
         role={pressable || below ? 'dialog' : 'tooltip'}
         aria-label={pressable || below ? person.name : undefined}
         data-presence={presence}
-        className="flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
+        className="flex flex-col gap-2.5 rounded-panel border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
       >
         <span className="flex items-center gap-2.5">
           <span className="relative shrink-0">
@@ -134,11 +134,11 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
           {follow && <FollowButton id={`${id ?? `peek-${person.name}`}-follow`} name={person.name} icon />}
         </span>
         {presence === 'streaming' ? (
-          <StreamStill name={person.name} className="w-full" />
+          <StreamStill name={person.name} className="w-full rounded-card" />
         ) : (
           <span
             id={id ? `${id}-thumb` : undefined}
-            className="relative flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden border border-primaryStroke bg-backgroundTertiary"
+            className="relative flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden rounded-card border border-primaryStroke bg-backgroundTertiary"
           >
             {known?.thumbs?.[0] !== undefined ? (
               <img src={api.streamThumbUrl(person.name, known.thumbs[0])} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />

@@ -140,7 +140,7 @@ function TypeBox({ id, title, message, yes, onYes, onNo }: TypeToConfirmProps) {
         else onNo();
       }}
       className={cn(
-        'm-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto w-[min(420px,calc(100vw-3rem))] md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >

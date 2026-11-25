@@ -148,7 +148,7 @@ export function mentionList({ h, useState, useEffect, useLayoutEffect }: Mention
               onClick: () => pick(m),
               className: `${PICK_ROW} ${i === lit ? PICK_LIT : PICK_DIM}`
             },
-            h('span', { className: 'flex h-5 w-5 shrink-0 bg-backgroundTertiary' }, face(m)),
+            h('span', { className: 'flex h-5 w-5 shrink-0 overflow-hidden rounded-avatar bg-backgroundTertiary' }, face(m)),
             h('span', { className: 'min-w-0 flex-1 truncate font-semibold' }, head, hit && h('span', { className: MATCH_TEXT }, hit), tail)
           );
         })

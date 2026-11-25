@@ -25,7 +25,7 @@ export function GeneratedAvatar({ name, className }: GeneratedAvatarProps) {
       aria-hidden
       style={key ? { backgroundColor: colorOf(key) } : undefined}
       className={cn(
-        'flex h-10 w-10 shrink-0 select-none items-center justify-center border border-primaryStroke bg-backgroundTertiary text-lg font-semibold uppercase leading-none',
+        'flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-avatar border border-primaryStroke bg-backgroundTertiary text-lg font-semibold uppercase leading-none',
         key ? 'text-white' : 'text-textTertiary',
         className
       )}

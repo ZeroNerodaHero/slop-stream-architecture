@@ -203,7 +203,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
       onClick={onClick}
       onClose={onClose}
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(640px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(640px,calc(100vw-3rem))] overflow-y-auto md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >

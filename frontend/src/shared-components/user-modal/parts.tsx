@@ -144,7 +144,7 @@ export function OptionCard({ id, name, checked, onChange, picture, label, detail
       <label
         htmlFor={id}
         className={cn(
-          'relative flex min-h-11 min-w-0 cursor-pointer flex-col items-center justify-center gap-2 border bg-background px-2 py-3 text-center transition-[border-color,color] duration-150',
+          'relative flex min-h-11 min-w-0 cursor-pointer flex-col items-center justify-center gap-2 rounded-card border bg-background px-2 py-3 text-center transition-[border-color,color] duration-150',
           '[&_svg]:h-7 [&_svg]:w-7 max-md:gap-1.5 max-md:[&_svg]:h-6 max-md:[&_svg]:w-6',
           checked && 'bg-primaryBlue/5',
           stroke
@@ -159,7 +159,7 @@ export function OptionCard({ id, name, checked, onChange, picture, label, detail
     <label
       htmlFor={id}
       className={cn(
-        'relative flex min-w-0 cursor-pointer flex-col gap-3 border bg-background p-4 transition-[border-color,color] duration-150',
+        'relative flex min-w-0 cursor-pointer flex-col gap-3 rounded-card border bg-background p-4 transition-[border-color,color] duration-150',
         compact && 'max-md:min-h-11 max-md:gap-1.5 max-md:p-1.5 max-md:[&_svg]:h-5 max-md:[&_svg]:w-5',
         compact === 'tight' && 'max-md:p-1',
         stroke

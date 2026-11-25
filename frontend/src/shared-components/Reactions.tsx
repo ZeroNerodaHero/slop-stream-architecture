@@ -120,7 +120,7 @@ export function ReactionPicker({
             onPick(emoji);
           }}
           className={cn(
-            'flex items-center justify-center border border-transparent leading-none hover:bg-primaryStroke/30 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent max-md:h-11 max-md:w-11',
+            'flex items-center justify-center rounded-control border border-transparent leading-none hover:bg-primaryStroke/30 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent max-md:h-11 max-md:w-11',
             big ? 'h-9 w-9 text-xl' : 'h-8 w-8 text-lg',
             yours && 'border-primaryBlue bg-primaryBlue/10'
           )}
@@ -160,7 +160,7 @@ export function ReactionPicker({
             data-line-menu
             data-reaction-picker
             onKeyDown={walk}
-            className="fixed left-0 top-0 z-[60] flex flex-col gap-1 border border-primaryStroke bg-backgroundSecondary p-1.5"
+            className="fixed left-0 top-0 z-[60] flex flex-col gap-1 rounded-panel border border-primaryStroke bg-backgroundSecondary p-1.5"
           >
             <div role="group" aria-label="quick" className="flex gap-0.5 border-b border-primaryStroke pb-1">
               {EMOJIS.slice(0, QUICK).map((e) => cell(e, true))}

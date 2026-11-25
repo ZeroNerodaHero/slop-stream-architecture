@@ -28,10 +28,11 @@ import { cn } from '@/utils/cn';
 
 const COLLAPSED = 'w-14';
 const EXPANDED = 'w-[min(300px,calc(100vw-12rem))]';
-const COLUMN = 'sticky top-0 h-screen w-14 shrink-0 self-start';
+const COLUMN =
+  'sticky top-0 h-screen w-14 shrink-0 self-start bubble:top-2 bubble:mt-2 bubble:h-[calc(100vh-1rem)] bubble:data-[side=left]:ml-2 bubble:data-[side=right]:mr-2';
 const panelClass = (side: 'left' | 'right') =>
   cn(
-    'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base',
+    'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base bubble:rounded-panel bubble:border-transparent bubble:bg-backgroundSecondary',
     side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke'
   );
 
@@ -41,14 +42,14 @@ const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
 const ICON_TAP = 'max-md:h-11 max-md:w-11';
 const ACTION = cn(
-  'relative inline-flex h-6 w-6 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundTertiary text-textSecondary transition-colors duration-100',
+  'relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundTertiary text-textSecondary transition-colors duration-100',
   'hover:border-secondaryStroke hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
   ICON_TAP
 );
 const BOX = 'shrink-0 gap-1 px-2 py-0.5 font-normal';
 const ICON = 14;
 const YOU =
-  'relative inline-flex shrink-0 border border-transparent transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
+  'relative inline-flex shrink-0 rounded-avatar border border-transparent transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 function Dot() {
   return (
     <span aria-hidden className="mx-1.5 text-textTertiary">
