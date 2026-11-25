@@ -8,7 +8,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 type Install = { at: 'idle' } | { at: 'downloading'; text: string } | { at: 'failed' };
 
 const DISMISS =
-  'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-transparent text-textTertiary hover:border-primaryStroke hover:text-textPrimary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primaryBlue';
+  'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-transparent text-background/80 hover:border-background/60 hover:text-background focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-background';
 
 export function UpdateBanner() {
   const [build, setBuild] = useState<string | null>(null);
@@ -42,27 +42,27 @@ export function UpdateBanner() {
   return (
     <div
       id="update-banner"
-      className="fixed inset-x-0 top-0 z-40 flex items-center justify-center gap-3 border-b border-primaryStroke bg-backgroundSecondary px-3 pb-1.5 pt-[calc(0.375rem+env(safe-area-inset-top))] font-sans text-sm text-textPrimary"
+      className="fixed inset-x-0 top-0 z-40 flex w-full items-center gap-3 border-b border-primaryBlueHover bg-primaryBlue pb-1.5 pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.75rem+env(safe-area-inset-right))] pt-[calc(0.375rem+env(safe-area-inset-top))] font-sans text-sm text-background"
     >
-      <p role="status" className="min-w-0 truncate">
+      <p role="status" className="min-w-0 flex-1 truncate font-medium">
         {text}
       </p>
-      {!native && (
-        <Button id="update-reload" size="sm" variant="outline" onClick={() => location.reload()}>
-          reload
-        </Button>
-      )}
-      {native && install.at !== 'downloading' && (
-        <Button id="update-install" size="sm" variant="outline" onClick={() => void update()}>
-          {install.at === 'failed' ? 'retry' : 'update and restart'}
-        </Button>
-      )}
       {install.at !== 'downloading' && (
         <Tooltip content="dismiss">
           <button id="update-dismiss" type="button" aria-label="dismiss" onClick={() => setDismissed(shown)} className={DISMISS}>
             <RiCloseLine aria-hidden size={16} />
           </button>
         </Tooltip>
+      )}
+      {!native && (
+        <Button id="update-reload" size="sm" onClick={() => location.reload()}>
+          reload
+        </Button>
+      )}
+      {native && install.at !== 'downloading' && (
+        <Button id="update-install" size="sm" onClick={() => void update()}>
+          {install.at === 'failed' ? 'retry' : 'update and restart'}
+        </Button>
       )}
     </div>
   );
