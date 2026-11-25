@@ -267,6 +267,7 @@ struct Early {
     held: Vec<Packet>,
     bytes: usize,
     spilled: bool,
+    released: bool,
 }
 
 pub struct ViewerTrack {
@@ -289,6 +290,10 @@ impl ViewerTrack {
         self.ready.load(Ordering::Relaxed) || !self.early.lock().unwrap_or_else(|e| e.into_inner()).held.is_empty()
     }
 
+    pub fn release(&self) {
+        *self.early.lock().unwrap_or_else(|e| e.into_inner()) = Early { spilled: true, released: true, ..Early::default() };
+    }
+
     fn hold(&self, packet: &Packet) {
         let mut early = self.early.lock().unwrap_or_else(|e| e.into_inner());
         if early.spilled {
@@ -296,7 +301,7 @@ impl ViewerTrack {
         }
         early.bytes += packet.payload.len();
         if early.held.len() >= EARLY_PACKETS || early.bytes > EARLY_BYTES {
-            *early = Early { spilled: true, ..Early::default() };
+            *early = Early { spilled: true, released: early.released, ..Early::default() };
             return;
         }
         early.held.push(packet.clone());
@@ -319,6 +324,9 @@ impl ViewerTrack {
         let n = writer.write_rtp(first).await.unwrap_or(0);
         if n == 0 {
             let mut early = self.early.lock().unwrap_or_else(|e| e.into_inner());
+            if early.released {
+                return 0;
+            }
             let later = std::mem::replace(&mut early.held, held);
             early.held.extend(later);
             drop(early);
@@ -361,7 +369,10 @@ impl ViewerTrack {
             self.floor.store(u32::from(packet.header.sequence_number), Ordering::Relaxed);
             self.resend.floor(packet.header.ssrc, packet.header.sequence_number);
             if !self.ready.load(Ordering::Relaxed) {
-                *self.early.lock().unwrap_or_else(|e| e.into_inner()) = Early::default();
+                let mut early = self.early.lock().unwrap_or_else(|e| e.into_inner());
+                if !early.released {
+                    *early = Early::default();
+                }
             }
         }
         self.deliver(&writer, packet).await
@@ -383,6 +394,7 @@ impl TrackLocal for ViewerTrack {
 
     async fn unbind(&self, _: &TrackLocalContext) -> webrtc::error::Result<()> {
         *self.bound.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.release();
         Ok(())
     }
 
@@ -482,6 +494,21 @@ mod tests {
         gate.open.store(true, Ordering::Relaxed);
         track.write(&mut packet(9000, 100), false).await;
         assert_eq!(*gate.got.lock().unwrap(), vec![9000]);
+    }
+
+    #[tokio::test]
+    async fn a_released_track_drops_what_it_held_and_holds_nothing_more() {
+        let gate = Arc::new(Gate::default());
+        let track = bound_track(&gate);
+        track.write(&mut packet(10, 1000), true).await;
+        track.write(&mut packet(11, 1000), false).await;
+        assert!(track.holds_picture());
+        track.release();
+        assert!(!track.holds_picture());
+        track.write(&mut packet(500, 1000), true).await;
+        track.write(&mut packet(501, 1000), false).await;
+        assert!(!track.holds_picture());
+        assert_eq!(track.early.lock().unwrap().held.len(), 0);
     }
 
     #[tokio::test]
