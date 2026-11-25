@@ -1,5 +1,5 @@
 export const INPUT =
-  'w-full rounded-control border border-primaryStroke bg-background px-2.5 py-[3px] text-base leading-snug text-textPrimary placeholder:text-textTertiary focus:border-primaryBlue disabled:opacity-40';
+  'w-full rounded-control border border-primaryStroke bg-background px-2.5 py-[calc(3px+0.125em)] text-base leading-[1.125] text-textPrimary placeholder:text-textTertiary focus:border-primaryBlue disabled:opacity-40';
 
 export const INPUT_BUTTON = 'px-3 py-[3px] text-base leading-snug';
 
