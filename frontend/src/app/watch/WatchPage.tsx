@@ -244,7 +244,7 @@ export function WatchPage() {
   const homePress = usePrefetchOnPointerDown('/');
 
   const face = name ? (
-    <span className="relative shrink-0">
+    <span className="relative flex shrink-0">
       <Face name={name} version={avatar} className={mobile ? 'h-8 w-8 text-sm' : 'h-10 w-10 text-lg'} />
       <PresenceSquare id="presence" labelled status={presence} className="border-background" />
     </span>
