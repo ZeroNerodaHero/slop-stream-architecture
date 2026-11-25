@@ -138,8 +138,8 @@
   .eps th.num, .eps td.num { text-align: right; padding-right: 10px; }
   .eps td.ep-name { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
   .eps .ktag { display: inline-block; min-width: 76px; margin-right: 6px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 12px; }
-  .eps th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
-  .eps th button:hover, .eps th[aria-sort] button { color: var(--t1); }
+  .eps th button, .ctrs th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
+  .eps th button:hover, .eps th[aria-sort] button, .ctrs th button:hover, .ctrs th[aria-sort] button { color: var(--t1); }
   .eps tr.ep { cursor: pointer; } .eps tr.ep:hover td, .eps tr.ep.open td { background: var(--bg3); }
   .eps tr.ep.open td { background: rgb(30 38 56); color: var(--t1); }
   .twrap { position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -443,6 +443,51 @@
     if (Number.isFinite(n) && n > 0) drawerPx = n;
   } catch (e) {
     console.warn('drawer width', e);
+  }
+
+  const SORT_KEY = 'stats.sort.';
+  const sorts = {};
+  function sortOf(table, cols, fallback) {
+    if (!sorts[table]) {
+      let got = null;
+      try { got = JSON.parse(localStorage.getItem(SORT_KEY + table) || 'null'); } catch (e) { got = null; }
+      sorts[table] = got && typeof got === 'object' && (got.dir === 1 || got.dir === -1) && typeof got.col === 'string' ? got : { ...fallback };
+    }
+    if (!cols.some((c) => c.id === sorts[table].col)) sorts[table] = { ...fallback };
+    return sorts[table];
+  }
+  function setSort(table, next) {
+    sorts[table] = next;
+    try { localStorage.setItem(SORT_KEY + table, JSON.stringify(next)); } catch (e) { console.warn('sort', e); }
+  }
+  function sortHead(table, cols, sort, onChange) {
+    const tr = el('tr');
+    for (const c of cols) {
+      const th = el('th');
+      const b = button(null, c.label + (c.id === sort.col ? (sort.dir < 0 ? ' ▼' : ' ▲') : ''), () => {
+        setSort(table, sort.col === c.id ? { col: c.id, dir: -sort.dir } : { col: c.id, dir: c.num ? -1 : 1 });
+        onChange();
+      });
+      b.dataset.col = `${table}:${c.id}`;
+      b.title = `sort by ${c.label}`;
+      if (c.id === sort.col) th.setAttribute('aria-sort', sort.dir < 0 ? 'descending' : 'ascending');
+      th.append(b);
+      tr.append(th);
+    }
+    return tr;
+  }
+  function sortRows(rows, col, dir, sinks, tie) {
+    return rows.sort((a, b) => {
+      if (col.num) {
+        const sa = sinks(a), sb = sinks(b);
+        if (sa !== sb) return sa ? 1 : -1;
+      }
+      const x = col.get(a), y = col.get(b);
+      const nx = !has(x) || x === '', ny = !has(y) || y === '';
+      if (nx || ny) return nx && ny ? tie(a, b) : nx ? 1 : -1;
+      const d = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return d * dir || tie(a, b);
+    });
   }
 
   function readHash() {
@@ -960,12 +1005,31 @@
     if (!picked) {
       picked = rows.filter((r) => r.c.state === 'running').sort((a, b) => (b.c.cpu_pct || 0) - (a.c.cpu_pct || 0))[0] || rows[0];
     }
+    const STATE_RANK = { running: 0, restarting: 1, paused: 2, created: 3, removing: 4, exited: 5, dead: 6 };
+    const ccols = [
+      ...(multi ? [{ id: 'box', label: 'box', get: (r) => r.box }] : []),
+      { id: 'name', label: 'container', get: (r) => r.c.name },
+      { id: 'state', label: 'state', get: (r) => (STATE_RANK[r.c.state] ?? 7) * 10 + (r.c.state === 'running' && r.c.health && r.c.health !== 'healthy' ? 1 : 0) },
+      { id: 'up', label: 'up', num: true, get: (r) => (r.c.up_since && r.c.state === 'running' ? secsSince(r.c.up_since, now) : null) },
+      { id: 'cpu', label: 'cpu', num: true, get: (r) => r.c.cpu_pct },
+      { id: 'mem', label: 'memory', num: true, get: (r) => r.c.mem_bytes },
+      { id: 'net', label: 'net ↓ / ↑', num: true, get: (r) => (has(r.c.rx_bps) || has(r.c.tx_bps) ? (r.c.rx_bps || 0) + (r.c.tx_bps || 0) : null) },
+      { id: 'pids', label: 'pids', num: true, get: (r) => r.c.pids },
+    ];
+    const heads = ccols.map((c) => c.label);
+    const csort = sortOf('containers', ccols, { col: 'name', dir: 1 });
+    const ccol = ccols.find((c) => c.id === csort.col);
+    sortRows(rows, ccol, csort.dir, (r) => r.c.state !== 'running', (a, b) => a.c.name.localeCompare(b.c.name) || a.box.localeCompare(b.box));
     const table = el('table', 'ctrs');
     const thead = el('thead');
-    const head = el('tr');
-    const heads = [...(multi ? ['box'] : []), 'container', 'state', 'up', 'cpu', 'memory', 'net ↓ / ↑', 'pids'];
-    for (const h of heads) head.append(el('th', null, h));
-    thead.append(head);
+    const focusedCol = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.col : null;
+    thead.append(sortHead('containers', ccols, csort, render));
+    if (focusedCol && focusedCol.startsWith('containers:')) {
+      requestAnimationFrame(() => {
+        const again = [...document.querySelectorAll('.ctrs th button')].find((x) => x.dataset.col === focusedCol);
+        if (again) again.focus({ preventScroll: true });
+      });
+    }
     const tbody = el('tbody');
     table.append(thead, tbody);
     pane.append(table);
