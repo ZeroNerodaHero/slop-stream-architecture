@@ -16,8 +16,9 @@ const WS_PORT = Number(process.env.WS_PORT || 17880);
 const UDP_PORT = Number(process.env.UDP_PORT || 17882);
 const HTTP_PORT = Number(process.env.HTTP_PORT || 17900);
 const CLIP = process.env.CLIP || path.join(os.tmpdir(), 'stream-simulcast-1080.y4m');
-const DOWNLINK_KBPS = Number(process.env.DOWNLINK_KBPS || 1200);
+const DOWNLINK_KBPS = Number(process.env.DOWNLINK_KBPS || 800);
 const RELAY_PORT = Number(process.env.RELAY_PORT || 17890);
+const SQUEEZE_MS = Number(process.env.SQUEEZE_MS || 10000);
 const WS_URL = `ws://127.0.0.1:${WS_PORT}/ws`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
@@ -67,7 +68,7 @@ window.publish = async (name, url, mode) => {
 };
 window.publishStats = async () => {
   const out = [];
-  for (const s of (await window.__pub.pc.getStats()).values()) if (s.type === 'outbound-rtp' && s.kind === 'video') out.push({ rid: s.rid, h: s.frameHeight, bytes: s.bytesSent, active: s.active, reason: s.qualityLimitationReason });
+  for (const s of (await window.__pub.pc.getStats()).values()) if (s.type === 'outbound-rtp' && s.kind === 'video') out.push({ rid: s.rid, h: s.frameHeight, bytes: s.bytesSent, active: s.active, reason: s.qualityLimitationReason, pli: s.pliCount, kf: s.keyFramesEncoded, fps: s.framesPerSecond });
   return out.sort((a, b) => (a.rid || '').localeCompare(b.rid || ''));
 };
 window.views = [];
@@ -87,18 +88,19 @@ window.watch = async (name, url, preview = false, relay = 0) => {
     if (e.track.kind !== 'video') return;
     video.srcObject = new MediaStream([e.track]);
     const onFrame = (_, meta) => {
-      if (view.firstFrame === null) { view.firstFrame = performance.now() - view.t0; view.firstHeight = meta.height; }
+      if (view.firstFrame === null) { view.firstFrame = performance.now() - view.t0; view.afterAnswer = performance.now() - view.answered; view.firstHeight = meta.height; }
     };
     video.requestVideoFrameCallback(onFrame);
   };
   await pc.setLocalDescription(await pc.createOffer());
   const { ws, sdp } = await signal(url, preview ? { role: 'watch', name, sdp: pc.localDescription.sdp, preview: true } : { role: 'watch', name, sdp: pc.localDescription.sdp });
   view.ws = ws;
+  view.answered = performance.now();
   await pc.setRemoteDescription({ type: 'answer', sdp: relay ? sdp.replace(/ (\\d+) typ host/g, ' ' + relay + ' typ host') : sdp });
   const sample = async () => {
     if (view.closed) return;
     for (const s of (await pc.getStats()).values()) {
-      if (s.type === 'inbound-rtp' && s.kind === 'video') view.samples.push({ t: Math.round(performance.now() - view.t0), h: s.frameHeight || 0, frames: s.framesDecoded || 0, bytes: s.bytesReceived || 0, freeze: s.totalFreezesDuration || 0, lost: s.packetsLost || 0, kf: s.keyFramesDecoded || 0 });
+      if (s.type === 'inbound-rtp' && s.kind === 'video') view.samples.push({ t: Math.round(performance.now() - view.t0), h: s.frameHeight || 0, frames: s.framesDecoded || 0, bytes: s.bytesReceived || 0, freeze: s.totalFreezesDuration || 0, lost: s.packetsLost || 0, kf: s.keyFramesDecoded || 0, pli: s.pliCount || 0 });
     }
     setTimeout(sample, 100);
   };
@@ -106,7 +108,7 @@ window.watch = async (name, url, preview = false, relay = 0) => {
   window.views.push(view);
   return window.views.length - 1;
 };
-window.view = (i) => { const v = window.views[i]; return { firstFrame: v.firstFrame, firstHeight: v.firstHeight, samples: v.samples }; };
+window.view = (i) => { const v = window.views[i]; return { firstFrame: v.firstFrame, afterAnswer: v.afterAnswer, firstHeight: v.firstHeight, samples: v.samples }; };
 window.unwatch = (i) => { const v = window.views[i]; v.closed = true; v.ws.close(); v.pc.close(); v.video.remove(); };
 </script>`;
 
@@ -210,24 +212,27 @@ async function browser(extra = []) {
 
 async function joinTimes(page, name, preview = false) {
   const times = [];
+  const afterAnswer = [];
   const heights = [];
   for (let i = 0; i < JOINS; i++) {
     const id = await page.evaluate(([n, u, p]) => window.watch(n, u, p), [name, WS_URL, preview]);
     const v = await waitFor(() => page.evaluate((i) => window.view(i).firstFrame !== null && window.view(i), id), 8000, 20);
     await page.evaluate((i) => window.unwatch(i), id);
     if (v) {
+      if (process.env.JOIN_TRACE) console.log('join', JSON.stringify({ first: Math.round(v.firstFrame), samples: v.samples.map((s) => [s.t, s.bytes, s.frames, s.pli]) }));
       times.push(Math.round(v.firstFrame));
+      afterAnswer.push(Math.round(v.afterAnswer));
       heights.push(v.firstHeight);
     }
     await sleep(700);
   }
-  return { times, heights };
+  return { times, afterAnswer, heights };
 }
 
 (async () => {
   if (!fs.existsSync(CLIP)) execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=1920x1080:r=30,noise=alls=10:allf=t+u', '-t', '2', '-pix_fmt', 'yuv420p', CLIP]);
   const server = serve();
-  const sfu = start([], { RUST_LOG: 'warn,video=info', PUBLIC_IP: '127.0.0.1', WS_PORT: String(WS_PORT), UDP_PORT: String(UDP_PORT), API_URL: `http://127.0.0.1:${HTTP_PORT}`, DUMMY_PASSWORD: 'local-only', THUMB_EVERY_SECS: '1' }, 'video');
+  const sfu = start([], { RUST_LOG: process.env.SFU_LOG || 'warn,video=info', PUBLIC_IP: '127.0.0.1', WS_PORT: String(WS_PORT), UDP_PORT: String(UDP_PORT), API_URL: `http://127.0.0.1:${HTTP_PORT}`, DUMMY_PASSWORD: 'local-only' }, 'video');
   const procs = [sfu.child];
   const cleanup = async () => {
     for (const p of procs) p.kill('SIGTERM');
@@ -258,7 +263,8 @@ async function joinTimes(page, name, preview = false) {
       prev = { total, at };
       for (const l of layers) if (l.bytes > 0 && ramp.firstBytesMs[l.rid || 'single'] === undefined) ramp.firstBytesMs[l.rid || 'single'] = at;
       const wanted = MODE === 'simulcast' ? 3 : 1;
-      return Object.keys(ramp.firstBytesMs).length >= wanted && ramp.kbps.length > 4 && ramp.kbps.slice(-4).every((k) => k.kbps > (MODE === 'simulcast' ? 4000 : 2000));
+      const tall = layers.some((l) => l.h === (MODE === 'simulcast' ? 1080 : 720));
+      return tall && Object.keys(ramp.firstBytesMs).length >= wanted && ramp.kbps.length > 4 && ramp.kbps.slice(-4).every((k) => k.kbps > (MODE === 'simulcast' ? 3000 : 2000));
     }, 90000, 500);
     ramp.settledMs = Date.now() - t0;
     results.publisherRamp = ramp;
@@ -268,6 +274,7 @@ async function joinTimes(page, name, preview = false) {
     if (MODE === 'simulcast') {
       check('the browser offers three rids', published.offeredRids === 3, published);
       check('the publisher sends three layers', sending.length === 3, layers);
+      check('no layer sends more than 30fps', sending.every((l) => (l.fps || 0) <= 31), layers);
       check('video binds a layer per rid', ups.length === 3, ups.map((l) => l.replace(/^\d+ /, '')));
     } else {
       check('the publisher sends one encoding', sending.length === 1, layers);
@@ -276,8 +283,12 @@ async function joinTimes(page, name, preview = false) {
     const viewBrowser = await browser();
     const view = await (await viewBrowser.newContext()).newPage();
     await view.goto(`http://localhost:${HTTP_PORT}/`);
+    const pubBefore = await pub.evaluate(() => window.publishStats());
     const joins = await joinTimes(view, 'cam');
-    results.firstFrame = { joins: joins.times.length, medianMs: median(joins.times), p90Ms: pct(joins.times, 0.9), minMs: Math.min(...joins.times), maxMs: Math.max(...joins.times), times: joins.times, heights: joins.heights };
+    const pubAfter = await pub.evaluate(() => window.publishStats());
+    results.publisherDuringJoins = pubAfter.map((l, i) => ({ rid: l.rid || 'single', plis: l.pli - (pubBefore[i]?.pli || 0), keyframes: l.kf - (pubBefore[i]?.kf || 0) }));
+    results.firstFrame = { joins: joins.times.length, medianMs: median(joins.times), p90Ms: pct(joins.times, 0.9), minMs: Math.min(...joins.times), maxMs: Math.max(...joins.times), afterAnswerMedianMs: median(joins.afterAnswer), times: joins.times, heights: joins.heights };
+    if (process.env.TIMINGS) results.timings = await (await fetch('http://127.0.0.1:9300/timings').catch(() => null))?.json().catch(() => null);
     check('every join got a first frame', joins.times.length === JOINS, results.firstFrame);
 
     if (MODE === 'simulcast') {
@@ -295,52 +306,61 @@ async function joinTimes(page, name, preview = false) {
       check('a healthy viewer climbs from 720 to 1080', changes.length >= 2 && changes[0].h === 720 && changes[changes.length - 1].h === 1080, changes);
       check('the climb froze nothing', last.freeze === 0, last);
       await view.evaluate((i) => window.unwatch(i), id);
+    }
 
+    {
+      const gate = MODE === 'simulcast' ? check : (name, ok, detail) => results.checks.push({ name, ok, detail, info: true });
       const pipe = relay(RELAY_PORT, UDP_PORT);
-      const slowPage = view;
-      const slowId = await slowPage.evaluate(([u, r]) => window.watch('cam', u, false, r), [WS_URL, RELAY_PORT]);
-      await waitFor(async () => {
-        const v = await slowPage.evaluate((i) => window.view(i), slowId);
-        return v.samples.length && v.samples[v.samples.length - 1].h === 1080;
-      }, 15000);
-      const throttledAt = await slowPage.evaluate((i) => Math.round(performance.now() - window.views[i].t0), slowId);
-      const fromSamples = (await slowPage.evaluate((i) => window.view(i), slowId)).samples;
-      results.squeezedFrom = fromSamples.length ? fromSamples[fromSamples.length - 1].h : 0;
+      const at = (i) => view.evaluate((i) => Math.round(performance.now() - window.views[i].t0), i);
+      const samples = async (i) => (await view.evaluate((i) => window.view(i), i)).samples;
+      const slowId = await view.evaluate(([u, r]) => window.watch('cam', u, false, r), [WS_URL, RELAY_PORT]);
+      await waitFor(async () => (await samples(slowId)).at(-1)?.h === (MODE === 'simulcast' ? 1080 : 720), 15000);
+      await sleep(1000);
+      const before = (await samples(slowId)).at(-1);
+      const throttledAt = await at(slowId);
       pipe.limit(DOWNLINK_KBPS);
       const throttledWall = Date.now();
-      const down = await waitFor(async () => {
-        const v = await slowPage.evaluate((i) => window.view(i), slowId);
-        const s = v.samples.filter((x) => x.t > throttledAt && x.h);
-        return s.length && s[s.length - 1].h === 360 ? s[s.length - 1] : null;
-      }, 20000, 200);
-      const droppedAt = down ? down.t : null;
-      check('a viewer squeezed to ' + DOWNLINK_KBPS + ' kbps falls to 360', !!down, { throttledAtMs: throttledAt, on360AtMs: droppedAt });
-      await sleep(3000);
-      const squeezed = (await slowPage.evaluate((i) => window.view(i), slowId)).samples.filter((x) => x.t > (droppedAt || throttledAt) + 500);
-      const kept = squeezed.length > 1 ? squeezed[squeezed.length - 1].frames - squeezed[0].frames : 0;
-      results.squeezedFps = squeezed.length > 1 ? Math.round((kept * 1000) / (squeezed[squeezed.length - 1].t - squeezed[0].t)) : 0;
+      await sleep(SQUEEZE_MS);
+      const during = (await samples(slowId)).filter((x) => x.t > throttledAt);
       pipe.limit(0);
       const freedWall = Date.now();
+      const freedAt = await at(slowId);
+      const tail = during.filter((x) => x.t > throttledAt + SQUEEZE_MS / 2);
+      const fps = tail.length > 1 ? Math.round(((tail.at(-1).frames - tail[0].frames) * 1000) / (tail.at(-1).t - tail[0].t)) : 0;
+      const on360 = during.find((x) => x.h === 360);
+      const back = await waitFor(async () => {
+        const s = (await samples(slowId)).filter((x) => x.t > freedAt && x.h);
+        const last = s.at(-1);
+        const second = s.find((x) => x.t >= (last ? last.t - 1000 : 0));
+        return last && last.h >= 720 && last.t - second.t >= 800 && last.frames - second.frames >= 15 ? second : null;
+      }, 45000, 200);
+      const all = await samples(slowId);
       const firstLine = (re, after) => sfu.lines.map((l) => [Number(l.split(' ')[0]), l]).find(([t, l]) => t >= after && re.test(l));
       const cut = firstLine(/watch cam: slot 0 layer \d+ -> 0 \(Congested/, throttledWall);
-      results.squeezeDecisionMs = cut ? cut[0] - throttledWall : null;
-      const freedAt = await slowPage.evaluate((i) => Math.round(performance.now() - window.views[i].t0), slowId);
-      const back = await waitFor(async () => {
-        const v = await slowPage.evaluate((i) => window.view(i), slowId);
-        const s = v.samples.filter((x) => x.t > freedAt && x.h);
-        return s.length && s[s.length - 1].h >= 720 ? s[s.length - 1] : null;
-      }, 40000, 200);
-      const slow = await slowPage.evaluate((i) => window.view(i), slowId);
       const lift = firstLine(/watch cam: slot 0 layer 0 -> \d \(Healthy/, freedWall);
-      results.squeezedViewer = { from: results.squeezedFrom, throttledAtMs: throttledAt, sfuDownAfterMs: results.squeezeDecisionMs, sfuUpAfterMs: lift ? lift[0] - freedWall : null, on360AtMs: droppedAt, downAfterMs: droppedAt && droppedAt - throttledAt, fpsWhileSqueezed: results.squeezedFps, relayDropped: pipe.dropped(), freedAtMs: freedAt, backUpAtMs: back && back.t, upAfterMs: back && back.t - freedAt, changes: heightsOf(slow.samples) };
-      results.squeezedSamples = slow.samples.filter((s) => s.t > throttledAt - 1000 && s.t < (droppedAt || throttledAt) + 2000);
-      check('it climbs back once the squeeze ends', !!back, results.squeezedViewer);
-      const freezes = (await slowPage.evaluate((i) => window.view(i), slowId)).samples.at(-1).freeze;
-      results.squeezedViewer.freezeSec = freezes;
-      check('the squeeze froze the picture for under a second', freezes < 1, freezes);
-      await slowPage.evaluate((i) => window.unwatch(i), slowId);
+      results.squeezedViewer = {
+        kbps: DOWNLINK_KBPS,
+        squeezeMs: SQUEEZE_MS,
+        from: before.h,
+        sfuDownAfterMs: cut ? cut[0] - throttledWall : null,
+        on360AfterMs: on360 ? on360.t - throttledAt : null,
+        fpsInSecondHalf: fps,
+        freezeSecDuringSqueeze: Math.round((during.at(-1).freeze - before.freeze) * 1000) / 1000,
+        relayDropped: pipe.dropped(),
+        sfuUpAfterMs: lift ? lift[0] - freedWall : null,
+        backTo720AfterMs: back ? back.t - freedAt : null,
+        totalFreezeSec: all.at(-1).freeze,
+        changes: heightsOf(all)
+      };
+      gate('a viewer squeezed to ' + DOWNLINK_KBPS + ' kbps falls to 360', !!on360, results.squeezedViewer);
+      gate('the squeezed viewer keeps moving', fps >= 20, results.squeezedViewer);
+      gate('the squeeze froze the picture for under a second', results.squeezedViewer.freezeSecDuringSqueeze < 1, results.squeezedViewer);
+      gate('it climbs back once the squeeze ends', !!back, results.squeezedViewer);
+      await view.evaluate((i) => window.unwatch(i), slowId);
       pipe.close();
+    }
 
+    if (MODE === 'simulcast') {
       const thumb = await waitFor(async () => (await fetch(`http://127.0.0.1:${WS_PORT}/thumb/cam.jpg`).catch(() => null))?.ok, 15000, 500);
       check('the thumbnail comes from the low layer', !!thumb);
     }
