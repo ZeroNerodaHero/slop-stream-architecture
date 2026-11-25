@@ -404,7 +404,7 @@ export function CornerPlayer({
             avatar={scene.avatar}
             main={{ id: `${prefix}-video`, streamAtom, videoRef, slot: scene.slot, muted, volume, onPlaying, onAutoplayBlocked }}
             onPick={scene.onPick}
-            className="min-w-0 border-0 border-b"
+            className="min-w-0 rounded-none border-0 border-b"
           />
         ) : (
           <VideoFrame
