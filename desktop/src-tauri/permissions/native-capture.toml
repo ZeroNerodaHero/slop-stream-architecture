@@ -1,0 +1,13 @@
+[[permission]]
+identifier = "native-capture"
+description = "Capture desktop audio, native mics and macOS screens and windows for the go live page"
+commands.allow = [
+  "start_desktop_audio",
+  "stop_desktop_audio",
+  "list_input_devices",
+  "start_mic",
+  "stop_mic",
+  "list_capture_sources",
+  "start_screen_capture",
+  "stop_screen_capture"
+]

@@ -1,8 +1,12 @@
-import { RiMicLine, RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiCloseLine, RiFilter3Line, RiMicLine, RiVoiceprintLine, RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 
 import {
+  addDesktopAudio,
+  DESKTOP_AUDIO,
+  desktopAudioBusyAtom,
+  desktopAudioStatusAtom,
   hasMicAtom,
   isPublishingAtom,
   MASTER,
@@ -13,21 +17,28 @@ import {
   type MixRow,
   micDeviceAtom,
   micDevicesAtom,
+  micProcessingAtom,
   mixRowsAtom,
+  nativeMicOnAtom,
   readMixLevel,
   refreshMicDevices,
+  removeDesktopAudio,
   resumeMixer,
   setMicDevice,
+  setMicProcessing,
   setMixLevel,
   setMixMuted
 } from '@/infra/atoms/publish-atoms';
 import type { Place } from '@/infra/live-dock';
+import { inTauri } from '@/infra/update-check';
 import { Button } from '@/shared-components/Button';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { DevicePick } from '@/shared-components/live/DevicePick';
 import { DockPanel } from '@/shared-components/live/Dock';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+
+const DESKTOP = inTauri();
 
 function decibels(level: number): string {
   if (level <= 0) return 'silent';
@@ -82,25 +93,35 @@ function Meter({ id, clip }: { id: string; clip?: boolean }) {
   );
 }
 
-function Row({ row, master = false }: { row: MixRow; master?: boolean }) {
+function Row({ row, master = false, extra }: { row: MixRow; master?: boolean; extra?: ReactNode }) {
+  const mute = (
+    <Tooltip content={row.muted ? 'muted. click to unmute' : 'mute'}>
+      <button
+        id={`mute-${row.id}`}
+        type="button"
+        aria-pressed={row.muted}
+        aria-label={row.muted ? `unmute ${row.label}` : `mute ${row.label}`}
+        onClick={() => setMixMuted(row.id, !row.muted)}
+        className={cn(ICON_BUTTON, row.muted && 'border-decrease text-decrease hover:border-decrease hover:text-decrease')}
+      >
+        {row.muted ? <RiVolumeMuteLine aria-hidden size={16} /> : <RiVolumeUpLine aria-hidden size={16} />}
+      </button>
+    </Tooltip>
+  );
   return (
     <li id={`mix-${row.id}`} className={cn('grid grid-cols-[minmax(0,1fr)_auto_6rem] items-center gap-3 px-3 py-2', master && 'border-t-2 border-primaryStroke')}>
       <span className="flex min-w-0 flex-col gap-1.5">
         <span className={cn('truncate text-sm leading-none', master ? 'text-textPrimary' : 'text-textSecondary')}>{row.label}</span>
         <Meter id={row.id} clip={master} />
       </span>
-      <Tooltip content={row.muted ? 'muted. click to unmute' : 'mute'}>
-        <button
-          id={`mute-${row.id}`}
-          type="button"
-          aria-pressed={row.muted}
-          aria-label={row.muted ? `unmute ${row.label}` : `mute ${row.label}`}
-          onClick={() => setMixMuted(row.id, !row.muted)}
-          className={cn(ICON_BUTTON, row.muted && 'border-decrease text-decrease hover:border-decrease hover:text-decrease')}
-        >
-          {row.muted ? <RiVolumeMuteLine aria-hidden size={16} /> : <RiVolumeUpLine aria-hidden size={16} />}
-        </button>
-      </Tooltip>
+      {extra ? (
+        <span className="flex items-center gap-1">
+          {extra}
+          {mute}
+        </span>
+      ) : (
+        mute
+      )}
       <Tooltip content={decibels(row.level)}>
         <input
           id={`gain-${row.id}`}
@@ -117,6 +138,70 @@ function Row({ row, master = false }: { row: MixRow; master?: boolean }) {
     </li>
   );
 }
+
+function MicTools() {
+  const native = useAtomValue(nativeMicOnAtom);
+  const { suppress, gate } = useAtomValue(micProcessingAtom);
+  if (!native) return null;
+  return (
+    <>
+      <Tooltip content={suppress ? 'noise suppression on' : 'noise suppression off'}>
+        <button
+          id="mic-suppress"
+          type="button"
+          aria-pressed={suppress}
+          aria-label="noise suppression"
+          onClick={() => void setMicProcessing({ suppress: !suppress })}
+          className={cn(ICON_BUTTON, suppress && 'border-primaryBlue text-primaryBlue')}
+        >
+          <RiVoiceprintLine aria-hidden size={16} />
+        </button>
+      </Tooltip>
+      <Tooltip content={gate ? 'noise gate on' : 'noise gate off'}>
+        <button
+          id="mic-gate"
+          type="button"
+          aria-pressed={gate}
+          aria-label="noise gate"
+          onClick={() => void setMicProcessing({ gate: !gate })}
+          className={cn(ICON_BUTTON, gate && 'border-primaryBlue text-primaryBlue')}
+        >
+          <RiFilter3Line aria-hidden size={16} />
+        </button>
+      </Tooltip>
+    </>
+  );
+}
+
+function DesktopAudioRemove() {
+  return (
+    <Tooltip content="remove desktop audio">
+      <button id="remove-desktop-audio" type="button" aria-label="remove desktop audio" onClick={removeDesktopAudio} className={ICON_BUTTON}>
+        <RiCloseLine aria-hidden size={16} />
+      </button>
+    </Tooltip>
+  );
+}
+
+function DesktopAudioAdd({ shown }: { shown: boolean }) {
+  const busy = useAtomValue(desktopAudioBusyAtom);
+  const status = useAtomValue(desktopAudioStatusAtom);
+  if (shown) return null;
+  return (
+    <div className="flex flex-col gap-2 border-t border-primaryStroke px-3 py-2">
+      <Button id="add-desktop-audio" variant="outline" size="sm" className="self-start" disabled={busy} onClick={() => void addDesktopAudio()}>
+        add desktop audio
+      </Button>
+      {status && (
+        <p id="desktop-audio-status" className="text-sm text-decrease">
+          {status}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const extraOf = (id: string): ReactNode => (id === 'mic' ? <MicTools /> : id === DESKTOP_AUDIO ? <DesktopAudioRemove /> : undefined);
 
 export function MixerBody() {
   const rows = useAtomValue(mixRowsAtom);
@@ -137,10 +222,11 @@ export function MixerBody() {
       <ul className="m-0 list-none divide-y divide-primaryStroke p-0">
         {rows.length === 0 && <li className="px-3 py-2 text-sm text-textTertiary">no mic: the stream is silent</li>}
         {rows.map((row) => (
-          <Row key={row.id} row={row} />
+          <Row key={row.id} row={row} extra={DESKTOP ? extraOf(row.id) : undefined} />
         ))}
         <Row row={{ ...master, id: MASTER }} master />
       </ul>
+      {DESKTOP && <DesktopAudioAdd shown={rows.some((r) => r.id === DESKTOP_AUDIO)} />}
     </>
   );
 }

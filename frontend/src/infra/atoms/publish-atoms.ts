@@ -9,6 +9,7 @@ import { record } from '@/infra/atoms/inspector-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { endWatch } from '@/infra/atoms/watch-atoms';
 import { pipAtom } from '@/infra/atoms/watch-state';
+import type { MicProcessing, NativeAudio, NativeMic } from '@/infra/desktop/native-audio';
 import {
   type FaceLines,
   type FaceMarks,
@@ -59,6 +60,7 @@ import {
 } from '@/infra/scene';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
+import { inTauri } from '@/infra/update-check';
 import type { Tone } from '@/shared-components/StatusLine';
 
 export type PublishPhase =
@@ -464,14 +466,32 @@ export async function refreshFaceCameras(): Promise<void> {
       faceCamerasAtom,
       devices.filter((d) => d.kind === 'videoinput' && d.deviceId).map((d, i) => ({ id: d.deviceId, label: d.label || `camera ${i + 1}` }))
     );
-  } catch {
-  }
+  } catch {}
 }
 
 export const micDevicesAtom = atom<{ id: string; label: string }[]>([]);
-export const micDeviceAtom = atom((get) => get(cameraAtom)?.getAudioTracks()[0]?.getSettings().deviceId ?? '');
+const nativeMicAtom = atom<{ id: string; track: MediaStreamTrack } | null>(null);
+export const nativeMicOnAtom = atom((get) => {
+  const native = get(nativeMicAtom);
+  return native !== null && get(cameraAtom)?.getAudioTracks()[0] === native.track;
+});
+export const micDeviceAtom = atom((get) => {
+  const track = get(cameraAtom)?.getAudioTracks()[0];
+  const native = get(nativeMicAtom);
+  return native && track === native.track ? native.id : (track?.getSettings().deviceId ?? '');
+});
+const storedMicProcessingAtom = atomWithStorage<unknown>('settings.desktopMicProcessing', null, undefined, { getOnInit: true });
+export const micProcessingAtom = atom<MicProcessing>((get) => {
+  const raw = get(storedMicProcessingAtom);
+  const kept = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return { suppress: kept.suppress !== false, gate: kept.gate !== false };
+});
+let nativeMic: NativeMic | null = null;
+
+const textOf = (err: unknown) => (typeof err === 'string' && err ? err : err instanceof Error && err.message ? err.message : 'it did not start');
 
 export async function refreshMicDevices(): Promise<void> {
+  if (inTauri()) return refreshNativeMics();
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     store.set(
@@ -483,7 +503,53 @@ export async function refreshMicDevices(): Promise<void> {
   }
 }
 
+async function refreshNativeMics(): Promise<void> {
+  try {
+    const { listNativeMics } = await import('@/infra/desktop/native-audio');
+    const devices = await listNativeMics();
+    store.set(
+      micDevicesAtom,
+      devices.map((d) => ({ id: d.id, label: d.default ? `${d.name} (default)` : d.name }))
+    );
+  } catch {
+    store.set(micDevicesAtom, []);
+  }
+}
+
+async function setNativeMic(id: string): Promise<void> {
+  const had = store.get(cameraAtom);
+  if (!had || (store.get(nativeMicOnAtom) && store.get(micDeviceAtom) === id)) return;
+  const generation = liveGeneration;
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  void ctx.resume().catch(() => undefined);
+  let opened: NativeMic;
+  try {
+    const { openNativeMic } = await import('@/infra/desktop/native-audio');
+    opened = await openNativeMic(ctx, id, store.get(micProcessingAtom));
+  } catch (err) {
+    void ctx.close().catch(() => undefined);
+    store.set(sourceStatusAtom, textOf(err));
+    return;
+  }
+  if (generation !== liveGeneration || store.get(cameraAtom) !== had) {
+    opened.stop();
+    return;
+  }
+  nativeMic = opened;
+  store.set(nativeMicAtom, { id, track: opened.track });
+  await swapMicTrack(had, opened.track);
+}
+
+export async function setMicProcessing(change: Partial<MicProcessing>): Promise<void> {
+  const next = { ...store.get(micProcessingAtom), ...change };
+  store.set(storedMicProcessingAtom, next);
+  if (!nativeMic) return;
+  if (change.gate !== undefined) nativeMic.setGate(next.gate);
+  if (change.suppress !== undefined && !(await nativeMic.setSuppress(next.suppress))) store.set(sourceStatusAtom, 'noise suppression did not load');
+}
+
 export async function setMicDevice(deviceId: string): Promise<void> {
+  if (inTauri()) return setNativeMic(deviceId);
   const had = store.get(cameraAtom);
   if (!had || had.getAudioTracks()[0]?.getSettings().deviceId === deviceId) return;
   const generation = liveGeneration;
@@ -499,6 +565,10 @@ export async function setMicDevice(deviceId: string): Promise<void> {
     fresh.getTracks().forEach((t) => t.stop());
     return;
   }
+  await swapMicTrack(had, track);
+}
+
+async function swapMicTrack(had: MediaStream, track: MediaStreamTrack): Promise<void> {
   had.getAudioTracks().forEach((t) => t.stop());
   store.set(cameraAtom, new MediaStream([track, ...had.getVideoTracks()]));
   store.set(sourceStatusAtom, '');
@@ -1156,7 +1226,33 @@ function onConnection(state: RTCPeerConnectionState) {
   else if (state === 'failed') stopLive('connection failed', 'failed');
 }
 
+const nativeSurfaces = new WeakMap<MediaStreamTrack, string>();
+
+async function pickNativeDisplay(): Promise<MediaStream | null | string> {
+  try {
+    const { pickNativeScreen } = await import('@/infra/desktop/native-screen');
+    const picked = await pickNativeScreen();
+    if (!picked) return null;
+    const track = picked.stream.getVideoTracks()[0];
+    if (track) nativeSurfaces.set(track, picked.surface);
+    return picked.stream;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ListFailed') return err.message;
+    store.set(sourceStatusAtom, textOf(err));
+    return null;
+  }
+}
+
 async function pickDisplay(): Promise<MediaStream | null> {
+  if (!inTauri() || !navigator.userAgent.includes('Mac')) return pickBrowserDisplay();
+  const native = await pickNativeDisplay();
+  if (typeof native !== 'string') return native;
+  const display = await pickBrowserDisplay();
+  if (!display) store.set(sourceStatusAtom, native);
+  return display;
+}
+
+async function pickBrowserDisplay(): Promise<MediaStream | null> {
   try {
     return await navigator.mediaDevices.getDisplayMedia(SCREEN_HINTS);
   } catch (err) {
@@ -1203,7 +1299,7 @@ async function sharePicked(): Promise<void> {
     }
   }
   track.addEventListener('ended', () => stopScreen(slot));
-  const surface = track.getSettings().displaySurface;
+  const surface = nativeSurfaces.get(track) ?? track.getSettings().displaySurface;
   const base = surface === 'window' ? 'window' : surface === 'browser' ? 'tab' : 'screen';
   const alike = store.get(screensAtom).filter((s) => s.label.startsWith(base)).length;
   const label = alike ? `${base} ${alike + 1}` : base;
@@ -1405,7 +1501,7 @@ function keptMix(id: string): { level: number; muted: boolean } | null {
 }
 
 function rememberMix(row: MixRow) {
-  if (row.id !== 'mic' && row.id !== MASTER) return;
+  if (row.id !== 'mic' && row.id !== MASTER && row.id !== DESKTOP_AUDIO) return;
   const raw = store.get(storedMixAtom);
   store.set(storedMixAtom, { ...(raw && typeof raw === 'object' ? raw : {}), [row.id]: { level: row.level, muted: row.muted } });
 }
@@ -1458,6 +1554,46 @@ export function mixClipping(now: number): boolean {
 }
 
 export const micLevelReader = (now: number) => readMixLevel('mic', now);
+
+export const DESKTOP_AUDIO = 'desktop';
+export const desktopAudioStatusAtom = atom('');
+export const desktopAudioBusyAtom = atom(false);
+let desktopAudio: NativeAudio | null = null;
+
+export async function addDesktopAudio(): Promise<void> {
+  if (!mixer || desktopAudio || store.get(desktopAudioBusyAtom)) return;
+  const generation = liveGeneration;
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  void ctx.resume().catch(() => undefined);
+  void resumeMixer();
+  store.set(desktopAudioBusyAtom, true);
+  store.set(desktopAudioStatusAtom, '');
+  try {
+    const { openDesktopAudio } = await import('@/infra/desktop/native-audio');
+    const opened = await openDesktopAudio(ctx);
+    if (generation !== liveGeneration || !mixer || desktopAudio) {
+      opened.stop();
+      return;
+    }
+    desktopAudio = opened;
+    addMixRow(DESKTOP_AUDIO, 'desktop audio', opened.track);
+  } catch (err) {
+    void ctx.close().catch(() => undefined);
+    store.set(desktopAudioStatusAtom, textOf(err));
+  } finally {
+    store.set(desktopAudioBusyAtom, false);
+  }
+}
+
+export function removeDesktopAudio() {
+  mixer?.remove(DESKTOP_AUDIO);
+  store.set(
+    mixRowsAtom,
+    store.get(mixRowsAtom).filter((r) => r.id !== DESKTOP_AUDIO)
+  );
+  desktopAudio?.stop();
+  desktopAudio = null;
+}
 
 export async function resumeMixer(): Promise<void> {
   await mixer?.resume().catch(() => undefined);
@@ -1647,6 +1783,8 @@ export function endLive() {
   store.set(modelLoadAtom, null);
   store.set(modelStatusAtom, '');
   unwatchMixer();
+  removeDesktopAudio();
+  store.set(desktopAudioStatusAtom, '');
   mixer?.close();
   mixer = null;
   store.set(mixerOpenAtom, false);
@@ -1657,6 +1795,8 @@ export function endLive() {
     ?.getTracks()
     .forEach((track) => track.stop());
   store.set(cameraAtom, null);
+  nativeMic = null;
+  store.set(nativeMicAtom, null);
   store.set(sourcesAtom, []);
   store.set(selectedSourceAtom, null);
   store.set(sourceStatusAtom, '');
@@ -1682,14 +1822,12 @@ export async function loadProfile(): Promise<void> {
     const me = await api.streamer(name);
     if (store.get(streamNameAtom) !== name || generation !== liveGeneration) return;
     store.set(streamThumbsAtom, me.thumbs ?? []);
-  } catch {
-  }
+  } catch {}
   try {
     const { assets } = await api.listAssets(name);
     if (store.get(streamNameAtom) !== name || generation !== liveGeneration) return;
     store.set(libraryAtom, assets);
-  } catch {
-  }
+  } catch {}
 }
 
 export function followIdentityOnLivePage() {

@@ -19,7 +19,7 @@ import {
 } from '../src/infra/window-stack.ts';
 
 test('every floating window kind is in the stack', () => {
-  for (const id of ['messages', 'timings', 'quality', 'chat', 'dm', 'corner', 'notifications', 'voice'] as const) assert.ok(STACK_IDS.includes(id));
+  for (const id of ['messages', 'timings', 'quality', 'chat', 'dm', 'corner', 'notifications', 'voice', 'screens'] as const) assert.ok(STACK_IDS.includes(id));
 });
 
 test('raise moves a window to the top and keeps the rest in order', () => {
@@ -40,7 +40,7 @@ test('drop removes a window and is a no-op when absent', () => {
 
 test('the order never grows past the window kinds', () => {
   let order: readonly (typeof STACK_IDS)[number][] = [];
-  for (let i = 0; i < 10000; i++) order = raise(order, STACK_IDS[(i * 3) % STACK_IDS.length]);
+  for (let i = 0; i < 10000; i++) order = raise(order, STACK_IDS[(i * 7 + (i % 5)) % STACK_IDS.length]);
   assert.equal(order.length, STACK_IDS.length);
   assert.equal(new Set(order).size, STACK_IDS.length);
 });

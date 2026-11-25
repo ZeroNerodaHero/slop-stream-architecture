@@ -2,8 +2,10 @@ import { RiAddLine, RiDraggable, RiLinkM } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
+  lazy,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -84,6 +86,7 @@ import {
 } from '@/infra/live-dock';
 import { CHAT_MOBILE, keyboardStrip, useIsMobile } from '@/infra/mobile';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
+import { inTauri } from '@/infra/update-check';
 import { Button } from '@/shared-components/Button';
 import { ChatOpenButton, useChatSide } from '@/shared-components/ChatSlot';
 import { Face } from '@/shared-components/Face';
@@ -117,6 +120,8 @@ const PHONE_TABS: readonly PhoneTab[] = ['sources', 'face', 'rig', 'sound', 'cha
 const PHONE_WORDS: Record<PhoneTab, string> = { sources: 'sources', face: 'face', rig: 'rig', sound: 'sound', chat: 'chat' };
 
 const TAB_KEY = 'live-tab';
+const DESKTOP = inTauri();
+const ScreenPicker = lazy(() => import('@/shared-components/live/ScreenPicker').then((m) => ({ default: m.ScreenPicker })));
 
 function keptTab(): PhoneTab {
   try {
@@ -245,7 +250,12 @@ interface Drag {
 
 function EditBar({ hidden, onAdd }: { hidden: ModuleId[]; onAdd: (id: ModuleId) => void }) {
   return (
-    <div id="live-edit-bar" role="toolbar" aria-label="edit layout" className="flex h-10 shrink-0 items-center gap-2 rounded-panel border border-primaryBlue/70 bg-backgroundSecondary px-2">
+    <div
+      id="live-edit-bar"
+      role="toolbar"
+      aria-label="edit layout"
+      className="flex h-10 shrink-0 items-center gap-2 rounded-panel border border-primaryBlue/70 bg-backgroundSecondary px-2"
+    >
       <span className="shrink-0 px-1 text-sm font-semibold text-primaryBlue">edit layout</span>
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
         {hidden.map((id) => (
@@ -356,7 +366,12 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   const order = drag ? [...shown.filter((t) => t !== drag.id), drag.id] : shown;
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-      {editing && <EditBar hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))} onAdd={(id) => !showInGrid(id) && setNote(`no room for the ${DOCK_WORDS[id]}: make a panel smaller first`)} />}
+      {editing && (
+        <EditBar
+          hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))}
+          onAdd={(id) => !showInGrid(id) && setNote(`no room for the ${DOCK_WORDS[id]}: make a panel smaller first`)}
+        />
+      )}
       <div
         ref={gridRef}
         id="live-grid"
@@ -710,9 +725,7 @@ export function LivePage() {
             })}
           </div>
           <div className="relative min-h-0 flex-1">
-            {PHONE_TABS.map((t) =>
-              t === 'chat' ? panel('chat', body('chat', 'phone'), 'flex flex-col') : panel(t, body(t, 'phone'))
-            )}
+            {PHONE_TABS.map((t) => (t === 'chat' ? panel('chat', body('chat', 'phone'), 'flex flex-col') : panel(t, body(t, 'phone'))))}
           </div>
           <div
             id="live-start-bar"
@@ -840,6 +853,11 @@ export function LivePage() {
         </ModuleBoundary>
       )}
       {modelDialog}
+      {DESKTOP && (
+        <Suspense fallback={null}>
+          <ScreenPicker />
+        </Suspense>
+      )}
     </PageFrame>
   );
 }
