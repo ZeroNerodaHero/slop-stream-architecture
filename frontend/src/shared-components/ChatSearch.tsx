@@ -336,7 +336,7 @@ function SearchChip({ chip, onRemove }: { chip: Chip; onRemove: () => void }) {
   return (
     <span
       data-chip={chipWord(chip)}
-      className="inline-flex h-6 min-w-0 max-w-full shrink-0 items-center gap-1 border border-primaryStroke bg-backgroundTertiary pl-1 pr-0.5 text-xs text-textPrimary"
+      className="inline-flex h-6 min-w-0 max-w-full shrink-0 items-center gap-1 rounded-control border border-primaryStroke bg-backgroundTertiary pl-1 pr-0.5 text-xs text-textPrimary"
     >
       {chip.key === 'from' && (
         <>
@@ -404,7 +404,7 @@ export function SearchField({ search, input, id, label, leading, onKeyDown, clas
           e.preventDefault();
           input.current?.focus();
         }}
-        className="flex min-h-[1.875rem] cursor-text flex-wrap items-center gap-1 border border-primaryStroke bg-background px-1 py-0.5 focus-within:border-primaryBlue"
+        className="flex min-h-[1.875rem] cursor-text flex-wrap items-center gap-1 rounded-control border border-primaryStroke bg-background px-1 py-0.5 focus-within:border-primaryBlue"
       >
         {leading}
         {search.chips.map((chip, i) => (
@@ -480,7 +480,7 @@ export function SearchSuggestions({ search, id, className }: { search: ChatSearc
       id={id}
       role="listbox"
       aria-label="what the filter could be"
-      className={cn('absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto border border-primaryStroke bg-backgroundSecondary py-1 text-sm', className)}
+      className={cn('absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-sm', className)}
     >
       {search.suggestions.map((suggestion, i) => {
         const HasIcon = suggestion.key === 'has' ? HAS[suggestion.value as HasKind]?.icon : undefined;
@@ -520,7 +520,7 @@ function SearchDay({ search, id, input }: { search: ChatSearch; id: string; inpu
       id={id}
       role="dialog"
       aria-label={`lines ${day.key} a day`}
-      className="absolute left-0 right-0 top-full z-20 mt-1 flex flex-wrap items-center gap-2 border border-primaryStroke bg-backgroundSecondary p-2 text-sm"
+      className="absolute left-0 right-0 top-full z-20 mt-1 flex flex-wrap items-center gap-2 rounded-panel border border-primaryStroke bg-backgroundSecondary p-2 text-sm"
     >
       <RiCalendarLine aria-hidden size={16} className="shrink-0 text-textSecondary" />
       <label htmlFor={`${id}-input`} className="shrink-0 text-textSecondary">
