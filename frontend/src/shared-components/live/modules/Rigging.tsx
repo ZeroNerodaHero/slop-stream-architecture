@@ -228,10 +228,10 @@ function RigBody({ place }: { place: Place }) {
       : "only you see this. your camera's picture is not sent."
   return (
     <div className="flex flex-col">
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 pb-1.5 pt-2.5">
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 pb-1.5 pt-2">
         <div
           id="rig-view"
-          className={cn('relative max-w-full shrink-0 overflow-hidden border border-primaryStroke bg-black', tall ? 'w-full' : place === 'tile' ? 'h-20' : 'h-16')}
+          className={cn('relative max-w-full shrink-0 overflow-hidden border border-primaryStroke bg-black', tall ? 'w-full' : 'h-16')}
           style={{ aspectRatio: String(aspect) }}
         >
           <div className={cn('absolute inset-0', mirror && '-scale-x-100')}>
@@ -292,7 +292,7 @@ function RigBody({ place }: { place: Place }) {
         </div>
       </div>
       <Tooltip content={note}>
-        <p id="rig-note" className="truncate px-3 pb-2 text-[11px] leading-tight text-textTertiary">
+        <p id="rig-note" className="truncate px-3 pb-1.5 text-[11px] leading-tight text-textTertiary">
           {note}
         </p>
       </Tooltip>

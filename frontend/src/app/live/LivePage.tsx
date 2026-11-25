@@ -216,7 +216,7 @@ function Slot({ hosts, ids, id, className, style }: SlotProps) {
 
 const ROW_TALL = '15.5rem';
 const ROW_LOW = '11rem';
-const WIDE_CELL = 290;
+const WIDE_CELL = 360;
 const RAIL_PX = 244;
 const STRIP_PX = 40;
 const CHAT_PX = 340;
