@@ -1096,7 +1096,7 @@ export function FriendChat() {
                     id="friend-chat-picture"
                     aria-label="picture or video"
                     className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary disabled:opacity-40',
+                      'flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-background text-textTertiary hover:text-textPrimary disabled:opacity-40',
                       mobile && 'h-11 w-11'
                     )}
                     disabled={pictures.length >= MAX_CHAT_IMAGES}
@@ -1137,14 +1137,14 @@ export function FriendChat() {
                   aria-label={`message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
-                  className={cn(INPUT, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-[1.875rem] text-sm')}
+                  className={cn(INPUT, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-8 text-sm')}
                 />
                 <Button
                   id="friend-chat-send"
                   type="submit"
                   onPointerDown={keepFocus}
                   variant="primary"
-                  className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-[1.875rem] text-sm')}
+                  className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-8 text-sm')}
                   disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending}
                   aria-busy={sending || undefined}
                 >

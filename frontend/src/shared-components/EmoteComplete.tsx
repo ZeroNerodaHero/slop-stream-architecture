@@ -2,6 +2,7 @@ import { type KeyboardEvent, type ReactNode, type RefObject, type SyntheticEvent
 
 import { type Emote, emoteQueryAt, emoteSrc, matchEmotes, notePicked, useMyEmotes } from '@/infra/emotes';
 import { cn } from '@/utils/cn';
+import { MATCH_TEXT, matchParts, PICK_DIM, PICK_LIT, PICK_PANEL, PICK_ROW } from '@/utils/match';
 
 export interface EmoteCompleteBox {
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => boolean;
@@ -91,33 +92,31 @@ export function useEmoteComplete({
   };
 
   const list = open ? (
-    <div
-      id={`${listId}-panel`}
-      data-emote-complete
-      onPointerDown={(e) => e.preventDefault()}
-      onMouseDown={(e) => e.preventDefault()}
-      className="absolute bottom-full left-0 right-0 z-30 mb-1 border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
-    >
-      <p className="px-2.5 pb-1 text-xs text-textTertiary">
-        emotes matching <span className="font-semibold text-textSecondary">:{at?.query}</span>
-      </p>
-      <ul id={listId} role="listbox" aria-label="emotes" className="max-h-64 overflow-y-auto">
-        {found.map((emote, i) => (
-          <li
-            key={emote.id}
-            id={`${listId}-${i}`}
-            role="option"
-            aria-selected={i === lit}
-            data-emote-option={emote.name}
-            onPointerEnter={() => setActive(i)}
-            onClick={() => pick(emote)}
-            className={cn('flex cursor-pointer items-center gap-2.5 px-2.5 py-1', i === lit ? 'bg-primaryBlue/15 text-textPrimary' : 'text-textSecondary')}
-          >
-            <img src={emoteSrc(emote.id)} alt="" className="h-6 w-6 shrink-0 object-contain" />
-            <span className="min-w-0 flex-1 truncate font-semibold">:{emote.name}:</span>
-            <span className="shrink-0 truncate text-xs text-textTertiary">{emote.group}</span>
-          </li>
-        ))}
+    <div id={`${listId}-panel`} data-emote-complete onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} className={PICK_PANEL}>
+      <ul id={listId} role="listbox" aria-label={`emotes matching ${at?.query ?? ''}`} className="max-h-64 overflow-y-auto">
+        {found.map((emote, i) => {
+          const [head, hit, tail] = matchParts(emote.name, at?.query ?? '');
+          return (
+            <li
+              key={emote.id}
+              id={`${listId}-${i}`}
+              role="option"
+              aria-selected={i === lit}
+              data-emote-option={emote.name}
+              onPointerEnter={() => setActive(i)}
+              onClick={() => pick(emote)}
+              className={cn(PICK_ROW, i === lit ? PICK_LIT : PICK_DIM)}
+            >
+              <img src={emoteSrc(emote.id)} alt="" className="h-5 w-5 shrink-0 object-contain" />
+              <span className="min-w-0 flex-1 truncate font-semibold">
+                :{head}
+                {hit && <span className={MATCH_TEXT}>{hit}</span>}
+                {tail}:
+              </span>
+              <span className="shrink-0 truncate text-xs text-textTertiary">{emote.group}</span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   ) : null;

@@ -14,6 +14,7 @@ import {
   nearMentions
 } from '@/infra/mentions';
 import type { MentionLink } from '@/shared-components/MentionComplete';
+import { MATCH_TEXT, matchParts, PICK_DIM, PICK_LIT, PICK_PANEL, PICK_ROW } from '@/utils/match';
 
 const DEBOUNCE_MS = 150;
 
@@ -126,15 +127,15 @@ export function mentionList({ h, useState, useEffect, useLayoutEffect }: Mention
         'data-mention-complete': true,
         onPointerDown: hold,
         onMouseDown: hold,
-        className: 'absolute bottom-full left-0 right-0 z-30 mb-1 border border-primaryStroke bg-backgroundSecondary py-1 text-sm'
+        className: PICK_PANEL
       },
-      h('p', { className: 'px-2.5 pb-1 text-xs text-textTertiary' }, 'people matching ', h('span', { className: 'font-semibold text-textSecondary' }, '@', query)),
       h(
         'ul',
-        { id, role: 'listbox', 'aria-label': 'people' },
+        { id, role: 'listbox', 'aria-label': `people matching ${query}` },
         mentionRows(found.length).map((i) => {
           const m = found[i];
           if (!m) return null;
+          const [head, hit, tail] = matchParts(m.name, query);
           return h(
             'li',
             {
@@ -143,14 +144,12 @@ export function mentionList({ h, useState, useEffect, useLayoutEffect }: Mention
               role: 'option',
               'aria-selected': i === lit,
               'data-mention-option': m.name,
-              'data-rank': i + 1,
               onPointerEnter: () => setSel({ key, at: i }),
               onClick: () => pick(m),
-              className: `flex cursor-pointer items-center gap-2.5 px-2.5 py-1 ${i === lit ? 'bg-primaryBlue/15 text-textPrimary' : 'text-textSecondary'}`
+              className: `${PICK_ROW} ${i === lit ? PICK_LIT : PICK_DIM}`
             },
-            h('span', { className: 'flex h-6 w-6 shrink-0 bg-backgroundTertiary' }, face(m)),
-            h('span', { className: 'min-w-0 flex-1 truncate font-semibold' }, m.name),
-            h('span', { 'aria-hidden': true, className: 'shrink-0 text-xs tabular-nums text-textTertiary' }, i + 1)
+            h('span', { className: 'flex h-5 w-5 shrink-0 bg-backgroundTertiary' }, face(m)),
+            h('span', { className: 'min-w-0 flex-1 truncate font-semibold' }, head, hit && h('span', { className: MATCH_TEXT }, hit), tail)
           );
         })
       )
