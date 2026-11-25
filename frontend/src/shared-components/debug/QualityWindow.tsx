@@ -3,30 +3,13 @@ import { useAtomValue } from 'jotai';
 import { closeQuality, qualityOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { quality } from '@/infra/debug/collect';
 import type { QualityCollector } from '@/infra/debug/collector';
+import { liveHeader } from '@/infra/debug/quality-header';
 import { layout } from '@/infra/debug/timeline';
 import { DebugPanel } from '@/shared-components/debug/DebugPanel';
 import { QualityView, type QualitySeries, type QualityTimeline } from '@/shared-components/debug/QualityView';
 import { useCollected } from '@/shared-components/debug/useCollected';
-
-function fixed(v: number | null, digits = 0): string {
-  return v === null || !Number.isFinite(v) ? '-' : v.toFixed(digits);
-}
-
-function nowRow(c: QualityCollector): [string, string][] | null {
-  const stats = c.stats;
-  if (!stats) return null;
-  const v = stats.video;
-  return [
-    ['res', v.width && v.height ? `${v.width}x${v.height}` : '-'],
-    ['fps', fixed(v.fps)],
-    ['bitrate', `${fixed(v.bitrate / 1000)} kbps`],
-    ['loss', `${fixed(v.lossPct, 1)} %`],
-    ['dropped', `${fixed(v.droppedPerSec, 1)} /s`],
-    ['jitter', `${fixed(v.jitterMs)} ms`],
-    ['rtt', `${fixed(stats.rttMs)} ms`],
-    ['path', stats.path ?? '-']
-  ];
-}
+import { Tooltip } from '@/shared-components/Tooltip';
+import { cn } from '@/utils/cn';
 
 function timeline(c: QualityCollector): QualityTimeline | null {
   const q = c.quality;
@@ -50,15 +33,22 @@ export function QualityWindow() {
 
 function QualityPanel() {
   const c = useCollected(quality);
+  const live = liveHeader(c.stats);
+  const word = live ? 'recording' : 'not recording';
   return (
     <DebugPanel
       id="quality"
       label="quality"
-      note="watched time, the gaps left out"
+      lead={
+        <Tooltip content={word}>
+          <span id="quality-recording" role="img" aria-label={word} tabIndex={0} className={cn('h-2 w-2 shrink-0 focus-visible:outline-none', live ? 'bg-increase' : 'bg-decrease')} />
+        </Tooltip>
+      }
+      note={live ? <span id="quality-live" className="font-mono tabular-nums">{live}</span> : 'watched time, the gaps left out'}
       place="left-auto right-[104px] top-[104px] h-[min(440px,calc(100dvh-208px))] w-[min(600px,calc(100vw-208px))]"
       onClose={closeQuality}
     >
-      <QualityView now={nowRow(c)} timeline={timeline(c)} />
+      <QualityView timeline={timeline(c)} />
     </DebugPanel>
   );
 }
