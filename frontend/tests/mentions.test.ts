@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import type { Mention } from '../src/infra/api.ts';
 import { MENTION_SCAN, mentionQueryAt } from '../src/infra/mention-query.ts';
 import {
+  askMentions,
   cachedMentions,
   cacheMentions,
   localMentions,
@@ -144,4 +145,51 @@ test('up moves toward the top, down toward #1, wrapping', () => {
   assert.equal(moveMention(0, 'ArrowDown', 6), 5);
   assert.equal(moveMention(0, 'ArrowUp', 1), 0);
   assert.equal(moveMention(0, 'ArrowDown', 0), 0);
+});
+
+test('a bare @ asks the server only when logged in and local candidates are short of the limit', () => {
+  assert.equal(askMentions('room', 'me', '', 0), true);
+  assert.equal(askMentions('room', 'me', '', MENTION_LIMIT - 1), true);
+  assert.equal(askMentions('room', 'me', '', MENTION_LIMIT), false);
+  assert.equal(askMentions('room', 'me', '', MENTION_LIMIT + 3), false);
+  assert.equal(askMentions(null, 'me', '', 0), false);
+  assert.equal(askMentions('room', null, '', 0), false);
+  assert.equal(askMentions('room', undefined, 'a', 0), false);
+});
+
+test('a typed prefix always asks the server when logged in', () => {
+  assert.equal(askMentions('room', 'me', 'a', 0), true);
+  assert.equal(askMentions('room', 'me', 'a', MENTION_LIMIT + 3), true);
+  assert.equal(askMentions(null, 'me', 'a', 0), false);
+});
+
+test('the bare @ server result never narrows a typed prefix', () => {
+  const cache = new Map<string, Mention[]>();
+  cacheMentions(cache, '', [person('host'), person('ann')]);
+  assert.deepEqual(names(cachedMentions(cache, '') ?? []), ['host', 'ann']);
+  assert.equal(cachedMentions(cache, 'a'), undefined);
+  assert.deepEqual(nearMentions(cache, 'a'), []);
+  assert.deepEqual(nearMentions(cache, ''), []);
+});
+
+test('a bare @ list merges the server tiers after the streamer, capped at 6, and navigates bottom-up', () => {
+  const local = localMentions([], '', { first: 'host' });
+  assert.deepEqual(names(local), ['host']);
+  assert.equal(askMentions('room', 'me', '', local.length), true);
+  const server = ['host', 'ann', 'bob', 'cat', 'dan', 'eve', 'fay'].map(person);
+  const found = mergeMentions(local, server);
+  assert.deepEqual(names(found), ['host', 'ann', 'bob', 'cat', 'dan', 'eve']);
+  assert.equal(found.length, MENTION_LIMIT);
+  assert.equal(new Set(names(found).map((n) => n.toLowerCase())).size, found.length);
+  const rows = mentionRows(found.length);
+  assert.deepEqual(rows, [5, 4, 3, 2, 1, 0]);
+  assert.deepEqual(rows.map((i) => found[i]?.name), ['eve', 'dan', 'cat', 'bob', 'ann', 'host']);
+  assert.equal(found[rows[rows.length - 1] ?? -1]?.name, 'host');
+  let lit = 0;
+  lit = moveMention(lit, 'ArrowUp', found.length);
+  assert.equal(lit, 1);
+  for (let i = 0; i < 4; i++) lit = moveMention(lit, 'ArrowUp', found.length);
+  assert.equal(lit, 5);
+  assert.equal(moveMention(lit, 'ArrowUp', found.length), 0);
+  assert.equal(moveMention(0, 'ArrowDown', found.length), 5);
 });

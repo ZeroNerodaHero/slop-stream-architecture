@@ -91,7 +91,7 @@ export interface ChatLineShapeProps extends Place {
 }
 
 const ACTIONS_HIDDEN =
-  'pointer-events-none opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 [@media(hover:hover)]:group-hover/line:pointer-events-auto [@media(hover:hover)]:group-hover/line:opacity-100';
+  'pointer-events-none opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 [@media(hover:hover)]:group-hover/line:pointer-events-auto [@media(hover:hover)]:group-hover/line:opacity-100 [@media(hover:hover)]:group-has-[[data-mention]:hover]/line:!pointer-events-none [@media(hover:hover)]:group-has-[[data-mention]:hover]/line:!opacity-0';
 const ACTIONS_SHOWN = 'pointer-events-auto opacity-100';
 const LONG_PRESS_MS = 450;
 const PRESS_SLOP_PX = 10;
