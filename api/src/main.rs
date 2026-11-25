@@ -123,6 +123,9 @@ impl ApiError {
     pub(crate) fn message(&self) -> &str {
         &self.1
     }
+    pub(crate) fn status(&self) -> StatusCode {
+        self.0
+    }
     pub(crate) fn bad_name() -> Self {
         Self::new(StatusCode::BAD_REQUEST, "bad name. use a-z 0-9 _ - (1 to 32)")
     }
@@ -396,7 +399,7 @@ async fn video_health(s: &AppState) -> Option<VideoHealth> {
 pub(crate) const OPTIONAL_PROBE: Duration = Duration::from_millis(1500);
 
 async fn health(State(s): State<AppState>) -> Response {
-    let (deploy, redis, debug_db, video, errors_dropped, s3_ok) = tokio::join!(
+    let (deploy, redis, debug_db, video, errors_dropped, s3_ok, emotes) = tokio::join!(
         release::current(&s.db),
         async { redis::cmd("PING").query_async::<String>(&mut s.redis.clone()).await.is_ok() },
         async {
@@ -408,6 +411,7 @@ async fn health(State(s): State<AppState>) -> Response {
         async { tokio::time::timeout(OPTIONAL_PROBE, video_health(&s)).await.ok().flatten() },
         debug::dropped(&s),
         async { tokio::time::timeout(OPTIONAL_PROBE, s3::ready(&s.s3)).await.unwrap_or(false) },
+        async { tokio::time::timeout(OPTIONAL_PROBE, emotes::total(&s.db)).await.ok().flatten() },
     );
     let postgres = deploy.is_ok();
     let deploy = deploy.ok().flatten();
@@ -430,6 +434,7 @@ async fn health(State(s): State<AppState>) -> Response {
         "s3_bucket": s.s3.bucket,
         "s3_endpoint": s.s3.endpoint,
         "errors_dropped": errors_dropped,
+        "emotes": emotes,
     });
     let status = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (status, Json(body)).into_response()
