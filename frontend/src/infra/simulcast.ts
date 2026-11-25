@@ -1,4 +1,6 @@
 export type Rid = 'q' | 'h' | 'f';
+export type CopyRid = 'cq' | 'ch';
+export type Codec = 'vp8' | 'vp9';
 
 export interface Layer {
   rid: Rid;
@@ -19,6 +21,7 @@ export interface Encoding {
   scaleResolutionDownBy?: number;
   maxBitrate?: number;
   maxFramerate?: number;
+  scalabilityMode?: string;
 }
 
 export const RIDS: readonly Rid[] = ['q', 'h', 'f'];
@@ -26,6 +29,9 @@ export const TOP_HEIGHT = 1080;
 export const MAX_FRAMERATE = 30;
 export const SINGLE_HEIGHT = 720;
 export const SINGLE_BITRATE = 2_500_000;
+export const VP9_SHARE = 0.7;
+export const VP9_MODE = 'L1T1';
+const COPY_OF: Record<CopyRid, Rid> = { cq: 'q', ch: 'h' };
 const UNKNOWN_HEIGHT = 720;
 const DIVIDE: Record<Rid, number> = { q: 3, h: 1.5, f: 1 };
 const MIN_HEIGHT: Record<Rid, number> = { q: 180, h: 240, f: 0 };
@@ -39,7 +45,7 @@ const RATES: readonly (readonly [number, number])[] = [
   [1080, 2_500_000]
 ];
 
-export function bitrateFor(height: number): number {
+function vp8RateFor(height: number): number {
   const first = RATES[0]!;
   const last = RATES[RATES.length - 1]!;
   if (height <= first[0]) return first[1];
@@ -52,11 +58,19 @@ export function bitrateFor(height: number): number {
   return last[1];
 }
 
+function share(bps: number, codec: Codec): number {
+  return codec === 'vp9' ? Math.round(bps * VP9_SHARE) : bps;
+}
+
+export function bitrateFor(height: number, codec: Codec = 'vp8'): number {
+  return share(vp8RateFor(height), codec);
+}
+
 function sourceOf(height: number | undefined): number {
   return height && height > 0 ? height : UNKNOWN_HEIGHT;
 }
 
-export function cameraLayers(sourceHeight: number | undefined, top?: Top): Layer[] {
+export function cameraLayers(sourceHeight: number | undefined, top?: Top, codec: Codec = 'vp8'): Layer[] {
   const source = sourceOf(sourceHeight);
   const topHeight = Math.max(1, Math.min(source, top?.height ?? TOP_HEIGHT));
   const topScale = source / topHeight;
@@ -64,9 +78,9 @@ export function cameraLayers(sourceHeight: number | undefined, top?: Top): Layer
     const height = topHeight / DIVIDE[rid];
     const active = rid === 'f' || height >= MIN_HEIGHT[rid];
     let maxBitrate: number;
-    if (rid === 'f') maxBitrate = top?.maxBitrate ?? bitrateFor(height);
-    else if (top) maxBitrate = Math.max(MIN_LAYER_BITRATE, Math.round(top.maxBitrate * SHARE_OF_TOP[rid]));
-    else maxBitrate = bitrateFor(height);
+    if (rid === 'f') maxBitrate = top ? share(top.maxBitrate, codec) : bitrateFor(height, codec);
+    else if (top) maxBitrate = Math.max(MIN_LAYER_BITRATE, Math.round(share(top.maxBitrate, codec) * SHARE_OF_TOP[rid]));
+    else maxBitrate = bitrateFor(height, codec);
     return { rid, active, scaleResolutionDownBy: topScale * DIVIDE[rid], maxBitrate, maxFramerate: MAX_FRAMERATE };
   });
 }
@@ -77,17 +91,41 @@ export function singleLayer(sourceHeight: number | undefined, top?: Top): Omit<L
   return { scaleResolutionDownBy: source / height, maxBitrate: top?.maxBitrate ?? SINGLE_BITRATE, maxFramerate: MAX_FRAMERATE };
 }
 
-export function sendEncodings(sourceHeight: number | undefined): Encoding[] {
-  return cameraLayers(sourceHeight).map(({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }) => ({
+export function sendEncodings(sourceHeight: number | undefined, codec: Codec = 'vp8'): Encoding[] {
+  return cameraLayers(sourceHeight, undefined, codec).map(({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }) => ({
     rid,
     active,
     scaleResolutionDownBy,
     maxBitrate,
-    maxFramerate
+    maxFramerate,
+    ...(codec === 'vp9' ? { scalabilityMode: VP9_MODE } : {})
   }));
 }
 
-export function applyLayers(encodings: Encoding[], sourceHeight: number | undefined, top?: Top): number {
+export function copyEncodings(sourceHeight: number | undefined): Encoding[] {
+  const encodings: Encoding[] = (Object.keys(COPY_OF) as CopyRid[]).map((rid) => ({ rid }));
+  applyCopy(encodings, sourceHeight, undefined, false);
+  return encodings;
+}
+
+export function applyCopy(encodings: Encoding[], sourceHeight: number | undefined, top: Top | undefined, upper: boolean): number {
+  const live = cameraLayers(sourceHeight, top).filter((l) => l.active);
+  let total = 0;
+  for (const encoding of encodings) {
+    const rid = COPY_OF[encoding.rid as CopyRid];
+    if (!rid) continue;
+    const step = rid === 'q' ? 0 : 1;
+    const layer = live[Math.min(step, live.length - 1)]!;
+    encoding.active = step === 0 || (upper && live.length > step);
+    encoding.scaleResolutionDownBy = layer.scaleResolutionDownBy;
+    encoding.maxBitrate = layer.maxBitrate;
+    encoding.maxFramerate = layer.maxFramerate;
+    if (encoding.active) total += layer.maxBitrate;
+  }
+  return total;
+}
+
+export function applyLayers(encodings: Encoding[], sourceHeight: number | undefined, top?: Top, codec: Codec = 'vp8'): number {
   if (encodings.length === 1) {
     const one = singleLayer(sourceHeight, top);
     encodings[0]!.scaleResolutionDownBy = one.scaleResolutionDownBy;
@@ -95,7 +133,7 @@ export function applyLayers(encodings: Encoding[], sourceHeight: number | undefi
     encodings[0]!.maxFramerate = one.maxFramerate;
     return one.maxBitrate;
   }
-  const layers = cameraLayers(sourceHeight, top);
+  const layers = cameraLayers(sourceHeight, top, codec);
   let total = 0;
   for (const encoding of encodings) {
     const layer = layers.find((l) => l.rid === encoding.rid);

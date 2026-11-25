@@ -40,6 +40,7 @@ export interface RelayReply {
   slots?: SlotInfo[];
   scene?: unknown;
   viewers?: number;
+  full?: boolean;
 }
 
 export function viewersOf(msg: RelayReply): number | null {

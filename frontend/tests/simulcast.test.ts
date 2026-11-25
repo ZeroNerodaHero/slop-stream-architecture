@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { applyLayers, bitrateFor, cameraLayers, type Encoding, sendEncodings, singleLayer } from '../src/infra/simulcast.ts';
+import { applyCopy, applyLayers, bitrateFor, cameraLayers, copyEncodings, type Encoding, sendEncodings, singleLayer, VP9_MODE } from '../src/infra/simulcast.ts';
 import { mergeLayers, type VideoLine } from '../src/infra/stream-stats.ts';
 
 const heights = (source: number, layers = cameraLayers(source)) => layers.map((l) => (l.active ? Math.round(source / l.scaleResolutionDownBy) : 0));
@@ -76,6 +76,81 @@ test('applying layers sets each encoding by its rid and sums the active caps', (
       ['h', true],
       ['f', true]
     ]
+  );
+});
+
+test('a VP9 camera sends the same sizes at 70% of the VP8 caps, 30fps, one stream per encoding', () => {
+  const encodings = sendEncodings(1080, 'vp9');
+  assert.deepEqual(
+    encodings.map((e) => [e.rid, e.maxBitrate, e.maxFramerate, e.scalabilityMode]),
+    [
+      ['q', 350_000, 30, VP9_MODE],
+      ['h', 840_000, 30, VP9_MODE],
+      ['f', 1_750_000, 30, VP9_MODE]
+    ]
+  );
+  assert.deepEqual(heights(1080, cameraLayers(1080, undefined, 'vp9')), [360, 720, 1080]);
+  assert.ok(sendEncodings(1080).every((e) => e.scalabilityMode === undefined));
+  assert.equal(bitrateFor(900, 'vp9'), Math.round(1_850_000 * 0.7));
+  const beside = cameraLayers(1080, { height: 360, maxBitrate: 500_000 }, 'vp9');
+  assert.deepEqual(
+    beside.map((l) => l.maxBitrate),
+    [60_000, 157_500, 350_000]
+  );
+  const tuned = sendEncodings(1080, 'vp9');
+  assert.equal(applyLayers(tuned, 1080, undefined, 'vp9'), 350_000 + 840_000 + 1_750_000);
+  assert.ok(tuned.every((e) => e.scalabilityMode === VP9_MODE));
+});
+
+test('the VP8 copy sends the lowest layer always and the next one only when asked', () => {
+  const copy = copyEncodings(1080);
+  assert.deepEqual(
+    copy.map((e) => [e.rid, e.active, e.maxBitrate, e.maxFramerate]),
+    [
+      ['cq', true, 500_000, 30],
+      ['ch', false, 1_200_000, 30]
+    ]
+  );
+  assert.deepEqual(
+    copy.map((e) => Math.round(1080 / e.scaleResolutionDownBy!)),
+    [360, 720]
+  );
+  assert.equal(applyCopy(copy, 1080, undefined, true), 1_700_000);
+  assert.deepEqual(
+    copy.map((e) => e.active),
+    [true, true]
+  );
+  assert.equal(applyCopy(copy, 1080, undefined, false), 500_000);
+  assert.deepEqual(
+    copy.map((e) => e.active),
+    [true, false]
+  );
+});
+
+test('the copy takes the two lowest live camera sizes, so a small source never leaves it dark', () => {
+  const copy = copyEncodings(480);
+  assert.deepEqual(
+    copy.map((e) => [e.active, Math.round(480 / e.scaleResolutionDownBy!)]),
+    [
+      [true, 320],
+      [false, 480]
+    ]
+  );
+  assert.equal(applyCopy(copy, 480, undefined, true), bitrateFor(320) + bitrateFor(480));
+  const beside = copyEncodings(1080);
+  assert.equal(applyCopy(beside, 1080, { height: 360, maxBitrate: 500_000 }, true), 225_000 + 500_000);
+  assert.deepEqual(
+    beside.map((e) => [e.active, Math.round(1080 / e.scaleResolutionDownBy!)]),
+    [
+      [true, 240],
+      [true, 360]
+    ]
+  );
+  const tiny = copyEncodings(240);
+  assert.equal(applyCopy(tiny, 240, undefined, true), bitrateFor(240));
+  assert.deepEqual(
+    tiny.map((e) => e.active),
+    [true, false]
   );
 });
 
