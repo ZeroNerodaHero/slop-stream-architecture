@@ -12,9 +12,11 @@ const LOSS_DOWN: f32 = 0.10;
 const NACK_DOWN: f32 = 0.10;
 const LOSS_OK: f32 = 0.02;
 const NACK_OK: f32 = 0.02;
+const SEVERE: f32 = 0.25;
+const REMB_GRACE: Duration = Duration::from_secs(3);
 const REMB_DOWN: f64 = 0.6;
 const REMB_FIT: f64 = 0.85;
-const SETTLE: Duration = Duration::from_secs(2);
+const SETTLE: Duration = Duration::from_secs(1);
 const BASE_UP_WAIT: Duration = Duration::from_secs(4);
 const AFTER_DOWN_WAIT: Duration = Duration::from_secs(8);
 const MAX_UP_WAIT: Duration = Duration::from_secs(32);
@@ -273,10 +275,11 @@ impl Picker {
             }
         }
         let rate = layers[current as usize].bps as f64;
-        let remb = signals.remb.map(|r| r as f64);
-        let remb_low = remb.is_some_and(|r| rate > 0.0 && r < rate * REMB_DOWN);
-        let congested = signals.loss >= LOSS_DOWN || signals.nack >= NACK_DOWN || remb_low;
         let just_up = self.last_up.is_some_and(|(at, _)| at == self.changed);
+        let remb = signals.remb.map(|r| r as f64).filter(|_| !just_up || now.saturating_duration_since(self.changed) >= REMB_GRACE);
+        let remb_low = remb.is_some_and(|r| rate > 0.0 && r < rate * REMB_DOWN);
+        let severe = signals.loss >= SEVERE || signals.nack >= SEVERE;
+        let congested = signals.loss >= LOSS_DOWN || signals.nack >= NACK_DOWN || remb_low;
         let settled = just_up || now.saturating_duration_since(self.changed) >= SETTLE;
         if congested {
             self.healthy_since = None;
@@ -284,11 +287,12 @@ impl Picker {
                 return None;
             }
             let fit = remb.filter(|_| remb_low).and_then(|r| (0..current).rev().find(|l| layers[*l as usize].live && (layers[*l as usize].bps as f64) <= r * REMB_FIT));
-            let Some(next) = fit.or_else(|| below(layers, current)) else {
+            let bottom = (0..current).find(|l| layers[*l as usize].live).filter(|_| severe);
+            let Some(next) = bottom.or(fit).or_else(|| below(layers, current)) else {
                 return None;
             };
             if let Some((at, from)) = self.last_up {
-                if from == next && now.saturating_duration_since(at) < FAILED_UP_WITHIN {
+                if next <= from && now.saturating_duration_since(at) < FAILED_UP_WITHIN {
                     self.up_wait = (self.up_wait * 2).min(MAX_UP_WAIT);
                 }
             }
@@ -313,7 +317,7 @@ impl Picker {
     }
 }
 
-pub const START_BUDGET_BPS: u64 = 2_500_000;
+pub const START_BUDGET_BPS: u64 = 1_500_000;
 const PREVIEW_MIN_HEIGHT: u32 = 360;
 
 pub fn start_level(layers: &[LayerView; LEVELS], offered: u8, preview: bool) -> u8 {
@@ -465,7 +469,7 @@ mod tests {
         ]
     }
 
-    const RATES: [u64; 3] = [450_000, 1_900_000, 4_300_000];
+    const RATES: [u64; 3] = [450_000, 1_100_000, 2_300_000];
 
     fn healthy() -> Signals {
         Signals { remb: None, loss: 0.0, nack: 0.0 }
@@ -475,7 +479,7 @@ mod tests {
     fn new_viewers_start_at_or_under_the_budget_and_previews_on_360() {
         assert_eq!(start_level(&three(RATES), 0b111, false), 1);
         assert_eq!(start_level(&three(RATES), 0b111, true), 0);
-        assert_eq!(start_level(&three([200_000, 900_000, 2_400_000]), 0b111, false), 2);
+        assert_eq!(start_level(&three([150_000, 500_000, 1_200_000]), 0b111, false), 2);
         let small = [
             LayerView { live: true, bps: 120_000, height: 240 },
             LayerView { live: true, bps: 600_000, height: 480 },
@@ -522,11 +526,11 @@ mod tests {
         let layers = three(RATES);
         let mut p = Picker::new(2, 2, t);
         let lossy = Signals { loss: 0.15, ..healthy() };
-        assert_eq!(p.decide(t + ms(1000), &layers, Some(2), &lossy), None);
-        assert_eq!(p.decide(t + ms(2000), &layers, Some(2), &lossy), Some(Why::Congested));
+        assert_eq!(p.decide(t + SETTLE / 2, &layers, Some(2), &lossy), None);
+        assert_eq!(p.decide(t + SETTLE, &layers, Some(2), &lossy), Some(Why::Congested));
         assert_eq!(p.target(), 1);
-        assert_eq!(p.decide(t + ms(2500), &layers, Some(1), &lossy), None);
-        assert_eq!(p.decide(t + ms(4000), &layers, Some(1), &lossy), Some(Why::Congested));
+        assert_eq!(p.decide(t + SETTLE * 3 / 2, &layers, Some(1), &lossy), None);
+        assert_eq!(p.decide(t + SETTLE * 2, &layers, Some(1), &lossy), Some(Why::Congested));
         assert_eq!(p.target(), 0);
         assert_eq!(p.decide(t + ms(7000), &layers, Some(0), &lossy), None);
         assert_eq!(p.target(), 0);
@@ -549,6 +553,35 @@ mod tests {
     }
 
     #[test]
+    fn heavy_loss_drops_straight_to_the_bottom() {
+        let t = Instant::now();
+        let mut p = Picker::new(2, 2, t);
+        let heavy = Signals { nack: 0.3, ..healthy() };
+        assert_eq!(p.decide(t + ms(3000), &three(RATES), Some(2), &heavy), Some(Why::Congested));
+        assert_eq!(p.target(), 0);
+    }
+
+    #[test]
+    fn a_remb_still_sized_for_the_old_layer_does_not_undo_a_climb() {
+        let t = Instant::now();
+        let layers = three(RATES);
+        let mut p = Picker::new(0, 2, t);
+        let mut now = t;
+        while p.target() == 0 {
+            now += ms(250);
+            p.decide(now, &layers, Some(0), &Signals { remb: Some(600_000), ..healthy() });
+        }
+        let lagging = Signals { remb: Some(600_000), ..healthy() };
+        assert_eq!(p.decide(now + ms(250), &layers, Some(1), &lagging), None);
+        assert_eq!(p.decide(now + ms(2750), &layers, Some(1), &lagging), None);
+        assert_eq!(p.decide(now + REMB_GRACE, &layers, Some(1), &lagging), Some(Why::Congested));
+        let lossy = Signals { loss: 0.2, ..healthy() };
+        let mut q = Picker::new(1, 2, t);
+        q.last_up = Some((t, 0));
+        assert_eq!(q.decide(t + ms(250), &layers, Some(1), &lossy), Some(Why::Congested));
+    }
+
+    #[test]
     fn a_low_remb_jumps_straight_to_the_layer_that_fits() {
         let t = Instant::now();
         let mut p = Picker::new(2, 2, t);
@@ -561,7 +594,7 @@ mod tests {
     fn a_remb_under_the_current_rate_holds_the_climb() {
         let t = Instant::now();
         let mut p = Picker::new(1, 2, t);
-        let held = Signals { remb: Some(1_500_000), ..healthy() };
+        let held = Signals { remb: Some(1_000_000), ..healthy() };
         for step in 1..40 {
             assert_eq!(p.decide(t + ms(step * 500), &three(RATES), Some(1), &held), None);
         }
@@ -578,7 +611,7 @@ mod tests {
             assert_eq!(p.decide(t + ms(step * 500), &layers, Some(1), &healthy()), None, "step {step}");
         }
         assert_eq!(p.decide(t + ms(8500), &layers, Some(1), &healthy()), Some(Why::Healthy));
-        let lossy = Signals { loss: 0.3, ..healthy() };
+        let lossy = Signals { loss: 0.2, ..healthy() };
         assert_eq!(p.decide(t + ms(8750), &layers, Some(1), &lossy), None);
         assert_eq!(p.decide(t + ms(9000), &layers, Some(2), &lossy), Some(Why::Congested));
         assert_eq!(p.up_wait, AFTER_DOWN_WAIT * 2);

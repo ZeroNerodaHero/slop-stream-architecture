@@ -54,6 +54,8 @@ use webrtc::api::media_engine::MIME_TYPE_VP8;
 const KEYFRAME_GAP: Duration = Duration::from_millis(1500);
 const FORCED_KEYFRAME_GAP: Duration = Duration::from_millis(300);
 const KEYFRAME_IN_FLIGHT: Duration = Duration::from_millis(500);
+const JOIN_PLI_WINDOW: Duration = Duration::from_secs(3);
+const NACK_BEHIND_FLOOR: u16 = 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const API_TIMEOUT: Duration = Duration::from_millis(1500);
 const SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
@@ -170,7 +172,6 @@ struct KeyframeAsks {
     asked_seen: u64,
     join_asked: Option<Instant>,
     trailing: bool,
-    reask: bool,
 }
 
 impl KeyframeAsks {
@@ -184,12 +185,6 @@ impl KeyframeAsks {
             Ask::Switch => !in_flight && since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
             Ask::Backup(connected) if seen != connected => false,
             Ask::Join | Ask::Backup(_) if in_flight => false,
-            Ask::Backup(_) if join_recent.is_some() && self.reask => {
-                self.reask = false;
-                self.asked = Some(now);
-                self.asked_seen = seen;
-                return Plan::Send;
-            }
             Ask::Join | Ask::Backup(_) => match join_recent {
                 Some(_) if self.trailing => false,
                 Some(d) => {
@@ -210,7 +205,6 @@ impl KeyframeAsks {
         self.asked_seen = seen;
         if !matches!(ask, Ask::Lost | Ask::Thumb | Ask::Switch) {
             self.join_asked = Some(now);
-            self.reask = ask == Ask::Join;
         }
         Plan::Send
     }
@@ -976,12 +970,16 @@ struct Health {
     remb: Option<(u64, Instant)>,
     loss: Option<(f32, Instant)>,
     nacked: u64,
-    window: Option<(Instant, u64, u64)>,
-    nack: f32,
+    window: std::collections::VecDeque<(Instant, u64, u64)>,
 }
 
 impl Health {
-    fn read(&mut self, packets: &[Box<dyn webrtc::rtcp::packet::Packet + Send + Sync>], ssrc: Option<u32>, now: Instant) -> bool {
+    fn reset(&mut self) {
+        self.loss = None;
+        self.window.clear();
+    }
+
+    fn read(&mut self, packets: &[Box<dyn webrtc::rtcp::packet::Packet + Send + Sync>], ssrc: Option<u32>, floor: Option<u16>, now: Instant) -> bool {
         let mut lost = false;
         for packet in packets {
             let any = packet.as_any();
@@ -999,24 +997,27 @@ impl Health {
                     self.loss = Some((smoothed, now));
                 }
             } else if let Some(nack) = any.downcast_ref::<TransportLayerNack>() {
-                self.nacked += nack.nacks.iter().map(|n| 1 + u64::from(n.lost_packets.count_ones())).sum::<u64>();
+                let before_floor = |seq: u16| floor.is_some_and(|f| (1..=NACK_BEHIND_FLOOR).contains(&f.wrapping_sub(seq)));
+                self.nacked += nack.nacks.iter().flat_map(|n| n.into_iter()).filter(|seq| !before_floor(*seq)).count() as u64;
             }
         }
         lost
     }
 
     fn signals(&mut self, now: Instant, sent: u64) -> Signals {
-        let (at, nacked, was_sent) = *self.window.get_or_insert((now, self.nacked, sent));
-        if now.saturating_duration_since(at) >= HEALTH_WINDOW {
-            let sent_in = sent.saturating_sub(was_sent);
-            self.nack = if sent_in >= NACK_MIN_SENT { self.nacked.saturating_sub(nacked) as f32 / sent_in as f32 } else { 0.0 };
-            self.window = Some((now, self.nacked, sent));
+        self.window.push_back((now, self.nacked, sent));
+        while self.window.len() > 2 && self.window.get(1).is_some_and(|(at, _, _)| now.saturating_duration_since(*at) >= HEALTH_WINDOW) {
+            self.window.pop_front();
         }
+        let nack = match self.window.front() {
+            Some((_, nacked, was_sent)) if sent.saturating_sub(*was_sent) >= NACK_MIN_SENT => self.nacked.saturating_sub(*nacked) as f32 / sent.saturating_sub(*was_sent) as f32,
+            _ => 0.0,
+        };
         let fresh = |at: Instant| now.saturating_duration_since(at) < HEALTH_STALE;
         Signals {
             remb: self.remb.filter(|(_, at)| fresh(*at)).map(|(r, _)| r),
             loss: self.loss.filter(|(_, at)| fresh(*at)).map_or(0.0, |(l, _)| l),
-            nack: self.nack,
+            nack,
         }
     }
 }
@@ -1029,13 +1030,16 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut moving: Option<(Instant, Option<u8>)> = None;
     let mut asked: Option<Instant> = None;
+    let joined = Instant::now();
     loop {
         tokio::select! {
             read = sender.read_rtcp() => {
                 let Ok((packets, _)) = read else { break };
-                if health.read(&packets, viewer.track.ssrc(), Instant::now()) {
+                let now = Instant::now();
+                if health.read(&packets, viewer.track.ssrc(), viewer.track.floor(), now) {
                     let level = viewer.current().unwrap_or_else(|| viewer.target());
-                    hub.request_keyframe(&room, slot, level, Ask::Lost).await;
+                    let ask = if now.saturating_duration_since(joined) < JOIN_PLI_WINDOW { Ask::Join } else { Ask::Lost };
+                    hub.request_keyframe(&room, slot, level, ask).await;
                 }
             }
             _ = tick.tick() => {
@@ -1056,6 +1060,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                     if current == Some(target) && from != current {
                         log::info!("{tag}: slot {slot} on layer {target} {}ms after the decision", feed.switched_after(&viewer, since).as_millis());
                         moving = None;
+                        health.reset();
                     }
                 }
                 let pending = current.is_some_and(|c| c != target) || (current.is_none() && target != start);
@@ -1296,6 +1301,7 @@ impl Hub {
 
     async fn request_keyframe(&self, name: &str, slot: usize, level: u8, ask: Ask) {
         let Some((plan, peer, ssrc, generation)) = self.plan_keyframe(name, None, slot, level, ask).await else { return };
+        log::debug!("keyframe {name} slot {slot} layer {level}: {ask:?} -> {plan:?}");
         match plan {
             Plan::Send => send_pli(&peer, ssrc).await,
             Plan::Skip => {}
@@ -1620,6 +1626,55 @@ mod tests {
     }
 
     #[test]
+    fn a_simulcast_offer_names_its_layers() {
+        let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:0\r\na=sendonly\r\na=rid:q send\r\na=rid:h send\r\na=rid:f send\r\na=simulcast:send q;h;f\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\na=sendonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:2\r\na=sendonly\r\na=rid:q send\r\na=rid:x send\r\na=rid:f recv\r\n";
+        let slots = offer_slots(sdp).unwrap();
+        assert_eq!(slots.iter().map(|s| (s.mid.as_str(), s.levels)).collect::<Vec<_>>(), vec![("0", 0b111), ("1", 1), ("2", 1)]);
+    }
+
+    #[test]
+    fn a_switch_asks_at_most_once_per_gap_and_never_over_one_in_flight() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Switch, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Switch, t + ms(100), 0), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Switch, t + FORCED_KEYFRAME_GAP, 0), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Switch, t + FORCED_KEYFRAME_GAP, 1), Plan::Send);
+        assert_eq!(asks.join_asked, None);
+        assert_eq!(asks.decide(Ask::Join, t + FORCED_KEYFRAME_GAP + ms(10), 1), Plan::Skip);
+    }
+
+    #[test]
+    fn nacks_for_packets_from_before_the_switch_do_not_count() {
+        use webrtc::rtcp::transport_feedbacks::transport_layer_nack::NackPair;
+        let nack = |packet_id: u16, lost_packets: u16| -> Vec<Box<dyn webrtc::rtcp::packet::Packet + Send + Sync>> {
+            vec![Box::new(TransportLayerNack { sender_ssrc: 0, media_ssrc: 7, nacks: vec![NackPair { packet_id, lost_packets }] })]
+        };
+        let mut health = Health::default();
+        health.read(&nack(100, 0b11), Some(7), Some(101), Instant::now());
+        assert_eq!(health.nacked, 2);
+        health.read(&nack(65530, 0), Some(7), Some(2), Instant::now());
+        assert_eq!(health.nacked, 2);
+        health.read(&nack(40000, 0), Some(7), Some(2), Instant::now());
+        assert_eq!(health.nacked, 3);
+        health.read(&nack(9, 0), Some(7), None, Instant::now());
+        assert_eq!(health.nacked, 4);
+    }
+
+    #[test]
+    fn the_nack_ratio_slides_with_every_tick() {
+        let t = Instant::now();
+        let mut health = Health::default();
+        for i in 0..8u64 {
+            assert_eq!(health.signals(t + ms(250 * i), i * 100).nack, 0.0);
+        }
+        health.nacked = 60;
+        let signals = health.signals(t + ms(2000), 825);
+        assert!(signals.nack > 0.10, "{}", signals.nack);
+        assert!(health.window.len() <= 6);
+    }
+
+    #[test]
     fn a_join_shares_a_keyframe_on_its_way() {
         let t = Instant::now();
         let mut asks = KeyframeAsks::default();
@@ -1706,12 +1761,14 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_asks_again_when_the_early_keyframe_went_before_connect() {
+    fn a_backup_asks_again_once_the_publisher_will_answer_when_the_early_keyframe_went_before_connect() {
         let t = Instant::now();
         let mut asks = KeyframeAsks::default();
         assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
-        assert_eq!(asks.decide(Ask::Backup(1), t + ms(150), 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(150), 1), Plan::Trail(ms(150)));
         assert_eq!(asks.decide(Ask::Backup(1), t + ms(160), 1), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Join, t + ms(200), 1), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Trailing, t + ms(300), 1), Plan::Send);
     }
 
     #[test]
@@ -1720,7 +1777,7 @@ mod tests {
         let mut asks = KeyframeAsks::default();
         assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
         assert_eq!(asks.decide(Ask::Backup(0), t + ms(150), 0), Plan::Skip);
-        assert_eq!(asks.decide(Ask::Backup(1), t + ms(150), 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(150), 1), Plan::Trail(ms(150)));
     }
 
     #[test]
@@ -1737,20 +1794,18 @@ mod tests {
         let t = Instant::now();
         let mut asks = KeyframeAsks::default();
         assert_eq!(asks.decide(Ask::Backup(0), t, 0), Plan::Send);
-        assert!(!asks.reask);
         assert_eq!(asks.decide(Ask::Backup(1), t + ms(100), 1), Plan::Trail(ms(200)));
     }
 
     #[test]
-    fn one_early_ask_gets_one_reask_and_later_backups_trail() {
+    fn early_backups_share_one_trailing_ask() {
         let t = Instant::now();
         let mut asks = KeyframeAsks::default();
         assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
-        assert_eq!(asks.decide(Ask::Backup(1), t + ms(100), 1), Plan::Send);
-        assert_eq!(asks.decide(Ask::Backup(2), t + ms(200), 2), Plan::Trail(ms(100)));
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(100), 1), Plan::Trail(ms(200)));
+        assert_eq!(asks.decide(Ask::Backup(2), t + ms(200), 2), Plan::Skip);
         assert_eq!(asks.decide(Ask::Backup(2), t + ms(250), 2), Plan::Skip);
         assert_eq!(asks.decide(Ask::Trailing, t + ms(300), 2), Plan::Send);
-        assert!(!asks.reask);
         assert_eq!(asks.decide(Ask::Backup(3), t + ms(400), 3), Plan::Trail(ms(200)));
     }
 

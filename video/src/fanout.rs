@@ -217,11 +217,16 @@ pub struct ViewerTrack {
     codec: RTCRtpCodecCapability,
     bound: Mutex<Option<Bound>>,
     resend: Arc<Resend>,
+    floor: AtomicU32,
 }
 
 impl ViewerTrack {
     pub fn new(codec: RTCRtpCodecCapability, id: String, stream_id: String, resend: Arc<Resend>) -> Self {
-        Self { id, stream_id, codec, bound: Mutex::new(None), resend }
+        Self { id, stream_id, codec, bound: Mutex::new(None), resend, floor: AtomicU32::new(u32::MAX) }
+    }
+
+    pub fn floor(&self) -> Option<u16> {
+        u16::try_from(self.floor.load(Ordering::Relaxed)).ok()
     }
 
     pub fn ssrc(&self) -> Option<u32> {
@@ -241,6 +246,7 @@ impl ViewerTrack {
             }
         };
         if switched {
+            self.floor.store(u32::from(packet.header.sequence_number), Ordering::Relaxed);
             self.resend.floor(packet.header.ssrc, packet.header.sequence_number);
         }
         writer.write_rtp(packet).await.unwrap_or(0)
