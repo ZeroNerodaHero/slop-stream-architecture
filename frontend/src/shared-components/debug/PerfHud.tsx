@@ -173,8 +173,8 @@ export function PerfHud({ mode = 'on' }: { mode?: PerfMode }) {
       createElement(
         'div',
         { key: i, className: 'mb-1 flex flex-col items-end gap-0.5' },
-        createElement('div', null, ...partsOf(parts)),
-        graphs[i]?.map((g) => spark(history, g))
+        graphs[i]?.map((g) => spark(history, g)),
+        createElement('div', null, ...partsOf(parts))
       )
     )
   );
