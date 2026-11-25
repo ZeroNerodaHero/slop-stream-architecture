@@ -217,7 +217,7 @@ export function PageFrame({
   }
 
   return (
-    <main ref={mainRef} className={cn('mx-auto px-5 pb-10 bubble:px-2', titled && '[--page-top:calc(var(--title-row,4rem)+1.5rem)]', width)}>
+    <main ref={mainRef} className={cn('mx-auto px-5 pb-10 bubble:px-2', titled && '[--page-top:calc(var(--title-row,4rem)+1.5rem)]', fill && 'pb-3 bubble:pb-2', width)}>
       <header
         ref={headerRef}
         className={cn(
