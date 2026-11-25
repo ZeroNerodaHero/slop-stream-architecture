@@ -87,7 +87,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
       volume={main.volume}
       onPlaying={main.onPlaying}
       onAutoplayBlocked={main.onAutoplayBlocked}
-      className={cn('h-full border-0', host && isVideoLayer(host) && fitOf(host) === 'cover' ? 'object-cover' : 'object-contain')}
+      className={cn('h-full rounded-none border-0', host && isVideoLayer(host) && fitOf(host) === 'cover' ? 'object-cover' : 'object-contain')}
     />
   );
   return (
@@ -119,7 +119,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
 
 function LayerVideo({ id, streamAtom, cover }: { id: string; streamAtom: Atom<MediaStream | null>; cover: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
-  return <VideoFrame id={id} streamAtom={streamAtom} videoRef={ref} muted className={cn('h-full border-0', cover ? 'object-cover' : 'object-contain')} />;
+  return <VideoFrame id={id} streamAtom={streamAtom} videoRef={ref} muted className={cn('h-full rounded-none border-0', cover ? 'object-cover' : 'object-contain')} />;
 }
 
 interface LayerBoxProps {

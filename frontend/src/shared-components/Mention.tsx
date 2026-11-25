@@ -25,7 +25,7 @@ export function Mention({ name, text }: { name: string; text: string }) {
       onKeyDown={peek.keyDown}
       className="relative [@media(hover:hover)]:group-hover/line:z-20"
     >
-      <ProfileLink person={person} className={cn('font-medium text-primaryBlue underline-offset-2 hover:underline', self && 'bg-primaryBlue/15 px-0.5')}>
+      <ProfileLink person={person} className={cn('font-medium text-primaryBlue underline-offset-2 hover:underline', self && 'rounded-control bg-primaryBlue/15 px-0.5')}>
         {text}
       </ProfileLink>
       {peek.at && <PersonCard id={`mention-peek-${name}`} person={person} at={peek.at} hold={peek.hold} />}

@@ -32,16 +32,15 @@ export function Badge({ group: carried, src, card, preview, size = 'sm', id, cla
     <span
       id={id}
       data-group={group.name}
-      title={card ? undefined : `in the group ${group.name}`}
       tabIndex={card ? 0 : undefined}
       aria-label={card ? `group ${group.name}` : undefined}
-      className={cn('inline-flex items-center align-middle', card && 'cursor-default', className)}
+      className={cn('inline-flex items-center overflow-hidden rounded-control align-middle', card && 'cursor-default', className)}
     >
       <GroupMark name={group.name} color={group.color} icon={icon} src={src} className={MARK[size]} />
       <Pill group={group} className={PILL[size]} />
     </span>
   );
-  if (!card) return pill;
+  if (!card) return <Tooltip content={`in the group ${group.name}`}>{pill}</Tooltip>;
   return (
     <Tooltip content={<GroupCard group={group} icon={icon} />} className="w-[280px] whitespace-normal p-0 text-sm font-normal">
       {pill}
@@ -69,7 +68,7 @@ function GroupCard({ group, icon }: { group: GroupBadge; icon: number | null | u
       {banner && <img src={banner} alt="" loading="lazy" decoding="async" className="aspect-[16/5] w-full border-b border-primaryStroke object-cover" />}
       <span className="flex flex-col gap-1 p-[3px]">
         <span className="flex items-center gap-1.5">
-          <GroupMark name={group.name} color={group.color} icon={icon} className="h-10 w-10 text-base" />
+          <GroupMark name={group.name} color={group.color} icon={icon} className="h-10 w-10 rounded-avatar text-base" />
           <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
             <span className="flex w-full min-w-0 items-center justify-between gap-2">
               <span className="min-w-0 truncate font-semibold leading-tight text-textPrimary">{group.name}</span>

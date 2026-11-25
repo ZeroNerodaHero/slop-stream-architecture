@@ -39,7 +39,7 @@ const panelClass = (side: 'left' | 'right') =>
 const LEAVE_GRACE_MS = 100;
 const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition-none';
 
-const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
+const NAME_LINE = '-mx-1 block rounded-control border border-transparent px-1 py-0.5 leading-tight';
 const ICON_TAP = 'max-md:h-11 max-md:w-11';
 const ACTION = cn(
   'relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundTertiary text-textSecondary transition-colors duration-100',
@@ -141,7 +141,7 @@ export function DrawerOpener() {
         aria-expanded={open}
         aria-controls="user-drawer"
         onClick={() => store.set(friendsOpenAtom, true)}
-        className="-ml-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
+        className="-ml-2.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
         <RiMenuLine aria-hidden size={22} />
       </button>
@@ -285,7 +285,6 @@ export function UserPanel() {
           <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !wide && 'invisible')}>
             <Link
               to={`/watch/${me}`}
-              title="your page"
               draggable={false}
               onClick={closeFriends}
               className={cn(
@@ -294,9 +293,11 @@ export function UserPanel() {
                 mirrored && 'flex-row-reverse text-right'
               )}
             >
-              <span id="me" className="truncate font-semibold group-hover/name:underline">
-                {me}
-              </span>
+              <Tooltip content="your page">
+                <span id="me" className="truncate font-semibold group-hover/name:underline">
+                  {me}
+                </span>
+              </Tooltip>
               <Tooltip content="logged in: this name is yours">
                 <span role="img" aria-label="logged in" className="shrink-0 text-increase">
                   ✓

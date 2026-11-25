@@ -53,7 +53,7 @@ export function OAuthButtons() {
               onClick={() => rememberReturn(false)}
               style={color && ({ '--brand': color.brand, color: color.text } as CSSProperties)}
               className={cn(
-                'flex w-full min-w-0 items-center justify-center gap-2 border border-primaryStroke px-3 py-2 text-base font-semibold focus-visible:outline-none',
+                'flex w-full min-w-0 items-center justify-center gap-2 rounded-control border border-primaryStroke px-3 py-2 text-base font-semibold focus-visible:outline-none',
                 color ? 'hover:border-[var(--brand)] focus-visible:border-[var(--brand)]' : 'text-textPrimary hover:border-primaryBlue focus-visible:border-primaryBlue'
               )}
             >

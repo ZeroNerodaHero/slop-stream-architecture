@@ -31,7 +31,7 @@ export function PinSheetButton({ count, open, onClick }: { count: number; open: 
         data-count={count}
         onClick={onClick}
         className={cn(
-          'flex h-11 w-11 shrink-0 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none',
+          'flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none',
           open ? 'text-primaryBlue' : 'text-textSecondary'
         )}
       >

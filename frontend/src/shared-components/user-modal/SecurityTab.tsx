@@ -28,7 +28,7 @@ import { cleanName } from '@/infra/names';
 import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
-import { Button } from '@/shared-components/Button';
+import { Button, buttonClassName } from '@/shared-components/Button';
 import { OAuthButtons, ProviderIcon, providerBrandStyle } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -245,13 +245,13 @@ function PasswordHint({ problem }: { problem: string | null }) {
   return problem ? <span className="text-decrease">{problem}</span> : <>{NEW_PASSWORD_RULE}. there is no reset: remember it.</>;
 }
 
-const SEGMENT = 'shrink-0 bg-[var(--brand)] px-2.5 text-xs font-semibold';
-const DIVIDER = 'border-l border-white/30';
-const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white';
+const PILL = 'flex min-w-0 items-stretch overflow-hidden rounded-control border border-primaryStroke bg-backgroundSecondary text-sm font-semibold max-md:min-h-11';
+const SEGMENT = 'flex shrink-0 items-center whitespace-nowrap border-l border-primaryStroke px-3 transition-colors duration-100';
+const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue';
 
 function LinkedPicture({ provider, src }: { provider: string; src?: string | null }) {
   const [broken, setBroken] = useState<string | null>(null);
-  const box = 'flex size-6 shrink-0 items-center justify-center border border-primaryStroke';
+  const box = 'flex size-5 shrink-0 items-center justify-center rounded-avatar border border-primaryStroke bg-background';
   if (!src || broken === src) {
     return (
       <span className={box}>
@@ -320,19 +320,19 @@ function LinkedLogins() {
                   {providerLabel(p)}
                 </span>
                 {on ? (
-                  <span style={providerBrandStyle(p)} className="flex min-w-0 items-stretch border border-[var(--brand)]">
-                    <span className="flex min-w-0 items-center gap-2 bg-[var(--brand)] px-2 py-1 text-white">
+                  <span className={PILL}>
+                    <span className="flex min-w-0 items-center gap-2 py-1.5 pl-1.5 pr-3 text-textPrimary">
                       <LinkedPicture provider={p} src={on.avatar} />
                       <Tooltip content={`since ${new Date(on.linked_at).toLocaleDateString()}`}>
-                        <span id={`sec-linked-name-${p}`} tabIndex={0} className="min-w-0 max-w-[180px] truncate text-sm font-semibold">
+                        <span id={`sec-linked-name-${p}`} tabIndex={0} className={`min-w-0 max-w-[180px] truncate ${FOCUS}`}>
                           {on.name || 'linked'}
                         </span>
                       </Tooltip>
                     </span>
                     {lastWayIn ? (
                       <Tooltip content="your only login">
-                        <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className={`flex shrink-0 ${DIVIDER} ${FOCUS}`}>
-                          <button type="button" disabled className={`pointer-events-none ${SEGMENT} text-white/50`}>
+                        <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className={`flex h-full shrink-0 ${FOCUS}`}>
+                          <button type="button" disabled className={`pointer-events-none ${SEGMENT} text-textTertiary opacity-50`}>
                             unlink
                           </button>
                         </span>
@@ -343,17 +343,17 @@ function LinkedLogins() {
                           id={`sec-unlink-${p}`}
                           type="button"
                           disabled={busy}
-                          className={`${DIVIDER} ${FOCUS} shrink-0 whitespace-nowrap bg-decrease px-2.5 text-xs font-semibold text-white disabled:opacity-50`}
+                          className={`${SEGMENT} ${FOCUS} border-decrease bg-decrease text-white hover:opacity-90 disabled:opacity-50`}
                           onClick={() => void unlink(p)}
                         >
                           sure? unlink
                         </button>
-                        <button type="button" className={`${DIVIDER} ${FOCUS} ${SEGMENT} text-white hover:bg-[var(--brand-hover)]`} onClick={() => setSure(null)}>
+                        <button type="button" className={`${SEGMENT} ${FOCUS} text-textSecondary hover:bg-backgroundTertiary hover:text-textPrimary`} onClick={() => setSure(null)}>
                           keep
                         </button>
                       </>
                     ) : (
-                      <button id={`sec-unlink-${p}`} type="button" className={`${DIVIDER} ${FOCUS} ${SEGMENT} text-white hover:bg-decrease`} onClick={() => setSure(p)}>
+                      <button id={`sec-unlink-${p}`} type="button" className={`${SEGMENT} ${FOCUS} text-textSecondary hover:bg-decrease/10 hover:text-decrease`} onClick={() => setSure(p)}>
                         unlink
                       </button>
                     )}
@@ -365,7 +365,7 @@ function LinkedLogins() {
                     onClick={() => rememberReturn(true)}
                     aria-label={`link ${providerLabel(p)}`}
                     style={providerBrandStyle(p)}
-                    className={`flex items-center border border-[var(--brand)] py-1 ${FOCUS} ${SEGMENT} text-white hover:bg-[var(--brand-hover)]`}
+                    className={buttonClassName('primary', 'border-[var(--brand)] bg-[var(--brand)] text-white hover:border-[var(--brand-hover)] hover:bg-[var(--brand-hover)]', 'sm')}
                   >
                     link
                   </a>

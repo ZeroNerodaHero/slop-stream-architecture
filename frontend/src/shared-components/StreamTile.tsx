@@ -16,12 +16,12 @@ interface StreamTileProps {
 
 export function StreamTile({ id, streamAtom, label, onPick, corner, className }: StreamTileProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const picture = <VideoFrame id={`${id}-video`} streamAtom={streamAtom} videoRef={videoRef} muted className="border-0" />;
+  const picture = <VideoFrame id={`${id}-video`} streamAtom={streamAtom} videoRef={videoRef} muted className="rounded-none border-0" />;
   return (
     <div
       id={onPick ? undefined : id}
       className={cn(
-        'relative w-40 shrink-0 border border-primaryStroke bg-black transition-colors duration-150',
+        'relative w-40 shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-black transition-colors duration-150',
         onPick && 'hover:border-primaryBlue [&:has(:focus-visible)]:border-primaryBlue',
         className
       )}

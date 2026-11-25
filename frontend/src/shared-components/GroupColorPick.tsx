@@ -25,12 +25,12 @@ export function GroupColorPick({ id, value, onChange }: { id: string; value: str
             data-swatch={hex}
             onClick={() => onChange(hex)}
             style={{ backgroundColor: hex }}
-            className={cn('h-6 w-6 shrink-0 focus-visible:outline-primaryBlue', hex === color && 'outline outline-2 outline-offset-1 outline-textPrimary')}
+            className={cn('h-6 w-6 shrink-0 rounded-control focus-visible:outline-primaryBlue', hex === color && 'outline outline-2 outline-offset-1 outline-textPrimary')}
           />
         </Tooltip>
       ))}
       <Tooltip content="more colors">
-        <label className="relative h-6 w-6 shrink-0 cursor-pointer border border-primaryStroke focus-within:border-primaryBlue" style={{ backgroundColor: color }}>
+        <label className="relative h-6 w-6 shrink-0 cursor-pointer rounded-control border border-primaryStroke focus-within:border-primaryBlue" style={{ backgroundColor: color }}>
           <input
             id={id}
             type="color"

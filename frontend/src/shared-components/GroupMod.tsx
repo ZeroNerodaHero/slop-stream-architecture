@@ -223,7 +223,7 @@ function ModConfirm({ server, ask, onDone }: { server: string; ask: ModAsk; onDo
           <div
             role="group"
             aria-labelledby="mod-timeout-for"
-            className="grid divide-x divide-primaryStroke border border-primaryStroke"
+            className="grid divide-x divide-primaryStroke overflow-hidden rounded-control border border-primaryStroke"
             style={{ gridTemplateColumns: `repeat(${TIMEOUT_PICKS.length}, minmax(0, 1fr))` }}
           >
             {TIMEOUT_PICKS.map((pick) => (
@@ -258,7 +258,7 @@ function joinedWords(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-const ROLE_CHIP = 'flex items-center gap-1 border px-2 py-0.5 text-xs font-semibold';
+const ROLE_CHIP = 'flex items-center gap-1 rounded-control border px-2 py-0.5 text-xs font-semibold';
 
 function MemberInfo({ server, name, onClose }: { server: string; name: string; onClose: () => void }) {
   const room = useAtomValue(roomAtom);
@@ -394,7 +394,7 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
             aria-label="close"
             onClick={close}
             className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent text-textTertiary hover:border-primaryStroke hover:text-textPrimary',
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-transparent text-textTertiary hover:border-primaryStroke hover:text-textPrimary',
               SHEET_CLOSE
             )}
           >

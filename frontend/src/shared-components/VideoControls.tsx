@@ -120,9 +120,9 @@ function SpeakerIcon({ muted, level }: { muted: boolean; level: number }) {
 }
 
 const DIAL = cn(
-  'h-1 cursor-pointer appearance-none bg-white/30',
-  '[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-white',
-  '[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white',
+  'h-1 cursor-pointer appearance-none rounded-control bg-white/30',
+  '[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-avatar [&::-webkit-slider-thumb]:bg-white',
+  '[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-avatar [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white',
   '[&:focus-visible::-webkit-slider-thumb]:bg-primaryBlue [&:focus-visible::-moz-range-thumb]:bg-primaryBlue'
 );
 

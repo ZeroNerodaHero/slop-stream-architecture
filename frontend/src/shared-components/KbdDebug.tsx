@@ -28,7 +28,7 @@ export function KbdDebug({ typing }: { typing: boolean }) {
     <pre
       id="kbd-debug"
       aria-hidden
-      className="pointer-events-none fixed right-1 top-14 z-[100] m-0 whitespace-pre border border-primaryStroke bg-black/80 px-1.5 py-1 font-mono text-[10px] leading-tight text-white"
+      className="pointer-events-none fixed right-1 top-14 z-[100] m-0 whitespace-pre rounded-card border border-primaryStroke bg-black/80 px-1.5 py-1 font-mono text-[10px] leading-tight text-white"
     >
       {text}
     </pre>

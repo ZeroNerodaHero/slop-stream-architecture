@@ -81,7 +81,7 @@ export function ExplorePage() {
       </div>
       {making && <MakeGroupDialog onClose={() => setMaking(false)} />}
       {query.error && (
-        <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
+        <p className="rounded-card border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
           {messageOf(query.error)}
         </p>
       )}

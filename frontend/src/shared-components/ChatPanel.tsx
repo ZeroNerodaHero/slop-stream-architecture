@@ -211,7 +211,7 @@ function Marks({ line, mine, small }: { line: ChatLine; mine: boolean; small: bo
           <LiveMark role="img" aria-label="streamer" data-streamer-mark size={small ? 'xs' : 'sm'} />
         </Tooltip>
       )}
-      {mine && <span className="bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
+      {mine && <span className="rounded-control bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
     </>
   );
 }
@@ -256,7 +256,7 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                     many ? 'min-w-0 flex-1' : small ? 'h-20 w-32 max-w-full' : 'h-[7.5rem] w-48 max-w-full'
                   )}
                 >
-                  <span className="relative bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
+                  <span className="relative rounded-control bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
                   <Button size="sm" className="relative" aria-label="show sensitive picture" onClick={() => setSensitive((all) => ({ ...all, [id]: true }))}>
                     show
                   </Button>
@@ -357,7 +357,7 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
     >
       <div className="flex-1" />
       {shown && blurred(shown) && (
-        <span data-sensitive={shown} className="flex shrink-0 flex-col items-center gap-2 self-center bg-backgroundTertiary px-8 py-10 text-sm text-textPrimary">
+        <span data-sensitive={shown} className="flex shrink-0 flex-col items-center gap-2 self-center rounded-card bg-backgroundTertiary px-8 py-10 text-sm text-textPrimary">
           sensitive
           <Button size="sm" aria-label="show sensitive picture" onClick={() => onShow(shown)}>
             show
@@ -423,7 +423,7 @@ function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: Pictu
 const BOT_BADGE: GroupBadge = { name: BOT_GROUP, badge: 'BOT', color: '#5865f2' };
 
 const TOAST =
-  'pointer-events-auto absolute bottom-full left-1/2 -translate-x-1/2 z-10 mb-2 flex w-max max-w-[calc(100%-1.5rem)] items-center gap-2 border border-decrease/60 bg-background px-2 py-1 text-xs text-decrease';
+  'pointer-events-auto absolute bottom-full left-1/2 -translate-x-1/2 z-10 mb-2 flex w-max max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-card border border-decrease/60 bg-background px-2 py-1 text-xs text-decrease';
 
 function ChatNotice({ notice, onDismiss }: { notice: string; onDismiss: () => void }) {
   return (
@@ -473,7 +473,7 @@ export function EquesLine({ message, at, attrs }: { message: string; at: number;
           </span>
         </>
       }
-      face={<img src="/icon-192.png?v=3" alt={EQUES} draggable={false} className="h-8 w-8 shrink-0 border border-primaryStroke object-cover" />}
+      face={<img src="/icon-192.png?v=3" alt={EQUES} draggable={false} className="h-8 w-8 shrink-0 rounded-avatar border border-primaryStroke object-cover" />}
       words={
         <span className="whitespace-pre-wrap">
           <LinkedText text={message} />

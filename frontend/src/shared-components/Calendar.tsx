@@ -132,7 +132,7 @@ export function Calendar({ name, scope = 'page', live: said, id = 'calendar' }: 
                       data-start={b.start.toISOString()}
                       data-end={b.end?.toISOString()}
                       className={cn(
-                        'absolute inset-x-[3px] overflow-hidden px-0.5 pt-[2px] text-[10px] font-semibold leading-none text-background sm:px-1',
+                        'absolute inset-x-[3px] overflow-hidden px-0.5 soft:rounded-[3px] bubble:rounded-[6px] pt-[2px] text-[10px] font-semibold leading-none text-background sm:px-1',
                         b.uncertain ? 'bg-textTertiary' : 'bg-primaryBlue',
                         s.last && b.live && 'border-b-2 border-solid border-textPrimary',
                         s.last && b.uncertain && 'border-b-2 border-dashed border-textSecondary'

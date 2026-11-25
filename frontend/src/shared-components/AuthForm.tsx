@@ -163,7 +163,7 @@ function Rule({ ok, children }: { ok: boolean; children: string }) {
       <span
         role="img"
         aria-label={ok ? 'met' : 'not yet'}
-        className={`flex h-4 w-4 shrink-0 items-center justify-center border transition-colors duration-150 ${
+        className={`flex h-4 w-4 shrink-0 items-center justify-center border transition-colors duration-150 soft:rounded-[3px] bubble:rounded-[5px] ${
           ok ? 'border-primaryBlue bg-primaryBlue text-background' : 'border-primaryStroke bg-background'
         }`}
       >

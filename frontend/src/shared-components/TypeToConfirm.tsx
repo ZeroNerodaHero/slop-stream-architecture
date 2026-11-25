@@ -161,7 +161,7 @@ function TypeBox({ id, title, message, yes, onYes, onNo }: TypeToConfirmProps) {
             onCut={stop}
             onContextMenu={stop}
             onDragStart={stop}
-            className="select-none whitespace-nowrap border border-primaryStroke bg-background px-2 py-0.5 font-mono font-semibold text-textPrimary"
+            className="select-none whitespace-nowrap rounded-control border border-primaryStroke bg-background px-2 py-0.5 font-mono font-semibold text-textPrimary"
           >
             {phrase}
           </span>{' '}
