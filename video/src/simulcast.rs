@@ -25,11 +25,15 @@ const UP_HELD: Duration = Duration::from_secs(30);
 
 pub fn level_of(rid: &str) -> Option<u8> {
     match rid {
-        "" | "q" => Some(0),
-        "h" => Some(1),
-        "f" => Some(2),
+        "" | "q" | "cq" => Some(0),
+        "h" | "ch" => Some(1),
+        "f" | "cf" => Some(2),
         _ => None,
     }
+}
+
+pub fn is_copy_rid(rid: &str) -> bool {
+    matches!(rid, "cq" | "ch" | "cf")
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -57,7 +61,6 @@ pub enum Codec {
 pub const CODECS: usize = 2;
 
 impl Codec {
-    pub const ALL: [Codec; CODECS] = [Codec::Vp8, Codec::Vp9];
 
     pub fn index(self) -> usize {
         match self {
@@ -499,6 +502,8 @@ mod tests {
         assert_eq!(level_of("h"), Some(1));
         assert_eq!(level_of("f"), Some(2));
         assert_eq!(level_of("x"), None);
+        assert_eq!((level_of("cq"), level_of("ch"), level_of("cf")), (Some(0), Some(1), Some(2)));
+        assert!(is_copy_rid("cq") && !is_copy_rid("q") && !is_copy_rid(""));
     }
 
     #[test]

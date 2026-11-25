@@ -12,7 +12,7 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalContext, TrackLocalWriter
 use tokio::sync::Notify;
 
 use crate::resend::Resend;
-use crate::simulcast::{rewrite_payload, start_level, LayerView, Rewrite, Frame, LEVELS, NO_LEVEL};
+use crate::simulcast::{rewrite_payload, start_level, Codec, Frame, LayerView, Rewrite, LEVELS, NO_LEVEL};
 use crate::view::View;
 
 const LIVE_WITHIN: Duration = Duration::from_millis(1000);
@@ -30,6 +30,7 @@ pub struct Layer {
 
 pub struct Feed {
     epoch: Instant,
+    codec: Codec,
     offered: u8,
     layers: [Layer; LEVELS],
     viewers: RwLock<Arc<[Arc<Viewer>]>>,
@@ -47,8 +48,16 @@ impl Meter {
 }
 
 impl Feed {
-    pub fn new(offered: u8) -> Self {
-        Self { epoch: Instant::now(), offered, layers: Default::default(), viewers: RwLock::new(Arc::from(Vec::new())) }
+    pub fn new(codec: Codec, offered: u8) -> Self {
+        Self { epoch: Instant::now(), codec, offered, layers: Default::default(), viewers: RwLock::new(Arc::from(Vec::new())) }
+    }
+
+    pub fn codec(&self) -> Codec {
+        self.codec
+    }
+
+    pub fn has_full_viewers(&self) -> bool {
+        self.viewers.read().unwrap_or_else(|e| e.into_inner()).iter().any(|v| !v.preview && v.view() == View::Full)
     }
 
     pub fn offered(&self) -> u8 {
@@ -180,6 +189,7 @@ fn cached(cache: &mut [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS], payloa
 
 pub struct Viewer {
     pub track: Arc<ViewerTrack>,
+    preview: bool,
     target: AtomicU8,
     current: AtomicU8,
     sent: AtomicU64,
@@ -190,9 +200,10 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    pub fn new(track: Arc<ViewerTrack>, start: u8) -> Self {
+    pub fn new(track: Arc<ViewerTrack>, start: u8, preview: bool) -> Self {
         Self {
             track,
+            preview,
             target: AtomicU8::new(start),
             current: AtomicU8::new(NO_LEVEL),
             sent: AtomicU64::new(0),
@@ -261,6 +272,10 @@ pub struct ViewerTrack {
 impl ViewerTrack {
     pub fn new(codec: RTCRtpCodecCapability, id: String, stream_id: String, resend: Arc<Resend>) -> Self {
         Self { id, stream_id, codec, bound: Mutex::new(None), resend, floor: AtomicU32::new(u32::MAX) }
+    }
+
+    pub fn codec(&self) -> &RTCRtpCodecCapability {
+        &self.codec
     }
 
     pub fn floor(&self) -> Option<u16> {

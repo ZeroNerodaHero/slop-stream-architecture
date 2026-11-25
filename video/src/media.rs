@@ -43,6 +43,13 @@ pub fn vp9_capability() -> RTCRtpCodecCapability {
     video_capability(MIME_TYPE_VP9, "profile-id=0")
 }
 
+pub fn capability_of(codec: crate::simulcast::Codec) -> RTCRtpCodecCapability {
+    match codec {
+        crate::simulcast::Codec::Vp8 => vp8_capability(),
+        crate::simulcast::Codec::Vp9 => vp9_capability(),
+    }
+}
+
 pub fn media_setup(twcc: bool, vp9: bool, resend: Option<std::sync::Arc<crate::resend::Resend>>) -> anyhow::Result<(MediaEngine, Registry)> {
     let mut media = MediaEngine::default();
     media.register_codec(

@@ -41,17 +41,16 @@ use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndicat
 use webrtc::rtcp::payload_feedbacks::receiver_estimated_maximum_bitrate::ReceiverEstimatedMaximumBitrate;
 use webrtc::rtcp::receiver_report::ReceiverReport;
 use webrtc::rtcp::transport_feedbacks::transport_layer_nack::TransportLayerNack;
-use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecParameters, RTPCodecType};
 use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 
 use crate::fanout::{Feed, Meter, Viewer, ViewerTrack};
-use crate::media::{accept_simulcast, media_setup, opus_capability, vp8_capability};
+use crate::media::{accept_simulcast, capability_of, media_setup, opus_capability};
 use crate::resend::Resend;
-use crate::simulcast::{level_of, parse_vp8, pinned_limits, start_level, Frame, Picker, Signals, LEVELS};
+use crate::simulcast::{is_copy_rid, level_of, pinned_limits, start_level, Codec, Picker, Signals, CODECS, LEVELS};
 use crate::view::{Gate, View, MAX_STRIKES};
-use webrtc::api::media_engine::MIME_TYPE_VP8;
 
 const KEYFRAME_GAP: Duration = Duration::from_millis(1500);
 const FORCED_KEYFRAME_GAP: Duration = Duration::from_millis(300);
@@ -72,6 +71,7 @@ const MAX_WATCHERS_PER_IP_ROOM: usize = 4;
 const MAX_WATCHERS_PER_IP: usize = 16;
 const MAX_PREVIEWS_PER_IP: usize = 12;
 const VIEWERS_TICK: Duration = Duration::from_secs(1);
+const COPY_HOLD: Duration = Duration::from_secs(10);
 const FOLLOW_TICK: Duration = Duration::from_millis(250);
 const SWITCH_REASK: Duration = Duration::from_millis(500);
 const HEALTH_WINDOW: Duration = Duration::from_secs(1);
@@ -127,16 +127,49 @@ struct Room {
 
 struct Slot {
     mid: String,
+    copy_mid: Option<String>,
     kind: RTPCodecType,
     track_id: String,
     out: SlotOut,
-    asks: [KeyframeAsks; LEVELS],
+    asks: [[KeyframeAsks; LEVELS]; CODECS],
 }
 
 #[derive(Clone)]
 enum SlotOut {
     Audio(Arc<TrackLocalStaticRTP>),
-    Video(Arc<Feed>),
+    Video(Feeds),
+}
+
+#[derive(Clone)]
+struct Feeds {
+    vp8: Arc<Feed>,
+    vp9: Option<Arc<Feed>>,
+}
+
+impl Feeds {
+    fn get(&self, codec: Codec) -> Option<&Arc<Feed>> {
+        match codec {
+            Codec::Vp8 => Some(&self.vp8),
+            Codec::Vp9 => self.vp9.as_ref(),
+        }
+    }
+
+    fn pick(&self, decodes_vp9: bool) -> &Arc<Feed> {
+        let now = Instant::now();
+        let live = |feed: &Feed| feed.views(now).iter().any(|l| l.live);
+        match &self.vp9 {
+            Some(vp9) if decodes_vp9 && (live(vp9) || !live(&self.vp8)) => vp9,
+            _ => &self.vp8,
+        }
+    }
+
+    fn primary(&self) -> Codec {
+        if self.vp9.is_some() {
+            Codec::Vp9
+        } else {
+            Codec::Vp8
+        }
+    }
 }
 
 enum Bound {
@@ -149,6 +182,48 @@ struct Offered {
     mid: String,
     kind: RTPCodecType,
     levels: u8,
+    copy: Option<(String, u8)>,
+}
+
+impl Offered {
+    fn pins(slots: &[Offered]) -> HashMap<String, Codec> {
+        let mut pins = HashMap::new();
+        for slot in slots.iter().filter(|s| s.kind == RTPCodecType::Video) {
+            match &slot.copy {
+                Some((copy, _)) => {
+                    pins.insert(slot.mid.clone(), Codec::Vp9);
+                    pins.insert(copy.clone(), Codec::Vp8);
+                }
+                None => {
+                    pins.insert(slot.mid.clone(), Codec::Vp8);
+                }
+            }
+        }
+        pins
+    }
+}
+
+#[derive(Default)]
+struct CopyDemand {
+    on: bool,
+    wanted_at: Option<Instant>,
+}
+
+impl CopyDemand {
+    fn update(&mut self, wanted: Option<bool>, now: Instant) -> Option<bool> {
+        let wanted = wanted?;
+        if wanted {
+            self.wanted_at = Some(now);
+            if !self.on {
+                self.on = true;
+                return Some(true);
+            }
+        } else if self.on && self.wanted_at.is_none_or(|at| now.saturating_duration_since(at) >= COPY_HOLD) {
+            self.on = false;
+            return Some(false);
+        }
+        None
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -304,6 +379,8 @@ struct Out {
     scene: Option<Scene>,
     #[serde(skip_serializing_if = "Option::is_none")]
     viewers: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full: Option<bool>,
 }
 
 #[tokio::main]
@@ -544,7 +621,8 @@ async fn handle(app: App, mut socket: WebSocket, forwarded: Option<IpAddr>) {
                 let _ = send(&mut socket, Out::error("bad offer")).await;
                 return;
             }
-            watch_stream(app, socket, name, incoming.sdp, wants, incoming.preview.unwrap_or(false), forwarded).await
+            let vp9 = decodes_vp9(&incoming.sdp);
+            watch_stream(app, socket, name, incoming.sdp, wants, vp9, incoming.preview.unwrap_or(false), forwarded).await
         }
         _ => {
             let _ = send(&mut socket, Out::error("role must be publish or watch")).await;
@@ -573,11 +651,13 @@ async fn owns_stream(app: &App, name: &str, session: Option<i64>, token: Option<
 
 async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slots: Vec<Offered>, grant: (Option<i64>, Option<i64>)) {
     let count = slots.len();
+    let pins = Offered::pins(&slots);
+    let copied = slots.iter().any(|s| s.copy.is_some());
     let Some(generation) = app.hub.claim(&name, slots).await else {
         let _ = send(&mut socket, Out::error("someone is already live")).await;
         return;
     };
-    log::info!("publish {name}: start, {count} slot(s)");
+    log::info!("publish {name}: start, {count} slot(s){}", if copied { ", camera in VP9 with a VP8 copy" } else { "" });
     let session = timings::Session::open("webrtc", "publish");
     let setup = Arc::new(timings::Setup::start("webrtc", "publish"));
 
@@ -628,7 +708,11 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                 }
                 Bound::Video { feed, level, tap } => (feed, level, tap),
             };
-            let vp8 = codec.capability.mime_type.eq_ignore_ascii_case(MIME_TYPE_VP8);
+            let family = feed.codec();
+            if Codec::of_mime(&codec.capability.mime_type) != Some(family) {
+                log::warn!("publish {room}: slot {slot} sent {} where {} was answered", codec.capability.mime_type, family.name());
+                return;
+            }
 
             let mut tap = None;
             if thumbs_on && camera {
@@ -669,7 +753,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                             }
                         }
                         if age.is_none_or(|age| age >= thumbs::ask_after()) {
-                            hub.request_keyframe(&room, slot, level, Ask::Thumb).await;
+                            hub.request_keyframe(&room, slot, family, level, Ask::Thumb).await;
                         }
                     }
                 });
@@ -680,7 +764,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                 packet.header.extension = false;
                 packet.header.extensions.clear();
                 let now = Instant::now();
-                let parsed = if vp8 { parse_vp8(&packet.payload) } else { Frame::default() };
+                let parsed = family.parse(&packet.payload);
                 feed.arrived(level, packet.payload.len(), &parsed, &mut meter, now);
                 if let Some(tap) = &mut tap {
                     tap.feed(&packet);
@@ -696,7 +780,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
         Box::pin(async {})
     }));
 
-    let answer = match negotiate(&peer, sdp).await {
+    let answer = match negotiate(&peer, sdp, &pins).await {
         Ok(answer) => answer,
         Err(e) => {
             log::warn!("publish {name}: negotiate: {e}");
@@ -713,6 +797,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
         let mut shutdown = app.shutdown.clone();
         let viewers = app.hub.viewers_rx(&name).await;
         let mut told = None;
+        let mut copy = CopyDemand::default();
         let mut tick = tokio::time::interval(VIEWERS_TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -725,6 +810,13 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                         }
                         Ok(Some(count)) => { tokio::spawn(tell_api_viewers(app.clone(), name.clone(), grant, count)); }
                         Ok(None) => {}
+                    }
+                    if let Some(full) = copy.update(app.hub.copy_wanted(&name, generation).await, Instant::now()) {
+                        log::info!("publish {name}: the VP8 copy {} its upper layer", if full { "turns on" } else { "turns off" });
+                        if send(&mut socket, Out::copy(full)).await.is_err() {
+                            log::info!("publish {name}: socket closed");
+                            break;
+                        }
                     }
                 }
                 msg = socket.recv() => match msg {
@@ -795,7 +887,8 @@ async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>), b
     }
 }
 
-async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize), preview: bool, forwarded: Option<IpAddr>) {
+#[allow(clippy::too_many_arguments)]
+async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize), vp9: bool, preview: bool, forwarded: Option<IpAddr>) {
     let Some((tracks, mut generation, my_generation, mut slots)) = app.hub.tracks(&name, wants).await else {
         let _ = send(&mut socket, Out::error("not live")).await;
         return;
@@ -809,7 +902,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     let starts: Vec<Option<u8>> = tracks
         .iter()
         .map(|(_, out, _)| match out {
-            SlotOut::Video(feed) => Some(feed.start_level(preview)),
+            SlotOut::Video(feeds) => Some(feeds.pick(vp9).start_level(preview)),
             SlotOut::Audio(_) => None,
         })
         .collect();
@@ -817,7 +910,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         .iter()
         .zip(&starts)
         .filter_map(|((slot, out, _), start)| match (out, start) {
-            (SlotOut::Video(feed), Some(level)) => Some((*slot, *level, Arc::clone(feed))),
+            (SlotOut::Video(feeds), Some(level)) => Some((*slot, *level, Arc::clone(feeds.pick(vp9)))),
             _ => None,
         })
         .collect();
@@ -834,8 +927,10 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     let mut following: Vec<(Arc<Feed>, Arc<Viewer>)> = Vec::new();
     for ((slot, out, track_id), start) in tracks.into_iter().zip(starts) {
         let (local, viewer): (Arc<dyn TrackLocal + Send + Sync>, _) = match (&out, start) {
-            (SlotOut::Video(feed), Some(start)) => {
-                let viewer = Arc::new(Viewer::new(Arc::new(ViewerTrack::new(vp8_capability(), track_id, name.clone(), Arc::clone(&resend))), start));
+            (SlotOut::Video(feeds), Some(start)) => {
+                let feed = feeds.pick(vp9);
+                log::info!("{what} {name}: slot {slot} in {}", feed.codec().name());
+                let viewer = Arc::new(Viewer::new(Arc::new(ViewerTrack::new(capability_of(feed.codec()), track_id, name.clone(), Arc::clone(&resend))), start, preview));
                 feed.join(Arc::clone(&viewer));
                 following.push((Arc::clone(feed), Arc::clone(&viewer)));
                 (Arc::clone(&viewer.track) as _, Some((Arc::clone(feed), viewer, start)))
@@ -865,7 +960,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         }
     }
 
-    let answer = match negotiate(&peer, sdp).await {
+    let answer = match negotiate(&peer, sdp, &HashMap::new()).await {
         Ok(answer) => answer,
         Err(e) => {
             log::warn!("watch {name}: negotiate: {e}");
@@ -1079,7 +1174,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                 reask = None;
                 if view != View::Hidden && resumed.is_some() && viewer.current().is_none() {
                     reask = Some(Instant::now() + FORCED_KEYFRAME_GAP);
-                    hub.request_keyframe(&room, slot, viewer.target(), Ask::Resume).await;
+                    hub.request_keyframe(&room, slot, feed.codec(), viewer.target(), Ask::Resume).await;
                 }
             }
             _ = viewer.view_changed() => {
@@ -1116,11 +1211,11 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                     resumed = Some(now);
                     asked = Some(now);
                     reask = Some(now + FORCED_KEYFRAME_GAP);
-                    hub.request_keyframe(&room, slot, target, Ask::Resume).await;
+                    hub.request_keyframe(&room, slot, feed.codec(), target, Ask::Resume).await;
                 } else if viewer.current() != Some(target) {
                     moving = Some((now, viewer.current()));
                     asked = Some(now);
-                    hub.request_keyframe(&room, slot, target, Ask::Switch).await;
+                    hub.request_keyframe(&room, slot, feed.codec(), target, Ask::Switch).await;
                 }
             }
             read = sender.read_rtcp() => {
@@ -1129,7 +1224,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                 if health.read(&packets, viewer.track.ssrc(), viewer.track.floor(), now) && view != View::Hidden {
                     let level = viewer.current().unwrap_or_else(|| viewer.target());
                     let ask = if now.saturating_duration_since(joined) < JOIN_PLI_WINDOW { Ask::Join } else { Ask::Lost };
-                    hub.request_keyframe(&room, slot, level, ask).await;
+                    hub.request_keyframe(&room, slot, feed.codec(), level, ask).await;
                 }
             }
             _ = tick.tick() => {
@@ -1164,7 +1259,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                 let pending = current.is_some_and(|c| c != target) || (current.is_none() && target != start);
                 if resumed.is_none() && pending && asked.is_none_or(|at| now.saturating_duration_since(at) >= SWITCH_REASK) {
                     asked = Some(now);
-                    hub.request_keyframe(&room, slot, target, Ask::Switch).await;
+                    hub.request_keyframe(&room, slot, feed.codec(), target, Ask::Switch).await;
                 }
             }
         }
@@ -1206,10 +1301,31 @@ async fn tell_api_viewers(app: App, name: String, grant: (Option<i64>, Option<i6
     }
 }
 
-async fn negotiate(peer: &RTCPeerConnection, sdp: String) -> anyhow::Result<String> {
+async fn pin_codecs(peer: &RTCPeerConnection, pins: &HashMap<String, Codec>) {
+    for transceiver in peer.get_transceivers().await {
+        if transceiver.kind() != RTPCodecType::Video {
+            continue;
+        }
+        let track = transceiver.sender().await.track().await;
+        let capability = match track.as_ref().and_then(|t| t.as_any().downcast_ref::<ViewerTrack>()) {
+            Some(track) => track.codec().clone(),
+            None => match transceiver.mid().and_then(|mid| pins.get(mid.as_str()).copied()) {
+                Some(codec) => capability_of(codec),
+                None => continue,
+            },
+        };
+        let mime = capability.mime_type.clone();
+        if let Err(e) = transceiver.set_codec_preferences(vec![RTCRtpCodecParameters { capability, ..Default::default() }]).await {
+            log::warn!("mid {:?}: could not answer {mime} only: {e}", transceiver.mid());
+        }
+    }
+}
+
+async fn negotiate(peer: &RTCPeerConnection, sdp: String, pins: &HashMap<String, Codec>) -> anyhow::Result<String> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         let offer = RTCSessionDescription::offer(sdp)?;
         peer.set_remote_description(offer).await?;
+        pin_codecs(peer, pins).await;
         let answer = peer.create_answer(None).await?;
         let mut gathered = peer.gathering_complete_promise().await;
         peer.set_local_description(answer).await?;
@@ -1275,7 +1391,7 @@ async fn new_peer(
             && !early_watched.is_empty()
             && !asked_early.swap(true, Ordering::SeqCst)
         {
-            let asks = early_watched.iter().map(|(slot, level, _)| (*slot, *level, Ask::Join)).collect();
+            let asks = early_watched.iter().map(|(slot, level, feed)| (*slot, feed.codec(), *level, Ask::Join)).collect();
             let hub = early_hub.clone();
             let room = early_room.clone();
             tokio::spawn(async move { hub.request_keyframes(&room, asks).await });
@@ -1298,7 +1414,7 @@ async fn new_peer(
             RTCPeerConnectionState::Connected
                 if !watched.is_empty() && !asked_backup.swap(true, Ordering::SeqCst) =>
             {
-                let asks = watched.iter().map(|(slot, level, feed)| (*slot, *level, Ask::Backup(feed.layer(*level).keyframes.load(Ordering::Relaxed)))).collect();
+                let asks = watched.iter().map(|(slot, level, feed)| (*slot, feed.codec(), *level, Ask::Backup(feed.layer(*level).keyframes.load(Ordering::Relaxed)))).collect();
                 let hub = hub.clone();
                 let room = room.clone();
                 tokio::spawn(async move { hub.request_keyframes(&room, asks).await });
@@ -1334,14 +1450,17 @@ impl Hub {
         let rooms = self.rooms.lock().await;
         let room = rooms.get(name).filter(|r| r.generation == generation)?;
         let camera = room.slots.iter().position(|s| s.kind == RTPCodecType::Video);
-        let index = room.slots.iter().position(|s| s.mid == mid)?;
-        match &room.slots[index].out {
+        let index = room.slots.iter().position(|s| s.mid == mid || s.copy_mid.as_deref() == Some(mid))?;
+        let slot = &room.slots[index];
+        match &slot.out {
             SlotOut::Audio(track) => Some((Bound::Audio(Arc::clone(track)), index)),
-            SlotOut::Video(feed) => {
+            SlotOut::Video(feeds) => {
+                let feed = feeds.get(if slot.mid == mid { feeds.primary() } else { Codec::Vp8 })?;
                 let level = level_of(rid).filter(|l| feed.offered() & (1 << l) != 0)?;
                 feed.bind(level, ssrc);
                 let lowest = feed.offered().trailing_zeros() as u8;
-                Some((Bound::Video { feed: Arc::clone(feed), level, tap: camera == Some(index) && level == lowest }, index))
+                let tap = camera == Some(index) && feed.codec() == Codec::Vp8 && level == lowest;
+                Some((Bound::Video { feed: Arc::clone(feed), level, tap }, index))
             }
         }
     }
@@ -1397,9 +1516,9 @@ impl Hub {
         Ok(())
     }
 
-    async fn request_keyframe(&self, name: &str, slot: usize, level: u8, ask: Ask) {
-        let Some((plan, peer, ssrc, generation)) = self.plan_keyframe(name, None, slot, level, ask).await else { return };
-        log::debug!("keyframe {name} slot {slot} layer {level}: {ask:?} -> {plan:?}");
+    async fn request_keyframe(&self, name: &str, slot: usize, codec: Codec, level: u8, ask: Ask) {
+        let Some((plan, peer, ssrc, generation)) = self.plan_keyframe(name, None, slot, codec, level, ask).await else { return };
+        log::debug!("keyframe {name} slot {slot} {} layer {level}: {ask:?} -> {plan:?}", codec.name());
         match plan {
             Plan::Send => send_pli(&peer, ssrc).await,
             Plan::Skip => {}
@@ -1409,7 +1528,7 @@ impl Hub {
                 let name = name.to_owned();
                 tokio::spawn(async move {
                     tokio::time::sleep(wait).await;
-                    if let Some((Plan::Send, peer, ssrc, _)) = hub.plan_keyframe(&name, Some(generation), slot, level, Ask::Trailing).await {
+                    if let Some((Plan::Send, peer, ssrc, _)) = hub.plan_keyframe(&name, Some(generation), slot, codec, level, Ask::Trailing).await {
                         send_pli(&peer, ssrc).await;
                     }
                 });
@@ -1417,23 +1536,32 @@ impl Hub {
         }
     }
 
-    async fn plan_keyframe(&self, name: &str, generation: Option<u64>, slot: usize, level: u8, ask: Ask) -> Option<(Plan, Arc<RTCPeerConnection>, u32, u64)> {
+    async fn plan_keyframe(&self, name: &str, generation: Option<u64>, slot: usize, codec: Codec, level: u8, ask: Ask) -> Option<(Plan, Arc<RTCPeerConnection>, u32, u64)> {
         let mut rooms = self.rooms.lock().await;
         let room = rooms.get_mut(name).filter(|r| generation.is_none_or(|g| g == r.generation))?;
         let peer = room.publisher.as_ref().and_then(Weak::upgrade)?;
         let generation = room.generation;
         let slot = room.slots.get_mut(slot)?;
-        let SlotOut::Video(feed) = &slot.out else { return None };
+        let SlotOut::Video(feeds) = &slot.out else { return None };
+        let feed = feeds.get(codec)?;
         let ssrc = feed.ssrc(level)?;
         let seen = feed.layer(level).keyframes.load(Ordering::Relaxed);
-        let plan = slot.asks.get_mut(level as usize)?.decide(ask, Instant::now(), seen);
+        let plan = slot.asks[codec.index()].get_mut(level as usize)?.decide(ask, Instant::now(), seen);
         Some((plan, peer, ssrc, generation))
     }
 
-    async fn request_keyframes(&self, name: &str, asks: Vec<(usize, u8, Ask)>) {
-        for (slot, level, ask) in asks {
-            self.request_keyframe(name, slot, level, ask).await;
+    async fn request_keyframes(&self, name: &str, asks: Vec<(usize, Codec, u8, Ask)>) {
+        for (slot, codec, level, ask) in asks {
+            self.request_keyframe(name, slot, codec, level, ask).await;
         }
+    }
+
+    async fn copy_wanted(&self, name: &str, generation: u64) -> Option<bool> {
+        let rooms = self.rooms.lock().await;
+        let room = rooms.get(name).filter(|r| r.generation == generation)?;
+        let camera = room.slots.iter().find(|s| s.copy_mid.is_some())?;
+        let SlotOut::Video(feeds) = &camera.out else { return None };
+        Some(feeds.vp8.has_full_viewers())
     }
 
     async fn clear(&self, name: &str) {
@@ -1510,14 +1638,18 @@ impl Room {
         let (generation_tx, _) = watch::channel(0);
         let slots: Vec<Slot> = slots
             .into_iter()
-            .map(|Offered { mid, kind, levels }| {
+            .map(|Offered { mid, kind, levels, copy }| {
                 let track_id = format!("{kind}-{mid}");
                 let out = if kind == RTPCodecType::Audio {
                     SlotOut::Audio(Arc::new(TrackLocalStaticRTP::new(opus_capability(), track_id.clone(), name.to_owned())))
                 } else {
-                    SlotOut::Video(Arc::new(Feed::new(levels)))
+                    SlotOut::Video(match &copy {
+                        Some((_, copy_levels)) => Feeds { vp8: Arc::new(Feed::new(Codec::Vp8, *copy_levels)), vp9: Some(Arc::new(Feed::new(Codec::Vp9, levels))) },
+                        None => Feeds { vp8: Arc::new(Feed::new(Codec::Vp8, levels)), vp9: None },
+                    })
                 };
-                Slot { mid, kind, track_id, out, asks: Default::default() }
+                let copy_mid = copy.map(|(mid, _)| mid);
+                Slot { mid, copy_mid, kind, track_id, out, asks: Default::default() }
             })
             .collect();
         let camera = slots
@@ -1571,6 +1703,14 @@ impl Out {
         }
     }
 
+    fn copy(full: bool) -> Self {
+        Self {
+            event: Some("copy".to_owned()),
+            full: Some(full),
+            ..Default::default()
+        }
+    }
+
     fn viewers(count: usize) -> Self {
         Self {
             event: Some("viewers".to_owned()),
@@ -1602,6 +1742,16 @@ struct MediaSection {
     sends: bool,
     receives: bool,
     levels: u8,
+    copy: bool,
+    vp8: bool,
+    vp9: Vec<String>,
+    other_vp9: Vec<String>,
+}
+
+impl MediaSection {
+    fn offers_vp9(&self) -> bool {
+        self.vp9.iter().any(|pt| !self.other_vp9.contains(pt))
+    }
 }
 
 fn media_sections(sdp: &str) -> Vec<MediaSection> {
@@ -1614,14 +1764,33 @@ fn media_sections(sdp: &str) -> Vec<MediaSection> {
                 Some("video") => Some(RTPCodecType::Video),
                 _ => None,
             };
-            sections.push(MediaSection { kind, mid: None, sends: true, receives: true, levels: 0 });
+            sections.push(MediaSection { kind, mid: None, sends: true, receives: true, levels: 0, copy: false, vp8: false, vp9: Vec::new(), other_vp9: Vec::new() });
         } else if let Some(section) = sections.last_mut() {
             if let Some(mid) = line.strip_prefix("a=mid:") {
                 section.mid = Some(mid.trim().to_owned());
+            } else if let Some(map) = line.strip_prefix("a=rtpmap:") {
+                let mut words = map.split_whitespace();
+                if let (Some(pt), Some(name)) = (words.next(), words.next()) {
+                    let codec = name.split('/').next().unwrap_or_default();
+                    if codec.eq_ignore_ascii_case("VP8") {
+                        section.vp8 = true;
+                    } else if codec.eq_ignore_ascii_case("VP9") {
+                        section.vp9.push(pt.to_owned());
+                    }
+                }
+            } else if let Some(fmtp) = line.strip_prefix("a=fmtp:") {
+                let mut words = fmtp.splitn(2, ' ');
+                if let (Some(pt), Some(params)) = (words.next(), words.next()) {
+                    if params.split(';').any(|p| p.trim().starts_with("profile-id=") && p.trim() != "profile-id=0") {
+                        section.other_vp9.push(pt.to_owned());
+                    }
+                }
             } else if let Some(rid) = line.strip_prefix("a=rid:") {
                 let mut words = rid.split_whitespace();
-                if let (Some(level), Some("send")) = (words.next().and_then(level_of), words.next()) {
+                let name = words.next().unwrap_or_default();
+                if let (Some(level), Some("send")) = (level_of(name), words.next()) {
                     section.levels |= 1 << level;
+                    section.copy |= is_copy_rid(name);
                 }
             } else if line == "a=sendonly" {
                 section.receives = false;
@@ -1637,11 +1806,26 @@ fn media_sections(sdp: &str) -> Vec<MediaSection> {
 }
 
 fn offer_slots(sdp: &str) -> Option<Vec<Offered>> {
-    media_sections(sdp)
-        .into_iter()
-        .filter(|section| section.sends && section.kind.is_some())
-        .map(|section| Some(Offered { mid: section.mid?, kind: section.kind?, levels: if section.levels == 0 { 1 } else { section.levels } }))
-        .collect()
+    let mut slots: Vec<(Offered, bool)> = Vec::new();
+    for section in media_sections(sdp).into_iter().filter(|section| section.sends && section.kind.is_some()) {
+        let levels = if section.levels == 0 { 1 } else { section.levels };
+        let offered = Offered { mid: section.mid.clone()?, kind: section.kind?, levels, copy: None };
+        let video = offered.kind == RTPCodecType::Video;
+        if !section.copy {
+            slots.push((offered, video && section.offers_vp9()));
+            continue;
+        }
+        let usable = video && section.vp8 && !section.offers_vp9();
+        if let Some((slot, _)) = slots.iter_mut().find(|(slot, vp9)| usable && *vp9 && slot.kind == RTPCodecType::Video && slot.copy.is_none()) {
+            slot.copy = Some((offered.mid, levels));
+        }
+    }
+    Some(slots.into_iter().map(|(slot, _)| slot).collect())
+}
+
+fn decodes_vp9(sdp: &str) -> bool {
+    let mut video = media_sections(sdp).into_iter().filter(|section| section.receives && section.kind == Some(RTPCodecType::Video)).peekable();
+    video.peek().is_some() && video.all(|section| section.offers_vp9())
 }
 
 fn offered_receivers(sdp: &str) -> (usize, usize) {
@@ -1670,7 +1854,7 @@ mod tests {
     }
 
     async fn live_room(hub: &Hub, name: &str) -> u64 {
-        hub.claim(name, vec![Offered { mid: "0".to_owned(), kind: RTPCodecType::Video, levels: 1 }]).await.expect("the name is free")
+        hub.claim(name, vec![Offered { mid: "0".to_owned(), kind: RTPCodecType::Video, levels: 1, copy: None }]).await.expect("the name is free")
     }
 
     #[tokio::test]
@@ -1719,6 +1903,113 @@ mod tests {
         let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:0\r\na=sendonly\r\na=rid:q send\r\na=rid:h send\r\na=rid:f send\r\na=simulcast:send q;h;f\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\na=sendonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:2\r\na=sendonly\r\na=rid:q send\r\na=rid:x send\r\na=rid:f recv\r\n";
         let slots = offer_slots(sdp).unwrap();
         assert_eq!(slots.iter().map(|s| (s.mid.as_str(), s.levels)).collect::<Vec<_>>(), vec![("0", 0b111), ("1", 1), ("2", 1)]);
+    }
+
+    const VP9_CAMERA: &str = "m=video 9 UDP/TLS/RTP/SAVPF 98 100 96\r\na=mid:0\r\na=sendonly\r\na=rtpmap:98 VP9/90000\r\na=fmtp:98 profile-id=0\r\na=rtpmap:100 VP9/90000\r\na=fmtp:100 profile-id=2\r\na=rtpmap:96 VP8/90000\r\na=rid:q send\r\na=rid:h send\r\na=rid:f send\r\na=simulcast:send q;h;f\r\n";
+    const AUDIO: &str = "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\na=sendonly\r\na=rtpmap:111 opus/48000/2\r\n";
+    const SCREEN: &str = "m=video 9 UDP/TLS/RTP/SAVPF 98 96\r\na=mid:2\r\na=sendonly\r\na=rtpmap:98 VP9/90000\r\na=fmtp:98 profile-id=0\r\na=rtpmap:96 VP8/90000\r\n";
+    const COPY: &str = "m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\na=mid:3\r\na=sendonly\r\na=rtpmap:96 VP8/90000\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=rid:cq send\r\na=rid:ch send\r\na=simulcast:send cq;~ch\r\n";
+
+    #[test]
+    fn a_vp8_copy_joins_the_vp9_camera_and_is_not_a_slot() {
+        let sdp = format!("v=0\r\n{VP9_CAMERA}{AUDIO}{SCREEN}{COPY}");
+        let slots = offer_slots(&sdp).unwrap();
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0].copy, Some(("3".to_owned(), 0b11)));
+        assert_eq!(slots[0].levels, 0b111);
+        assert_eq!(slots[2].copy, None);
+        let pins = Offered::pins(&slots);
+        assert_eq!(pins.get("0"), Some(&Codec::Vp9));
+        assert_eq!(pins.get("3"), Some(&Codec::Vp8));
+        assert_eq!(pins.get("2"), Some(&Codec::Vp8));
+        assert_eq!(pins.get("1"), None);
+    }
+
+    #[test]
+    fn without_a_copy_every_video_slot_stays_vp8() {
+        let slots = offer_slots(&format!("v=0\r\n{VP9_CAMERA}{AUDIO}{SCREEN}")).unwrap();
+        assert!(slots.iter().all(|s| s.copy.is_none()));
+        assert!(Offered::pins(&slots).values().all(|c| *c == Codec::Vp8));
+        let vp8_camera = VP9_CAMERA.replace("a=rtpmap:98 VP9/90000\r\na=fmtp:98 profile-id=0\r\n", "").replace("a=rtpmap:100 VP9/90000\r\n", "");
+        let slots = offer_slots(&format!("v=0\r\n{vp8_camera}{AUDIO}{COPY}")).unwrap();
+        assert_eq!(slots.len(), 2, "a copy with no VP9 camera to follow is dropped");
+        assert!(slots.iter().all(|s| s.copy.is_none()));
+        let two_copies = offer_slots(&format!("v=0\r\n{VP9_CAMERA}{COPY}{}", COPY.replace("a=mid:3", "a=mid:4"))).unwrap();
+        assert_eq!(two_copies.len(), 1);
+        assert_eq!(two_copies[0].copy, Some(("3".to_owned(), 0b11)));
+    }
+
+    #[test]
+    fn a_viewer_decodes_vp9_only_when_every_video_section_offers_profile_0() {
+        let recv = |video: &str| format!("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n{video}{video}");
+        let both = "m=video 9 UDP/TLS/RTP/SAVPF 96 98\r\na=recvonly\r\na=rtpmap:96 VP8/90000\r\na=rtpmap:98 VP9/90000\r\na=fmtp:98 profile-id=0\r\n";
+        let bare = "m=video 9 UDP/TLS/RTP/SAVPF 96 98\r\na=recvonly\r\na=rtpmap:96 VP8/90000\r\na=rtpmap:98 VP9/90000\r\n";
+        let vp8 = "m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\na=rtpmap:96 VP8/90000\r\n";
+        let profile2 = "m=video 9 UDP/TLS/RTP/SAVPF 96 100\r\na=recvonly\r\na=rtpmap:96 VP8/90000\r\na=rtpmap:100 VP9/90000\r\na=fmtp:100 profile-id=2\r\n";
+        assert!(decodes_vp9(&recv(both)));
+        assert!(decodes_vp9(&recv(bare)));
+        assert!(!decodes_vp9(&recv(vp8)));
+        assert!(!decodes_vp9(&recv(profile2)));
+        assert!(!decodes_vp9(&format!("v=0\r\n{both}{vp8}")));
+        assert!(!decodes_vp9("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n"));
+    }
+
+    #[test]
+    fn the_copy_top_turns_on_at_once_and_off_after_the_hold() {
+        let t = Instant::now();
+        let mut copy = CopyDemand::default();
+        assert_eq!(copy.update(None, t), None);
+        assert_eq!(copy.update(Some(false), t), None);
+        assert_eq!(copy.update(Some(true), t), Some(true));
+        assert_eq!(copy.update(Some(true), t + ms(1000)), None);
+        assert_eq!(copy.update(Some(false), t + ms(2000)), None);
+        assert_eq!(copy.update(Some(true), t + ms(5000)), None);
+        assert_eq!(copy.update(Some(false), t + ms(5000) + COPY_HOLD - ms(1)), None);
+        assert_eq!(copy.update(Some(false), t + ms(5000) + COPY_HOLD), Some(false));
+        assert_eq!(copy.update(Some(false), t + ms(60_000)), None);
+        assert_eq!(copy.update(Some(true), t + ms(61_000)), Some(true));
+    }
+
+    #[tokio::test]
+    async fn the_copy_binds_to_the_vp8_feed_and_feeds_the_thumbnail() {
+        let hub = Hub::default();
+        let slots = offer_slots(&format!("v=0\r\n{VP9_CAMERA}{AUDIO}{COPY}")).unwrap();
+        let generation = hub.claim("c", slots).await.unwrap();
+        let Some((Bound::Video { feed, level, tap }, slot)) = hub.bind("c", generation, "0", "f", 1).await else { panic!("the camera binds") };
+        assert_eq!((feed.codec(), level, tap, slot), (Codec::Vp9, 2, false, 0));
+        let Some((Bound::Video { feed, tap, .. }, _)) = hub.bind("c", generation, "0", "q", 2).await else { panic!("the camera binds") };
+        assert_eq!((feed.codec(), tap), (Codec::Vp9, false));
+        let Some((Bound::Video { feed, level, tap }, slot)) = hub.bind("c", generation, "3", "cq", 3).await else { panic!("the copy binds") };
+        assert_eq!((feed.codec(), level, tap, slot), (Codec::Vp8, 0, true, 0));
+        let Some((Bound::Video { feed, level, tap }, _)) = hub.bind("c", generation, "3", "ch", 4).await else { panic!("the copy binds") };
+        assert_eq!((feed.codec(), level, tap), (Codec::Vp8, 1, false));
+        assert!(hub.bind("c", generation, "3", "cf", 5).await.is_none());
+        let rooms = hub.rooms.lock().await;
+        let SlotOut::Video(feeds) = &rooms["c"].slots[0].out else { panic!("a video slot") };
+        assert_eq!(feeds.pick(true).codec(), Codec::Vp9);
+        assert_eq!(feeds.pick(false).codec(), Codec::Vp8);
+        assert_eq!(feeds.vp8.ssrc(0), Some(3));
+        assert_eq!(feeds.vp9.as_ref().unwrap().ssrc(2), Some(1));
+        let now = Instant::now();
+        let mut meter = Meter::new(now);
+        feeds.vp8.arrived(0, 100, &Default::default(), &mut meter, now);
+        assert_eq!(feeds.pick(true).codec(), Codec::Vp8, "a VP9 feed that is quiet while the copy flows sends VP9 viewers to the copy");
+        feeds.vp9.as_ref().unwrap().arrived(2, 100, &Default::default(), &mut meter, now);
+        assert_eq!(feeds.pick(true).codec(), Codec::Vp9);
+        assert_eq!(feeds.pick(false).codec(), Codec::Vp8);
+    }
+
+    #[tokio::test]
+    async fn a_vp8_only_publisher_has_one_feed_and_vp9_viewers_get_vp8() {
+        let hub = Hub::default();
+        let generation = live_room(&hub, "p").await;
+        let Some((Bound::Video { feed, tap, .. }, _)) = hub.bind("p", generation, "0", "", 9).await else { panic!("binds") };
+        assert_eq!((feed.codec(), tap), (Codec::Vp8, true));
+        let rooms = hub.rooms.lock().await;
+        let SlotOut::Video(feeds) = &rooms["p"].slots[0].out else { panic!("a video slot") };
+        assert!(feeds.vp9.is_none());
+        assert_eq!(feeds.pick(true).codec(), Codec::Vp8);
+        assert!(feeds.get(Codec::Vp9).is_none());
     }
 
     #[test]
