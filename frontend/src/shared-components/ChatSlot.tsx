@@ -105,17 +105,21 @@ const CORNERS = [
   { id: 'se', sx: 1, sy: 1, className: '-bottom-px -right-px cursor-nwse-resize border-b-2 border-r-2' }
 ] as const;
 
-export function chatLayoutClass(side: ChatSide, open: boolean): string {
+const OPEN_COLUMNS = {
+  right: { fixed: 'beside:grid-cols-[minmax(0,1fr)_360px]', fluid: 'beside:grid-cols-[minmax(0,1fr)_340px]' },
+  left: { fixed: 'beside:grid-cols-[360px_minmax(0,1fr)]', fluid: 'beside:grid-cols-[340px_minmax(0,1fr)]' }
+} as const;
+
+export function chatLayoutClass(side: ChatSide, open: boolean, fluid = false): string {
   if (side !== 'left' && side !== 'right') return '';
   return cn(
     'beside:grid beside:grid-rows-[auto_1fr] beside:items-start beside:transition-[grid-template-columns,column-gap] beside:duration-300 beside:ease-out motion-reduce:beside:transition-none',
     open ? 'beside:gap-x-6 bubble:beside:gap-x-2' : 'beside:gap-x-0',
-    side === 'right' && (open ? 'beside:grid-cols-[minmax(0,1fr)_360px]' : 'beside:grid-cols-[minmax(0,1fr)_0px]'),
-    side === 'left' && (open ? 'beside:grid-cols-[360px_minmax(0,1fr)]' : 'beside:grid-cols-[0px_minmax(0,1fr)]')
+    open ? OPEN_COLUMNS[side][fluid ? 'fluid' : 'fixed'] : side === 'right' ? 'beside:grid-cols-[minmax(0,1fr)_0px]' : 'beside:grid-cols-[0px_minmax(0,1fr)]'
   );
 }
 
-export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; children: ReactNode }) {
+export function ChatSlot({ tabbed = false, fluid = false, children }: { tabbed?: boolean; fluid?: boolean; children: ReactNode }) {
   const side = useChatSide();
   const open = useAtomValue(chatModalOpenAtom) || (tabbed && side !== 'modal');
   const ref = useRef<HTMLDialogElement | null>(null);
@@ -372,7 +376,11 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
                 : open
                   ? 'mt-4 h-[min(50vh,560px)] opacity-100'
                   : 'mt-0 h-0 overflow-hidden opacity-0',
-              tall ? 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:max-h-[720px] beside:opacity-100' : 'beside:mt-0 beside:h-0 beside:max-h-0 beside:opacity-0',
+              tall
+                ? fluid
+                  ? 'beside:mt-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:opacity-100'
+                  : 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:max-h-[720px] beside:opacity-100'
+                : 'beside:mt-0 beside:h-0 beside:max-h-0 beside:opacity-0',
               clip && 'overflow-hidden'
             )
       )}
@@ -384,7 +392,9 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
             ? 'min-h-0 w-full flex-1'
             : cn(
                 tabbed ? 'h-full' : 'h-[min(50vh,560px)]',
-                'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[360px]',
+                fluid
+                  ? 'w-full beside:absolute beside:top-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[340px]'
+                  : 'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[360px]',
                 'transition-transform duration-300 ease-out motion-reduce:transition-none',
                 side === 'right' && 'beside:right-0',
                 side === 'left' && 'beside:left-0',

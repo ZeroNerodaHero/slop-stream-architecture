@@ -12,7 +12,7 @@ import {
   RiVolumeUpLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { type GroupRoom, isVoice, type VoiceMember } from '@/infra/api';
@@ -118,7 +118,7 @@ function FaceWithPresence({ name, version, className, ring }: { name: string; ve
   );
 }
 
-interface TileOf {
+export interface TileOf {
   key: string;
   name: string;
   kind: 'person' | 'screen';
@@ -137,22 +137,15 @@ function columns(n: number): string {
   return 'grid-cols-2 md:grid-cols-4';
 }
 
-function Call({ room, channel, className }: { room: GroupRoom; channel: string; className?: string }) {
+export function useCallTiles(room: GroupRoom, channel: string): TileOf[] {
   const me = useAtomValue(meAtom) ?? '';
-  const call = useAtomValue(voiceCallAtom);
   const seats = useAtomValue(voiceSeatsAtom);
   const pictures = useAtomValue(voicePicturesAtom);
   const local = useAtomValue(voiceLocalVideoAtom);
-  const speaking = useAtomValue(voiceSpeakingAtom);
   const muted = useAtomValue(voiceMutedAtom);
   const deaf = useAtomValue(voiceDeafAtom);
-  const videoError = useAtomValue(voiceVideoErrorAtom);
-  const mobile = useIsMobile();
-  const [focus, setFocus] = useState<string | null>(null);
   const people: Member[] = room.voice?.[channel] ?? [];
   const serverMuted = (name: string) => people.some((p) => p.name === name && p.muted);
-  const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
-
   const tiles: TileOf[] = [
     { key: 'me', name: me, kind: 'person', stream: local.camera, self: true, mute: muted || deaf, deaf, serverMuted: serverMuted(me) },
     ...(local.screen ? [{ key: 'me:screen', name: me, kind: 'screen' as const, stream: local.screen, self: true, mute: false, deaf: false, serverMuted: false }] : [])
@@ -174,6 +167,17 @@ function Call({ room, channel, className }: { room: GroupRoom; channel: string; 
     });
     if (screen) tiles.push({ key: `${s.seat}:screen`, name: s.user, kind: 'screen', stream: screen.stream, self: false, mute: false, deaf: false, serverMuted: false });
   }
+  return tiles;
+}
+
+function Call({ room, channel, className }: { room: GroupRoom; channel: string; className?: string }) {
+  const call = useAtomValue(voiceCallAtom);
+  const speaking = useAtomValue(voiceSpeakingAtom);
+  const videoError = useAtomValue(voiceVideoErrorAtom);
+  const mobile = useIsMobile();
+  const [focus, setFocus] = useState<string | null>(null);
+  const tiles = useCallTiles(room, channel);
+  const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
   const focused = tiles.find((t) => t.key === focus) ?? null;
 
   const tile = (t: TileOf, size: 'grid' | 'big' | 'strip') => (
@@ -229,12 +233,14 @@ function Call({ room, channel, className }: { room: GroupRoom; channel: string; 
   );
 }
 
-function Tile({
+export function Tile({
   tile,
   size,
   version,
   talking,
   focused,
+  thin = false,
+  label,
   onClick
 }: {
   tile: TileOf;
@@ -242,6 +248,8 @@ function Tile({
   version: number | null;
   talking: boolean;
   focused: boolean;
+  thin?: boolean;
+  label?: string;
   onClick: () => void;
 }) {
   const what = tile.kind === 'screen' ? `${tile.name}'s screen` : tile.self ? `${tile.name} (you)` : tile.name;
@@ -253,14 +261,14 @@ function Tile({
       data-video={tile.stream ? 'on' : undefined}
       className={cn(
         'group/tile relative overflow-hidden rounded-card border bg-backgroundTertiary',
-        size === 'big' ? 'h-full w-full' : 'aspect-video',
+        size === 'big' ? 'h-full w-full' : thin ? 'aspect-[16/10]' : 'aspect-video',
         size === 'strip' && 'w-36 shrink-0 max-md:w-28',
-        talking ? 'border-increase outline outline-2 -outline-offset-2 outline-increase' : 'border-primaryStroke hover:border-secondaryStroke bubble:border-transparent bubble:hover:border-secondaryStroke'
+        talking ? (thin ? 'border-increase' : 'border-increase outline outline-2 -outline-offset-2 outline-increase') : 'border-primaryStroke hover:border-secondaryStroke bubble:border-transparent bubble:hover:border-secondaryStroke'
       )}
     >
       <button
         type="button"
-        aria-label={focused ? `back to everyone` : `focus ${what}`}
+        aria-label={label ?? (focused ? `back to everyone` : `focus ${what}`)}
         aria-pressed={focused}
         onClick={onClick}
         className="absolute inset-0 z-10 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue"
@@ -268,12 +276,14 @@ function Tile({
       {tile.stream ? (
         <Picture stream={tile.stream} mirror={tile.self && tile.kind === 'person'} contain={tile.kind === 'screen' || size === 'big'} />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className={cn('absolute inset-0 flex items-center justify-center', thin && 'pb-6 xl:pb-0')}>
           <FaceWithPresence
             name={tile.name}
             version={version}
             ring="border-backgroundTertiary"
-            className={cn(size === 'strip' ? 'h-9 w-9 text-sm' : size === 'big' ? 'h-24 w-24 text-3xl' : 'h-16 w-16 text-xl max-md:h-12 max-md:w-12 max-md:text-base')}
+            className={cn(
+              size === 'strip' ? 'h-9 w-9 text-sm' : thin ? 'h-7 w-7 text-xs xl:h-12 xl:w-12 xl:text-lg' : size === 'big' ? 'h-24 w-24 text-3xl' : 'h-16 w-16 text-xl max-md:h-12 max-md:w-12 max-md:text-base'
+            )}
           />
         </div>
       )}
@@ -304,79 +314,118 @@ function HeardMutedOnTile({ uid }: { uid: string }) {
   return <Mark label="muted for you" icon={<RiVolumeMuteLine aria-hidden data-heard-muted size={12} />} />;
 }
 
+const videos = new Map<MediaStream, HTMLVideoElement>();
+
+function videoOf(stream: MediaStream): HTMLVideoElement {
+  const kept = videos.get(stream);
+  if (kept) return kept;
+  const el = document.createElement('video');
+  el.autoplay = true;
+  el.muted = true;
+  el.playsInline = true;
+  el.srcObject = stream;
+  videos.set(stream, el);
+  return el;
+}
+
+function dropIfLoose(stream: MediaStream, el: HTMLVideoElement) {
+  window.setTimeout(() => {
+    if (el.isConnected || videos.get(stream) !== el) return;
+    videos.delete(stream);
+    el.srcObject = null;
+  }, 0);
+}
+
 function Picture({ stream, mirror, contain }: { stream: MediaStream; mirror: boolean; contain: boolean }) {
-  const video = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    const el = video.current;
-    if (!el) return;
-    el.srcObject = stream;
-    void el.play().catch(() => undefined);
+  const host = useRef<HTMLDivElement>(null);
+  const look = cn('absolute inset-0 h-full w-full bg-black', contain ? 'object-contain' : 'object-cover', mirror && '[transform:scaleX(-1)]');
+  useLayoutEffect(() => {
+    const box = host.current;
+    if (!box) return;
+    const el = videoOf(stream);
+    box.appendChild(el);
+    if (el.paused) void el.play().catch(() => undefined);
     return () => {
-      el.srcObject = null;
+      if (el.parentNode === box) box.removeChild(el);
+      dropIfLoose(stream, el);
     };
   }, [stream]);
-  return (
-    <video
-      ref={video}
-      autoPlay
-      muted
-      playsInline
-      className={cn('absolute inset-0 h-full w-full bg-black', contain ? 'object-contain' : 'object-cover', mirror && '[transform:scaleX(-1)]')}
-    />
-  );
+  useLayoutEffect(() => {
+    const el = videos.get(stream);
+    if (el && el.parentNode === host.current) el.className = look;
+  });
+  return <div ref={host} className="absolute inset-0" />;
 }
 
 const CONTROL =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-control border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue disabled:opacity-50 max-md:h-11 max-md:w-11';
 
-function ControlBar({ mobile }: { mobile: boolean }) {
+const DOCK_CONTROL = 'h-8 w-8 max-md:h-11 max-md:w-11';
+
+export function ControlBar({ mobile, dock = false }: { mobile: boolean; dock?: boolean }) {
   const call = useAtomValue(voiceCallAtom);
   const muted = useAtomValue(voiceMutedAtom);
   const deaf = useAtomValue(voiceDeafAtom);
   const local = useAtomValue(voiceLocalVideoAtom);
   const ready = call.phase === 'connected';
+  const at = dock ? 'voice-dock' : 'voice-room';
+  const size = dock ? DOCK_CONTROL : undefined;
+  const icon = dock ? 16 : 18;
   return (
     <div
-      id="voice-room-controls"
+      id={`${at}-controls`}
       role="toolbar"
       aria-label="call"
       className={cn(
-        'flex shrink-0 items-center justify-center gap-2 rounded-b-panel border-t border-primaryStroke bg-backgroundSecondary px-3 py-2 bubble:border-transparent',
+        dock
+          ? 'flex shrink-0 flex-wrap items-center gap-1.5 px-2 pb-2'
+          : 'flex shrink-0 items-center justify-center gap-2 rounded-b-panel border-t border-primaryStroke bg-backgroundSecondary px-3 py-2 bubble:border-transparent',
         mobile && 'fixed inset-x-0 bottom-0 z-30 rounded-none rounded-t-panel pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
       )}
     >
-      <Control id="voice-room-mic" label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
-        {muted ? <RiMicOffLine aria-hidden size={18} /> : <RiMicLine aria-hidden size={18} />}
+      <Control id={`${at}-mic`} className={size} label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
+        {muted ? <RiMicOffLine aria-hidden size={icon} /> : <RiMicLine aria-hidden size={icon} />}
       </Control>
-      <Control id="voice-room-deafen" label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
-        <RiHeadphoneLine aria-hidden size={18} />
+      <Control id={`${at}-deafen`} className={size} label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
+        <RiHeadphoneLine aria-hidden size={icon} />
       </Control>
       <Control
-        id="voice-room-camera"
+        id={`${at}-camera`}
+        className={size}
         label={local.camera ? 'turn camera off' : 'turn camera on'}
         pressed={!!local.camera}
         disabled={!ready}
         onClick={() => void setVoiceVideo('camera', !local.camera)}
       >
-        {local.camera ? <RiCameraLine aria-hidden size={18} /> : <RiCameraOffLine aria-hidden size={18} />}
+        {local.camera ? <RiCameraLine aria-hidden size={icon} /> : <RiCameraOffLine aria-hidden size={icon} />}
       </Control>
       {SCREEN_SUPPORTED && (
         <Control
-          id="voice-room-screen"
+          id={`${at}-screen`}
+          className={size}
           label={local.screen ? 'stop sharing' : 'share your screen'}
           pressed={!!local.screen}
           disabled={!ready}
           onClick={() => void setVoiceVideo('screen', !local.screen)}
         >
-          <RiComputerLine aria-hidden size={18} />
+          <RiComputerLine aria-hidden size={icon} />
         </Control>
       )}
-      <Control id="voice-room-settings" label="voice settings" onClick={() => openUserModal('voice')}>
-        <RiSettings3Line aria-hidden size={18} />
-      </Control>
-      <Control id="voice-room-leave" label="leave voice" danger onClick={leaveVoice}>
-        <RiLogoutBoxRLine aria-hidden size={18} />
-      </Control>
+      {dock ? (
+        <Button id="voice-dock-leave" size="sm" variant="outline-danger" className="ml-auto h-8 gap-1.5 py-0 max-md:h-11" onClick={leaveVoice}>
+          <RiLogoutBoxRLine aria-hidden size={16} />
+          leave
+        </Button>
+      ) : (
+        <>
+          <Control id="voice-room-settings" label="voice settings" onClick={() => openUserModal('voice')}>
+            <RiSettings3Line aria-hidden size={18} />
+          </Control>
+          <Control id="voice-room-leave" label="leave voice" danger onClick={leaveVoice}>
+            <RiLogoutBoxRLine aria-hidden size={18} />
+          </Control>
+        </>
+      )}
     </div>
   );
 }
@@ -387,6 +436,7 @@ function Control({
   pressed,
   danger,
   disabled,
+  className,
   onClick,
   children
 }: {
@@ -395,6 +445,7 @@ function Control({
   pressed?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  className?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -413,7 +464,8 @@ function Control({
             ? 'border-decrease bg-decrease text-white hover:bg-decrease/85'
             : pressed
               ? 'border-primaryBlue bg-background text-primaryBlue'
-              : 'border-primaryStroke bg-background text-textSecondary hover:border-secondaryStroke hover:bg-backgroundTertiary hover:text-textPrimary'
+              : 'border-primaryStroke bg-background text-textSecondary hover:border-secondaryStroke hover:bg-backgroundTertiary hover:text-textPrimary',
+          className
         )}
       >
         {children}
