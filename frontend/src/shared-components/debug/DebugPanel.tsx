@@ -11,6 +11,7 @@ import { cn } from '@/utils/cn';
 export function DebugPanel({
   id,
   label,
+  lead,
   note,
   place,
   onClose,
@@ -18,7 +19,8 @@ export function DebugPanel({
 }: {
   id: WindowId;
   label: string;
-  note: string;
+  lead?: ReactNode;
+  note?: ReactNode;
   place: string;
   onClose: () => void;
   children: ReactNode;
@@ -48,8 +50,9 @@ export function DebugPanel({
           if (!mobile) press(e, 'move');
         }}
       >
+        {lead}
         <span className="font-semibold">{label}</span>
-        <span className="text-xs text-textTertiary">{note}</span>
+        {note && <span className="min-w-0 truncate text-xs text-textTertiary">{note}</span>}
         <span className="ml-auto flex items-center gap-1">
           <Tooltip content="close">
             <button
