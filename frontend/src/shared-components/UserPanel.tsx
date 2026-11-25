@@ -101,7 +101,7 @@ function NotificationsOpener() {
         {unread > 0 && (
           <span
             aria-hidden
-            className="absolute right-1 top-1.5 flex h-3.5 min-w-3.5 items-center justify-center bg-primaryBlue px-0.5 text-[9px] font-semibold leading-none text-background"
+            className="absolute right-1 top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-control bg-primaryBlue px-0.5 text-[9px] font-semibold leading-none text-background"
           >
             {unread > 99 ? '99+' : unread}
           </span>

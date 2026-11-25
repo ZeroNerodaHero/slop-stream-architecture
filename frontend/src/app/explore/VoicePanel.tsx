@@ -52,12 +52,12 @@ import { cn } from '@/utils/cn';
 const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/voice:opacity-100 [@media(hover:none)]:opacity-100';
 
 const BAR_BUTTON =
-  'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+  'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center rounded-control border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
 const PEEK_MS = 200;
 
 const CALL_BUTTON =
-  'flex h-6 w-6 max-md:h-9 max-md:w-9 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+  'flex h-6 w-6 max-md:h-9 max-md:w-9 shrink-0 items-center justify-center rounded-control border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
 export function VoicePanel({
   room,
@@ -121,7 +121,7 @@ export function VoicePanel({
     <section
       id="group-voice"
       aria-label="voice"
-      className={cn('flex shrink-0 flex-col gap-1 border border-primaryStroke bg-backgroundSecondary text-sm', flat ? 'mx-3 p-4' : 'p-2', className)}
+      className={cn('flex shrink-0 flex-col gap-1 rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm bubble:border-transparent', flat ? 'mx-3 p-4' : 'p-2', className)}
     >
       <div className="flex min-h-6 items-center justify-between gap-2">
         <h3 className="pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
@@ -182,7 +182,7 @@ export function VoicePanel({
           const pending = mine && !!me && (call.phase === 'joining' || failed) && !people.some((p) => p.name === me);
           return (
             <li key={item.name}>
-              <div className={cn('group/voice flex items-center', mine ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}>
+              <div className={cn('group/voice flex items-center rounded-control', mine ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}>
                 <button
                   id={`group-voice-${item.name}`}
                   type="button"
@@ -237,7 +237,7 @@ export function VoicePanel({
                   if (!addFull) onAdd();
                 }}
                 className={cn(
-                  'flex w-full items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11 text-textTertiary',
+                  'flex w-full items-center gap-1.5 rounded-control px-1 py-1 text-left max-md:min-h-11 text-textTertiary',
                   addFull ? 'cursor-not-allowed opacity-50' : 'hover:bg-primaryStroke/20 hover:text-textPrimary'
                 )}
               >
@@ -271,8 +271,8 @@ function PendingSeat({
   const words = voiceFailWords(error);
   return (
     <li id="group-voice-pending" data-voice-member={name} data-pending={failed ? 'failed' : 'joining'} className="flex text-textTertiary">
-      <span className="flex min-w-0 flex-1 items-center gap-2 border border-transparent p-px max-md:min-h-11">
-        <span className="flex shrink-0 outline outline-2 outline-offset-1 outline-transparent">
+      <span className="flex min-w-0 flex-1 items-center gap-2 rounded-control border border-transparent p-px max-md:min-h-11">
+        <span className="flex shrink-0 rounded-avatar outline outline-2 outline-offset-1 outline-transparent">
           <Face name={name} version={avatar} className={cn('h-5 w-5 text-[10px] grayscale', failed ? 'opacity-35' : 'opacity-60')} />
         </span>
         <span className="min-w-0 truncate">{name}</span>
@@ -317,9 +317,9 @@ function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar:
       <ProfileLink
         person={{ name: person.name, verified: true, avatar }}
         live={presence === 'streaming'}
-        className="flex min-w-0 flex-1 items-center gap-2 border border-transparent p-px outline-none hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue max-md:min-h-11"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-control border border-transparent p-px outline-none hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue max-md:min-h-11"
       >
-        <span className={cn('flex shrink-0 outline outline-2 outline-offset-1', talking ? 'outline-increase' : 'outline-transparent')}>
+        <span className={cn('flex shrink-0 rounded-avatar outline outline-2 outline-offset-1', talking ? 'outline-increase' : 'outline-transparent')}>
           <Face name={person.name} version={avatar} className="h-5 w-5 text-[10px]" />
         </span>
         <span className="min-w-0 flex-1 truncate">{person.name}</span>

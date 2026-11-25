@@ -346,7 +346,7 @@ function ListsCard({
     <section id="mod-lists-card" className="relative flex h-full min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
       <h3 className="sr-only">jannies, bans and timeouts</h3>
       <div className="shrink-0 overflow-x-auto">
-        <div id="mod-lists-tabs" role="tablist" aria-label="show" onKeyDown={roveTabs} className="flex w-max min-w-full gap-1 border-b border-primaryStroke">
+        <div id="mod-lists-tabs" role="tablist" aria-label="show" onKeyDown={roveTabs} className="flex w-max min-w-full gap-1 border-b border-primaryStroke bubble:border-transparent">
           {words.map((word) => {
             const on = list === word;
             const Icon = LIST_ICONS[word];
