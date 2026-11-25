@@ -5,15 +5,22 @@ import { summarize } from '../src/infra/debug/stats.ts';
 import {
   axis,
   DEFAULT_SECTIONS,
+  DEFAULT_SORTS,
   hotP95,
   loadSections,
+  loadSorts,
+  nextSort,
+  parseSorts,
   parseSections,
   place,
   pool,
   routeParts,
   saveSections,
+  saveSorts,
   SECTIONS_KEY,
   sectionAxis,
+  SORT_KEY,
+  sortRows,
   serializeSections
 } from '../src/infra/debug/strip.ts';
 
@@ -103,4 +110,37 @@ test('section state round trips through storage under one key', () => {
   assert.deepEqual(loadSections(broken), DEFAULT_SECTIONS);
   assert.doesNotThrow(() => saveSections(broken, next));
   assert.deepEqual(loadSections(null), DEFAULT_SECTIONS);
+});
+
+test('each section sorts its rows by med, p95, err or n, desc first, ties keep their order', () => {
+  const row = (key: string, values: number[], errors = 0) => ({ key, summary: summarize(values), errors });
+  const rows = [row('a', [10, 10, 10], 0), row('b', [50, 50, 400], 3), row('c', [30], 1), row('d', [20, 20, 20], 0)];
+  const keys = (col: 'med' | 'p95' | 'err' | 'n', dir: 'desc' | 'asc') => sortRows(rows, { col, dir }).map((r) => r.key);
+  assert.deepEqual(keys('med', 'desc'), ['b', 'c', 'd', 'a']);
+  assert.deepEqual(keys('med', 'asc'), ['a', 'd', 'c', 'b']);
+  assert.deepEqual(keys('p95', 'desc')[0], 'b');
+  assert.deepEqual(keys('err', 'desc'), ['b', 'c', 'a', 'd']);
+  assert.deepEqual(keys('n', 'desc'), ['a', 'b', 'd', 'c']);
+  assert.deepEqual(keys('n', 'asc'), ['c', 'a', 'b', 'd']);
+  assert.deepEqual(
+    rows.map((r) => r.key),
+    ['a', 'b', 'c', 'd']
+  );
+  assert.deepEqual(nextSort({ col: 'n', dir: 'desc' }, 'p95'), { col: 'p95', dir: 'desc' });
+  assert.deepEqual(nextSort({ col: 'p95', dir: 'desc' }, 'p95'), { col: 'p95', dir: 'asc' });
+  assert.deepEqual(nextSort({ col: 'p95', dir: 'asc' }, 'p95'), { col: 'p95', dir: 'desc' });
+});
+
+test('sort state defaults to most asked first and round trips per section', () => {
+  assert.deepEqual(DEFAULT_SORTS.api, { col: 'n', dir: 'desc' });
+  assert.deepEqual(parseSorts('{bad'), DEFAULT_SORTS);
+  assert.deepEqual(parseSorts('{"chat":{"col":"med","dir":"asc"},"api":{"col":"x","dir":"asc"}}'), { ...DEFAULT_SORTS, chat: { col: 'med', dir: 'asc' } });
+  const map = new Map<string, string>();
+  const storage = { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => void map.set(k, v) };
+  assert.deepEqual(loadSorts(storage), DEFAULT_SORTS);
+  const next = { ...DEFAULT_SORTS, chat: { col: 'med' as const, dir: 'desc' as const }, api: { col: 'p95' as const, dir: 'asc' as const } };
+  saveSorts(storage, next);
+  assert.deepEqual([...map.keys()], [SORT_KEY]);
+  assert.equal(SORT_KEY, 'settings.timingsSort');
+  assert.deepEqual(loadSorts(storage), next);
 });

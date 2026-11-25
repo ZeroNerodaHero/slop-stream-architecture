@@ -96,3 +96,40 @@ test('the session log ends the open session when the next begins', () => {
   assert.equal(log.list.length, 0);
   assert.equal(log.begin('dummy-c', 50).id, 0);
 });
+
+test('a few samples sit at the right end of a line sized for the full buffer', () => {
+  const sessions: Session[] = [{ id: 0, name: 'dummy-a', avatar: null, start: 0, end: null }];
+  const l = layout([0, 1000, 2000, 3000, 4000], [0, 0, 0, 0, 0], sessions, 101);
+  assert.equal(l.span, 100_000);
+  assert.deepEqual(l.xs, [96_000, 97_000, 98_000, 99_000, 100_000]);
+  assert.equal(l.runs[0]!.x, 96_000);
+});
+
+test('one sample sits at the right edge', () => {
+  const sessions: Session[] = [{ id: 0, name: 'dummy-a', avatar: null, start: 0, end: null }];
+  const l = layout([5000], [0], sessions, 600);
+  assert.equal(l.span, 599_000);
+  assert.deepEqual(l.xs, [599_000]);
+});
+
+test('gaps and sessions shift with the samples while the buffer fills', () => {
+  const sessions: Session[] = [
+    { id: 4, name: 'dummy-a', avatar: 7, start: 1000, end: 3500 },
+    { id: 5, name: 'dummy-b', avatar: null, start: 60_000, end: null }
+  ];
+  const l = layout([1000, 2000, 3000, 60_000, 61_000, 62_000], [4, 4, 4, 5, 5, 5], sessions, 11);
+  assert.equal(l.span, 8000);
+  assert.deepEqual(l.xs, [4000, 5000, 6000, 6000, 7000, 8000]);
+  assert.deepEqual(
+    l.runs.map((r) => r.x),
+    [4000, 6000]
+  );
+  assert.deepEqual(l.gaps, [{ x: 6000, name: 'dummy-a', from: 3500, to: 60_000 }]);
+});
+
+test('a full buffer stretches across the whole line as before', () => {
+  const sessions: Session[] = [{ id: 0, name: 'dummy-a', avatar: null, start: 0, end: null }];
+  const l = layout([0, 1000, 2000], [0, 0, 0], sessions, 3);
+  assert.equal(l.span, 2000);
+  assert.deepEqual(l.xs, [0, 1000, 2000]);
+});

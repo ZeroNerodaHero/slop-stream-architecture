@@ -4,6 +4,7 @@ import { closeQuality, qualityOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { quality } from '@/infra/debug/collect';
 import type { QualityCollector } from '@/infra/debug/collector';
 import { liveHeader } from '@/infra/debug/quality-header';
+import { routeOf } from '@/infra/debug/rings';
 import { layout } from '@/infra/debug/timeline';
 import { DebugPanel } from '@/shared-components/debug/DebugPanel';
 import { QualityView, type QualitySeries, type QualityTimeline } from '@/shared-components/debug/QualityView';
@@ -23,7 +24,8 @@ function timeline(c: QualityCollector): QualityTimeline | null {
     { key: 'jitter', label: 'jitter', unit: 'ms', digits: 0, values: q.series('jitterMs') }
   ];
   if (rtt.some((v) => Number.isFinite(v))) series.push({ key: 'rtt', label: 'rtt', unit: 'ms', digits: 0, values: rtt });
-  return { t, layout: layout(t, q.series('session'), c.sessions?.list ?? []), series };
+  const details = { width: q.series('width'), height: q.series('height'), dropped: q.series('droppedPerSec'), route: q.series('route').map(routeOf) };
+  return { t, layout: layout(t, q.series('session'), c.sessions?.list ?? [], q.size), series, details };
 }
 
 export function QualityWindow() {

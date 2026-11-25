@@ -113,3 +113,64 @@ export function saveSections(storage: Pick<Storage, 'setItem'> | null, s: Sectio
     return;
   }
 }
+
+export type SortCol = 'med' | 'p95' | 'err' | 'n';
+export interface SectionSort {
+  col: SortCol;
+  dir: 'desc' | 'asc';
+}
+export type SortState = Record<MetricGroup, SectionSort>;
+
+export const SORT_KEY = 'settings.timingsSort';
+export const SORT_COLS: readonly SortCol[] = ['med', 'p95', 'err', 'n'];
+const DEFAULT_SORT: SectionSort = { col: 'n', dir: 'desc' };
+export const DEFAULT_SORTS: SortState = { chat: DEFAULT_SORT, watch: DEFAULT_SORT, api: DEFAULT_SORT };
+
+export function nextSort(cur: SectionSort, col: SortCol): SectionSort {
+  return cur.col === col ? { col, dir: cur.dir === 'desc' ? 'asc' : 'desc' } : { col, dir: 'desc' };
+}
+
+function sortValue(row: { summary: Summary; errors?: number }, col: SortCol): number {
+  const v = col === 'med' ? row.summary.median : col === 'p95' ? row.summary.p95 : col === 'err' ? (row.errors ?? 0) : row.summary.n;
+  return Number.isFinite(v) ? v : -Infinity;
+}
+
+export function sortRows<T extends { summary: Summary; errors?: number }>(rows: readonly T[], sort: SectionSort): T[] {
+  const sign = sort.dir === 'desc' ? -1 : 1;
+  return rows
+    .map((row, i) => ({ row, i, v: sortValue(row, sort.col) }))
+    .sort((a, b) => (a.v === b.v ? a.i - b.i : a.v < b.v ? -sign : sign))
+    .map((x) => x.row);
+}
+
+export function parseSorts(raw: string | null): SortState {
+  let found: unknown = null;
+  try {
+    found = raw === null ? null : JSON.parse(raw);
+  } catch {
+    found = null;
+  }
+  const out = { ...DEFAULT_SORTS };
+  if (!found || typeof found !== 'object' || Array.isArray(found)) return out;
+  for (const g of GROUPS) {
+    const v = (found as Record<string, unknown>)[g] as Partial<SectionSort> | null | undefined;
+    if (v && SORT_COLS.includes(v.col as SortCol) && (v.dir === 'desc' || v.dir === 'asc')) out[g] = { col: v.col as SortCol, dir: v.dir };
+  }
+  return out;
+}
+
+export function loadSorts(storage: Pick<Storage, 'getItem'> | null): SortState {
+  try {
+    return parseSorts(storage?.getItem(SORT_KEY) ?? null);
+  } catch {
+    return { ...DEFAULT_SORTS };
+  }
+}
+
+export function saveSorts(storage: Pick<Storage, 'setItem'> | null, s: SortState): void {
+  try {
+    storage?.setItem(SORT_KEY, JSON.stringify({ chat: s.chat, watch: s.watch, api: s.api }));
+  } catch {
+    return;
+  }
+}
