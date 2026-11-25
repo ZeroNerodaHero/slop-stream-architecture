@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::time::{Duration, Instant};
 
 use axum::extract::multipart::MultipartError;
 use axum::extract::rejection::JsonRejection;
@@ -37,6 +38,8 @@ const TOO_BIG: &str = "picture too big. 512 kb at most";
 const TAKEN: &str = "that name is taken in this group";
 const FULL: &str = "this group has 50 emotes already";
 const NO_SUCH_EMOTE: &str = "no such emote";
+const NO_PICTURE: &str = "no picture";
+const NOT_SAVED: &str = "could not save the picture";
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -185,8 +188,42 @@ async fn screen(s: &AppState, who: &crate::auth::Account, headers: &HeaderMap, w
     crate::moderate::check(s, crate::moderate::Upload { kind: crate::moderate::UploadKind::Emote, who: Some(who.id), ip: ip.as_deref(), mime: "image/webp", key: None, sha: Some(sha) }, webp).await
 }
 
-fn key_of(id: Uuid) -> String {
-    format!("emotes/{id}.webp")
+fn key_of(group: &str, id: Uuid) -> String {
+    format!("emotes/{group}/{id}.webp")
+}
+
+fn too_big(len: usize) -> bool {
+    len > MAX_BYTES
+}
+
+fn full(count: i64) -> bool {
+    count >= MAX_PER_GROUP
+}
+
+pub(crate) fn refusal(status: StatusCode, message: &str) -> &'static str {
+    match message {
+        NAME_RULE => "bad name",
+        NOT_A_PICTURE | NO_PICTURE => "not a picture",
+        TOO_BIG => "too big",
+        TAKEN => "name taken",
+        FULL => "group full",
+        NOT_SAVED => "storage failure",
+        crate::moderate::REJECTED | crate::moderate::ANIMATED => "moderation refused",
+        crate::moderate::IMAGE_CHECKS_DOWN => "moderation down",
+        _ => match status {
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => "forbidden",
+            StatusCode::PAYLOAD_TOO_LARGE => "too big",
+            StatusCode::TOO_MANY_REQUESTS => "rate limited",
+            StatusCode::NOT_FOUND => "no such group",
+            StatusCode::UNPROCESSABLE_ENTITY => "moderation refused",
+            s if s.is_server_error() => "server error",
+            _ => "bad form",
+        },
+    }
+}
+
+fn tally(action: &str, what: &str, took: Duration, status: StatusCode) {
+    crate::timings::record("emote", action, what, took, crate::timings::outcome(status.as_u16()));
 }
 
 fn login() -> ApiError {
@@ -194,7 +231,11 @@ fn login() -> ApiError {
 }
 
 async fn need_manager(s: &AppState, who: Uuid, group: &str) -> Result<(), ApiError> {
-    if group_mod::allows(s, who, group, EMOTES).await? {
+    manager_gate(group_mod::allows(s, who, group, EMOTES).await?)
+}
+
+fn manager_gate(allowed: bool) -> Result<(), ApiError> {
+    if allowed {
         Ok(())
     } else {
         Err(ApiError::new(StatusCode::FORBIDDEN, "you can't manage the emotes here"))
@@ -249,9 +290,19 @@ fn form_error(e: MultipartError) -> ApiError {
     }
 }
 
-async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, mut form: Multipart) -> Result<(StatusCode, Json<Value>), ApiError> {
+async fn upload(State(s): State<AppState>, Path(group): Path<String>, me: Me, headers: HeaderMap, form: Multipart) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let started = Instant::now();
+    let done = take(&s, &group, me, &headers, form).await;
+    match &done {
+        Ok((status, _)) => tally("upload", "accepted", started.elapsed(), *status),
+        Err(e) => tally("upload", refusal(e.status(), e.message()), started.elapsed(), e.status()),
+    }
+    done
+}
+
+async fn take(s: &AppState, group: &str, Me(me): Me, headers: &HeaderMap, mut form: Multipart) -> Result<(StatusCode, Json<Value>), ApiError> {
     let who = me.ok_or_else(login)?;
-    let group = group_mod::server(&s.db, &group).await?;
+    let group = group_mod::server(&s.db, group).await?;
     need_manager(&s, who.id, &group).await?;
     let mut name: Option<String> = None;
     let mut bytes: Option<Vec<u8>> = None;
@@ -260,7 +311,7 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
             Some("name") => name = Some(field.text().await.map_err(form_error)?),
             Some("image") => {
                 let got = field.bytes().await.map_err(form_error)?;
-                if got.len() > MAX_BYTES {
+                if too_big(got.len()) {
                     return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, TOO_BIG));
                 }
                 bytes = Some(got.to_vec());
@@ -270,7 +321,7 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     }
     let name = clean_name(name.as_deref().unwrap_or(""))?;
     let Some(bytes) = bytes.filter(|b| !b.is_empty()) else {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "no picture"));
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, NO_PICTURE));
     };
     crate::auth::limit(&s, &format!("rl:emote:{}", who.id), RATE_WINDOW_SECS, RATE_PER_WINDOW, "slow down: too many emotes this hour").await?;
     let webp = tokio::task::spawn_blocking(move || redraw(&bytes))
@@ -278,11 +329,11 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
         .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not read the picture"))?
         .map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
     let sha = crate::media::sha256_hex(&webp);
-    let looked = screen(&s, &who, &headers, &webp, &sha).await?;
+    let looked = screen(&s, &who, headers, &webp, &sha).await?;
     let mut tx = s.db.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(7311, hashtext($1))").bind(&group).execute(&mut *tx).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM group_emotes WHERE group_name = $1").bind(&group).fetch_one(&mut *tx).await?;
-    if count >= MAX_PER_GROUP {
+    if full(count) {
         return Err(ApiError::new(StatusCode::CONFLICT, FULL));
     }
     let id: Option<Uuid> = sqlx::query_scalar(
@@ -293,17 +344,17 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     .bind(&name)
     .bind(who.id)
     .bind(&sha)
-    .bind(crate::ratelimit::forwarded_ip(&headers))
+    .bind(crate::ratelimit::forwarded_ip(headers))
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else { return Err(ApiError::new(StatusCode::CONFLICT, TAKEN)) };
-    let key = key_of(id);
+    let key = key_of(&group, id);
     sqlx::query("UPDATE group_emotes SET key = $2 WHERE id = $1").bind(id).bind(&key).execute(&mut *tx).await?;
     tx.commit().await?;
     if let Err(e) = s3::put(&s.s3, &key, &webp, "image/webp").await {
         let _ = sqlx::query("DELETE FROM group_emotes WHERE id = $1").bind(id).execute(&s.db).await;
         log::error!("s3 emote {group}/{name}: {e}");
-        return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not save the picture"));
+        return Err(ApiError::new(StatusCode::BAD_GATEWAY, NOT_SAVED));
     }
     crate::moderate::set_key(&s.db, looked.row, &key).await;
     log::info!("{}: new emote :{name}: in {group}, {} bytes", who.name, webp.len());
@@ -335,6 +386,7 @@ async fn rename(State(s): State<AppState>, Path((group, id)): Path<(String, Stri
 }
 
 async fn remove(State(s): State<AppState>, Path((group, id)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let started = Instant::now();
     let who = me.ok_or_else(login)?;
     let group = group_mod::server(&s.db, &group).await?;
     need_manager(&s, who.id, &group).await?;
@@ -347,6 +399,7 @@ async fn remove(State(s): State<AppState>, Path((group, id)): Path<(String, Stri
     }
     crate::cf_purge::purge(vec![format!("/api/emotes/{id}")]);
     log::info!("{}: deleted emote {id} from {group}", who.name);
+    tally("delete", "deleted", started.elapsed(), StatusCode::NO_CONTENT);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -359,9 +412,15 @@ pub(crate) async fn drop_group(s: &AppState, group: &str) {
         }
     };
     for (_, key) in &rows {
+        let started = Instant::now();
         let _ = s3::delete(&s.s3, key).await;
+        tally("delete", "group deleted", started.elapsed(), StatusCode::NO_CONTENT);
     }
     crate::cf_purge::purge(rows.iter().map(|(id, _)| format!("/api/emotes/{id}")).collect());
+}
+
+pub(crate) async fn total(db: &PgPool) -> Option<i64> {
+    sqlx::query_scalar("SELECT count(*) FROM group_emotes").fetch_one(db).await.ok()
 }
 
 async fn mine(State(s): State<AppState>, Me(me): Me) -> ApiResult {
@@ -541,5 +600,65 @@ mod tests {
         cut.truncate(40);
         assert_eq!(redraw(&cut).unwrap_err(), NOT_A_PICTURE);
         assert_eq!(redraw(&png(MAX_SOURCE_SIDE + 1, 2)).unwrap_err(), NOT_A_PICTURE);
+    }
+
+    #[test]
+    fn a_png_name_on_other_bytes_is_still_refused() {
+        let mut fake = b"\x89PNG\r\n\x1a\n".to_vec();
+        fake.extend_from_slice(&[0x42; 200]);
+        assert_eq!(redraw(&fake).unwrap_err(), NOT_A_PICTURE);
+        assert_eq!(redraw(b"just some text that a file called pog.png held").unwrap_err(), NOT_A_PICTURE);
+        assert_eq!(redraw(&[0u8; 4096]).unwrap_err(), NOT_A_PICTURE);
+        let garbage: Vec<u8> = (0..2048u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        assert_eq!(redraw(&garbage).unwrap_err(), NOT_A_PICTURE);
+    }
+
+    #[test]
+    fn an_emote_lives_under_its_group() {
+        let id = Uuid::try_parse(ID).unwrap();
+        assert_eq!(key_of("lobby", id), format!("emotes/lobby/{ID}.webp"));
+        assert_ne!(key_of("lobby", id), key_of("other", id));
+        assert!(key_of("lobby", id).starts_with("emotes/lobby/"));
+    }
+
+    #[test]
+    fn the_size_and_count_gates() {
+        assert!(!too_big(0));
+        assert!(!too_big(MAX_BYTES));
+        assert!(too_big(MAX_BYTES + 1));
+        assert!(!full(0));
+        assert!(!full(MAX_PER_GROUP - 1));
+        assert!(full(MAX_PER_GROUP));
+        assert!(full(MAX_PER_GROUP + 3));
+    }
+
+    #[test]
+    fn each_refusal_has_its_reason() {
+        let why = |status: StatusCode, msg: &str| refusal(status, msg);
+        assert_eq!(why(StatusCode::BAD_REQUEST, NOT_A_PICTURE), "not a picture");
+        assert_eq!(why(StatusCode::BAD_REQUEST, NO_PICTURE), "not a picture");
+        assert_eq!(why(StatusCode::PAYLOAD_TOO_LARGE, TOO_BIG), "too big");
+        assert_eq!(why(StatusCode::PAYLOAD_TOO_LARGE, "whatever axum says"), "too big");
+        assert_eq!(why(StatusCode::BAD_REQUEST, NAME_RULE), "bad name");
+        assert_eq!(why(StatusCode::CONFLICT, TAKEN), "name taken");
+        assert_eq!(why(StatusCode::CONFLICT, FULL), "group full");
+        assert_eq!(why(StatusCode::TOO_MANY_REQUESTS, "slow down: too many emotes this hour"), "rate limited");
+        assert_eq!(why(StatusCode::UNPROCESSABLE_ENTITY, crate::moderate::REJECTED), "moderation refused");
+        assert_eq!(why(StatusCode::UNPROCESSABLE_ENTITY, crate::moderate::ANIMATED), "moderation refused");
+        assert_eq!(why(StatusCode::SERVICE_UNAVAILABLE, crate::moderate::IMAGE_CHECKS_DOWN), "moderation down");
+        assert_eq!(why(StatusCode::BAD_GATEWAY, NOT_SAVED), "storage failure");
+        assert_eq!(why(StatusCode::FORBIDDEN, "you can't manage the emotes here"), "forbidden");
+        assert_eq!(why(StatusCode::UNAUTHORIZED, "not logged in"), "forbidden");
+        assert_eq!(why(StatusCode::NOT_FOUND, "no such group"), "no such group");
+        assert_eq!(why(StatusCode::INTERNAL_SERVER_ERROR, "db"), "server error");
+        assert_eq!(why(StatusCode::BAD_REQUEST, "bad form"), "bad form");
+    }
+
+    #[test]
+    fn a_member_without_the_power_gets_403() {
+        assert!(manager_gate(true).is_ok());
+        let e = manager_gate(false).unwrap_err();
+        assert_eq!(e.status(), StatusCode::FORBIDDEN);
+        assert_eq!(refusal(e.status(), e.message()), "forbidden");
     }
 }

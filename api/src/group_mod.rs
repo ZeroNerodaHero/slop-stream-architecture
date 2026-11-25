@@ -81,7 +81,11 @@ fn perms_json(bits: i32) -> Value {
 pub(crate) async fn allows(s: &AppState, user: uuid::Uuid, group: &str, bit: i32) -> Result<bool, sqlx::Error> {
     let held = held(&s.db, user, group).await?;
     let admin = s.admins.iter().any(|a| a.id == user);
-    Ok(held.owner || admin || held.perms & bit != 0)
+    Ok(grants(held.owner, admin, held.perms, bit))
+}
+
+fn grants(owner: bool, admin: bool, perms: i32, bit: i32) -> bool {
+    owner || admin || perms & bit != 0
 }
 
 async fn held(db: &sqlx::PgPool, user: uuid::Uuid, group: &str) -> Result<Held, sqlx::Error> {
@@ -1878,6 +1882,20 @@ mod tests {
         assert_eq!(perms_json(ROLES)["roles"], json!(true));
         assert_eq!(perms_json(ROLES)["kick"], json!(false));
         assert_eq!(perms_json(ROLES)["voice"], json!(false));
+    }
+
+    #[test]
+    fn the_emotes_power_is_the_owners_and_a_role_s_that_has_it() {
+        assert!(grants(true, false, 0, EMOTES), "an owner always manages emotes");
+        assert!(grants(false, true, 0, EMOTES), "a site admin too");
+        assert!(!grants(false, false, 0, EMOTES), "a plain member does not");
+        assert!(!grants(false, false, ALL & !EMOTES, EMOTES), "every other power is not the emotes power");
+        assert!(grants(false, false, EMOTES, EMOTES), "a role with the power has it");
+        assert!(grants(false, false, KICK | EMOTES, EMOTES));
+        assert_eq!(PermsIn::default().bits() & EMOTES, 0, "a new role starts without it");
+        let old: PermsIn = serde_json::from_value(json!({ "kick": true, "ban": true })).unwrap();
+        assert_eq!(old.bits() & EMOTES, 0, "a body that leaves it out gives none");
+        assert_eq!(perms_json(ALL)["emotes"], json!(true));
     }
 
     #[test]

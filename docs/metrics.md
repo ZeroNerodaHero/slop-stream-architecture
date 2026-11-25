@@ -180,6 +180,7 @@ every api process (`api`, `chat`, `events`, `home`) times what it does and keeps
 | `s3` | method and `object`, `object range` or `bucket` | the request to seaweedfs (`s3::send_with`). 404 counts as 4xx |
 | `video`, `voice` | method and path of the internal call: `/live`, `/viewers`, `/health`, `/thumb/{name}.jpg`, `/internal/voice` | the request. no answer counts as an error |
 | `api` | from video and voice: the call to the api, `POST /api/streams/{name}/heartbeat`, `/attached`, `/stop`, `/viewers`, `/api/voice/redeem`, `/api/voice/beat`, `/api/voice/attached` | the request. no answer or a 5xx counts as an error |
+| `emote` | `upload` or `delete` and the outcome: `accepted`, a refusal's reason (`emotes::refusal`, `chat.md`'s emotes), `deleted`, `group deleted` | the upload from the request to its answer, a delete its own. a refusal counts as a 4xx, a storage failure or server error as a 5xx. the calls tab, as `emotes` |
 | `session` | a live connection: `method` is `ws` or `webrtc`, `name` the route (`/chat/{name}`, `/chat/{server}/{channel}`, `/rt`, `/events`) or the role (`publish`, `watch`, `preview`, `call`, `screen`). two lines, one each way (below) | how long it stayed open, from the upgrade or the first offer to the close. `n` is sessions ended, `err` the ones that ended badly: a socket error, a peer that failed or vanished |
 | `setup` | a webrtc connection being set up, by role | from the offer to connected. `err` is one that never connected |
 

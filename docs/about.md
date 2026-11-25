@@ -20,6 +20,15 @@ the column is not drawn by the tab any more (the tab is the page of blocks), but
 - **text** is html, but only a fragment of the tags a line needs: `p`, `br`, `b`, `strong`, `i`, `em`, `u`, `s`, `a`, `ul`, `ol`, `li`, `h2`, `h3`, `blockquote`. a `div` becomes a `p`. a link is http or https or it is not a link. `script`, `style`, `iframe`, `svg`, `form` and the rest are dropped with what is inside them. cut at 10 000 characters (`TEXT_MAX`). the api cleans it (`sanitize_html` in `about_page.rs`) and keeps the cleaned string in the bucket; the page cleans it again before it draws it (`sanitizeHtml` in `about.ts`).
 - **the look** of a block is a few fields, each checked by the api: a font from a fixed list of families already on the machine (nothing is fetched), a size from 12 to 96, `#rrggbb` colors for the text, the fill and the stroke, a stroke width, a turn (`r`, a rotation), an alignment. anything else is dropped.
 
+## the cards
+
+the editor is a fixed list of fill-in cards (`what i stream`, `when i'm on`, `my setup`, `rules`, `links`, `faq`, and `more` only for an old page), each with a switch, a title, a plain text box and one attachment (a picture, a clip, a sound or a link). they are kept in the same `{ blocks }` document, with no change to the api (`frontend/src/infra/about-cards.ts`):
+
+- **a card's blocks** sit at `x = 1600` (`POS_MAX`, off any old canvas). `y` is the card's slot times 100 plus a part: 0 to 49 its text, 50 to 99 its files. `z` is 1 when the card is on, 0 when off.
+- **its text** is `<h3>title</h3><p>body</p>` and, with a link, `<blockquote>link</blockquote>`, every character escaped, so `sanitize_html` hands it back byte for byte (`an_about_card_comes_back_as_it_was_sent` in `about_page.rs`). a body past one block's 10 000 bytes goes on in `<p>` blocks at the next parts.
+- **an untouched card** (off, its own title, nothing in it) writes no block.
+- **an old page**: every block not at a card's place goes into the `more` card, on: its text in reading order (`y`, then `x`) as plain text (lists as `- ` and `1. `, a link as `words (address)`), every picture, clip and sound kept. lines, boxes and borders hold nothing and are dropped. nothing changes on the server until the owner edits and it saves.
+
 ## not this
 
 - **html as a document.** a text block is a fragment: the tags above, nothing that loads or runs.
