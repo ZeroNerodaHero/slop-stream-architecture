@@ -33,7 +33,6 @@ function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
-// Map each region char to the color chosen for this name.
 function paletteFor(key: string): Record<string, [number, number, number]> {
   const h = hash(key);
   return {
