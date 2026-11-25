@@ -429,6 +429,7 @@
   const archCache = new Map();
   const archBuilt = new Map();
   const hostBuilt = new Map();
+  const ctrBuilt = new Map();
   const tm = { data: null, error: null, at: 0, key: '' };
   let state = null, stateError = null, pageBuild = null;
   const charts = [];
@@ -922,6 +923,22 @@
   function containerTable(now) {
     const boxes = boxesShown();
     const multi = boxes.length > 1;
+    const prev = new Map(ctrBuilt);
+    ctrBuilt.clear();
+    const keptChart = (box, id, s, spec) => {
+      let bucket = ctrBuilt.get(box);
+      if (!bucket) { bucket = { series: s, items: new Map() }; ctrBuilt.set(box, bucket); }
+      const old = prev.get(box);
+      if (old && old.series === s && old.items.has(id)) {
+        const it = old.items.get(id);
+        charts.push(it.c);
+        bucket.items.set(id, it);
+        return it.node;
+      }
+      const node = chart(spec);
+      bucket.items.set(id, { node, c: charts[charts.length - 1] });
+      return node;
+    };
     const words = sel.cq.toLowerCase().split(/\s+/).filter(Boolean);
     const rows = [];
     const notes = [];
@@ -980,18 +997,18 @@
       name.title = c.image || '';
       const st = el('td', c.state === 'exited' && c.exit_code === 0 ? 'dim' : `st-${c.state}`, c.state + (c.health && c.health !== 'healthy' ? ` · ${c.health}` : '') + (c.state === 'exited' && has(c.exit_code) ? ` (${c.exit_code})` : ''));
       if (c.restarts > 0) st.append(el('span', 'note', ` · ${c.restarts} restart${c.restarts > 1 ? 's' : ''}`));
-      const cell = (text, v, color, max) => {
+      const cell = (metric, text, v, color, max) => {
         const td = el('td', 'cell mono');
         td.append(el('div', null, text));
-        if (s.t.length) td.append(chart({ label: text, lines: [{ v, color }], now, src: s, max, small: true, thin: true }));
+        if (s.t.length) td.append(keptChart(r.box, `${c.name}\u0000${metric}`, s, { label: text, lines: [{ v, color }], now, src: s, max, small: true, thin: true }));
         return td;
       };
       if (multi) tr.append(el('td', 'dim', r.box));
       tr.append(
         name, st,
         el('td', 'mono', c.up_since ? human(secsSince(c.up_since, now)) : '—'),
-        cell(pct1(c.cpu_pct), cs.cpu_pct, COLORS.blue),
-        cell(`${bytes(c.mem_bytes)}${c.mem_limit ? ' / ' + bytes(c.mem_limit) : ''}`, cs.mem_bytes, COLORS.violet, c.mem_limit || 0),
+        cell('cpu', pct1(c.cpu_pct), cs.cpu_pct, COLORS.blue),
+        cell('mem', `${bytes(c.mem_bytes)}${c.mem_limit ? ' / ' + bytes(c.mem_limit) : ''}`, cs.mem_bytes, COLORS.violet, c.mem_limit || 0),
         el('td', 'mono', `${bps(c.rx_bps)} / ${bps(c.tx_bps)}`),
         el('td', 'mono', has(c.pids) ? c.pids : '—')
       );
@@ -1010,12 +1027,13 @@
     title.append(el('h2', null, `${c.name}${multi ? ` · ${picked.box}` : ''}`), el('span', c.state === 'running' ? 'st-running' : `st-${c.state}`, c.state));
     right.append(title);
     const src = s;
+    const det = (metric, spec) => keptChart(picked.box, `${c.name}\u0000detail-${metric}`, s, spec);
     right.append(
-      chart({ label: 'cpu (% of one core)', now, src, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
-      chart({ label: 'memory', now, src, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
-      chart({ label: 'network', now, src, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
-      chart({ label: 'disk io', now, src, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
-      chart({ label: 'pids', now, src, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
+      det('cpu', { label: 'cpu (% of one core)', now, src, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
+      det('mem', { label: 'memory', now, src, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
+      det('net', { label: 'network', now, src, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
+      det('disk', { label: 'disk io', now, src, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
+      det('pids', { label: 'pids', now, src, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
     );
     return split;
   }
