@@ -249,7 +249,7 @@ function PowerTile({
         aria-description={power.description}
         onClick={() => !still && onToggle?.()}
         className={cn(
-          'flex min-w-0 flex-col items-center gap-1 border px-1 pb-1.5 pt-1.5 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
+          'flex min-w-0 flex-col items-center gap-1 rounded-card border px-1 pb-1.5 pt-1.5 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
           on ? 'border-primaryBlue' : 'border-primaryStroke',
           still ? 'cursor-default' : 'hover:bg-primaryStroke/20',
           !mine && 'opacity-40',
@@ -728,7 +728,7 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
                           data-pin-unpin={pin.id}
                           aria-label="unpin"
                           onClick={() => togglePin(server, channel, pin.id, false)}
-                          className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center border border-primaryStroke text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+                          className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
                         >
                           <RiUnpinLine aria-hidden size={14} />
                         </button>
@@ -835,10 +835,10 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
   return (
     <Skeleton id="group-loading" label="loading the group">
       <div className={cn('relative mb-16', TOP_VIEW)}>
-        <div className="relative h-36 border border-primaryStroke">
+        <div className="relative h-36 overflow-hidden rounded-panel border border-primaryStroke">
           <Bone className="absolute inset-0" />
         </div>
-        <div className="absolute -bottom-12 left-4 h-24 w-24 border-4 border-background">
+        <div className="absolute -bottom-12 left-4 h-24 w-24 overflow-hidden rounded-avatar border-4 border-background">
           <Bone className="h-full" />
         </div>
       </div>
@@ -1083,7 +1083,7 @@ export function ServerPage() {
   const groupHead = (
     <>
       <div className={cn('relative mb-16', TOP_VIEW)}>
-        <div id="group-banner" className="group/banner relative h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
+        <div id="group-banner" className="group/banner relative h-36 overflow-hidden rounded-panel border border-primaryStroke" style={{ backgroundColor: color }}>
           {banner && <img src={banner.src} srcSet={banner.srcSet} sizes="max(100vw, 36rem)" alt="" className="h-full w-full object-cover" />}
           {canPicture && (
             <PicturePick
@@ -1097,7 +1097,7 @@ export function ServerPage() {
         </div>
         <div className="absolute -bottom-12 left-4 flex items-end gap-4">
           <div className="group/icon relative flex">
-            <GroupMark id="group-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 border-4 border-background text-3xl" />
+            <GroupMark id="group-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 rounded-avatar border-4 border-background text-3xl" />
             {canPicture && (
               <PicturePick
                 id="group-icon-pick"
@@ -1116,7 +1116,7 @@ export function ServerPage() {
             {words.title}
             {words.tag && <span className="text-base font-normal text-textTertiary">#{words.tag}</span>}
             {room.owner && <OwnerMark name={ownerRoleOf(room)} size={18} />}
-            {room.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
+            {room.public === false && <span className="rounded-control bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
             <Tooltip content={membersWords}>
               <span id="group-members-count" role="img" aria-label={membersWords} className="flex items-center gap-1 text-sm font-normal text-textTertiary">
                 {room.members}
@@ -1240,7 +1240,7 @@ export function ServerPage() {
         aria-expanded={drawer}
         aria-controls="group-drawer"
         onClick={() => setDrawer((open) => !open)}
-        className="-mr-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
+        className="-mr-2.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
         <RiGroupLine aria-hidden size={22} />
       </button>
@@ -2331,7 +2331,7 @@ function PicturesSection({ server, room, run }: ManageProps) {
       <div className="flex flex-col gap-2">
         <h3 className={SECTION_TITLE}>group image</h3>
         <div className="group/icon relative flex">
-          <GroupMark id="manage-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 border border-primaryStroke text-3xl" />
+          <GroupMark id="manage-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 rounded-avatar border border-primaryStroke text-3xl" />
           <PicturePick
             id="manage-icon-pick"
             label={room.icon === null ? 'add a picture' : 'change picture'}
@@ -2343,7 +2343,7 @@ function PicturesSection({ server, room, run }: ManageProps) {
       </div>
       <div className="flex min-w-48 flex-1 flex-col gap-2">
         <h3 className={SECTION_TITLE}>group banner</h3>
-        <div id="manage-banner" className="group/banner relative h-24 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
+        <div id="manage-banner" className="group/banner relative h-24 overflow-hidden rounded-card border border-primaryStroke" style={{ backgroundColor: color }}>
           {banner && <img src={banner.src} srcSet={banner.srcSet} sizes="max(100vw, 24rem)" alt="" className="h-full w-full object-cover" />}
           <PicturePick
             id="manage-banner-pick"
@@ -2366,7 +2366,7 @@ function ColorSection({ server, room, run }: ManageProps) {
   return (
     <Section id="manage-color" title="color" description="the group's square, banner and badge, wherever they show.">
       <div className="flex items-center gap-3">
-        <GroupMark id="manage-color-mark" name={server} color={color} icon={room.icon} className="h-12 w-12 shrink-0 border border-primaryStroke text-lg" />
+        <GroupMark id="manage-color-mark" name={server} color={color} icon={room.icon} className="h-12 w-12 shrink-0 rounded-avatar border border-primaryStroke text-lg" />
         <Badge group={{ name: server, badge: room.badge, color }} preview size="md" />
       </div>
       <form
@@ -2502,7 +2502,7 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
               key={member.name}
               data-member={member.name}
               data-owner={member.owner || undefined}
-              className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5"
+              className="flex items-start gap-2 rounded-card border border-primaryStroke px-2 py-1.5"
             >
               <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
               <div className="min-w-0 flex-1">
@@ -2528,7 +2528,7 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
                     label={`give ${member.name} a role`}
                     items={offer.map((role) => ({ key: role.id, label: role.name, color: role.color }))}
                     onPick={(id) => void run(() => api.giveRole(server, id, member.name))}
-                    className="flex h-5 w-5 shrink-0 items-center justify-center border border-transparent text-textTertiary hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none"
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-control border border-transparent text-textTertiary hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none"
                   >
                     <RiAddLine aria-hidden size={14} />
                   </HoverMenu>
@@ -2650,7 +2650,7 @@ function TimeoutsSection({ server, run }: ManageProps) {
             const remaining = item.until - Math.floor(now / 1000);
             const more = remaining < TIMEOUT_MAX_SECS ? EXTENDS : [];
             return (
-              <li key={item.name} data-timeout={item.name} className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5">
+              <li key={item.name} data-timeout={item.name} className="flex items-start gap-2 rounded-card border border-primaryStroke px-2 py-1.5">
                 <Face name={item.name} version={item.avatar} className="h-8 w-8 shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
@@ -2885,7 +2885,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
       const everyone = open.roles.length === 0;
       const canDelete = item.can_delete && !isHome && !(isVoice(item) && voiceCount === 1);
       return (
-        <li key={name} data-channel={name} data-open {...reorder.item(name)} className="border border-primaryBlue bg-background">
+        <li key={name} data-channel={name} data-open {...reorder.item(name)} className="rounded-card border border-primaryBlue bg-background">
           <form id="channel-form" onSubmit={(e) => void save(e)}>
             <div className="flex items-center gap-2.5 border-b border-primaryStroke px-2.5 py-2">
               {handle}
@@ -2995,7 +2995,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
                   <div
                     role="group"
                     aria-labelledby="channel-cooldown-label"
-                    className="grid divide-x divide-primaryStroke border border-primaryStroke"
+                    className="grid divide-x divide-primaryStroke overflow-hidden rounded-control border border-primaryStroke"
                     style={{ gridTemplateColumns: `repeat(${cooldowns.length}, minmax(0, 1fr))` }}
                   >
                     {cooldowns.map((seconds) => (
@@ -3052,7 +3052,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
         data-channel={name}
         {...reorder.item(name)}
         className={cn(
-          'flex items-center gap-2.5 border bg-background pl-2.5 transition-[border-color] duration-150',
+          'flex items-center gap-2.5 rounded-card border bg-background pl-2.5 transition-[border-color] duration-150',
           reorder.held === name ? 'border-primaryBlue' : 'border-primaryStroke',
           opens && 'hover:bg-primaryStroke/20'
         )}
@@ -3304,7 +3304,7 @@ function RolesSection({ server, room, run }: ManageProps) {
             const custom = !SWATCHES.includes(open.color.toLowerCase());
             const cooldowns = COOLDOWNS.includes(open.cooldown) ? COOLDOWNS : [...COOLDOWNS, open.cooldown].sort((a, b) => a - b);
             return (
-              <li key={role.id} data-role={role.name} data-open className="border border-primaryBlue">
+              <li key={role.id} data-role={role.name} data-open className="rounded-card border border-primaryBlue">
                 <form id="role-form" onSubmit={(e) => void save(e)}>
                   <div className="flex items-center gap-2.5 border-b border-primaryStroke px-2.5 py-2">
                     <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[15px] font-semibold" style={{ color: roleInk(open.color) }}>
@@ -3402,7 +3402,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                       <div
                         role="group"
                         aria-labelledby="role-cooldown-label"
-                        className="grid divide-x divide-primaryStroke border border-primaryStroke"
+                        className="grid divide-x divide-primaryStroke overflow-hidden rounded-control border border-primaryStroke"
                         style={{ gridTemplateColumns: `repeat(${cooldowns.length}, minmax(0, 1fr))` }}
                       >
                         {cooldowns.map((seconds) => (
@@ -3445,7 +3445,7 @@ function RolesSection({ server, room, run }: ManageProps) {
             </>
           );
           return (
-            <li key={role.id} data-role={role.name} data-reach={within || undefined} className="border border-primaryStroke">
+            <li key={role.id} data-role={role.name} data-reach={within || undefined} className="rounded-card border border-primaryStroke">
               {within ? (
                 <button
                   type="button"
@@ -3498,7 +3498,7 @@ function OwnerRowBody({ name }: { name: string }) {
 }
 
 const SWATCHES: string[] = COLORS.slice(0, 3).map((color) => color.toLowerCase());
-const SWATCH = 'h-[30px] w-[30px] shrink-0 border-2';
+const SWATCH = 'h-[30px] w-[30px] shrink-0 rounded-control border-2';
 const SWATCH_ON = 'border-textPrimary outline outline-2 -outline-offset-4 outline-background';
 
 const ALL_PERMS: RolePerms = { appearance: true, roles: true, channels: true, kick: true, ban: true, emotes: true };

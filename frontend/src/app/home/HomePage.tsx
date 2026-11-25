@@ -456,7 +456,7 @@ function RecentCard({ person: p }: { person: Recent }) {
         <ProfileLink
           id={`recent-link-${p.name}`}
           person={target}
-          className="flex min-w-0 border border-transparent outline-none after:absolute after:inset-0 focus-visible:border-primaryBlue"
+          className="flex min-w-0 rounded-card border border-transparent outline-none after:absolute after:inset-0 focus-visible:border-primaryBlue"
         >
           <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
         </ProfileLink>
@@ -677,13 +677,13 @@ export function HomePage() {
         }
       >
         {error && (
-          <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
+          <p className="rounded-card border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
             api is down: {error}
           </p>
         )}
         {!error && !streams && <StreamsSkeleton />}
         {list?.length === 0 && (
-          <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
+          <div id="empty" className="rounded-card border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
             <p className="text-textSecondary">nobody is live</p>
             <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
               go live

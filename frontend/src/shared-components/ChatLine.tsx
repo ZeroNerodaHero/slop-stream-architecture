@@ -436,7 +436,7 @@ export function ReplyQuote({ shape, quote, onJump, color }: { shape: ChatStyle; 
   }
   return (
     <span data-reply-quote className="flex min-w-0 items-stretch text-xs leading-4">
-      <span aria-hidden className={cn('ml-4 mt-2 shrink-0 rounded-tl-md border-l-2 border-t-2 border-primaryStroke', shape === 'blocks' ? 'w-6' : 'w-5')} />
+      <span aria-hidden className={cn('ml-4 mt-2 shrink-0 border-l-2 border-t-2 border-primaryStroke soft:rounded-tl-[6px] bubble:rounded-tl-[8px]', shape === 'blocks' ? 'w-6' : 'w-5')} />
       <span className="ml-1 flex min-w-0 pb-0.5">{inner}</span>
     </span>
   );

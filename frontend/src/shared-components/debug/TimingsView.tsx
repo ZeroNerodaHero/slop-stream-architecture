@@ -118,7 +118,7 @@ function Label({ group, row }: { group: MetricGroup; row: MetricRow }) {
     <span className="flex min-w-0 items-center gap-1.5">
       <span
         className={cn(
-          'flex h-3 w-3 shrink-0 items-center justify-center border font-mono text-[8px] leading-none',
+          'flex h-3 w-3 shrink-0 items-center justify-center rounded-control border font-mono text-[8px] leading-none',
           method === 'GET' ? 'border-secondaryStroke text-textTertiary' : 'border-primaryBlue text-primaryBlue'
         )}
       >
@@ -225,7 +225,7 @@ function Section({ g, open, onToggle, sort, onSort }: { g: MetricGroupRows; open
               onToggle();
             }}
             className={cn(
-              'flex h-5 w-5 shrink-0 items-center justify-center border bg-backgroundSecondary hover:border-primaryBlue hover:text-primaryBlue',
+              'flex h-5 w-5 shrink-0 items-center justify-center rounded-control border bg-backgroundSecondary hover:border-primaryBlue hover:text-primaryBlue',
               open ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textSecondary'
             )}
           >

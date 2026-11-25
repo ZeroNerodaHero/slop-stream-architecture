@@ -62,19 +62,19 @@ function LayoutPreview({ layout, kinds }: { layout: SocialsLayout; kinds: readon
     <span
       aria-hidden
       className={cn(
-        'flex min-w-0 flex-1 border border-primaryStroke bg-background p-2',
+        'flex min-w-0 flex-1 rounded-card border border-primaryStroke bg-background p-2',
         layout === 'row' ? 'h-16 flex-wrap content-start gap-1' : 'grid grid-cols-3 gap-1'
       )}
     >
       {shown.map((kind, i) => {
         const Icon = SOCIAL_ICON[kind];
         return layout === 'row' ? (
-          <span key={`${kind}-${i}`} className="flex h-5 items-center gap-1 border border-primaryStroke px-1">
+          <span key={`${kind}-${i}`} className="flex h-5 items-center gap-1 rounded-control border border-primaryStroke px-1">
             <Icon size={10} />
             <span className="h-1 w-5 bg-textTertiary" />
           </span>
         ) : (
-          <span key={`${kind}-${i}`} className="flex flex-col items-center gap-0.5 border border-primaryStroke py-1">
+          <span key={`${kind}-${i}`} className="flex flex-col items-center gap-0.5 rounded-control border border-primaryStroke py-1">
             <Icon size={10} />
             <span className="h-1 w-4 bg-textTertiary" />
           </span>
@@ -172,7 +172,7 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
   });
 
   return (
-    <div id="socials-editor" className="border border-primaryStroke bg-backgroundSecondary p-4">
+    <div id="socials-editor" className="rounded-card border border-primaryStroke bg-backgroundSecondary p-4">
       <fieldset disabled={!canEdit} className="m-0 border-0 p-0 disabled:opacity-60">
         <legend className={SECTION_TITLE}>your links</legend>
         <p className="mt-1 text-textSecondary">
@@ -180,12 +180,12 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
         </p>
         <div className="mt-4 flex flex-col gap-5">
           {draft.links.length === 0 ? (
-            <div className="flex items-center justify-center border border-dashed border-secondaryStroke p-4 text-center text-sm text-textTertiary">
+            <div className="flex items-center justify-center rounded-card border border-dashed border-secondaryStroke p-4 text-center text-sm text-textTertiary">
               no links yet. pick a place below and a row appears here.
             </div>
           ) : (
             <div className="relative">
-              <ul id="socials-list" {...reorder.list} className="m-0 list-none divide-y divide-primaryStroke border border-primaryStroke bg-background p-0">
+              <ul id="socials-list" {...reorder.list} className="m-0 list-none divide-y divide-primaryStroke rounded-card border border-primaryStroke bg-background p-0">
                 {reorder.order.map((key) => {
                   const i = Number(key);
                   const link = draft.links[i];
@@ -211,7 +211,7 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
                       aria-label={`add a ${kind} link`}
                       disabled={full}
                       onClick={() => setFocusRow(addSocial(kind))}
-                      className="flex h-10 w-10 items-center justify-center border border-primaryStroke bg-background text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:border-primaryStroke disabled:hover:text-textSecondary"
+                      className="flex h-10 w-10 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:border-primaryStroke disabled:hover:text-textSecondary"
                     >
                       <Icon aria-hidden size={20} />
                     </button>

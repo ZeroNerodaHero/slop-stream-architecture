@@ -45,7 +45,7 @@ function MobileHomeLink({ caret = false }: { caret?: boolean }) {
       id="home"
       to="/"
       aria-label="home"
-      className="flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
     >
       {caret ? <RiArrowLeftSLine aria-hidden size={24} /> : <RiHome5Line aria-hidden size={22} />}
     </Link>

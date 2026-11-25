@@ -17,7 +17,7 @@ import {
 import { type Shape } from '@/infra/shape';
 import { contrast, hex, type Palette, PRESET_LABELS, PRESET_NAMES, PRESETS, type TokenName, TOKENS } from '@/infra/theme';
 import { Button } from '@/shared-components/Button';
-import { FIELDSET, Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { CHECKBOX, FIELDSET, Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const TOKEN_LABEL: Record<TokenName, string> = {
@@ -109,7 +109,7 @@ function Swatch({ palette }: { palette: Palette }) {
 }
 
 const COLOR_INPUT =
-  'h-11 w-11 shrink-0 cursor-pointer appearance-none border border-primaryStroke bg-transparent p-0 [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 disabled:cursor-default disabled:opacity-40';
+  'h-11 w-11 shrink-0 cursor-pointer appearance-none overflow-hidden rounded-control border border-primaryStroke bg-transparent p-0 [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 disabled:cursor-default disabled:opacity-40';
 
 const SIZE_WORDS: Record<TextSize, string> = {
   80: 'smallest',
@@ -214,7 +214,7 @@ export function AppearanceTab() {
                       type="checkbox"
                       checked={theme.text === null}
                       onChange={(e) => setCustomColor('text', e.target.checked ? null : hex(palette.textPrimary))}
-                      className="h-4 w-4 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue"
+                      className={CHECKBOX}
                     />
                     auto
                   </label>
@@ -225,7 +225,7 @@ export function AppearanceTab() {
             <ul className="flex flex-wrap gap-2" aria-label="the colours these make">
               {TOKENS.map((token) => (
                 <li key={token} className="flex flex-col items-center gap-1" title={`${TOKEN_LABEL[token]} ${hex(palette[token])}`}>
-                  <span className="h-7 w-7 border border-primaryStroke" style={{ backgroundColor: css(palette[token]) }} />
+                  <span className="h-7 w-7 rounded-control border border-primaryStroke" style={{ backgroundColor: css(palette[token]) }} />
                   <span className="text-[10px] uppercase tracking-wider text-textTertiary">{TOKEN_LABEL[token]}</span>
                 </li>
               ))}

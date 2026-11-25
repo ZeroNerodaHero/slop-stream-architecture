@@ -234,7 +234,7 @@ export function DragHandle({ id, label, held, handleRef, onPointerDown, onKeyDow
         onKeyDown={onKeyDown}
         onBlur={onBlur}
         className={cn(
-          'flex shrink-0 touch-none select-none items-center justify-center border border-transparent p-0.5 text-textTertiary transition-colors duration-150 hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
+          'flex shrink-0 touch-none select-none items-center justify-center rounded-control border border-transparent p-0.5 text-textTertiary transition-colors duration-150 hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
           held ? 'cursor-grabbing border-primaryBlue text-primaryBlue' : 'cursor-grab active:cursor-grabbing',
           className
         )}

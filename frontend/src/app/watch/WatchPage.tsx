@@ -296,7 +296,7 @@ export function WatchPage() {
       <span
         aria-hidden
         className={cn(
-          'border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide backdrop-blur-sm',
+          'rounded-control border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide backdrop-blur-sm',
           tone === 'bad' ? 'text-decrease' : 'text-white'
         )}
       >
@@ -430,7 +430,7 @@ export function WatchPage() {
               id="tile-scene"
               type="button"
               onClick={clearChoice}
-              className="flex aspect-video w-40 shrink-0 items-center justify-center border border-dashed border-secondaryStroke text-sm text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-textPrimary"
+              className="flex aspect-video w-40 shrink-0 items-center justify-center rounded-card border border-dashed border-secondaryStroke text-sm text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-textPrimary"
             >
               back to the stream
             </button>

@@ -50,9 +50,9 @@ const NEW = 'new';
 
 const ADD = 'text-sm font-semibold text-primaryBlue disabled:opacity-40';
 const LABEL = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
-const DASHED = 'border border-dashed border-primaryStroke';
+const DASHED = 'rounded-card border border-dashed border-primaryStroke';
 const ICON = 'flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary hover:text-textPrimary disabled:opacity-40 disabled:hover:text-textSecondary';
-const PLATE = 'flex gap-0.5 border border-primaryStroke bg-background/90 p-0.5';
+const PLATE = 'flex gap-0.5 rounded-control border border-primaryStroke bg-background/90 p-0.5';
 const inset = (n: number) => 6 + (n * 26 + 4) + 8;
 const KIND_ICON: Record<Kind, ReactNode> = {
   text: <RiText size={16} aria-hidden />,
@@ -239,7 +239,7 @@ function TextEditor({ html, autoFocus, inset, onChange }: { html: string; autoFo
         onChange(next);
       }}
       style={{ '--inset': `${inset}px` } as CSSProperties}
-      className="about-text min-h-[3.5rem] whitespace-pre-wrap border border-primaryStroke bg-background px-2 py-1 outline-none [overflow-wrap:anywhere] before:float-right before:h-7 before:w-[var(--inset)] before:content-[''] focus:border-primaryBlue empty:after:text-textTertiary empty:after:content-[attr(data-placeholder)]"
+      className="about-text min-h-[3.5rem] whitespace-pre-wrap rounded-card border border-primaryStroke bg-background px-2 py-1 outline-none [overflow-wrap:anywhere] before:float-right before:h-7 before:w-[var(--inset)] before:content-[''] focus:border-primaryBlue empty:after:text-textTertiary empty:after:content-[attr(data-placeholder)]"
     />
   );
 }
@@ -274,7 +274,7 @@ function Clip({ src, poster, editing }: { src: string; poster?: string; editing:
   const [on, setOn] = useState(false);
   const [length, setLength] = useState(0);
   return (
-    <div className="relative aspect-video border border-primaryStroke bg-black">
+    <div className="relative aspect-video overflow-hidden rounded-card border border-primaryStroke bg-black">
       <video
         ref={ref}
         src={src}
@@ -298,7 +298,7 @@ function Clip({ src, poster, editing }: { src: string; poster?: string; editing:
           className="absolute inset-0 flex items-center justify-center text-white disabled:cursor-default"
         >
           <PlayGlyph size={40} />
-          {length > 0 && <span className="absolute bottom-2 right-2 bg-black/70 px-1.5 text-xs tabular-nums">{fmtClock(length)}</span>}
+          {length > 0 && <span className="absolute bottom-2 right-2 rounded-control bg-black/70 px-1.5 text-xs tabular-nums">{fmtClock(length)}</span>}
         </button>
       )}
     </div>
@@ -325,7 +325,7 @@ function Track({ src, inset }: { src: string; inset: number }) {
   };
 
   return (
-    <div className="about-track flex flex-col gap-1.5 border border-primaryStroke p-3" data-playing={playing || undefined}>
+    <div className="about-track flex flex-col gap-1.5 rounded-card border border-primaryStroke p-3" data-playing={playing || undefined}>
       <audio
         ref={audio}
         src={src}
@@ -375,7 +375,7 @@ function Track({ src, inset }: { src: string; inset: number }) {
 function Body({ cell, editing, focus, inset, onHtml }: { cell: Cell; editing: boolean; focus: boolean; inset: number; onHtml: (html: string) => void }) {
   if (cell.kind === 'text') return editing ? <TextEditor html={cell.html} autoFocus={focus} inset={inset} onChange={onHtml} /> : <Rich html={cell.html} />;
   if (cell.kind === 'image')
-    return <img src={cell.src} alt="" draggable={false} className="about-image aspect-video w-full border border-primaryStroke bg-black object-cover" />;
+    return <img src={cell.src} alt="" draggable={false} className="about-image aspect-video w-full rounded-card border border-primaryStroke bg-black object-cover" />;
   if (cell.kind === 'video') return <Clip key={cell.src} src={cell.src} poster={cell.poster} editing={editing} />;
   return <Track key={cell.src} src={cell.src} inset={inset} />;
 }
@@ -826,7 +826,7 @@ export function About({ name, edit = false, id }: AboutProps) {
                         </Tooltip>
                       )}
                       {dragging === cell.key && (
-                        <span className="pointer-events-none absolute -right-3 top-1/2 z-20 -translate-y-1/2 translate-x-full whitespace-nowrap border border-primaryStroke bg-background px-1.5 text-xs tabular-nums text-textSecondary">
+                        <span className="pointer-events-none absolute -right-3 top-1/2 z-20 -translate-y-1/2 translate-x-full whitespace-nowrap rounded-control border border-primaryStroke bg-background px-1.5 text-xs tabular-nums text-textSecondary">
                           {cell.cols} of {COLS}
                         </span>
                       )}

@@ -14,7 +14,7 @@ import {
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
 import { Button } from '@/shared-components/Button';
-import { FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { CHECKBOX, FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const KINDS: readonly { kind: NotificationKind; label: string; icon: ReactNode }[] = [
@@ -78,7 +78,7 @@ export function NotificationsTab() {
                 <label
                   htmlFor={`notify-${kind}`}
                   className={cn(
-                    'flex items-center gap-4 border bg-background p-4 transition-[border-color,color] duration-150',
+                    'flex items-center gap-4 rounded-card border bg-background p-4 transition-[border-color,color] duration-150',
                     loaded ? 'cursor-pointer' : 'cursor-default',
                     on ? 'border-primaryBlue' : 'border-primaryStroke hover:border-secondaryStroke',
                     'has-[:focus-visible]:border-primaryBlue'
@@ -95,7 +95,7 @@ export function NotificationsTab() {
                     checked={on}
                     disabled={!loaded}
                     onChange={(e) => void setNotifySetting(kind, e.target.checked)}
-                    className="h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40"
+                    className={CHECKBOX}
                   />
                 </label>
               </li>

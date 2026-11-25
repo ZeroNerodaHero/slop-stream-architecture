@@ -30,13 +30,13 @@ export function VisibilityToggle({ isPublic, onChange, ids, className, disabled 
         <span
           aria-hidden
           className={cn(
-            'relative h-5 w-9 shrink-0 border border-primaryStroke transition-colors duration-150',
+            'relative h-5 w-9 shrink-0 rounded-control border border-primaryStroke transition-colors duration-150',
             isPublic ? 'bg-background' : 'bg-primaryBlue'
           )}
         >
           <span
             className={cn(
-              'absolute left-px top-px flex h-4 w-4 items-center justify-center transition-transform duration-150',
+              'absolute left-px top-px flex h-4 w-4 items-center justify-center rounded-control transition-transform duration-150',
               isPublic ? 'bg-textTertiary text-background' : 'translate-x-4 bg-background text-primaryBlue'
             )}
           >

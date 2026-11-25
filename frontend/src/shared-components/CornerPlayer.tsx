@@ -55,10 +55,10 @@ const CLICK_SLOP = 4;
 const MIN_WIDTH = 160;
 
 const CORNERS = [
-  { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
-  { id: 'ne', sx: 1, sy: -1, className: '-right-px -top-px cursor-nesw-resize border-r-2 border-t-2' },
-  { id: 'sw', sx: -1, sy: 1, className: '-bottom-px -left-px cursor-nesw-resize border-b-2 border-l-2' },
-  { id: 'se', sx: 1, sy: 1, className: '-bottom-px -right-px cursor-nwse-resize border-b-2 border-r-2' }
+  { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize rounded-tl-panel border-l-2 border-t-2' },
+  { id: 'ne', sx: 1, sy: -1, className: '-right-px -top-px cursor-nesw-resize rounded-tr-panel border-r-2 border-t-2' },
+  { id: 'sw', sx: -1, sy: 1, className: '-bottom-px -left-px cursor-nesw-resize rounded-bl-panel border-b-2 border-l-2' },
+  { id: 'se', sx: 1, sy: 1, className: '-bottom-px -right-px cursor-nwse-resize rounded-br-panel border-b-2 border-r-2' }
 ] as const;
 
 interface Gesture {
@@ -404,7 +404,7 @@ export function CornerPlayer({
             avatar={scene.avatar}
             main={{ id: `${prefix}-video`, streamAtom, videoRef, slot: scene.slot, muted, volume, onPlaying, onAutoplayBlocked }}
             onPick={scene.onPick}
-            className="min-w-0 border-0 border-b"
+            className="min-w-0 rounded-none border-0 border-b"
           />
         ) : (
           <VideoFrame
@@ -415,7 +415,7 @@ export function CornerPlayer({
             volume={volume}
             onPlaying={onPlaying}
             onAutoplayBlocked={onAutoplayBlocked}
-            className={cn('min-w-0 border-0 border-b', popped && 'h-full object-contain')}
+            className={cn('min-w-0 rounded-none border-0 border-b', popped && 'h-full object-contain')}
           />
         )}
       </Link>
@@ -502,7 +502,7 @@ export function CornerPlayer({
       style={style}
       onClickCapture={swallowClickAfterDrag}
       onDragStart={(e) => e.preventDefault()}
-      className={cn(FRAME, 'group pointer-events-auto isolate grid', box ? 'fixed' : 'relative w-[min(320px,calc(100vw-3rem))]')}
+      className={cn(FRAME, 'group pointer-events-auto isolate grid overflow-hidden rounded-panel', box ? 'fixed' : 'relative w-[min(320px,calc(100vw-3rem))]')}
     >
       {column}
       {chatBox}

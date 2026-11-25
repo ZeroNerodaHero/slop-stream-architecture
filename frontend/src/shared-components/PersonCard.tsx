@@ -90,7 +90,7 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
                 data-card-action={a.key}
                 onClick={a.onPick}
                 className={cn(
-                  'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
+                  'flex h-7 w-7 items-center justify-center rounded-control border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
                   a.danger ? 'text-decrease' : 'text-textSecondary hover:text-textPrimary'
                 )}
               >

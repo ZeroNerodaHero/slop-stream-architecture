@@ -214,7 +214,7 @@ export function StreamStatsButton({ id, role, stats, className = 'left-3 top-3',
           id={`${id}-panel`}
           role="region"
           aria-label="stream stats"
-          className="absolute left-0 top-full z-20 mt-2 w-60 border border-white/10 bg-black/90 p-3 text-xs text-white backdrop-blur-sm"
+          className="absolute left-0 top-full z-20 mt-2 w-60 rounded-card border border-white/10 bg-black/90 p-3 text-xs text-white backdrop-blur-sm"
         >
           {stats ? (
             <>

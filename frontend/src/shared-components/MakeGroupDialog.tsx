@@ -121,7 +121,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           create group
         </h2>
         <div className="relative mb-7">
-          <div id="groups-make-banner" className="group/banner relative h-28 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
+          <div id="groups-make-banner" className="group/banner relative h-28 overflow-hidden rounded-card border border-primaryStroke" style={{ backgroundColor: color }}>
             {banner && <img src={banner.url} alt="" className="h-full w-full object-cover" />}
             <PicturePick
               id="groups-make-banner-pick"
@@ -132,7 +132,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div className="group/icon absolute -bottom-8 left-4 flex">
-            <GroupMark id="groups-make-icon" name={clean || 'new'} color={color} src={icon?.url} className="h-16 w-16 border-4 border-backgroundSecondary text-2xl" />
+            <GroupMark id="groups-make-icon" name={clean || 'new'} color={color} src={icon?.url} className="h-16 w-16 rounded-avatar border-4 border-backgroundSecondary text-2xl" />
             <PicturePick
               id="groups-make-icon-pick"
               label={icon ? 'change picture' : 'add a picture'}

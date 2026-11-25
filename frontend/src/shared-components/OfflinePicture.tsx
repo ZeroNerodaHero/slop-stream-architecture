@@ -8,7 +8,7 @@ interface OfflinePictureProps {
 
 export function OfflinePicture({ id, src, className }: OfflinePictureProps) {
   return (
-    <span className={cn('relative block aspect-video overflow-hidden border border-primaryStroke bg-black', className)}>
+    <span className={cn('relative block aspect-video overflow-hidden rounded-card border border-primaryStroke bg-black', className)}>
       <img
         id={id}
         src={src}
@@ -20,7 +20,7 @@ export function OfflinePicture({ id, src, className }: OfflinePictureProps) {
       />
       <span aria-hidden className="absolute inset-0 bg-black/10" />
       <span className="absolute inset-0 flex items-center justify-center p-3">
-        <span className="border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+        <span className="rounded-control border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
           not streaming yet
         </span>
       </span>

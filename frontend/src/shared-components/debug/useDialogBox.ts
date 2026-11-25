@@ -3,7 +3,7 @@ import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useSta
 import { type Box, BOXES_KEY, clampBox, parseBoxes, saveBox, type WindowId } from '@/infra/debug/window-store';
 import { useStackedWindow } from '@/shared-components/useStackedWindow';
 
-export const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
+export const FRAME = 'rounded-panel border border-primaryStroke bg-backgroundSecondary';
 export const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 320;
 const MIN_H = 200;

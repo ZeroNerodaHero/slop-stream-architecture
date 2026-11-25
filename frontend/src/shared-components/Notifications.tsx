@@ -39,7 +39,7 @@ const GAP = 8;
 const TICK_MS = 30_000;
 
 const ICON_BUTTON =
-  'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
+  'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 const REMOVE_BUTTON = cn(
   ICON_BUTTON,
   'absolute right-2 top-2 bg-backgroundSecondary opacity-0 transition-opacity duration-150 focus-visible:opacity-100',
@@ -98,7 +98,7 @@ function Row({ n, fresh, now, onPick }: RowProps) {
   const found = at ? (n.badge ?? servers?.find((s) => s.name === at.server)) : null;
   const group = found?.badge ? found : null;
   const className = cn(
-    'flex w-full items-start gap-3 border border-transparent py-2 pl-3 pr-11 text-left transition-colors duration-150 max-md:pr-12',
+    'flex w-full items-start gap-3 rounded-card border border-transparent py-2 pl-3 pr-11 text-left transition-colors duration-150 max-md:pr-12',
     'group-hover/notification:border-primaryStroke group-hover/notification:bg-backgroundTertiary/60 focus-visible:border-primaryBlue focus-visible:outline-none'
   );
   const inner = (
@@ -108,7 +108,7 @@ function Row({ n, fresh, now, onPick }: RowProps) {
         <span
           aria-hidden
           className={cn(
-            'absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center border border-backgroundSecondary',
+            'absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-avatar border border-backgroundSecondary',
             n.kind === 'live' ? 'bg-primaryBlue text-background' : 'bg-background text-textSecondary'
           )}
         >

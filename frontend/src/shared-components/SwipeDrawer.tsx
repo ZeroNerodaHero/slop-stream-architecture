@@ -33,7 +33,7 @@ export function DrawerClose({ onClose, className }: { onClose: () => void; class
         aria-label="close"
         onClick={onClose}
         className={cn(
-          'flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
+          'flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-transparent text-textSecondary hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
           className
         )}
       >

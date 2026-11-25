@@ -101,7 +101,7 @@ function InspectorPanel() {
         FRAME,
         'fixed m-0 flex flex-col overflow-hidden p-0 text-sm text-textPrimary open:flex',
         mobile
-          ? 'inset-x-0 bottom-0 top-auto h-[60dvh] w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
+          ? 'inset-x-0 bottom-0 top-auto h-[60dvh] rounded-none w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
           : !box && 'left-auto right-6 top-6 h-[min(440px,calc(100dvh-3rem))] w-[min(600px,calc(100vw-3rem))]'
       )}
     >
@@ -122,7 +122,7 @@ function InspectorPanel() {
               aria-label={paused ? 'resume' : 'pause'}
               onClick={toggleInspectorPaused}
               className={cn(
-                'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
+                'flex h-7 w-7 items-center justify-center rounded-control border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
                 paused && 'border-primaryBlue text-primaryBlue'
               )}
             >
@@ -135,7 +135,7 @@ function InspectorPanel() {
               type="button"
               aria-label="copy as json"
               onClick={copy}
-              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+              className="flex h-7 w-7 items-center justify-center rounded-control border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
             >
               <RiFileCopyLine aria-hidden size={16} />
             </button>
@@ -146,7 +146,7 @@ function InspectorPanel() {
               type="button"
               aria-label="clear"
               onClick={clearFrames}
-              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+              className="flex h-7 w-7 items-center justify-center rounded-control border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
             >
               <RiDeleteBinLine aria-hidden size={16} />
             </button>
@@ -157,7 +157,7 @@ function InspectorPanel() {
               type="button"
               aria-label="close"
               onClick={closeInspector}
-              className={cn('flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue', SHEET_CLOSE)}
+              className={cn('flex h-7 w-7 items-center justify-center rounded-control border border-transparent hover:border-primaryBlue hover:text-primaryBlue', SHEET_CLOSE)}
             >
               <RiCloseLine aria-hidden size={18} />
             </button>
@@ -175,7 +175,7 @@ function InspectorPanel() {
           aria-label="filter: a word in the frame, its type, its socket…"
           autoComplete="off"
           spellCheck={false}
-          className="min-w-[160px] flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm text-textPrimary placeholder:text-textTertiary"
+          className="min-w-[160px] flex-1 rounded-control border border-primaryStroke bg-background px-2 py-1 text-sm text-textPrimary placeholder:text-textTertiary"
         />
         <span id="inspector-types" role="group" aria-label="directions" className="flex gap-1">
           {FRAME_DIRS.map((dir) => (
@@ -185,7 +185,7 @@ function InspectorPanel() {
               type="button"
               aria-pressed={dirs.has(dir)}
               onClick={() => toggleInspectorDir(dir)}
-              className={cn('border px-2 py-0.5 text-xs uppercase tracking-wide', dirs.has(dir) ? DIR_TONE[dir] : 'border-primaryStroke text-textTertiary line-through')}
+              className={cn('rounded-control border px-2 py-0.5 text-xs uppercase tracking-wide', dirs.has(dir) ? DIR_TONE[dir] : 'border-primaryStroke text-textTertiary line-through')}
             >
               {dir}
             </button>
@@ -224,7 +224,7 @@ function InspectorPanel() {
                 <span className="w-[64px] shrink-0 tabular-nums text-textTertiary" title={new Date(e.at).toLocaleString()}>
                   {clock(e.at)}
                 </span>
-                <span className={cn('w-[34px] shrink-0 border text-center text-[10px] uppercase leading-4 tracking-wide', DIR_TONE[e.dir])}>{e.dir}</span>
+                <span className={cn('w-[34px] shrink-0 rounded-control border text-center text-[10px] uppercase leading-4 tracking-wide', DIR_TONE[e.dir])}>{e.dir}</span>
                 <span className="w-[80px] shrink-0 truncate text-textSecondary" title={e.source}>
                   {e.source}
                 </span>
@@ -233,7 +233,7 @@ function InspectorPanel() {
                 {e.bytes > e.text.length && <span className="shrink-0 text-textTertiary">{e.bytes} b</span>}
               </button>
               {open && (
-                <pre className="mb-2 max-h-[240px] overflow-auto whitespace-pre-wrap border border-primaryStroke bg-backgroundTertiary p-2 text-textSecondary">
+                <pre className="mb-2 max-h-[240px] overflow-auto whitespace-pre-wrap rounded-card border border-primaryStroke bg-backgroundTertiary p-2 text-textSecondary">
                   {pretty(e.text)}
                 </pre>
               )}

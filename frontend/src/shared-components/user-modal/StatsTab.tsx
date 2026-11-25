@@ -128,7 +128,7 @@ function MyStats() {
 
       {stats && !stats.last && (
         <Block title="streams">
-          <p id="stats-empty" className="border border-dashed border-secondaryStroke px-4 py-8 text-center text-sm text-textTertiary">
+          <p id="stats-empty" className="rounded-card border border-dashed border-secondaryStroke px-4 py-8 text-center text-sm text-textTertiary">
             no streams yet. go live with this account and its numbers show up here.
           </p>
         </Block>
@@ -155,7 +155,7 @@ function MyStats() {
 
 function Tile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-1 border border-primaryStroke bg-background px-3 py-2">
+    <div className="flex flex-col gap-1 rounded-card border border-primaryStroke bg-background px-3 py-2">
       <span className="text-xs font-semibold uppercase tracking-wider text-textTertiary">{label}</span>
       <span className="text-xl font-semibold tabular-nums leading-tight text-textPrimary">{value}</span>
     </div>
@@ -195,7 +195,7 @@ function StreamRow({ row, on, onPick }: { row: StreamStatsRow; on: boolean; onPi
         aria-pressed={on}
         onClick={onPick}
         className={cn(
-          'flex w-full items-center gap-3 border px-3 py-2 text-left text-sm transition-colors duration-150 max-md:min-h-11',
+          'flex w-full items-center gap-3 rounded-card border px-3 py-2 text-left text-sm transition-colors duration-150 max-md:min-h-11',
           'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
           on ? 'border-primaryBlue bg-primaryBlue/5' : 'border-primaryStroke hover:border-secondaryStroke hover:bg-backgroundTertiary'
         )}
@@ -228,7 +228,7 @@ export function ViewerGraph({ points }: { points: [number, number][] }) {
   const titleId = useId();
   if (points.length === 0)
     return (
-      <p id="stats-graph-empty" className="border border-dashed border-secondaryStroke px-4 py-8 text-center text-sm text-textTertiary">
+      <p id="stats-graph-empty" className="rounded-card border border-dashed border-secondaryStroke px-4 py-8 text-center text-sm text-textTertiary">
         no samples yet: the count is written once a minute while you are live.
       </p>
     );
@@ -251,7 +251,7 @@ export function ViewerGraph({ points }: { points: [number, number][] }) {
   }
 
   return (
-    <figure id="stats-graph" className="relative m-0 border border-primaryStroke bg-background p-2">
+    <figure id="stats-graph" className="relative m-0 rounded-card border border-primaryStroke bg-background p-2">
       <figcaption id={titleId} className="sr-only">
         viewers over time
       </figcaption>
@@ -293,7 +293,7 @@ export function ViewerGraph({ points }: { points: [number, number][] }) {
       {hovered && (
         <div
           id="stats-graph-tip"
-          className="pointer-events-none absolute top-2 border border-primaryStroke bg-backgroundSecondary px-2 py-1 text-xs"
+          className="pointer-events-none absolute top-2 rounded-card border border-primaryStroke bg-backgroundSecondary px-2 py-1 text-xs"
           style={x(hovered[0]) > W / 2 ? { right: `${((W - x(hovered[0])) / W) * 100 + 2}%` } : { left: `${(x(hovered[0]) / W) * 100 + 2}%` }}
         >
           <span className="text-textSecondary">{clock(hovered[0])}</span> <span className="font-semibold tabular-nums text-textPrimary">{hovered[1]} watching</span>

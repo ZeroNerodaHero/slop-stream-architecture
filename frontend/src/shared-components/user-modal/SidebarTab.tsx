@@ -14,7 +14,7 @@ const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string }[] = [
 
 function YouPreview({ side }: { side: PanelSide }) {
   return (
-    <span aria-hidden className="relative flex h-36 min-w-0 flex-1 border border-primaryStroke bg-background">
+    <span aria-hidden className="relative flex h-36 min-w-0 flex-1 overflow-hidden rounded-card border border-primaryStroke bg-background">
       <span className="m-2 min-w-0 flex-1 bg-backgroundTertiary" />
       <span
         className={cn(
@@ -62,7 +62,7 @@ function SidebarLists() {
               data-on={on}
               {...reorder.item(list)}
               className={cn(
-                'flex items-center gap-3 border bg-background p-3 transition-[border-color] duration-150',
+                'flex items-center gap-3 rounded-card border bg-background p-3 transition-[border-color] duration-150',
                 reorder.held === list ? 'border-primaryBlue' : 'border-primaryStroke',
                 !on && 'text-textTertiary'
               )}

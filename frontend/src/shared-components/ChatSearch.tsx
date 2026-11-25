@@ -543,7 +543,7 @@ function SearchDay({ search, id, input }: { search: ChatSearch; id: string; inpu
             search.dismiss();
           }
         }}
-        className="min-w-[8.5rem] flex-1 border border-primaryStroke bg-background px-1.5 py-0.5 text-sm text-textPrimary focus:border-primaryBlue"
+        className="min-w-[8.5rem] flex-1 rounded-control border border-primaryStroke bg-background px-1.5 py-0.5 text-sm text-textPrimary focus:border-primaryBlue"
       />
       <Button
         size="sm"

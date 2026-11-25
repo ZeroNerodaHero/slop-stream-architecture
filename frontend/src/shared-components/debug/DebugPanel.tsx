@@ -42,7 +42,7 @@ export function DebugPanel({
       className={cn(
         FRAME,
         'fixed m-0 flex flex-col overflow-hidden p-0 text-sm text-textPrimary open:flex',
-        mobile ? 'inset-x-0 bottom-0 top-auto h-[60dvh] w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]' : !box && place
+        mobile ? 'inset-x-0 bottom-0 top-auto h-[60dvh] rounded-none w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]' : !box && place
       )}
     >
       {mobile && <SheetGrab onDismiss={onClose} />}
@@ -63,7 +63,7 @@ export function DebugPanel({
               type="button"
               aria-label="close"
               onClick={onClose}
-              className={cn('flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue', SHEET_CLOSE)}
+              className={cn('flex h-7 w-7 items-center justify-center rounded-control border border-transparent hover:border-primaryBlue hover:text-primaryBlue', SHEET_CLOSE)}
             >
               <RiCloseLine aria-hidden size={18} />
             </button>
