@@ -111,7 +111,6 @@ function InspectorPanel() {
         onPointerDown={(e) => {
           if (!mobile) press(e, 'move');
         }}
-        title={mobile ? undefined : 'drag to move'}
       >
         <span className="font-semibold">messages</span>
         <span className="ml-auto flex items-center gap-1">
