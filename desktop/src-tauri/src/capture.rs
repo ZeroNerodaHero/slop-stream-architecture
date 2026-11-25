@@ -121,7 +121,9 @@ mod platform {
 
         fn points(&self) -> (f64, f64) {
             match self {
-                Self::Display(display, _) => (f64::from(display.width()), f64::from(display.height())),
+                Self::Display(display, _) => {
+                    (f64::from(display.width()), f64::from(display.height()))
+                }
                 Self::Window(window) => {
                     let frame = window.frame();
                     (frame.size.width, frame.size.height)
@@ -214,19 +216,36 @@ mod platform {
         let many = displays.len() > 1;
         let mut out = Vec::new();
         for (i, display) in displays.into_iter().enumerate() {
-            let name = if many { format!("screen {}", i + 1) } else { "screen".to_string() };
-            out.push((format!("d:{}", display.display_id()), name, String::new(), Target::Display(display, own.clone())));
+            let name = if many {
+                format!("screen {}", i + 1)
+            } else {
+                "screen".to_string()
+            };
+            out.push((
+                format!("d:{}", display.display_id()),
+                name,
+                String::new(),
+                Target::Display(display, own.clone()),
+            ));
         }
         for window in windows.into_iter().filter(worth_listing) {
             let app = window
                 .owning_application()
                 .map(|a| a.application_name())
                 .unwrap_or_default();
-            let name = window.title().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| app.clone());
+            let name = window
+                .title()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| app.clone());
             if name.is_empty() {
                 continue;
             }
-            out.push((format!("w:{}", window.window_id()), name, app, Target::Window(window)));
+            out.push((
+                format!("w:{}", window.window_id()),
+                name,
+                app,
+                Target::Window(window),
+            ));
         }
         Ok(out)
     }
@@ -246,7 +265,11 @@ mod platform {
             .map(|((id, name, app, target), thumbnail)| {
                 let (w, h) = target.points();
                 Shareable {
-                    kind: if matches!(target, Target::Display(..)) { "display" } else { "window" },
+                    kind: if matches!(target, Target::Display(..)) {
+                        "display"
+                    } else {
+                        "window"
+                    },
                     id,
                     name,
                     app,
@@ -262,7 +285,8 @@ mod platform {
         let (tx, rx) = sync_channel::<Frame>(1);
         thread::spawn(move || {
             while let Ok(frame) = rx.recv() {
-                let sent = jpeg(&frame, 80).map(|bytes| channel.send(InvokeResponseBody::Raw(bytes)));
+                let sent =
+                    jpeg(&frame, 80).map(|bytes| channel.send(InvokeResponseBody::Raw(bytes)));
                 busy.store(false, Ordering::Release);
                 if matches!(sent, Some(Err(_))) {
                     break;
@@ -296,7 +320,8 @@ mod platform {
         });
         let busy = Arc::new(AtomicBool::new(false));
         let frames = encoder(channel, busy.clone());
-        let mut stream = SCStream::new_with_delegate(&filter, &config, callbacks).map_err(|e| e.to_string())?;
+        let mut stream =
+            SCStream::new_with_delegate(&filter, &config, callbacks).map_err(|e| e.to_string())?;
         stream
             .add_output_handler(
                 move |sample: CMSampleBuffer, kind: SCStreamOutputType| {
@@ -308,7 +333,8 @@ mod platform {
                     if busy.swap(true, Ordering::AcqRel) {
                         return;
                     }
-                    let sent = frame_of(&sample).is_some_and(|frame| frames.try_send(frame).is_ok());
+                    let sent =
+                        frame_of(&sample).is_some_and(|frame| frames.try_send(frame).is_ok());
                     if !sent {
                         busy.store(false, Ordering::Release);
                     }

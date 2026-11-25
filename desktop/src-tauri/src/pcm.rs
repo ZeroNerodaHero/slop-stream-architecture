@@ -61,7 +61,13 @@ impl Resampler {
             self.out.extend_from_slice(&input[..frames * channels]);
             return &self.out;
         }
-        let at = |k: usize, c: usize, last: &[f32]| if k == 0 { last[c] } else { input[(k - 1) * channels + c] };
+        let at = |k: usize, c: usize, last: &[f32]| {
+            if k == 0 {
+                last[c]
+            } else {
+                input[(k - 1) * channels + c]
+            }
+        };
         while self.pos < frames as f64 {
             let i = self.pos.floor() as usize;
             let frac = (self.pos - i as f64) as f32;
@@ -73,11 +79,16 @@ impl Resampler {
             self.pos += self.step;
         }
         self.pos -= frames as f64;
-        self.last.copy_from_slice(&input[(frames - 1) * channels..frames * channels]);
+        self.last
+            .copy_from_slice(&input[(frames - 1) * channels..frames * channels]);
         &self.out
     }
 }
 
 pub fn floats(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
-    bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c))
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
 }

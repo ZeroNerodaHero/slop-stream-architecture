@@ -83,8 +83,12 @@ mod platform {
 
     fn interleave(sample: &CMSampleBuffer, out: &mut Vec<f32>) {
         out.clear();
-        let Ok(list) = sample.audio_buffer_list() else { return };
-        let buffers: Vec<_> = (0..list.num_buffers()).filter_map(|i| list.get(i)).collect();
+        let Ok(list) = sample.audio_buffer_list() else {
+            return;
+        };
+        let buffers: Vec<_> = (0..list.num_buffers())
+            .filter_map(|i| list.get(i))
+            .collect();
         match buffers.as_slice() {
             [] => {}
             [one] if one.number_channels >= 2 => {
@@ -175,7 +179,11 @@ mod platform {
         Ok((client, capture))
     }
 
-    fn run(channel: Channel<InvokeResponseBody>, stop: &AtomicBool, ready: &mpsc::Sender<Result<(), String>>) {
+    fn run(
+        channel: Channel<InvokeResponseBody>,
+        stop: &AtomicBool,
+        ready: &mpsc::Sender<Result<(), String>>,
+    ) {
         let (client, capture) = match open() {
             Ok(opened) => opened,
             Err(e) => {

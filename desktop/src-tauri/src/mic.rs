@@ -66,7 +66,9 @@ pub async fn start_mic(
     let (stop, stopped) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let thread = thread::spawn(move || {
-        let stream = match open(&id, channel).and_then(|s| s.play().map(|()| s).map_err(|e| e.to_string())) {
+        let stream = match open(&id, channel)
+            .and_then(|s| s.play().map(|()| s).map_err(|e| e.to_string()))
+        {
             Ok(stream) => stream,
             Err(e) => {
                 let _ = ready_tx.send(Err(e));
@@ -133,7 +135,9 @@ fn build<T: SizedSample + 'static>(
     device
         .build_input_stream(
             config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| feed.push(data.iter().map(|s| convert(*s))),
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                feed.push(data.iter().map(|s| convert(*s)))
+            },
             |_| {},
             None,
         )
@@ -160,9 +164,13 @@ fn open(id: &str, channel: Channel<InvokeResponseBody>) -> Result<cpal::Stream, 
         SampleFormat::F32 => build::<f32>(&device, config, feed, |s| s),
         SampleFormat::I16 => build::<i16>(&device, config, feed, |s| f32::from(s) / 32_768.0),
         SampleFormat::I32 => build::<i32>(&device, config, feed, |s| s as f32 / 2_147_483_648.0),
-        SampleFormat::U16 => build::<u16>(&device, config, feed, |s| (f32::from(s) - 32_768.0) / 32_768.0),
+        SampleFormat::U16 => build::<u16>(&device, config, feed, |s| {
+            (f32::from(s) - 32_768.0) / 32_768.0
+        }),
         SampleFormat::U8 => build::<u8>(&device, config, feed, |s| (f32::from(s) - 128.0) / 128.0),
         SampleFormat::I8 => build::<i8>(&device, config, feed, |s| f32::from(s) / 128.0),
-        other => Err(format!("this mic sends {other} samples, which are not handled")),
+        other => Err(format!(
+            "this mic sends {other} samples, which are not handled"
+        )),
     }
 }
