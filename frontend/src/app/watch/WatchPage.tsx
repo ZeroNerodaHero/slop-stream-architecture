@@ -514,7 +514,7 @@ export function WatchPage() {
           <div className="shrink-0">{player}</div>
           {tabs.length > 0 && (
             <div id="watch-tabs" className="flex min-h-0 flex-1 flex-col">
-              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className={cn('flex shrink-0 border-b border-primaryStroke px-1', typing && 'hidden')}>
+              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className={cn('flex shrink-0 border-b border-primaryStroke px-1 bubble:gap-1 bubble:border-transparent bubble:px-2 bubble:py-1', typing && 'hidden')}>
                 {tabs.map((t) => {
                   const on = t === shown;
                   return (
@@ -528,9 +528,9 @@ export function WatchPage() {
                       tabIndex={on ? 0 : -1}
                       onClick={() => openTab(t)}
                       className={cn(
-                        '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
+                        '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 bubble:mb-0 bubble:min-h-10 bubble:rounded-control bubble:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
                         t === 'chat' && 'ml-auto',
-                        on ? 'border-primaryBlue text-textPrimary' : 'border-transparent text-textSecondary'
+                        on ? 'border-primaryBlue text-textPrimary bubble:bg-backgroundTertiary' : 'border-transparent text-textSecondary'
                       )}
                     >
                       {t}

@@ -182,7 +182,7 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
           role="listbox"
           aria-label="people found"
           onMouseDown={(e) => e.preventDefault()}
-          className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto border border-primaryStroke bg-backgroundSecondary py-1"
+          className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-panel border border-primaryStroke bg-backgroundSecondary py-1"
         >
           {hits.length === 0 ? (
             <li className="px-3 py-1.5 text-sm text-textTertiary">{found.settled ? 'nobody found' : 'searching'}</li>
@@ -235,7 +235,7 @@ function FilterChip({ word, picked, onPick, className, children }: { word: strin
 
 function Empty({ id, children }: { id: string; children: ReactNode }) {
   return (
-    <p id={id} className="flex items-center justify-center gap-2 border border-dashed border-primaryStroke px-3 py-6 text-sm text-textSecondary">
+    <p id={id} className="flex items-center justify-center gap-2 rounded-control border border-dashed border-primaryStroke px-3 py-6 bubble:rounded-card text-sm text-textSecondary">
       <RiIndeterminateCircleLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
       {children}
     </p>
@@ -244,7 +244,7 @@ function Empty({ id, children }: { id: string; children: ReactNode }) {
 
 function Card({ id, title, tip, count, children }: { id?: string; title: string; tip: string; count?: number; children: ReactNode }) {
   return (
-    <section id={id} className="flex h-full min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
+    <section id={id} className="flex h-full min-w-0 flex-col gap-3 rounded-panel border border-primaryStroke bg-backgroundSecondary p-3 bubble:border-transparent md:p-4 md:bubble:bg-background">
       <div className="flex items-center gap-1.5">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-textSecondary">{title}</h3>
         <Info tip={tip} />
@@ -255,12 +255,13 @@ function Card({ id, title, tip, count, children }: { id?: string; title: string;
   );
 }
 
-const ROW = 'flex items-center gap-2 border-b border-primaryStroke px-3 py-1.5 last:border-b-0 max-md:min-h-[52px] max-md:py-2';
+const ROW = 'flex items-center gap-2 border-b border-primaryStroke bubble:border-transparent px-3 py-1.5 last:border-b-0 max-md:min-h-[52px] max-md:py-2';
 const ROW_FACE = 'h-6 w-6 shrink-0 text-[10px]';
 const ROW_TEXT = 'flex min-w-0 flex-1 items-center gap-2 max-md:flex-col max-md:items-stretch max-md:gap-0';
 const ROW_NAME = 'min-w-0 truncate text-sm font-semibold';
 const ROW_WHAT = 'min-w-0 flex-1 truncate text-sm text-textSecondary max-md:text-[13px]';
-const ROWS = 'border border-primaryStroke bg-background';
+const INSET = 'md:bubble:bg-backgroundSecondary';
+const ROWS = cn('rounded-control border border-primaryStroke bg-background bubble:rounded-card bubble:border-transparent', INSET);
 
 function WelcomeSection() {
   useEffect(() => {
@@ -270,7 +271,7 @@ function WelcomeSection() {
   return (
     <Card id="mod-welcome" title="welcome message" tip={WELCOME_TIP}>
       <div className="min-w-0">
-        <WelcomeEditor id="mod-welcome" />
+        <WelcomeEditor id="mod-welcome" previewClassName={INSET} />
       </div>
     </Card>
   );
@@ -300,7 +301,7 @@ function When({ at }: { at: string }) {
 }
 
 function Chip({ action }: { action: string }) {
-  return <span className={cn('inline-block shrink-0 border px-1.5 text-xs leading-5', chipColor(action))}>{action}</span>;
+  return <span className={cn('inline-block shrink-0 rounded-control border px-1.5 text-xs leading-5', chipColor(action))}>{action}</span>;
 }
 
 function Detail({ text }: { text: string }) {
@@ -343,7 +344,7 @@ function ListsCard({
   const words = Object.keys(LIST_TIPS) as List[];
 
   return (
-    <section id="mod-lists-card" className="relative flex h-full min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
+    <section id="mod-lists-card" className="relative flex h-full min-w-0 flex-col gap-3 rounded-panel border border-primaryStroke bg-backgroundSecondary p-3 bubble:border-transparent md:p-4 md:bubble:bg-background">
       <h3 className="sr-only">jannies, bans and timeouts</h3>
       <div className="shrink-0 overflow-x-auto">
         <div id="mod-lists-tabs" role="tablist" aria-label="show" onKeyDown={roveTabs} className="flex w-max min-w-full gap-1 border-b border-primaryStroke bubble:border-transparent">
@@ -547,7 +548,7 @@ export function ModTab({ name }: { name: string }) {
                 <col />
               </colgroup>
               <thead>
-                <tr className="border-b border-primaryStroke text-left text-xs uppercase tracking-wide text-textSecondary">
+                <tr className="border-b border-primaryStroke bubble:border-transparent text-left text-xs uppercase tracking-wide text-textSecondary">
                   <th className="px-3 py-2 font-semibold">when</th>
                   <th className="py-2 pr-3 font-semibold">who</th>
                   <th className="py-2 pr-3 font-semibold">action</th>
@@ -557,7 +558,7 @@ export function ModTab({ name }: { name: string }) {
               </thead>
               <tbody>
                 {rows.map((row, i) => (
-                  <tr key={`${row.at}-${i}`} data-action={row.action} className="border-b border-primaryStroke last:border-b-0">
+                  <tr key={`${row.at}-${i}`} data-action={row.action} className="border-b border-primaryStroke last:border-b-0 bubble:border-transparent">
                     <td className="px-3 py-2 text-textTertiary">
                       <When at={row.at} />
                     </td>
@@ -575,7 +576,7 @@ export function ModTab({ name }: { name: string }) {
             </table>
             <ul id="mod-log-rows" aria-label="mod log" className="md:hidden">
               {rows.map((row, i) => (
-                <li key={`${row.at}-${i}`} data-action={row.action} className="flex flex-col gap-0.5 border-b border-primaryStroke px-3 py-2 text-sm last:border-b-0">
+                <li key={`${row.at}-${i}`} data-action={row.action} className="flex flex-col gap-0.5 border-b border-primaryStroke px-3 py-2 text-sm last:border-b-0 bubble:border-transparent">
                   <div className="flex items-center gap-2">
                     <span className="min-w-0 truncate font-semibold">{row.actor}</span>
                     <Chip action={row.action} />

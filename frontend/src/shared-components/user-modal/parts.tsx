@@ -10,7 +10,7 @@ export const FIELDSET =
   'relative m-0 border-0 p-0 py-4 first:pt-0 last:pb-0 [&>legend+*]:clear-left [&>legend+*]:!mt-0 [&>legend]:float-left [&>legend]:w-full [&>legend]:pb-2';
 export const BUTTON = 'px-4 py-2 text-base';
 export const CHECKBOX =
-  'h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40';
+  'h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40 soft:rounded-[3px] bubble:rounded-[5px]';
 
 export function Section({ id, title, description, children }: { id?: string; title: string; description?: ReactNode; children: ReactNode }) {
   return (

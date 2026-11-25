@@ -255,7 +255,7 @@ function Tile({
         'group/tile relative overflow-hidden rounded-card border bg-backgroundTertiary',
         size === 'big' ? 'h-full w-full' : 'aspect-video',
         size === 'strip' && 'w-36 shrink-0 max-md:w-28',
-        talking ? 'border-increase outline outline-2 -outline-offset-2 outline-increase' : 'border-primaryStroke hover:border-secondaryStroke'
+        talking ? 'border-increase outline outline-2 -outline-offset-2 outline-increase' : 'border-primaryStroke hover:border-secondaryStroke bubble:border-transparent bubble:hover:border-secondaryStroke'
       )}
     >
       <button
@@ -342,7 +342,7 @@ function ControlBar({ mobile }: { mobile: boolean }) {
       aria-label="call"
       className={cn(
         'flex shrink-0 items-center justify-center gap-2 rounded-b-panel border-t border-primaryStroke bg-backgroundSecondary px-3 py-2 bubble:border-transparent',
-        mobile && 'fixed inset-x-0 bottom-0 z-30 rounded-none pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
+        mobile && 'fixed inset-x-0 bottom-0 z-30 rounded-none rounded-t-panel pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
       )}
     >
       <Control id="voice-room-mic" label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>

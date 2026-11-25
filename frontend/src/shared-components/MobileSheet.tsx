@@ -10,7 +10,7 @@ export const SHEET_MS = 200;
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 
 export const SHEET_DIALOG = cn(
-  'max-md:mx-0 max-md:mb-[var(--kbh,0px)] max-md:mt-auto max-md:w-full max-md:max-w-none max-md:max-h-[min(90dvh,calc(var(--vvh,100dvh)-24px))] max-md:overflow-y-auto max-md:overscroll-contain',
+  'max-md:mx-0 max-md:rounded-t-panel max-md:mb-[var(--kbh,0px)] max-md:mt-auto max-md:w-full max-md:max-w-none max-md:max-h-[min(90dvh,calc(var(--vvh,100dvh)-24px))] max-md:overflow-y-auto max-md:overscroll-contain',
   'max-md:border-x-0 max-md:border-b-0 max-md:pt-0 max-md:pb-[calc(1.25rem+env(safe-area-inset-bottom))] max-md:[html[data-keyboard]_&]:pb-5'
 );
 
@@ -62,7 +62,7 @@ export function SheetGrab({ onDismiss, className }: { onDismiss: () => void; cla
       onPointerCancel={(e) => up(e, true)}
       className={cn('flex shrink-0 cursor-grab justify-center pb-3 pt-2 md:hidden', GRIP, className)}
     >
-      <span className="h-1 w-10 bg-primaryStroke" />
+      <span className="h-1 w-10 rounded-control bg-primaryStroke" />
     </div>
   );
 }
