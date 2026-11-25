@@ -1,6 +1,7 @@
 import { type PointerEvent as ReactPointerEvent, useState } from 'react';
 
 import { niceTicks } from '@/infra/debug/stats';
+import { hoverWords } from '@/infra/debug/quality-header';
 import type { Gap, Layout } from '@/infra/debug/timeline';
 import { useWidth } from '@/shared-components/debug/useWidth';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -78,13 +79,7 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
     <div ref={ref} className="w-full">
       <div id="profiler-readout" className="min-h-5 truncate font-mono text-textTertiary">
         {at !== null
-          ? [
-              clock(t[at]!),
-              layout.runs.find((r) => at >= r.from && at < r.to)?.name ?? '',
-              ...series.map((s) => `${s.label} ${fixed(s.values[at], s.digits)} ${s.unit}`)
-            ]
-              .filter(Boolean)
-              .join(' · ')
+          ? hoverWords(t[at]!, layout.runs.find((r) => at >= r.from && at < r.to)?.name ?? '')
           : t.length > 0
             ? `${clock(t[0]!)} → ${clock(t[t.length - 1]!)}`
             : ''}
@@ -162,21 +157,9 @@ function Charts({ timeline }: { timeline: QualityTimeline }) {
   );
 }
 
-export function QualityView({ now, timeline }: { now: readonly (readonly [string, string])[] | null; timeline: QualityTimeline | null }) {
+export function QualityView({ timeline }: { timeline: QualityTimeline | null }) {
   return (
     <div id="profiler-quality" className="min-h-0 flex-1 overflow-y-auto px-3 py-1 text-xs leading-5">
-      <div id="profiler-now" className="flex flex-wrap gap-x-3 border-b border-primaryStroke/60 py-1 font-mono">
-        {now ? (
-          now.map(([name, value]) => (
-            <span key={name} className="flex items-baseline gap-1">
-              <span className="text-textSecondary">{name}</span>
-              <span className="tabular-nums text-textPrimary">{value}</span>
-            </span>
-          ))
-        ) : (
-          <span className="font-sans text-textTertiary">not watching</span>
-        )}
-      </div>
       {timeline && timeline.t.length > 0 && (
         <div className="pt-1">
           <Charts timeline={timeline} />

@@ -11,16 +11,20 @@ import { cn } from '@/utils/cn';
 export function DebugPanel({
   id,
   label,
+  lead,
   note,
   place,
   onClose,
+  actions,
   children
 }: {
   id: WindowId;
   label: string;
-  note: string;
+  lead?: ReactNode;
+  note?: ReactNode;
   place: string;
   onClose: () => void;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   const { dialogRef, box, press } = useDialogBox(id);
@@ -48,9 +52,11 @@ export function DebugPanel({
           if (!mobile) press(e, 'move');
         }}
       >
+        {lead}
         <span className="font-semibold">{label}</span>
-        <span className="text-xs text-textTertiary">{note}</span>
-        <span className="ml-auto flex items-center gap-1">
+        {note && <span className="min-w-0 truncate text-xs text-textTertiary">{note}</span>}
+        <span className="ml-auto flex items-center gap-2">
+          {actions}
           <Tooltip content="close">
             <button
               id={`${id}-close`}
