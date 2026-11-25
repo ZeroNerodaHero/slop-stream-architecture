@@ -899,22 +899,26 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     let setup = Arc::new(timings::Setup::start("webrtc", what));
     let dead = Arc::new(Notify::new());
     let connected = Arc::new(Notify::new());
-    let starts: Vec<Option<u8>> = tracks
-        .iter()
-        .map(|(_, out, _)| match out {
-            SlotOut::Video(feeds) => Some(feeds.pick(vp9).start_level(preview)),
-            SlotOut::Audio(_) => None,
-        })
-        .collect();
-    let watched = tracks
-        .iter()
-        .zip(&starts)
-        .filter_map(|((slot, out, _), start)| match (out, start) {
-            (SlotOut::Video(feeds), Some(level)) => Some((*slot, *level, Arc::clone(feeds.pick(vp9)))),
-            _ => None,
-        })
-        .collect();
     let resend = Arc::new(Resend::default());
+    let planned: Vec<(usize, SlotOut, Option<(Arc<Feed>, Arc<Viewer>, u8)>)> = tracks
+        .into_iter()
+        .map(|(slot, out, track_id)| {
+            let viewer = match &out {
+                SlotOut::Video(feeds) => {
+                    let feed = Arc::clone(feeds.pick(vp9));
+                    let start = feed.start_level(preview);
+                    let track = ViewerTrack::new(capability_of(feed.codec()), track_id, name.clone(), Arc::clone(&resend));
+                    Some((feed, Arc::new(Viewer::new(Arc::new(track), start, preview)), start))
+                }
+                SlotOut::Audio(_) => None,
+            };
+            (slot, out, viewer)
+        })
+        .collect();
+    let watched = planned
+        .iter()
+        .filter_map(|(slot, _, viewer)| viewer.as_ref().map(|(feed, viewer, start)| (*slot, *start, Arc::clone(feed), Arc::clone(viewer))))
+        .collect();
     let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched, Some(Arc::clone(&resend)), setup.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
@@ -925,17 +929,15 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     };
 
     let mut following: Vec<(Arc<Feed>, Arc<Viewer>)> = Vec::new();
-    for ((slot, out, track_id), start) in tracks.into_iter().zip(starts) {
-        let (local, viewer): (Arc<dyn TrackLocal + Send + Sync>, _) = match (&out, start) {
-            (SlotOut::Video(feeds), Some(start)) => {
-                let feed = feeds.pick(vp9);
+    for (slot, out, viewer) in planned {
+        let local: Arc<dyn TrackLocal + Send + Sync> = match (&out, &viewer) {
+            (_, Some((feed, viewer, _))) => {
                 log::info!("{what} {name}: slot {slot} in {}", feed.codec().name());
-                let viewer = Arc::new(Viewer::new(Arc::new(ViewerTrack::new(capability_of(feed.codec()), track_id, name.clone(), Arc::clone(&resend))), start, preview));
-                feed.join(Arc::clone(&viewer));
-                following.push((Arc::clone(feed), Arc::clone(&viewer)));
-                (Arc::clone(&viewer.track) as _, Some((Arc::clone(feed), viewer, start)))
+                feed.join(Arc::clone(viewer));
+                following.push((Arc::clone(feed), Arc::clone(viewer)));
+                Arc::clone(&viewer.track) as _
             }
-            (SlotOut::Audio(track), _) => (Arc::clone(track) as _, None),
+            (SlotOut::Audio(track), None) => Arc::clone(track) as _,
             (SlotOut::Video(_), None) => continue,
         };
         let sender = match peer.add_track(local).await {
@@ -1346,7 +1348,7 @@ async fn new_peer(
     name: &str,
     dead: Arc<Notify>,
     connected: Arc<Notify>,
-    watched: Vec<(usize, u8, Arc<Feed>)>,
+    watched: Vec<(usize, u8, Arc<Feed>, Arc<Viewer>)>,
     resend: Option<Arc<Resend>>,
     setup: Arc<timings::Setup>,
 ) -> anyhow::Result<RTCPeerConnection> {
@@ -1381,7 +1383,7 @@ async fn new_peer(
     let tag = format!("{} {name}", role.as_str());
     let hub = app.hub.clone();
     let room = name.to_owned();
-    let watched: Arc<[(usize, u8, Arc<Feed>)]> = watched.into();
+    let watched: Arc<[(usize, u8, Arc<Feed>, Arc<Viewer>)]> = watched.into();
     let early_hub = hub.clone();
     let early_room = room.clone();
     let early_watched = Arc::clone(&watched);
@@ -1391,7 +1393,7 @@ async fn new_peer(
             && !early_watched.is_empty()
             && !asked_early.swap(true, Ordering::SeqCst)
         {
-            let asks = early_watched.iter().map(|(slot, level, feed)| (*slot, feed.codec(), *level, Ask::Join)).collect();
+            let asks = early_watched.iter().map(|(slot, level, feed, _)| (*slot, feed.codec(), *level, Ask::Join)).collect();
             let hub = early_hub.clone();
             let room = early_room.clone();
             tokio::spawn(async move { hub.request_keyframes(&room, asks).await });
@@ -1414,7 +1416,11 @@ async fn new_peer(
             RTCPeerConnectionState::Connected
                 if !watched.is_empty() && !asked_backup.swap(true, Ordering::SeqCst) =>
             {
-                let asks = watched.iter().map(|(slot, level, feed)| (*slot, feed.codec(), *level, Ask::Backup(feed.layer(*level).keyframes.load(Ordering::Relaxed)))).collect();
+                let asks = watched
+                    .iter()
+                    .filter(|(_, _, _, viewer)| !viewer.track.holds_picture())
+                    .map(|(slot, level, feed, _)| (*slot, feed.codec(), *level, Ask::Backup(feed.layer(*level).keyframes.load(Ordering::Relaxed))))
+                    .collect();
                 let hub = hub.clone();
                 let room = room.clone();
                 tokio::spawn(async move { hub.request_keyframes(&room, asks).await });
