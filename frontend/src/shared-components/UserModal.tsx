@@ -277,10 +277,10 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
         id={`panel-${tab}`}
         role="tabpanel"
         aria-labelledby={`tab-${tab}`}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:pl-8 sm:pr-14 sm:py-5"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:px-8 sm:py-5"
       >
         <div className="max-w-[760px]">
-          <h2 id={`panel-${tab}-title`} className="mb-4 border-l-4 border-primaryBlue pl-3 text-lg font-semibold leading-tight">
+          <h2 id={`panel-${tab}-title`} className="mb-4 border-l-4 border-primaryBlue pl-3 pr-12 text-lg font-semibold leading-tight">
             {TABS[tab].label}
           </h2>
           <Suspense fallback={null}>
