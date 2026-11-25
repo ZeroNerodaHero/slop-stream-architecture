@@ -324,7 +324,7 @@ Opus and VP8 only: every browser has both, so a publisher cannot pick a codec
 some watcher lacks, and all watchers get the same bytes.
 
 `pub fn media_setup`: `twcc`: ask the remote side for transport-wide feedback. Only useful when the
-remote is a browser uploading to us; it adapts its bitrate to that feedback.
+remote is a browser uploading to us; it adapts its bitrate to that feedback. `resend`: a watcher's own nack answerer (`video/src/resend.rs`) in place of the stock one, so nacks for packets from before a layer switch go unanswered; `None` keeps the stock one. It also registers the mid and rid header extensions a simulcast offer needs.
 
 `pub fn opus_voice_capability`: Opus for voice only: mono speech at a low bitrate, with DTX so silence costs
 almost nothing. Never use it for the stream; music must not get DTX.
@@ -332,10 +332,7 @@ almost nothing. Never use it for the stream; music must not get DTX.
 `pub fn voice_media_setup`: Like `media_setup`, but for voice: the voice Opus for the mics, and VP8 for the cameras and
 screens shown in a voice channel, with TWCC so a browser sending one adapts its bitrate.
 
-`pub fn is_vp8_keyframe`: Whether a VP8 RTP payload starts a keyframe (RFC 7741): the first packet of
-partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the
-VP8 frame tag clear. Only VP8 is registered above, so it is the one codec a
-publisher can send us. Anything short or malformed is not a keyframe.
+Keyframes are read by `parse_vp8` in `video/src/simulcast.rs` (`simulcast.md`): the first packet of partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the VP8 frame tag clear. Anything short or malformed is not a keyframe.
 
 ## `video/src/thumbs.rs`
 

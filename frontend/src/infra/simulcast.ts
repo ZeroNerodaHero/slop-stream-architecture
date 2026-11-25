@@ -78,7 +78,13 @@ export function singleLayer(sourceHeight: number | undefined, top?: Top): Omit<L
 }
 
 export function sendEncodings(sourceHeight: number | undefined): Encoding[] {
-  return cameraLayers(sourceHeight).map(({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }) => ({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }));
+  return cameraLayers(sourceHeight).map(({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }) => ({
+    rid,
+    active,
+    scaleResolutionDownBy,
+    maxBitrate,
+    maxFramerate
+  }));
 }
 
 export function applyLayers(encodings: Encoding[], sourceHeight: number | undefined, top?: Top): number {
