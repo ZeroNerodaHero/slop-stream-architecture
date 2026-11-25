@@ -1114,6 +1114,7 @@ impl History {
             row.insert("name".into(), json!(line.name));
             row.insert("src".into(), json!(line.src));
             row.insert("rate".into(), json!(crate::agent::round(total.n as f64 / span, 3)));
+            row.insert("b".into(), json!(total.b.iter().map(|&(i, c)| (ms(bucket_us(i as usize)), c)).collect::<Vec<_>>()));
             out.push(Value::Object(row));
             if !blocking(&line.name) {
                 totals.add(dir, &line.kind, &sums);
@@ -1306,6 +1307,11 @@ mod tests {
         assert_eq!(rows[0]["max"], 4.0);
         assert_eq!(rows[0]["sum_ms"], 140.0);
         assert!(rows[0]["p50"].as_f64().unwrap() > 3.0);
+        let b = rows[0]["b"].as_array().unwrap();
+        assert_eq!(b.len(), 2);
+        assert_eq!(b.iter().map(|x| x[1].as_u64().unwrap()).sum::<u64>(), 40);
+        assert!(b[0][0].as_f64().unwrap() < b[1][0].as_f64().unwrap());
+        assert!((b[1][0].as_f64().unwrap() - 4.0).abs() < 0.3);
         let d = h.detail(rows[0]["key"].as_str().unwrap(), 0, 1_000_090).unwrap();
         assert_eq!(d["n"], json!([10, 30]));
         assert_eq!(d["sum"], json!([20.0, 120.0]));
