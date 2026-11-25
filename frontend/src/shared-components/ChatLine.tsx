@@ -53,9 +53,14 @@ export function placeOf(at: number, prevAt: number | undefined, same: boolean): 
   return { first, bucket: first || prevAt === undefined || minuteOf(prevAt) !== minuteOf(at) };
 }
 
+function Stamp({ at, children }: { at: number; children: ReactNode }) {
+  return <Tooltip content={at ? stamp(at) : null}>{children}</Tooltip>;
+}
+
 function GutterClock({ at, shown, className }: { at: number; shown: boolean; className?: string }) {
   return (
-    <span
+    <Stamp at={at}>
+      <span
       aria-hidden
       className={cn(
         GUTTER,
@@ -65,7 +70,8 @@ function GutterClock({ at, shown, className }: { at: number; shown: boolean; cla
       )}
     >
       {clock(at)}
-    </span>
+      </span>
+    </Stamp>
   );
 }
 
@@ -473,17 +479,18 @@ export function ChatLineShape({
 }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   const press = useLongPress();
-  const corner = <Corner mark={mark} actions={actions} open={press.open} firstInList={firstInList} />;
+  const hug = shape === 'bubbles' && !!mark;
+  const corner = <Corner mark={hug ? undefined : mark} actions={actions} open={press.open} firstInList={firstInList} />;
   const lineBox = cn(
     'group/line relative transition-colors duration-700',
     actions && '[-webkit-touch-callout:none] [@media(hover:hover)]:hover:bg-primaryStroke/10 [@media(hover:none)]:select-none',
-    mark && 'pr-8',
+    mark && !hug && 'pr-8',
     pending === 'sending' && 'opacity-50',
     pending === 'failed' && 'opacity-70',
     flash ? 'bg-primaryBlue/15 duration-150' : press.open && 'bg-primaryStroke/15'
   );
   const p = (className: string, children: ReactNode) => (
-    <p {...attrs} {...(actions ? press.handlers : {})} ref={press.ref} title={title} data-flash={flash || undefined} className={cn(lineBox, className)}>
+    <p {...attrs} {...(actions ? press.handlers : {})} ref={press.ref} aria-description={title} data-flash={flash || undefined} className={cn(lineBox, className)}>
       {children}
       {corner}
     </p>
@@ -504,7 +511,9 @@ export function ChatLineShape({
       over(
         row,
         <>
-          <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(at)}</span>
+          <Stamp at={at}>
+            <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(at)}</span>
+          </Stamp>
           {faced && <span className="shrink-0 self-start">{face}</span>}
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
             <span className="mr-1.5">{who}</span>
@@ -530,7 +539,9 @@ export function ChatLineShape({
             {head && (
               <span className="flex items-baseline gap-2">
                 <span className="min-w-0 truncate">{who}</span>
-                <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(at)}</span>
+                <Stamp at={at}>
+                  <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(at)}</span>
+                </Stamp>
               </span>
             )}
             {words}
@@ -543,23 +554,35 @@ export function ChatLineShape({
     );
   }
   const named = crowd && !mine && first;
+  const bubble = (
+    <span
+      data-bubble
+      className={cn(
+        'relative flex flex-col rounded-bubble border px-2.5 py-[3px] [overflow-wrap:anywhere]',
+        hug ? 'max-w-[calc(85%-20px)]' : 'max-w-[85%]',
+        mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
+      )}
+    >
+      {named ? <span className="flex min-w-0 items-baseline text-sm leading-4">{who}</span> : <span className="sr-only">{mine ? 'you' : name}: </span>}
+      {quote}
+      {words}
+      {pictures}
+    </span>
+  );
   return p(
     cn('flex gap-2 leading-tight', bucket && !bare && 'mt-1 first:mt-0'),
     <>
       {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-[5px]" />}
       <span className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
-        <span
-          data-bubble
-          className={cn(
-            'relative flex max-w-[85%] flex-col rounded-bubble border px-2.5 py-[3px] [overflow-wrap:anywhere]',
-            mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
-          )}
-        >
-          {named ? <span className="flex min-w-0 items-baseline text-sm leading-4">{who}</span> : <span className="sr-only">{mine ? 'you' : name}: </span>}
-          {quote}
-          {words}
-          {pictures}
-        </span>
+        {hug ? (
+          <span className={cn('flex w-full items-start gap-1.5', mine ? 'justify-end' : 'justify-start')}>
+            {mine && <span className="flex pt-1">{mark}</span>}
+            {bubble}
+            {!mine && <span className="flex pt-1">{mark}</span>}
+          </span>
+        ) : (
+          bubble
+        )}
         {reactions}
       </span>
       <Side side={side} />

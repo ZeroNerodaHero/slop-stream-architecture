@@ -239,7 +239,7 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
   const first = ids.length <= 2 ? ids.length : Math.ceil(ids.length / 2);
   const rows = [ids.slice(0, first), ids.slice(first)].filter((row) => row.length > 0);
   return (
-    <span className={cn('mt-1 flex max-w-full flex-col gap-1', many && 'w-[28rem]')}>
+    <span className={cn('mt-1 flex max-w-full flex-col gap-1', many && 'w-[28rem] overflow-hidden rounded-card')}>
       {rows.map((row, r) => (
         <span key={r} className={cn('flex gap-1', many && (small ? 'h-16' : 'h-24'))}>
           {row.map((id, j) => {
@@ -253,7 +253,7 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                   data-sensitive={id}
                   className={cn(
                     'relative flex flex-col items-center justify-center gap-1 overflow-hidden bg-backgroundTertiary',
-                    many ? 'min-w-0 flex-1' : small ? 'h-20 w-32 max-w-full' : 'h-[7.5rem] w-48 max-w-full'
+                    many ? 'min-w-0 flex-1' : cn('rounded-card', small ? 'h-20 w-32 max-w-full' : 'h-[7.5rem] w-48 max-w-full')
                   )}
                 >
                   <span className="relative rounded-control bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
@@ -264,23 +264,23 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
               );
             }
             return (
-              <button
-                key={id}
-                type="button"
-                aria-label={many ? `picture ${i + 1} of ${ids.length}` : 'picture'}
-                title="see it full size"
-                className={cn(THUMB_HOVER, many ? 'min-w-0 flex-1' : 'block max-w-full')}
-                onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
-              >
-                <img
-                  src={srcOf(id)}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  onError={() => failed(id)}
-                  className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')}
-                />
-              </button>
+              <Tooltip key={id} content="see it full size">
+                <button
+                  type="button"
+                  aria-label={many ? `picture ${i + 1} of ${ids.length}` : 'picture'}
+                  className={cn(THUMB_HOVER, many ? 'min-w-0 flex-1' : 'block max-w-full overflow-hidden rounded-card')}
+                  onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
+                >
+                  <img
+                    src={srcOf(id)}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    onError={() => failed(id)}
+                    className={many ? 'h-full w-full object-cover' : cn('block max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')}
+                  />
+                </button>
+              </Tooltip>
             );
           })}
         </span>
