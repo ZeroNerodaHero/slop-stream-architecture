@@ -2,7 +2,7 @@ import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
 import { DEBUG_KEYS, migrateDebugSettings, PERF_KEY, type PerfMode, perfModeOf } from '@/infra/debug-flag';
-import { applyShapeTo, type Shape, shapeOf } from '@/infra/shape';
+import { applyShapeTo, DEFAULT_SHAPE, type Shape, shapeOf } from '@/infra/shape';
 import { store } from '@/infra/store';
 import {
   applyPalette,
@@ -320,7 +320,7 @@ export function applyStoredTheme() {
 
 export { SHAPES, type Shape } from '@/infra/shape';
 
-const storedShapeAtom = atomWithStorage<unknown>('settings.shape', 'block', undefined, { getOnInit: true });
+const storedShapeAtom = atomWithStorage<unknown>('settings.shape', DEFAULT_SHAPE, undefined, { getOnInit: true });
 export const shapeAtom = atom((get): Shape => shapeOf(get(storedShapeAtom)));
 
 export function setShape(shape: Shape) {

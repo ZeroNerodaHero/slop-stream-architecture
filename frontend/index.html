@@ -13,9 +13,13 @@
         }
         var size = JSON.parse(localStorage.getItem('settings.textSize') || 'null');
         if ([80, 90, 110, 125].indexOf(size) !== -1) style.setProperty('font-size', size + '%');
-        var shape = JSON.parse(localStorage.getItem('settings.shape') || 'null');
-        if (shape === 'soft' || shape === 'bubble') document.documentElement.dataset.shape = shape;
       } catch (e) {}
+      try {
+        var shape = JSON.parse(localStorage.getItem('settings.shape') || 'null');
+        if (shape !== 'block') document.documentElement.dataset.shape = shape === 'soft' ? 'soft' : 'bubble';
+      } catch (e) {
+        document.documentElement.dataset.shape = 'bubble';
+      }
     </script>
     <script>
       try {
