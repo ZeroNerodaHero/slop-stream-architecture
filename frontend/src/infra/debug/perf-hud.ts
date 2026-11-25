@@ -213,3 +213,76 @@ export class PerfSampler {
     }
   }
 }
+
+export const HISTORY = 60;
+
+export type PerfSeries = 'fps' | 'busy' | 'lagMs' | 'memoryMb' | 'downKBps' | 'videoKbps';
+
+export const PERF_SERIES: readonly PerfSeries[] = ['fps', 'busy', 'lagMs', 'memoryMb', 'downKBps', 'videoKbps'];
+
+export class PerfHistory {
+  readonly size: number;
+  private readonly buf: Record<PerfSeries, Float64Array>;
+  private head = 0;
+  private count = 0;
+
+  constructor(size = HISTORY) {
+    this.size = size;
+    this.buf = Object.fromEntries(PERF_SERIES.map((key) => [key, new Float64Array(size)])) as Record<PerfSeries, Float64Array>;
+  }
+
+  get length(): number {
+    return this.count;
+  }
+
+  push(snap: PerfSnapshot): void {
+    for (const key of PERF_SERIES) {
+      const value = snap[key];
+      this.buf[key][this.head] = value === null ? Number.NaN : value;
+    }
+    this.head = (this.head + 1) % this.size;
+    this.count = Math.min(this.count + 1, this.size);
+  }
+
+  values(key: PerfSeries): number[] {
+    const out: number[] = [];
+    const buf = this.buf[key];
+    const start = (this.head - this.count + this.size) % this.size;
+    for (let i = 0; i < this.count; i++) out.push(buf[(start + i) % this.size]!);
+    return out;
+  }
+}
+
+export function rangeOf(key: PerfSeries, values: readonly number[]): readonly [number, number] {
+  const seen = values.filter((v) => Number.isFinite(v));
+  const peak = seen.length ? Math.max(...seen) : 0;
+  if (key === 'fps') return [0, Math.max(60, peak)];
+  if (key === 'busy') return [0, 1];
+  if (key === 'memoryMb' && seen.length) {
+    const low = Math.min(...seen);
+    const pad = Math.max((peak - low) * 0.15, 1);
+    return [Math.max(0, low - pad), peak + pad];
+  }
+  return [0, Math.max(peak * 1.15, key === 'lagMs' ? 50 : 1)];
+}
+
+export function sparkLines(values: readonly number[], range: readonly [number, number], width: number, height: number, size = HISTORY, inset = 1.5): string[] {
+  const [lo, hi] = range;
+  const span = hi - lo || 1;
+  const step = width / Math.max(size - 1, 1);
+  const lines: string[] = [];
+  let points: string[] = [];
+  values.forEach((v, i) => {
+    if (!Number.isFinite(v)) {
+      if (points.length) lines.push(points.join(' '));
+      points = [];
+      return;
+    }
+    const x = width - (values.length - 1 - i) * step;
+    const t = Math.min(Math.max((v - lo) / span, 0), 1);
+    const y = inset + (1 - t) * (height - inset * 2);
+    points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  });
+  if (points.length) lines.push(points.join(' '));
+  return lines;
+}

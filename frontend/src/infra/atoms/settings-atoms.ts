@@ -1,7 +1,7 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import { DEBUG_KEYS, migrateDebugSettings } from '@/infra/debug-flag';
+import { DEBUG_KEYS, migrateDebugSettings, PERF_KEY, type PerfMode, perfModeOf } from '@/infra/debug-flag';
 import { store } from '@/infra/store';
 import {
   applyPalette,
@@ -187,11 +187,11 @@ export function setQualityEnabled(on: boolean) {
   store.set(storedQualityAtom, on);
 }
 
-const storedPerfAtom = atomWithStorage<unknown>('settings.debugPerf', false, undefined, { getOnInit: true });
-export const perfEnabledAtom = atom((get) => get(storedPerfAtom) === true);
+const storedPerfAtom = atomWithStorage<unknown>(PERF_KEY, 'off', undefined, { getOnInit: true });
+export const perfModeAtom = atom((get) => perfModeOf(get(storedPerfAtom)));
 
-export function setPerfEnabled(on: boolean) {
-  store.set(storedPerfAtom, on);
+export function setPerfMode(mode: PerfMode) {
+  store.set(storedPerfAtom, mode);
 }
 
 const storedHideBotsAtom = atomWithStorage<unknown>('settings.hideBots', false, undefined, { getOnInit: true });
