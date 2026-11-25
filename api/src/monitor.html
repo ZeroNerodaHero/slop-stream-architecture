@@ -223,7 +223,7 @@
   .arch .elabel { display: none; }
   .arch .elabel rect { fill: var(--bg); stroke: var(--stroke); }
   .arch .elabel text { font-size: 10px; fill: var(--t2); }
-  .arch.labels .elabel, .arch .edge.hot .elabel { display: inline; }
+  .arch .edge.hot .elabel { display: inline; }
   .arch.focus .edge:not(.hot) { opacity: .1; }
   .arch.focus .node:not(.hot) { opacity: .35; }
   .arch .edge.hot path { stroke-width: 2.25; }
@@ -417,7 +417,7 @@
   const cardId = (r) => `${r.dir}|${cardKey(r)}`;
   const kindLabel = (k) => KIND_LABEL[k] || k;
 
-  const sel = { box: null, range: '1h', tab: 'host', cview: 'table', labels: false, ctr: null, cq: '' };
+  const sel = { box: null, range: '1h', tab: 'host', cview: 'table', ctr: null, cq: '' };
   const views = {
     endpoints: { name: 'endpoints', q: '', pick: new Set(), errs: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
     calls: { name: 'calls', q: '', pick: new Set(), errs: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
@@ -1121,7 +1121,7 @@
       shell.append(left);
       return shell;
     }
-    const key = `${t.name}|${data.at}|${sel.labels}|${data.edges.length}`;
+    const key = `${t.name}|${data.at}|${data.edges.length}`;
     const built = archBuilt.get(t.name);
     if (built && built.key === key) {
       built.error.textContent = (A && A.error) || '';
@@ -1131,14 +1131,6 @@
     }
     const containers = data.nodes.filter((n) => !n.outside).length;
     const caption = el('h2', null, `Architecture (${containers} containers, ${data.edges.length} connections)`);
-    const labels = el('div', 'seg');
-    labels.setAttribute('role', 'group');
-    labels.setAttribute('aria-label', 'edge labels');
-    for (const [id, text] of [[false, 'labels on hover'], [true, 'all labels']]) {
-      const b = button(null, text, () => { sel.labels = id; render(); });
-      b.setAttribute('aria-pressed', String(sel.labels === id));
-      labels.append(b);
-    }
     const left = el('div', 'archl');
     const error = el('p', 'note');
     error.textContent = (A && A.error) || '';
@@ -1318,7 +1310,7 @@
     }
     const drawSparks = () => requestAnimationFrame(() => { for (const c of charts) if (side.contains(c.canvas)) draw(c); });
     panel(now);
-    const barParts = [caption, nets, labels];
+    const barParts = [caption, nets];
     bar.append(...barParts);
     archBuilt.set(t.name, { key, shell, panel, error, barParts });
     return shell;
@@ -1358,7 +1350,7 @@
     const W = PADX * 2 + tiers.length * COLW + 30;
     const H = y;
     const mid = `m-${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-    const svg = sv('svg', { class: `arch${sel.labels ? ' labels' : ''}`, width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `containers of ${t.name} and how they connect` });
+    const svg = sv('svg', { class: 'arch', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `containers of ${t.name} and how they connect` });
     const defs = sv('defs');
     for (const [id, color] of [['a-inter', COLORS.t3], ['a-in', COLORS.blue], ['a-out', COLORS.violet], ['a-hot', COLORS.white], ['a-cut', COLORS.red]]) {
       const m = sv('marker', { id: `${mid}-${id}`, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
