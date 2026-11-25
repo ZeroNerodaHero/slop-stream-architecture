@@ -21,6 +21,8 @@ const RELAY_PORT = Number(process.env.RELAY_PORT || 17890);
 const SQUEEZE_MS = Number(process.env.SQUEEZE_MS || 10000);
 const HIDDEN_MS = Number(process.env.HIDDEN_MS || 8000);
 const RESUMES = Number(process.env.RESUMES || 8);
+const LAYERED = MODE === 'simulcast' || MODE === 'vp9';
+const COPY_HOLD_MS = 10000;
 const WS_URL = `ws://127.0.0.1:${WS_PORT}/ws`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
@@ -35,7 +37,8 @@ function check(name, ok, detail) {
 }
 
 const PAGE = `<!doctype html><meta charset="utf-8"><body><script type="module">
-import { sendEncodings, applyLayers } from '/simulcast.js';
+import { sendEncodings, applyLayers, copyEncodings, applyCopy } from '/simulcast.js';
+import { vp9First, vp8Only } from '/camera-codec.js';
 const signal = (url, setup) => new Promise((resolve, reject) => {
   const ws = new WebSocket(url);
   ws.onopen = () => ws.send(JSON.stringify(setup));
@@ -53,32 +56,59 @@ window.publish = async (name, url, mode) => {
   track.contentHint = 'motion';
   const height = track.getSettings().height;
   const pc = new RTCPeerConnection();
-  const encodings = mode === 'single' ? [{ maxBitrate: 2500000, scaleResolutionDownBy: height / 720 }] : sendEncodings(height);
-  const sender = pc.addTransceiver(track, { direction: 'sendonly', streams: [stream], sendEncodings: encodings }).sender;
+  const codec = mode === 'vp9' ? 'vp9' : 'vp8';
+  const caps = RTCRtpSender.getCapabilities('video').codecs;
+  const encodings = mode === 'single' ? [{ maxBitrate: 2500000, scaleResolutionDownBy: height / 720 }] : sendEncodings(height, codec);
+  const camera = pc.addTransceiver(track, { direction: 'sendonly', streams: [stream], sendEncodings: encodings });
+  if (codec === 'vp9') camera.setCodecPreferences(vp9First(caps));
+  const sender = camera.sender;
   pc.addTransceiver(stream.getAudioTracks()[0], { direction: 'sendonly', streams: [stream] });
+  let copy = null;
+  if (codec === 'vp9') {
+    const t = pc.addTransceiver(track, { direction: 'sendonly', streams: [stream], sendEncodings: copyEncodings(height) });
+    t.setCodecPreferences(vp8Only(caps));
+    copy = t.sender;
+  }
   await pc.setLocalDescription(await pc.createOffer());
   await gathered(pc);
   const { ws, sdp } = await signal(url, { role: 'publish', name, sdp: pc.localDescription.sdp, session: 1, token: 1 });
   await pc.setRemoteDescription({ type: 'answer', sdp });
   if (mode !== 'single') {
     const params = sender.getParameters();
-    applyLayers(params.encodings, height);
+    applyLayers(params.encodings, height, undefined, codec);
     await sender.setParameters(params);
   }
-  window.__pub = { pc, ws, sender };
-  return { height, offeredRids: (pc.localDescription.sdp.match(/a=rid:\\S+ send/g) || []).length };
+  const copyEvents = [];
+  const tuneCopy = async (upper) => {
+    const params = copy.getParameters();
+    applyCopy(params.encodings, height, undefined, upper);
+    await copy.setParameters(params);
+  };
+  if (copy) await tuneCopy(false);
+  ws.addEventListener('message', (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.event !== 'copy' || !copy) return;
+    copyEvents.push({ t: Math.round(performance.now()), full: msg.full });
+    tuneCopy(msg.full === true);
+  });
+  window.__pub = { pc, ws, sender, copy, copyEvents };
+  return { height, offeredRids: (pc.localDescription.sdp.match(/a=rid:\\S+ send/g) || []).length, answered: sender.getParameters().codecs.map((c) => c.mimeType), copyAnswered: copy && copy.getParameters().codecs.map((c) => c.mimeType) };
 };
+window.copyEvents = () => window.__pub.copyEvents.map((e) => e);
+window.now = () => Math.round(performance.now());
 window.publishStats = async () => {
   const out = [];
-  for (const s of (await window.__pub.pc.getStats()).values()) if (s.type === 'outbound-rtp' && s.kind === 'video') out.push({ rid: s.rid, h: s.frameHeight, bytes: s.bytesSent, active: s.active, reason: s.qualityLimitationReason, pli: s.pliCount, kf: s.keyFramesEncoded, fps: s.framesPerSecond });
+  const stats = await window.__pub.pc.getStats();
+  for (const s of stats.values()) if (s.type === 'outbound-rtp' && s.kind === 'video') out.push({ rid: s.rid, mid: s.mid, codec: stats.get(s.codecId)?.mimeType, h: s.frameHeight, bytes: s.bytesSent, active: s.active, reason: s.qualityLimitationReason, pli: s.pliCount, kf: s.keyFramesEncoded, fps: s.framesPerSecond, frames: s.framesEncoded, qp: s.qpSum });
   return out.sort((a, b) => (a.rid || '').localeCompare(b.rid || ''));
 };
 window.views = [];
-window.watch = async (name, url, preview = false, relay = 0) => {
+window.watch = async (name, url, preview = false, relay = 0, vp8only = false) => {
   const view = { t0: performance.now(), firstFrame: null, firstHeight: null, samples: [], frameTimes: [], closed: false };
   const pc = new RTCPeerConnection();
   view.pc = pc;
-  pc.addTransceiver('video', { direction: 'recvonly' });
+  const recv = pc.addTransceiver('video', { direction: 'recvonly' });
+  if (vp8only) recv.setCodecPreferences(vp8Only(RTCRtpReceiver.getCapabilities('video').codecs));
   pc.addTransceiver('audio', { direction: 'recvonly' });
   const video = document.createElement('video');
   video.muted = true;
@@ -108,9 +138,10 @@ window.watch = async (name, url, preview = false, relay = 0) => {
   await pc.setRemoteDescription({ type: 'answer', sdp: relay ? sdp.replace(/ (\\d+) typ host/g, ' ' + relay + ' typ host') : sdp });
   const sample = async () => {
     if (view.closed) return;
-    for (const s of (await pc.getStats()).values()) {
+    const stats = await pc.getStats();
+    for (const s of stats.values()) {
       if (s.type === 'inbound-rtp' && s.kind === 'audio') view.audioBytes = s.bytesReceived || 0;
-      if (s.type === 'inbound-rtp' && s.kind === 'video') view.samples.push({ abytes: view.audioBytes || 0, t: Math.round(performance.now() - view.t0), h: s.frameHeight || 0, frames: s.framesDecoded || 0, bytes: s.bytesReceived || 0, freeze: s.totalFreezesDuration || 0, lost: s.packetsLost || 0, kf: s.keyFramesDecoded || 0, pli: s.pliCount || 0 });
+      if (s.type === 'inbound-rtp' && s.kind === 'video') view.samples.push({ codec: stats.get(s.codecId)?.mimeType || null, abytes: view.audioBytes || 0, t: Math.round(performance.now() - view.t0), h: s.frameHeight || 0, frames: s.framesDecoded || 0, bytes: s.bytesReceived || 0, freeze: s.totalFreezesDuration || 0, lost: s.packetsLost || 0, kf: s.keyFramesDecoded || 0, pli: s.pliCount || 0 });
     }
     setTimeout(sample, 100);
   };
@@ -121,17 +152,19 @@ window.watch = async (name, url, preview = false, relay = 0) => {
 window.say = (i, text) => { const v = window.views[i]; v.ws.send(text); return Math.round(performance.now() - v.t0); };
 window.frameAfter = (i, t) => window.views[i].frameTimes.find(([at]) => at > t) || null;
 window.sock = (i) => ({ closed: window.views[i].wsClosed, errors: window.views[i].wsErrors });
-window.view = (i) => { const v = window.views[i]; return { firstFrame: v.firstFrame, afterAnswer: v.afterAnswer, firstHeight: v.firstHeight, samples: v.samples }; };
+window.view = (i) => { const v = window.views[i]; return { firstFrame: v.firstFrame, afterAnswer: v.afterAnswer, firstHeight: v.firstHeight, samples: v.samples, codec: v.samples.map((s) => s.codec).filter(Boolean).at(-1) || null, offered: v.pc.localDescription.sdp.match(/a=rtpmap:\\d+ (VP8|VP9)/g) || [] }; };
 window.unwatch = (i) => { const v = window.views[i]; v.closed = true; v.ws.close(); v.pc.close(); v.video.remove(); };
 </script>`;
 
 function serve() {
   const module = stripTypeScriptTypes(fs.readFileSync(path.join(ROOT, 'frontend/src/infra/simulcast.ts'), 'utf8'));
+  const codecs = stripTypeScriptTypes(fs.readFileSync(path.join(ROOT, 'frontend/src/infra/camera-codec.ts'), 'utf8'));
   return http
     .createServer((req, res) => {
       const url = new URL(req.url, 'http://x');
       if (url.pathname === '/') return res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
       if (url.pathname === '/simulcast.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end(module);
+      if (url.pathname === '/camera-codec.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end(codecs);
       if (req.method === 'POST' && /^\/api\/streams\/[^/]+\/go-live$/.test(url.pathname)) return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ session: 1, token: 1 }));
       if (req.method === 'POST' && url.pathname.startsWith('/api/streams/')) return res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
       res.writeHead(404).end();
@@ -223,23 +256,38 @@ async function browser(extra = []) {
   });
 }
 
-async function joinTimes(page, name, preview = false) {
+async function joinTimes(page, name, preview = false, vp8only = false) {
   const times = [];
   const afterAnswer = [];
   const heights = [];
+  const codecs = [];
   for (let i = 0; i < JOINS; i++) {
-    const id = await page.evaluate(([n, u, p]) => window.watch(n, u, p), [name, WS_URL, preview]);
-    const v = await waitFor(() => page.evaluate((i) => window.view(i).firstFrame !== null && window.view(i), id), 8000, 20);
+    const id = await page.evaluate(([n, u, p, v]) => window.watch(n, u, p, 0, v), [name, WS_URL, preview, vp8only]);
+    const v = await waitFor(() => page.evaluate((i) => window.view(i).firstFrame !== null && window.view(i).codec !== null && window.view(i), id), 8000, 20);
     await page.evaluate((i) => window.unwatch(i), id);
     if (v) {
       if (process.env.JOIN_TRACE) console.log('join', JSON.stringify({ first: Math.round(v.firstFrame), samples: v.samples.map((s) => [s.t, s.bytes, s.frames, s.pli]) }));
       times.push(Math.round(v.firstFrame));
       afterAnswer.push(Math.round(v.afterAnswer));
       heights.push(v.firstHeight);
+      codecs.push(v.codec);
     }
     await sleep(700);
   }
-  return { times, afterAnswer, heights };
+  return { times, afterAnswer, heights, codecs };
+}
+
+async function sendRates(pub, ms = 6000) {
+  const a = await pub.evaluate(() => window.publishStats());
+  await sleep(ms);
+  const b = await pub.evaluate(() => window.publishStats());
+  return b
+    .map((l) => {
+      const was = a.find((x) => x.mid === l.mid && x.rid === l.rid);
+      const frames = l.frames - (was?.frames || 0);
+      return { mid: l.mid, rid: l.rid || 'single', codec: l.codec, h: l.h, fps: l.fps, kbps: Math.round(((l.bytes - (was?.bytes || 0)) * 8) / ms), avgQp: frames > 0 ? Math.round(((l.qp - (was?.qp || 0)) / frames) * 10) / 10 : null, reason: l.reason };
+    })
+    .filter((l) => l.kbps > 0);
 }
 
 (async () => {
@@ -275,8 +323,8 @@ async function joinTimes(page, name, preview = false) {
       if (prev) ramp.kbps.push({ t: at, kbps: Math.round(((total - prev.total) * 8) / (at - prev.at)) });
       prev = { total, at };
       for (const l of layers) if (l.bytes > 0 && ramp.firstBytesMs[l.rid || 'single'] === undefined) ramp.firstBytesMs[l.rid || 'single'] = at;
-      const wanted = MODE === 'simulcast' ? 3 : 1;
-      const tall = layers.some((l) => l.h === (MODE === 'simulcast' ? 1080 : 720));
+      const wanted = MODE === 'vp9' ? 4 : LAYERED ? 3 : 1;
+      const tall = layers.some((l) => l.h === (LAYERED ? 1080 : 720));
       return tall && Object.keys(ramp.firstBytesMs).length >= wanted && ramp.kbps.length > 4 && ramp.kbps.slice(-4).every((k) => k.kbps > (MODE === 'simulcast' ? 3000 : 2000));
     }, 90000, 500);
     ramp.settledMs = Date.now() - t0;
@@ -289,8 +337,23 @@ async function joinTimes(page, name, preview = false) {
       check('the publisher sends three layers', sending.length === 3, layers);
       check('no layer sends more than 30fps', sending.every((l) => (l.fps || 0) <= 31), layers);
       check('video binds a layer per rid', ups.length === 3, ups.map((l) => l.replace(/^\d+ /, '')));
+    } else if (MODE === 'vp9') {
+      const camera = sending.filter((l) => ['q', 'h', 'f'].includes(l.rid));
+      const copy = sending.filter((l) => l.rid === 'cq' || l.rid === 'ch');
+      check('the browser offers three camera rids and two copy rids', published.offeredRids === 5, published);
+      check('the camera is answered VP9 only and the copy VP8 only', published.answered.join() === 'video/VP9' && published.copyAnswered.join() === 'video/VP8', published);
+      check('the camera sends three VP9 layers', camera.length === 3 && camera.every((l) => l.codec === 'video/VP9'), layers);
+      check('the copy sends its low VP8 layer and holds the upper one', copy.length === 1 && copy[0].rid === 'cq' && copy[0].codec === 'video/VP8' && copy[0].h === 360, layers);
+      check('no layer sends more than 30fps', sending.every((l) => (l.fps || 0) <= 31), layers);
+      check('video binds three VP9 layers and the VP8 copy', ups.length === 4 && ups.filter((l) => /VP9/.test(l)).length === 3 && ups.filter((l) => /VP8/.test(l)).length === 1, ups.map((l) => l.replace(/^\d+ /, '')));
+      check('video reads the camera as VP9 with a VP8 copy', sfu.lines.some((l) => /publish cam: start, 2 slot\(s\), camera in VP9 with a VP8 copy/.test(l)), sfu.lines.filter((l) => /publish cam: start/.test(l)));
     } else {
       check('the publisher sends one encoding', sending.length === 1, layers);
+    }
+
+    if (LAYERED) {
+      await sleep(2000);
+      results.sendRates = await sendRates(pub);
     }
 
     const viewBrowser = await browser();
@@ -304,11 +367,52 @@ async function joinTimes(page, name, preview = false) {
     if (process.env.TIMINGS) results.timings = await (await fetch('http://127.0.0.1:9300/timings').catch(() => null))?.json().catch(() => null);
     check('every join got a first frame', joins.times.length === JOINS, results.firstFrame);
 
-    if (MODE === 'simulcast') {
+    if (MODE === 'vp9') check('viewers that can decode VP9 get VP9', joins.codecs.length === JOINS && joins.codecs.every((c) => c === 'video/VP9'), joins.codecs);
+    if (MODE === 'vp9') {
+      const vp8 = await joinTimes(view, 'cam', false, true);
+      results.vp8FirstFrame = { joins: vp8.times.length, medianMs: median(vp8.times), p90Ms: pct(vp8.times, 0.9), maxMs: Math.max(...vp8.times), afterAnswerMedianMs: median(vp8.afterAnswer), times: vp8.times, heights: vp8.heights, codecs: [...new Set(vp8.codecs)] };
+      check('every VP8-only join got a first frame', vp8.times.length === JOINS, results.vp8FirstFrame);
+      check('VP8-only viewers get VP8 from the copy', vp8.codecs.every((c) => c === 'video/VP8') && vp8.heights.every((h) => h === 360 || h === 720), results.vp8FirstFrame);
+      const vp8Previews = await joinTimes(view, 'cam', true, true);
+      check('VP8-only previews get the copy at 360', vp8Previews.heights.length === JOINS && vp8Previews.heights.every((h) => h === 360) && vp8Previews.codecs.every((c) => c === 'video/VP8'), { heights: vp8Previews.heights, codecs: [...new Set(vp8Previews.codecs)] });
+
+      await sleep(COPY_HOLD_MS + 2000);
+      const copyOff = await pub.evaluate(() => window.copyEvents());
+      const startedAt = await pub.evaluate(() => window.now());
+      const vp8Id = await view.evaluate((u) => window.watch('cam', u, false, 0, true), WS_URL);
+      const vp9Id = await view.evaluate((u) => window.watch('cam', u), WS_URL);
+      const climbed = await waitFor(async () => (await view.evaluate((i) => window.view(i), vp8Id)).samples.at(-1)?.h === 720, 20000, 200);
+      const vp8View = await view.evaluate((i) => window.view(i), vp8Id);
+      const vp9View = await view.evaluate((i) => window.view(i), vp9Id);
+      const on = (await pub.evaluate(() => window.copyEvents())).find((e) => e.t > startedAt && e.full);
+      await view.evaluate((i) => window.unwatch(i), vp8Id);
+      const leftAt = await pub.evaluate(() => window.now());
+      const off = await waitFor(async () => (await pub.evaluate(() => window.copyEvents())).find((e) => e.t > leftAt && !e.full), COPY_HOLD_MS + 5000, 200);
+      await sleep(2000);
+      const quiet = await sendRates(pub, 3000);
+      await view.evaluate((i) => window.unwatch(i), vp9Id);
+      results.copy = {
+        offBeforeTest: copyOff.at(-1) || null,
+        upperOnAfterMs: on ? on.t - startedAt : null,
+        vp8ViewerOn720AfterMs: climbed ? heightsOf(vp8View.samples).find((c) => c.h === 720)?.t : null,
+        vp8ViewerChanges: heightsOf(vp8View.samples),
+        vp8ViewerCodec: vp8View.codec,
+        vp9ViewerCodec: vp9View.codec,
+        vp9ViewerChanges: heightsOf(vp9View.samples),
+        upperOffAfterLeaveMs: off ? off.t - leftAt : null,
+        sendingAfter: quiet.map((l) => `${l.rid}:${l.codec}:${l.h}:${l.kbps}`)
+      };
+      check('a VP8 viewer turns the copy upper layer on and climbs to 720', !!on && !!climbed && vp8View.codec === 'video/VP8', results.copy);
+      check('a VP9 viewer watching at the same time stays on VP9', vp9View.codec === 'video/VP9' && vp9View.samples.at(-1)?.h >= 720, results.copy);
+      check('the copy upper layer turns off after the hold once VP8 viewers leave', !!off && off.t - leftAt >= COPY_HOLD_MS - 1500 && !quiet.some((l) => l.rid === 'ch'), results.copy);
+    }
+
+    if (LAYERED) {
       check('new viewers start on a full-size layer', joins.heights.every((h) => h >= 720), joins.heights);
       const previews = await joinTimes(view, 'cam', true);
       results.previewFirstFrame = { medianMs: median(previews.times), p90Ms: pct(previews.times, 0.9), heights: previews.heights };
       check('previews get the lowest layer, 360', previews.heights.length === JOINS && previews.heights.every((h) => h === 360), results.previewFirstFrame);
+      if (MODE === 'vp9') check('VP9 previews stay on VP9', previews.codecs.every((c) => c === 'video/VP9'), previews.codecs);
 
       const id = await view.evaluate((u) => window.watch('cam', u), WS_URL);
       await sleep(9000);
@@ -322,7 +426,7 @@ async function joinTimes(page, name, preview = false) {
     }
 
     if (!process.env.SKIP_PAUSE) {
-      const top = MODE === 'simulcast' ? 1080 : 720;
+      const top = LAYERED ? 1080 : 720;
       const samples = async (i) => (await view.evaluate((i) => window.view(i), i)).samples;
       const id = await view.evaluate((u) => window.watch('cam', u), WS_URL);
       await waitFor(async () => (await samples(id)).at(-1)?.h === top, 20000);
@@ -372,7 +476,7 @@ async function joinTimes(page, name, preview = false) {
       check('it comes back on the layer it had', back && back[1] === top, results.hiddenViewer);
       check('sequence numbers run on across a pause', results.hiddenViewer.lostAcrossAllPauses < 20, results.hiddenViewer);
 
-      if (MODE === 'simulcast') {
+      if (LAYERED) {
         await view.evaluate((i) => window.say(i, '{"view":"small"}'), id);
         const low = await waitFor(async () => (await samples(id)).at(-1)?.h === 360, 4000);
         const s0 = (await samples(id)).length;
@@ -405,12 +509,12 @@ async function joinTimes(page, name, preview = false) {
     }
 
     {
-      const gate = MODE === 'simulcast' ? check : (name, ok, detail) => results.checks.push({ name, ok, detail, info: true });
+      const gate = LAYERED ? check : (name, ok, detail) => results.checks.push({ name, ok, detail, info: true });
       const pipe = relay(RELAY_PORT, UDP_PORT);
       const at = (i) => view.evaluate((i) => Math.round(performance.now() - window.views[i].t0), i);
       const samples = async (i) => (await view.evaluate((i) => window.view(i), i)).samples;
       const slowId = await view.evaluate(([u, r]) => window.watch('cam', u, false, r), [WS_URL, RELAY_PORT]);
-      await waitFor(async () => (await samples(slowId)).at(-1)?.h === (MODE === 'simulcast' ? 1080 : 720), 15000);
+      await waitFor(async () => (await samples(slowId)).at(-1)?.h === (LAYERED ? 1080 : 720), 15000);
       await sleep(1000);
       const before = (await samples(slowId)).at(-1);
       const throttledAt = await at(slowId);
@@ -456,7 +560,7 @@ async function joinTimes(page, name, preview = false) {
       pipe.close();
     }
 
-    if (MODE === 'simulcast') {
+    if (LAYERED) {
       const thumb = await waitFor(async () => (await fetch(`http://127.0.0.1:${WS_PORT}/thumb/cam.jpg`).catch(() => null))?.ok, 15000, 500);
       check('the thumbnail comes from the low layer', !!thumb);
     }
@@ -465,7 +569,7 @@ async function joinTimes(page, name, preview = false) {
     const decided = sfu.lines.map((l) => /on layer (\d+) (\d+)ms after the decision/.exec(l)).filter(Boolean).map((m) => Number(m[2]));
     if (decided.length) results.switchMs = { n: decided.length, medianMs: median(decided), maxMs: Math.max(...decided), all: decided };
 
-    if (MODE === 'simulcast' && !process.env.SKIP_DUMMY) {
+    if (LAYERED && !process.env.SKIP_DUMMY) {
       const dummy = start(['dummy'], { RUST_LOG: 'warn,video=info', DUMMY_STREAMS: '1', DUMMY_NAMES: 'dummy-a', DUMMY_PASSWORD: 'local-only', API_URL: `http://127.0.0.1:${HTTP_PORT}`, VIDEO_WS_URL: WS_URL, DUMMY_CHAT: '0', DUMMY_GIFS: path.join(ROOT, 'random-media/gifs') }, 'dummy');
       procs.push(dummy.child);
       const live = await waitFor(async () => (await (await fetch(`http://127.0.0.1:${WS_PORT}/live`)).json()).includes('dummy-a'), 30000, 500);
@@ -484,7 +588,7 @@ async function joinTimes(page, name, preview = false) {
   }
   if (process.env.LOG) fs.writeFileSync(process.env.LOG, sfu.lines.join('\n'));
   if (process.env.OUT) fs.writeFileSync(process.env.OUT, JSON.stringify(results, null, 2));
-  console.log(JSON.stringify({ publisherRamp: results.publisherRamp && { firstBytesMs: results.publisherRamp.firstBytesMs, settledMs: results.publisherRamp.settledMs }, firstFrame: results.firstFrame, previewFirstFrame: results.previewFirstFrame, healthyViewer: results.healthyViewer, hiddenViewer: results.hiddenViewer, smallViewer: results.smallViewer, abuse: results.abuse, squeezedViewer: results.squeezedViewer, switchMs: results.switchMs, dummyFirstFrame: results.dummyFirstFrame }, null, 1));
+  console.log(JSON.stringify({ publisherRamp: results.publisherRamp && { firstBytesMs: results.publisherRamp.firstBytesMs, settledMs: results.publisherRamp.settledMs }, sendRates: results.sendRates, firstFrame: results.firstFrame, vp8FirstFrame: results.vp8FirstFrame, copy: results.copy, previewFirstFrame: results.previewFirstFrame, healthyViewer: results.healthyViewer, hiddenViewer: results.hiddenViewer, smallViewer: results.smallViewer, abuse: results.abuse, squeezedViewer: results.squeezedViewer, switchMs: results.switchMs, dummyFirstFrame: results.dummyFirstFrame }, null, 1));
   console.log(failed ? 'FAIL' : 'PASS');
   process.exit(failed ? 1 : 0);
 })();
