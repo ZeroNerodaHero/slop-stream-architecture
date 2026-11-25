@@ -6,16 +6,17 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SyntheticEvent,
-  type UIEvent,
   memo,
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore
 } from 'react';
 import { createPortal } from 'react-dom';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 
 import { type GroupBadge, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -48,10 +49,9 @@ import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP, CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
-import { keepFocus, stuckAfterScroll, useBottomPin } from '@/infra/keyboard';
+import { keepFocus } from '@/infra/keyboard';
 import { cn } from '@/utils/cn';
 
-const STUCK_PX = 40;
 const PEEK_MS = 300;
 const LINES_GUESS = 16;
 const LINE_SHAPES: readonly (readonly [name: string, words: string])[] = [
@@ -542,6 +542,8 @@ interface ChatRowProps {
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
   lineSide?: (line: ChatLine) => ReactNode;
+  bare?: boolean;
+  firstInList?: boolean;
 }
 
 const ChatRow = memo(function ChatRow({
@@ -560,7 +562,9 @@ const ChatRow = memo(function ChatRow({
   lineMark,
   lineActions,
   lineMenu,
-  lineSide
+  lineSide,
+  bare,
+  firstInList
 }: ChatRowProps) {
   return (
     <ChatLineShape
@@ -649,9 +653,86 @@ const ChatRow = memo(function ChatRow({
       }}
       first={first}
       bucket={bucket}
+      bare={bare}
+      firstInList={firstInList}
     />
   );
 });
+
+const FIRST_INDEX = 1_000_000;
+
+interface RowCtx {
+  room: ChatRoom;
+  shape: ChatStyle;
+  flash: string | null;
+  me: string | null | undefined;
+  myName: string | null;
+  asStreamer: boolean;
+  roleColor: (name: string) => string | undefined;
+  replies: boolean;
+  reacts: boolean;
+  jumps: boolean;
+  lineMark?: (line: ChatLine) => ReactNode;
+  lineActions?: (line: ChatLine) => ReactNode;
+  lineMenu?: (line: ChatLine) => LineMenuItem[];
+  lineSide?: (line: ChatLine) => ReactNode;
+  bare: boolean;
+  hasHeader: boolean;
+}
+
+function samePrev(lines: readonly ChatLine[], i: number): boolean {
+  const line = lines[i]!;
+  const prev = lines[i - 1];
+  return prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
+}
+
+function rowNode(lines: readonly ChatLine[], i: number, ctx: RowCtx): ReactNode {
+  const line = lines[i]!;
+  const mine = line.from === ctx.myName && (ctx.asStreamer ? line.streamer : ctx.me ? line.verified : !line.verified && !line.streamer);
+  const place = placeOf(line.at, lines[i - 1]?.at, samePrev(lines, i));
+  return (
+    <ChatRow
+      key={line.id}
+      line={line}
+      room={ctx.room}
+      shape={ctx.shape}
+      mine={mine}
+      me={ctx.me}
+      first={place.first}
+      bucket={place.bucket}
+      flashed={ctx.flash === line.id}
+      replyColor={line.reply?.verified ? ctx.roleColor(line.reply.from) : undefined}
+      replies={ctx.replies}
+      reacts={ctx.reacts}
+      jumps={ctx.jumps}
+      lineMark={ctx.lineMark}
+      lineActions={ctx.lineActions}
+      lineMenu={ctx.lineMenu}
+      lineSide={ctx.lineSide}
+      bare={ctx.bare}
+      firstInList={ctx.bare ? !ctx.hasHeader && i === 0 : undefined}
+    />
+  );
+}
+
+function rowTopPad(lines: readonly ChatLine[], i: number, shape: ChatStyle, hasHeader: boolean): string {
+  if (!hasHeader && i === 0) return '0px';
+  const line = lines[i]!;
+  const place = placeOf(line.at, lines[i - 1]?.at, samePrev(lines, i));
+  if (shape === 'log') return '0.25rem';
+  if (shape === 'blocks') return place.first || line.reply ? '0.375rem' : '0.125rem';
+  return place.bucket ? 'calc(1px + 0.25rem)' : '1px';
+}
+
+function useRowCtx(name: string, room: ChatRoom, extra: Pick<RowCtx, 'replies' | 'reacts' | 'jumps' | 'lineMark' | 'lineActions' | 'lineMenu' | 'lineSide' | 'bare' | 'hasHeader'>): RowCtx {
+  const shape = useAtomValue(chatStyleAtom);
+  const flash = useAtomValue(room.flashAtom);
+  const asStreamer = useAtomValue(room.asStreamerAtom);
+  const speaker = useAtomValue(chatSpeakerAtom);
+  const me = useAtomValue(meAtom);
+  const roleColor = useRoleColors(room);
+  return { room, shape, flash, me, myName: asStreamer ? name : speaker, asStreamer, roleColor, ...extra };
+}
 
 export function RoomLines({
   name,
@@ -676,43 +757,159 @@ export function RoomLines({
   reacts?: boolean;
   jumps?: boolean;
 }) {
-  const shape = useAtomValue(chatStyleAtom);
-  const flash = useAtomValue(room.flashAtom);
-  const asStreamer = useAtomValue(room.asStreamerAtom);
-  const speaker = useAtomValue(chatSpeakerAtom);
-  const me = useAtomValue(meAtom);
-  const myName = asStreamer ? name : speaker;
-  const roleColor = useRoleColors(room);
+  const ctx = useRowCtx(name, room, { replies, reacts, jumps, lineMark, lineActions, lineMenu, lineSide, bare: false, hasHeader: false });
+  return <>{lines.map((_, i) => rowNode(lines, i, ctx))}</>;
+}
+
+function ChatLog({
+  name,
+  room,
+  lines,
+  header,
+  scrollTick,
+  lineMark,
+  lineActions,
+  lineMenu,
+  lineSide,
+  replies = false,
+  reacts = false,
+  jumps = false
+}: {
+  name: string;
+  room: ChatRoom;
+  lines: readonly ChatLine[];
+  header: ReactNode;
+  scrollTick: number;
+  lineMark?: (line: ChatLine) => ReactNode;
+  lineActions?: (line: ChatLine) => ReactNode;
+  lineMenu?: (line: ChatLine) => LineMenuItem[];
+  lineSide?: (line: ChatLine) => ReactNode;
+  replies?: boolean;
+  reacts?: boolean;
+  jumps?: boolean;
+}) {
+  const hasHeader = header !== null && header !== undefined && header !== false;
+  const ctx = useRowCtx(name, room, { replies, reacts, jumps, lineMark, lineActions, lineMenu, lineSide, bare: true, hasHeader });
+  const vref = useRef<VirtuosoHandle | null>(null);
+  const scroller = useRef<HTMLElement | null>(null);
+  const resizer = useRef<ResizeObserver | null>(null);
+  const following = useRef(true);
+  const anchorRef = useRef<{ id: string; top: number } | null>(null);
+
+  const firstId = lines[0]?.id;
+  const [pre, setPre] = useState({ firstId, restore: false });
+  if (firstId !== pre.firstId) {
+    const oldIdx = pre.firstId !== undefined ? lines.findIndex((l) => l.id === pre.firstId) : -1;
+    setPre({ firstId, restore: oldIdx > 0 });
+  }
+
+  const components = useMemo(() => (hasHeader ? { Header: () => <>{header}</> } : {}), [hasHeader, header]);
+
+  const toBottom = useCallback((behavior?: 'smooth') => {
+    vref.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior });
+  }, []);
+
+  const repin = useCallback(() => {
+    if (!following.current) return;
+    let frame = 0;
+    const pass = (left: number) => {
+      toBottom();
+      if (left > 0) frame = requestAnimationFrame(() => pass(left - 1));
+    };
+    frame = requestAnimationFrame(() => pass(4));
+    return () => cancelAnimationFrame(frame);
+  }, [toBottom]);
+
+  const setScroller = useCallback(
+    (el: HTMLElement | null) => {
+      scroller.current = el;
+      resizer.current?.disconnect();
+      if (!el) return;
+      resizer.current = new ResizeObserver(() => repin());
+      resizer.current.observe(el);
+    },
+    [repin]
+  );
+
+  const onScroll = useCallback(
+    (e: SyntheticEvent<HTMLElement>) => {
+      const el = e.currentTarget;
+      room.noteScroll(el.scrollTop);
+      if (following.current) {
+        anchorRef.current = null;
+        return;
+      }
+      const top = el.getBoundingClientRect().top;
+      for (const row of el.querySelectorAll('[data-id]')) {
+        const dy = row.getBoundingClientRect().top - top;
+        if (dy >= 0) {
+          anchorRef.current = { id: row.getAttribute('data-id') ?? '', top: dy };
+          return;
+        }
+      }
+    },
+    [room]
+  );
+
+  useLayoutEffect(() => {
+    if (!pre.restore) return;
+    const target = anchorRef.current;
+    const el = scroller.current;
+    if (!target || !el) return;
+    let frame = 0;
+    const fix = (passes: number) => {
+      const row = el.querySelector(`[data-id="${CSS.escape(target.id)}"]`);
+      if (row instanceof HTMLElement) {
+        const off = row.getBoundingClientRect().top - el.getBoundingClientRect().top - target.top;
+        if (Math.abs(off) > 0.5) el.scrollTop += off;
+      }
+      if (passes > 0) frame = requestAnimationFrame(() => fix(passes - 1));
+    };
+    frame = requestAnimationFrame(() => fix(3));
+    return () => cancelAnimationFrame(frame);
+  }, [pre]);
+
+  useEffect(() => {
+    const plan = room.takeScrollPlan();
+    const v = vref.current;
+    if (!v || !plan || plan === 'keep') return;
+    if (plan === 'bottom') {
+      following.current = true;
+      requestAnimationFrame(() => toBottom());
+    } else if (typeof plan === 'object') {
+      const idx = lines.findIndex((l) => l.id === plan.id);
+      if (idx >= 0) {
+        following.current = false;
+        v.scrollToIndex({ index: idx, align: 'center' });
+      }
+    }
+  }, [room, lines, scrollTick, toBottom]);
+
+  useEffect(() => () => resizer.current?.disconnect(), []);
+
   return (
-    <>
-      {lines.map((line, i) => {
-        const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
-        const prev = lines[i - 1];
-        const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
-        const place = placeOf(line.at, prev?.at, same);
-        return (
-          <ChatRow
-            key={line.id}
-            line={line}
-            room={room}
-            shape={shape}
-            mine={mine}
-            me={me}
-            first={place.first}
-            bucket={place.bucket}
-            flashed={flash === line.id}
-            replyColor={line.reply?.verified ? roleColor(line.reply.from) : undefined}
-            replies={replies}
-            reacts={reacts}
-            jumps={jumps}
-            lineMark={lineMark}
-            lineActions={lineActions}
-            lineMenu={lineMenu}
-            lineSide={lineSide}
-          />
-        );
-      })}
-    </>
+    <Virtuoso
+      ref={vref}
+      scrollerRef={(el) => setScroller(el as HTMLElement | null)}
+      style={{ height: '100%' }}
+      data={lines as ChatLine[]}
+      firstItemIndex={FIRST_INDEX}
+      initialTopMostItemIndex={{ index: Math.max(0, lines.length - 1), align: 'end' }}
+      followOutput={(atBottom) => (atBottom ? 'auto' : false)}
+      atBottomStateChange={(atBottom) => {
+        following.current = atBottom;
+        room.setFollowing(atBottom);
+      }}
+      startReached={() => void room.loadOlder()}
+      onScroll={onScroll}
+      computeItemKey={(_, line) => line.id}
+      increaseViewportBy={{ top: 900, bottom: 900 }}
+      components={components}
+      itemContent={(index) => {
+        const i = index - FIRST_INDEX;
+        return <div style={{ paddingTop: rowTopPad(lines, i, ctx.shape, hasHeader) }}>{rowNode(lines, i, ctx)}</div>;
+      }}
+    />
   );
 }
 
@@ -732,11 +929,6 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const server = channel !== undefined;
   const bar = useChatWindowBar();
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const hold = useRef(0);
-  const stuck = useRef(true);
-  const shown = useRef(0);
-  const shownRoom = useRef<ChatRoom | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const textRef = useRef<HTMLInputElement | null>(null);
   const sendKeepsFocus = useRef(false);
@@ -802,45 +994,6 @@ export function ChatPanel({
   useEffect(() => {
     if (replyTo) textRef.current?.focus();
   }, [replyTo]);
-
-  useLayoutEffect(() => {
-    const el = listRef.current;
-    if (!el) {
-      shown.current = 0;
-      return;
-    }
-    if (shownRoom.current !== room) {
-      shownRoom.current = room;
-      shown.current = 0;
-    }
-    const plan = room.takeScrollPlan();
-    if (plan === 'keep') {
-      el.scrollTop += el.scrollHeight - hold.current;
-    } else if (plan && typeof plan === 'object') {
-      const node = el.querySelector(`[data-id="${CSS.escape(plan.id)}"]`);
-      if (node instanceof HTMLElement) el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - (el.clientHeight - node.offsetHeight) / 2;
-      stuck.current = false;
-      room.setFollowing(false);
-    } else if (plan === 'bottom' || stuck.current || shown.current === 0) {
-      el.scrollTop = el.scrollHeight;
-      stuck.current = true;
-      room.setFollowing(true);
-    }
-    shown.current = lines.length;
-    hold.current = el.scrollHeight;
-    if (lines.length > 0 && el.scrollHeight <= el.clientHeight) room.fillShort();
-  }, [room, lines, total, scrollTick, aside]);
-
-  useBottomPin(listRef, stuck, aside);
-
-  function onScroll(e: UIEvent<HTMLDivElement>) {
-    const el = e.currentTarget;
-    const atBottom = stuckAfterScroll(el, stuck.current, STUCK_PX);
-    stuck.current = atBottom;
-    room.setFollowing(atBottom);
-    room.noteScroll(el.scrollTop);
-    if (el.scrollTop < 48) void room.loadOlder();
-  }
 
   function pickFiles(list: FileList | File[] | null) {
     const { pictures, videos } = splitFiles(list ? [...list] : []);
@@ -931,20 +1084,34 @@ export function ChatPanel({
           )}
 
           <div
-            ref={listRef}
-            onScroll={onScroll}
             id="chat-lines"
             role="log"
             aria-live="polite"
             data-style={shape}
-            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm', shape === 'log' ? 'gap-1' : shape === 'bubbles' ? 'gap-px' : 'gap-0.5', shape === 'bubbles' ? 'leading-tight' : 'leading-snug')}
+            className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 text-sm', shape === 'bubbles' ? 'leading-tight' : 'leading-snug')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
-            {!waiting && !server && welcome && <WelcomeLine key={room.key} welcome={welcome} />}
             {!waiting && lines.length === 0 && (
-              <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
+              <div className={cn('flex flex-col', shape === 'log' ? 'gap-1' : shape === 'bubbles' ? 'gap-px' : 'gap-0.5')}>
+                {!server && welcome && <WelcomeLine key={room.key} welcome={welcome} />}
+                <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
+              </div>
             )}
-            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} lineMenu={lineMenu} replies={!needsNick} reacts jumps />
+            {!waiting && lines.length > 0 && (
+              <ChatLog
+                name={name}
+                room={room}
+                lines={lines}
+                scrollTick={scrollTick}
+                header={!server && welcome ? <WelcomeLine key={room.key} welcome={welcome} /> : null}
+                lineMark={lineMark}
+                lineActions={lineActions}
+                lineMenu={lineMenu}
+                replies={!needsNick}
+                reacts
+                jumps
+              />
+            )}
           </div>
         </div>
 

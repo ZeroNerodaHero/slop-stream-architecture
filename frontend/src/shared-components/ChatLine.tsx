@@ -88,6 +88,8 @@ export interface ChatLineShapeProps extends Place {
   flash?: boolean;
   side?: ReactNode;
   pending?: 'sending' | 'failed';
+  bare?: boolean;
+  firstInList?: boolean;
 }
 
 const ACTIONS_HIDDEN =
@@ -158,17 +160,12 @@ function useLongPress() {
   };
 }
 
-function Corner({ mark, actions, open }: { mark?: ReactNode; actions?: ReactNode; open: boolean }) {
+function Corner({ mark, actions, open, firstInList }: { mark?: ReactNode; actions?: ReactNode; open: boolean; firstInList?: boolean }) {
+  const top = firstInList === undefined ? '-top-3.5 group-first/line:top-0' : firstInList ? 'top-0' : '-top-3.5';
   return (
     <>
       {actions && (
-        <span
-          data-line-actions
-          className={cn(
-            'absolute -top-3.5 right-2 z-10 flex items-center border border-primaryStroke bg-backgroundSecondary group-first/line:top-0',
-            open ? ACTIONS_SHOWN : ACTIONS_HIDDEN
-          )}
-        >
+        <span data-line-actions className={cn('absolute right-2 z-10 flex items-center border border-primaryStroke bg-backgroundSecondary', top, open ? ACTIONS_SHOWN : ACTIONS_HIDDEN)}>
           {actions}
         </span>
       )}
@@ -443,11 +440,13 @@ export function ChatLineShape({
   reactions,
   flash = false,
   side,
-  pending
+  pending,
+  bare = false,
+  firstInList
 }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   const press = useLongPress();
-  const corner = <Corner mark={mark} actions={actions} open={press.open} />;
+  const corner = <Corner mark={mark} actions={actions} open={press.open} firstInList={firstInList} />;
   const lineBox = cn(
     'group/line relative transition-colors duration-700',
     actions && '[-webkit-touch-callout:none] [@media(hover:hover)]:hover:bg-primaryStroke/10 [@media(hover:none)]:select-none',
@@ -495,7 +494,7 @@ export function ChatLineShape({
     const head = first || !!quote;
     const row = 'flex gap-2';
     return p(
-      cn('leading-snug', head && 'mt-1 first:mt-0', quote ? 'flex flex-col' : row),
+      cn('leading-snug', head && !bare && 'mt-1 first:mt-0', quote ? 'flex flex-col' : row),
       over(
         row,
         <>
@@ -518,7 +517,7 @@ export function ChatLineShape({
   }
   const named = crowd && !mine && first;
   return p(
-    cn('flex gap-2 leading-tight', bucket && 'mt-1 first:mt-0'),
+    cn('flex gap-2 leading-tight', bucket && !bare && 'mt-1 first:mt-0'),
     <>
       {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-[5px]" />}
       <span className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
