@@ -78,7 +78,7 @@ export function useMentionComplete({
         lines={lines}
         hide={hide}
         search={api.mentions}
-        face={(m) => <Avatar name={m.name} version={m.avatar} className="mr-0 h-6 w-6 border-0" />}
+        face={(m) => <Avatar name={m.name} version={m.avatar} className="mr-0 h-5 w-5 border-0" />}
         link={link}
       />
     </Suspense>
