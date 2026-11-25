@@ -7,7 +7,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 export const COUNT =
-  'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
+  'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-control border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
 
 export function NotificationsBell() {
   const open = useAtomValue(notificationsOpenAtom);
@@ -23,7 +23,7 @@ export function NotificationsBell() {
         aria-controls={open ? 'notifications-panel' : undefined}
         data-unread={unread || undefined}
         onClick={toggleNotifications}
-        className={cn(buttonClassName('secondary', 'relative p-1.5 max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
+        className={cn(buttonClassName('secondary', 'relative p-1.5 bubble:p-[7px] max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
       >
         <RiNotification3Line aria-hidden size={20} />
         {unread > 0 && (

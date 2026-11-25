@@ -37,7 +37,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const PEEK_MS = 200;
-const ICON_BUTTON = 'shrink-0 rounded-control border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+const ICON_BUTTON = 'shrink-0 rounded-control border border-transparent p-0.5 bubble:p-px text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
 const COLUMN = 'px-[calc(0.75rem-1px)] max-md:px-[calc(1.25rem-1px)]';
 
@@ -222,7 +222,7 @@ function Chat({ id, person }: { id: string; person: Person }) {
       >
         <RiChat3Line aria-hidden size={16} />
         {unread > 0 && (
-          <span aria-hidden className="absolute -right-1.5 -top-1.5 bg-background px-px text-xs font-semibold leading-none tabular-nums text-primaryBlue">
+          <span aria-hidden className="absolute -right-1.5 -top-1.5 rounded-control bg-background px-px soft:min-w-3 soft:text-center bubble:min-w-3 bubble:text-center text-xs font-semibold leading-none tabular-nums text-primaryBlue">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
@@ -424,7 +424,7 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
             name={server.name}
             color={server.color}
             icon={server.icon}
-            className="h-8 w-8 rounded-card border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
+            className="h-8 w-8 rounded-control border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
           />
           {live > 0 && (
             <span

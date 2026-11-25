@@ -231,7 +231,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         </Tooltip>
       </header>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3 max-md:grid max-md:auto-cols-fr max-md:grid-flow-col max-md:items-stretch max-md:gap-x-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3 bubble:border-b-0 bubble:pb-4 max-md:grid max-md:auto-cols-fr max-md:grid-flow-col max-md:items-stretch max-md:gap-x-2">
         <FollowButton id="profile-popup-follow" name={name} className="max-md:min-h-11" />
         {friend && (
           <button
@@ -276,9 +276,12 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         )}
       </div>
 
-      {mobile && heardUid && <VoiceLevel id="profile-popup-voice" name={name} uid={heardUid} className="shrink-0 border-b border-t-0 px-5 py-3" />}
+      {mobile && heardUid && <VoiceLevel id="profile-popup-voice" name={name} uid={heardUid} className="shrink-0 border-b border-t-0 px-5 py-3 bubble:border-b-0" />}
 
-      <div id="profile-popup-body" className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">
+      <div
+        id="profile-popup-body"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 bubble:mx-2 bubble:mb-2 bubble:rounded-panel bubble:bg-background bubble:px-3 bubble:py-3"
+      >
         {failed ? (
           <p id="profile-popup-failed" className="text-textSecondary">
             could not load {name}.{' '}
@@ -312,7 +315,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             )}
 
             <div id="profile-popup-tabs" className={cn((picture || card.offline_note) && 'mt-5')}>
-              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke">
+              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke bubble:border-transparent">
                 {POPUP_TABS.map((t) => {
                   const on = t === tab;
                   return (

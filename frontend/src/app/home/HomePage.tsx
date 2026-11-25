@@ -552,7 +552,7 @@ function Groups() {
       {loading && (
         <Skeleton id="home-groups-loading" className={GROUPS_GRID}>
           {Array.from({ length: GROUPS_GUESS }, (_, i) => (
-            <Bone key={i} className="aspect-square" />
+            <Bone key={i} className="aspect-square rounded-card" />
           ))}
         </Skeleton>
       )}

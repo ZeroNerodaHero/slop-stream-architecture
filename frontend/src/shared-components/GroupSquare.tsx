@@ -5,7 +5,7 @@ import { groupBanner, groupWords, type Server } from '@/infra/api';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { cn } from '@/utils/cn';
 
-export const GROUP_SQUARE_BOX = 'aspect-square border border-primaryStroke bg-backgroundSecondary';
+export const GROUP_SQUARE_BOX = 'aspect-square rounded-card border border-primaryStroke bg-backgroundSecondary';
 
 export function GroupSquareFace({ server, corner, compact }: { server: Server; corner?: ReactNode; compact?: boolean }) {
   const banner = groupBanner(server.name, server.banner, 'square');
@@ -23,7 +23,7 @@ export function GroupSquareFace({ server, corner, compact }: { server: Server; c
         name={server.name}
         color={server.color}
         icon={server.icon}
-        className={cn('absolute left-3 top-3 h-16 w-16 border-2 border-black/40 text-xl', compact && 'max-md:left-2 max-md:top-2 max-md:h-12 max-md:w-12')}
+        className={cn('absolute left-3 top-3 h-16 w-16 rounded-avatar border-2 border-black/40 text-xl', compact && 'max-md:left-2 max-md:top-2 max-md:h-12 max-md:w-12')}
       />
       {corner}
       <span className={cn('relative px-3 py-2.5 text-white', compact && 'max-md:px-2 max-md:py-2')}>
@@ -54,7 +54,7 @@ export const GroupSquare = memo(function GroupSquare({ server, id }: { server: S
       >
         <GroupSquareFace
           server={server}
-          corner={live > 0 && <span className="absolute right-2 top-2 bg-black/55 px-1.5 py-0.5 text-xs font-semibold text-increase">{live} live</span>}
+          corner={live > 0 && <span className="absolute right-2 top-2 rounded-control bg-black/55 px-1.5 py-0.5 text-xs font-semibold text-increase">{live} live</span>}
         />
       </Link>
     </li>

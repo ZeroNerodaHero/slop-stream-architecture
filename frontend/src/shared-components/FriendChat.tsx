@@ -191,7 +191,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
           <span
             id={`friend-chat-unread-${dm.name}`}
             aria-hidden
-            className="absolute -left-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-backgroundSecondary bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
+            className="absolute -left-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-control border border-backgroundSecondary bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
           >
             {dm.unread > 99 ? '99+' : dm.unread}
           </span>
@@ -312,7 +312,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
                       )}
                     </span>
                     {tab && tab.unread > 0 && (
-                      <span aria-hidden className="flex h-5 min-w-5 shrink-0 items-center justify-center bg-primaryBlue px-1 text-xs font-semibold leading-none text-background">
+                      <span aria-hidden className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-control bg-primaryBlue px-1 text-xs font-semibold leading-none text-background">
                         {tab.unread > 99 ? '99+' : tab.unread}
                       </span>
                     )}

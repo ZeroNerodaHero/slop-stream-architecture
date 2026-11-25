@@ -137,7 +137,7 @@ import { compactCount } from '@/utils/count';
 
 const FACES = 4;
 
-const TILE = 'block overflow-hidden border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue';
+const TILE = 'block overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue';
 
 const RESERVED = new Set(['before', 'search', 'by', 'around']);
 
@@ -158,7 +158,7 @@ const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-14px)] lg:h-[cal
 const TOP_VIEW = 'snap-start scroll-mt-6';
 
 const ICON_BUTTON =
-  'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40';
+  'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center rounded-control border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40';
 
 const BELL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/channel:opacity-100 [@media(hover:none)]:opacity-100';
 
@@ -644,12 +644,12 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
           data-count={count}
           onClick={() => setOpen((was) => !was)}
           className={cn(
-            'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150 max-md:min-h-11',
+            'flex shrink-0 items-center gap-1 whitespace-nowrap rounded-control border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150 max-md:min-h-11',
             open ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
           )}
         >
           <RiPushpinLine aria-hidden size={14} />
-          {count}
+          <span>{count}</span>
         </button>
       </Tooltip>
       {open && (
@@ -657,7 +657,7 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
           id="group-pins"
           role="region"
           aria-label="pinned messages"
-          className={cn('absolute right-0 top-full z-30 mt-1 flex max-h-96 flex-col border border-primaryStroke bg-backgroundSecondary text-sm', pinsWidth(membersOpen))}
+          className={cn('absolute right-0 top-full z-30 mt-1 flex max-h-96 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm', pinsWidth(membersOpen))}
         >
           <div className="flex items-center justify-between gap-2 border-b border-primaryStroke px-3 py-1.5">
             <span className="font-semibold">pinned messages</span>
@@ -813,7 +813,7 @@ function RoomSearch({ search, input, flat, className }: { search: ChatSearch; in
       <SearchFilters
         id="group-search-filters"
         search={search}
-        className="absolute left-0 right-0 top-full z-10 mt-1 hidden border border-primaryStroke bg-backgroundSecondary px-2 py-1 group-focus-within/search:flex"
+        className="absolute left-0 right-0 top-full z-10 mt-1 hidden rounded-panel border border-primaryStroke bg-backgroundSecondary px-2 py-1 group-focus-within/search:flex"
       />
     </form>
   );
@@ -845,7 +845,7 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
         <Bone className="h-4 w-80 max-w-full" />
       </div>
       <div ref={gridRef} className={cn(ROOM_GRID, roomColumns(membersOpen), 'max-md:gap-4')}>
-        <div className={cn('flex flex-col border border-primaryStroke bg-backgroundSecondary p-1', STACKED_SNAP)}>
+        <div className={cn('flex flex-col rounded-panel border border-primaryStroke bg-backgroundSecondary p-1 bubble:border-transparent', STACKED_SNAP)}>
           <div className="flex h-6 items-center px-2">
             <Bone className="h-3 w-24" />
           </div>
@@ -855,13 +855,13 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
             </div>
           ))}
         </div>
-        <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3', ROOM_HEIGHT, STACKED_SNAP)}>
+        <div className={cn('flex flex-col gap-3 rounded-panel border border-primaryStroke bg-backgroundSecondary p-3 bubble:border-transparent', ROOM_HEIGHT, STACKED_SNAP)}>
           <Bone className="h-4 w-2/3" />
           <Bone className="h-4 w-1/2" />
           <Bone className="h-4 w-3/4" />
           <Bone className="mt-auto h-10" />
         </div>
-        <div className={cn('flex flex-col gap-2 border border-primaryStroke bg-backgroundSecondary p-2', ROSTER_HEIGHT, STACKED_SNAP, !membersOpen && 'lg:hidden')}>
+        <div className={cn('flex flex-col gap-2 rounded-panel border border-primaryStroke bg-backgroundSecondary p-2 bubble:border-transparent', ROSTER_HEIGHT, STACKED_SNAP, !membersOpen && 'lg:hidden')}>
           <div className="flex shrink-0 gap-1">
             <Bone className="h-8 min-w-0 flex-1" />
             <Bone className="hidden h-8 w-8 shrink-0 lg:block" />
@@ -872,19 +872,19 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
           <div className="flex flex-col gap-0.5">
             {Array.from({ length: 3 }, (_, i) => (
               <div key={i} className="flex items-center gap-2 p-px">
-                <Bone className="h-7 w-7 shrink-0" />
+                <Bone className="h-7 w-7 shrink-0 rounded-avatar" />
                 <Bone className={cn('h-3', i === 1 ? 'w-16' : 'w-24')} />
               </div>
             ))}
           </div>
         </div>
         {!membersOpen && (
-          <div className={cn('hidden w-14 flex-col items-center border border-primaryStroke bg-backgroundSecondary pt-1.5 lg:flex', ROSTER_HEIGHT)}>
-            <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)] shrink-0" />
+          <div className={cn('hidden w-14 flex-col items-center rounded-panel border border-primaryStroke bg-backgroundSecondary pt-1.5 bubble:border-transparent lg:flex', ROSTER_HEIGHT)}>
+            <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)] shrink-0 rounded-control" />
             <div className="my-1 h-4" />
             <div className="flex flex-col gap-1">
               {Array.from({ length: 3 }, (_, i) => (
-                <Bone key={i} className="h-[calc(2rem+2px)] w-[calc(2rem+2px)]" />
+                <Bone key={i} className="h-[calc(2rem+2px)] w-[calc(2rem+2px)] rounded-avatar" />
               ))}
             </div>
           </div>
@@ -1214,7 +1214,7 @@ export function ServerPage() {
   );
   const mobileTitle = (
     <span className="flex min-w-0 items-center gap-2.5">
-      <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
+      <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 rounded-control text-sm" />
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-normal text-textSecondary">{words.title}</span>
         {voiceView.view ? (
@@ -1261,7 +1261,7 @@ export function ServerPage() {
       bleed={!noChannel}
       title={
         <span className="flex min-w-0 items-center gap-3">
-          <GroupMark name={server} color={color} icon={room.icon} className="h-8 w-8 shrink-0 text-sm" />
+          <GroupMark name={server} color={color} icon={room.icon} className="h-8 w-8 shrink-0 rounded-control text-sm" />
           <span className="truncate">
             {channel === home ? (
               <GroupName words={words} />
@@ -1334,7 +1334,7 @@ export function ServerPage() {
                 <>
                   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
                     {groupHead}
-                    <div className="mx-3 flex flex-col gap-6 border border-primaryStroke bg-backgroundSecondary p-4">
+                    <div className="mx-3 flex flex-col gap-6 rounded-panel border border-primaryStroke bg-backgroundSecondary p-4 bubble:border-transparent">
                       {channelList}
                       {liveList}
                     </div>
@@ -1391,7 +1391,7 @@ function ChannelList({
   }
 
   return (
-    <nav aria-label="channels" className={cn(boxed && 'border border-primaryStroke bg-backgroundSecondary p-1')}>
+    <nav aria-label="channels" className={cn(boxed && 'rounded-panel border border-primaryStroke bg-backgroundSecondary p-1 bubble:border-transparent')}>
       <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'sr-only')}>channels</h3>
       <ul id="group-channels" className={cn('flex flex-col', !boxed && 'gap-0.5')}>
         {textChannels.map((item) => {
@@ -1401,7 +1401,7 @@ function ChannelList({
             <li
               key={item.name}
               data-muted={isMuted || undefined}
-              className={cn('group/channel flex items-center', here ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}
+              className={cn('group/channel flex items-center rounded-control', here ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}
             >
               {here ? (
                 <span aria-current="page" className={cn('min-w-0 flex-1 truncate px-2 font-semibold max-md:py-2.5', row)}>
@@ -1462,7 +1462,7 @@ function ChannelList({
           aria-haspopup="dialog"
           onClick={() => setAdding(true)}
           className={cn(
-            'flex w-full items-center gap-1 px-2 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary max-md:min-h-11',
+            'flex w-full items-center gap-1 rounded-control px-2 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary max-md:min-h-11',
             boxed ? row : 'mt-0.5 py-1'
           )}
         >
@@ -1661,7 +1661,7 @@ const Member = memo(function Member({ member, live, ownerRole, flat }: { member:
         person={{ name: member.name, verified: true, avatar: member.avatar ?? null }}
         live={presence === 'streaming'}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue max-md:min-h-11',
+          'flex min-w-0 flex-1 items-center gap-2 rounded-control border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue max-md:min-h-11',
           !flat && 'p-px'
         )}
       >
@@ -1797,7 +1797,7 @@ function MoreRow({
           <button
             type="button"
             aria-label="could not load more: try again"
-            className="flex h-7 w-7 items-center justify-center border border-primaryStroke text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
+            className="flex h-7 w-7 items-center justify-center rounded-control border border-primaryStroke text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
             onClick={() => ask.current(height())}
           >
             <RiRefreshLine aria-hidden size={14} />
@@ -1882,7 +1882,7 @@ function Roster({ room, flat = false, fill = false }: { room: GroupRoom; flat?: 
         id="group-roster"
         aria-label="members"
         className={cn(
-          'flex flex-col border border-primaryStroke bg-backgroundSecondary text-sm',
+          'flex flex-col rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm bubble:border-transparent',
           flat ? 'mx-3 gap-3 p-4' : cn('gap-2 p-2', ROSTER_HEIGHT, STACKED_SNAP, fill && ROSTER_FILL),
           folded && 'lg:hidden'
         )}
@@ -1905,7 +1905,7 @@ function Roster({ room, flat = false, fill = false }: { room: GroupRoom; flat?: 
                   aria-expanded
                   aria-controls="group-roster"
                   onClick={() => setOpen(false, showRef)}
-                  className="hidden h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-background text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none lg:flex"
+                  className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none lg:flex"
                 >
                   <RiArrowRightSLine aria-hidden size={16} />
                 </button>
@@ -1931,7 +1931,7 @@ function Roster({ room, flat = false, fill = false }: { room: GroupRoom; flat?: 
             </ul>
             {away.length > 0 && (
               <>
-                <h4 className="flex items-center gap-1 border-t border-primaryStroke pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+                <h4 className="flex items-center gap-1 border-t border-primaryStroke pt-3 bubble:border-transparent text-xs font-semibold uppercase tracking-wider text-textTertiary">
                   offline <span className="font-normal normal-case tracking-normal">{away.length}</span>
                 </h4>
                 <ul id="group-members-offline" className="flex flex-col gap-1 pb-1">
@@ -1966,7 +1966,7 @@ function MembersStrip({ room, showRef, onShow, fill = false }: { room: GroupRoom
     <aside
       id="group-members-strip"
       aria-label="members"
-      className={cn('hidden w-14 flex-col border border-primaryStroke bg-backgroundSecondary lg:flex', ROSTER_HEIGHT, fill && ROSTER_FILL)}
+      className={cn('hidden w-14 flex-col rounded-panel border border-primaryStroke bg-backgroundSecondary bubble:border-transparent lg:flex', ROSTER_HEIGHT, fill && ROSTER_FILL)}
     >
       <div className="flex shrink-0 justify-center pt-1.5">
         <Tooltip content="show members" at="left">
@@ -1978,7 +1978,7 @@ function MembersStrip({ room, showRef, onShow, fill = false }: { room: GroupRoom
             aria-expanded={false}
             aria-controls="group-roster"
             onClick={onShow}
-            className="flex h-[calc(2rem+2px)] w-[calc(2rem+2px)] items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
+            className="flex h-[calc(2rem+2px)] w-[calc(2rem+2px)] items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
           >
             <RiArrowLeftSLine aria-hidden size={16} />
           </button>
@@ -2004,7 +2004,7 @@ function MembersStrip({ room, showRef, onShow, fill = false }: { room: GroupRoom
                   person={{ name: member.name, verified: true, avatar: member.avatar ?? null }}
                   live={presence === 'streaming'}
                   label={`${member.name} · ${PRESENCE_WORD[presence]}`}
-                  className="flex border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+                  className="flex rounded-control border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
                 >
                   <RailFace name={member.name} avatar={member.avatar ?? null} presence={presence} />
                 </ProfileLink>
@@ -2089,7 +2089,7 @@ const MANAGE_TABS: {
 const RAIL_GROUP = 'hidden px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
 const RAIL_TAB = cn(
   'flex shrink-0 items-center gap-2.5 whitespace-nowrap px-3 py-2 text-left font-semibold leading-tight transition-colors duration-150',
-  'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
+  'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2 bubble:rounded-control bubble:border-transparent',
   'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue'
 );
 const RAIL_TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
@@ -2180,9 +2180,9 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
         PAGE_DIALOG
       )}
     >
-      <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-52 sm:border-b-0 sm:border-r">
-        <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
-          <GroupMark name={server} color={room.color || '#5865f2'} icon={room.icon} className="h-9 w-9 text-base" />
+      <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-52 sm:border-b-0 sm:border-r bubble:border-transparent sm:bubble:m-2 sm:bubble:mr-0 sm:bubble:rounded-panel">
+        <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 bubble:border-transparent sm:flex">
+          <GroupMark name={server} color={room.color || '#5865f2'} icon={room.icon} className="h-9 w-9 rounded-control text-base" />
           <span className="min-w-0">
             <span className="block truncate font-semibold leading-tight">{words.title}</span>
             <span className="block text-xs text-textTertiary">{words.tag ? `#${words.tag}` : 'manage'}</span>
@@ -2226,7 +2226,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             })}
           </div>
           {room.owner && (
-            <div className="flex shrink-0 items-center border-l border-primaryStroke p-2 sm:mt-auto sm:border-l-0 sm:border-t">
+            <div className="flex shrink-0 items-center border-l border-primaryStroke p-2 sm:mt-auto sm:border-l-0 sm:border-t bubble:border-transparent">
               <button
                 id="room-delete-ask"
                 type="button"

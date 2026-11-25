@@ -57,7 +57,7 @@ export function VoiceRoom({ room, channel, className }: { room: GroupRoom; chann
   return here ? <Call room={room} channel={channel} className={className} /> : <JoinCard room={room} channel={channel} className={className} />;
 }
 
-const FRAME = 'flex flex-col border border-primaryStroke bg-backgroundSecondary max-md:border-0 max-md:bg-background';
+const FRAME = 'flex flex-col rounded-panel border border-primaryStroke bg-backgroundSecondary bubble:border-transparent max-md:rounded-none max-md:border-0 max-md:bg-background';
 
 function JoinCard({ room, channel, className }: { room: GroupRoom; channel: string; className?: string }) {
   const me = useAtomValue(meAtom) ?? null;
@@ -74,8 +74,8 @@ function JoinCard({ room, channel, className }: { room: GroupRoom; channel: stri
 
   return (
     <section id="voice-room" aria-label={`voice: ${channel}`} className={cn(FRAME, 'items-center justify-center p-4', className)}>
-      <div id="voice-room-card" className="flex w-full max-w-sm flex-col items-center gap-4 border border-primaryStroke bg-background p-6 text-center">
-        <span aria-hidden className="flex h-12 w-12 items-center justify-center border border-primaryStroke text-textSecondary">
+      <div id="voice-room-card" className="flex w-full max-w-sm flex-col items-center gap-4 rounded-card border border-primaryStroke bg-background p-6 text-center bubble:border-transparent">
+        <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-control border border-primaryStroke text-textSecondary">
           <RiVolumeUpLine size={24} />
         </span>
         <div className="flex min-w-0 max-w-full flex-col gap-1">
@@ -190,7 +190,7 @@ function Call({ room, channel, className }: { room: GroupRoom; channel: string; 
 
   return (
     <section id="voice-room" aria-label={`voice: ${channel}`} className={cn(FRAME, 'relative min-h-0', className)}>
-      <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-primaryStroke px-3 max-md:hidden">
+      <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-primaryStroke px-3 bubble:border-transparent max-md:hidden">
         <RiVolumeUpLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
         <h2 className="min-w-0 truncate text-sm font-semibold text-textPrimary">{channel}</h2>
         <span id="voice-room-status" className="text-xs text-textTertiary">
@@ -252,7 +252,7 @@ function Tile({
       data-speaking={talking || undefined}
       data-video={tile.stream ? 'on' : undefined}
       className={cn(
-        'group/tile relative overflow-hidden border bg-backgroundTertiary',
+        'group/tile relative overflow-hidden rounded-card border bg-backgroundTertiary',
         size === 'big' ? 'h-full w-full' : 'aspect-video',
         size === 'strip' && 'w-36 shrink-0 max-md:w-28',
         talking ? 'border-increase outline outline-2 -outline-offset-2 outline-increase' : 'border-primaryStroke hover:border-secondaryStroke'
@@ -277,7 +277,7 @@ function Tile({
           />
         </div>
       )}
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-20 flex max-w-[calc(100%-12px)] items-center gap-1 bg-black/70 px-1.5 py-0.5 text-xs text-white">
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-20 flex max-w-[calc(100%-12px)] items-center gap-1 rounded-control bg-black/70 px-1.5 py-0.5 text-xs text-white">
         {tile.kind === 'screen' && <RiComputerLine aria-hidden size={12} className="shrink-0" />}
         {tile.serverMuted && <Mark label="server muted" className="text-decrease" icon={<RiMicOffFill aria-hidden size={12} />} />}
         {!tile.serverMuted && tile.mute && <Mark label="muted" icon={<RiMicOffLine aria-hidden size={12} />} />}
@@ -327,7 +327,7 @@ function Picture({ stream, mirror, contain }: { stream: MediaStream; mirror: boo
 }
 
 const CONTROL =
-  'flex h-10 w-10 shrink-0 items-center justify-center border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue disabled:opacity-50 max-md:h-11 max-md:w-11';
+  'flex h-10 w-10 shrink-0 items-center justify-center rounded-control border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue disabled:opacity-50 max-md:h-11 max-md:w-11';
 
 function ControlBar({ mobile }: { mobile: boolean }) {
   const call = useAtomValue(voiceCallAtom);
@@ -341,8 +341,8 @@ function ControlBar({ mobile }: { mobile: boolean }) {
       role="toolbar"
       aria-label="call"
       className={cn(
-        'flex shrink-0 items-center justify-center gap-2 border-t border-primaryStroke bg-backgroundSecondary px-3 py-2',
-        mobile && 'fixed inset-x-0 bottom-0 z-30 pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
+        'flex shrink-0 items-center justify-center gap-2 rounded-b-panel border-t border-primaryStroke bg-backgroundSecondary px-3 py-2 bubble:border-transparent',
+        mobile && 'fixed inset-x-0 bottom-0 z-30 rounded-none pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
       )}
     >
       <Control id="voice-room-mic" label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
