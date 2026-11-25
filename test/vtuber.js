@@ -420,6 +420,7 @@ function glb(json) {
       ? "the rigging, under the preview: the camera's picture with the reader's marks on the face and the numbers moving, an eye for the marks alone, a fold"
       : "the rigging, under the preview: the camera's picture with no face to mark and the numbers at rest, an eye for the marks alone, a fold",
     drawn(async () => {
+      if (await pub.$('#live-dock-tab-rig')) await pub.click('#live-dock-tab-rig');
       await pub.waitForSelector('#rig-body', { timeout: 5000 });
       const boxes = await pub.evaluate(() => {
         const box = (sel) => {
@@ -428,7 +429,7 @@ function glb(json) {
         };
         return { scene: box('#scene'), rig: box('#rig') };
       });
-      expect(boxes.rig.top >= boxes.scene.bottom && Math.abs(boxes.rig.left - boxes.scene.left) <= 1 && Math.abs(boxes.rig.right - boxes.scene.right) <= 1, `the rigging is not under the preview: ${JSON.stringify(boxes)}`);
+      expect(boxes.rig.top >= boxes.scene.bottom, `the rigging is not under the preview: ${JSON.stringify(boxes)}`);
       await waitRigPicture(pub, camera.label);
       await pub.waitForFunction(() => document.querySelector('#rig-video').videoWidth > 0, null, { timeout: 10000 });
       let said;
@@ -456,10 +457,14 @@ function glb(json) {
       expect((await pub.evaluate(() => localStorage.getItem('settings.rigPicture'))) === 'false', 'the eye is not kept');
       await press(pub, '#rig-picture', true);
       await waitRigPicture(pub, camera.label);
-      await pub.click('#rig-toggle');
-      await pub.waitForSelector('#rig-body', { state: 'detached', timeout: 5000 });
-      expect(JSON.parse(await pub.evaluate(() => localStorage.getItem('settings.livePanels'))).rig === false, 'the fold is not kept');
-      await pub.click('#rig-toggle');
+      const rigToggle = (await pub.$('#rig-toggle')) ? '#rig-toggle' : '#live-dock-toggle';
+      const rigVideo = await pub.$('#rig-video');
+      await pub.click(rigToggle);
+      await pub.waitForFunction((sel) => document.querySelector(sel).getAttribute('aria-expanded') === 'false', rigToggle, { timeout: 5000 });
+      const panels = JSON.parse(await pub.evaluate(() => localStorage.getItem('settings.livePanels')));
+      expect(rigToggle === '#rig-toggle' ? panels.rig === false : panels.dock === false, 'the fold is not kept');
+      expect(await rigVideo.evaluate((v) => v.isConnected), 'the fold took the camera picture off the page');
+      await pub.click(rigToggle);
       await waitRigPicture(pub, camera.label);
       const went = await cameraWent(pub, camera.label);
       expect(went.sent.length === 0, `the camera's track went to a sender: ${JSON.stringify(went.sent)}`);

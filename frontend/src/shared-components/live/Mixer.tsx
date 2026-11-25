@@ -3,7 +3,6 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import {
-  livePanelsAtom,
   MASTER,
   masterRowAtom,
   mixClipping,
@@ -13,12 +12,11 @@ import {
   mixRowsAtom,
   readMixLevel,
   resumeMixer,
-  setLivePanel,
   setMixLevel,
   setMixMuted
 } from '@/infra/atoms/publish-atoms';
 import { Button } from '@/shared-components/Button';
-import { Collapsible, ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -94,51 +92,46 @@ function Row({ row, master = false }: { row: MixRow; master?: boolean }) {
           {row.muted ? <RiVolumeMuteLine aria-hidden size={16} /> : <RiVolumeUpLine aria-hidden size={16} />}
         </button>
       </Tooltip>
-      <input
-        id={`gain-${row.id}`}
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={row.level}
-        aria-label={`${row.label} level`}
-        title={decibels(row.level)}
-        onChange={(e) => setMixLevel(row.id, e.target.valueAsNumber)}
-        className="h-1 w-full accent-primaryBlue"
-      />
+      <Tooltip content={decibels(row.level)}>
+        <input
+          id={`gain-${row.id}`}
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={row.level}
+          aria-label={`${row.label} level`}
+          onChange={(e) => setMixLevel(row.id, e.target.valueAsNumber)}
+          className="h-1 w-full accent-primaryBlue"
+        />
+      </Tooltip>
     </li>
   );
 }
 
-export function Mixer() {
+export function MixerBody() {
   const rows = useAtomValue(mixRowsAtom);
   const master = useAtomValue(masterRowAtom);
-  const open = useAtomValue(livePanelsAtom).sound;
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const running = useAtomValue(mixerRunningAtom);
+  if (!mixerOpen) return <p className="px-3 py-3 text-sm text-textTertiary">this browser has no web audio: the mic goes out as it is</p>;
   return (
-    <Collapsible id="mixer" title="sound" open={open} onToggle={() => setLivePanel('sound', !open)} className="mt-3">
-      {!mixerOpen ? (
-        <p className="px-3 py-3 text-sm text-textTertiary">this browser has no web audio: the mic goes out as it is</p>
-      ) : (
-        <>
-          {!running && (
-            <div className="flex items-center gap-3 border-b border-primaryStroke px-3 py-2 text-sm text-decrease">
-              the browser paused the sound: the stream is silent
-              <Button id="mixer-resume" variant="primary" className="px-3 py-1.5 text-sm" onClick={() => void resumeMixer()}>
-                sound on
-              </Button>
-            </div>
-          )}
-          <ul className="m-0 list-none divide-y divide-primaryStroke p-0">
-            {rows.length === 0 && <li className="px-3 py-2 text-sm text-textTertiary">no mic: the stream is silent</li>}
-            {rows.map((row) => (
-              <Row key={row.id} row={row} />
-            ))}
-            <Row row={{ ...master, id: MASTER }} master />
-          </ul>
-        </>
+    <>
+      {!running && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-primaryStroke px-3 py-2 text-sm text-decrease">
+          the browser paused the sound: the stream is silent
+          <Button id="mixer-resume" variant="primary" size="sm" onClick={() => void resumeMixer()}>
+            sound on
+          </Button>
+        </div>
       )}
-    </Collapsible>
+      <ul className="m-0 list-none divide-y divide-primaryStroke p-0">
+        {rows.length === 0 && <li className="px-3 py-2 text-sm text-textTertiary">no mic: the stream is silent</li>}
+        {rows.map((row) => (
+          <Row key={row.id} row={row} />
+        ))}
+        <Row row={{ ...master, id: MASTER }} master />
+      </ul>
+    </>
   );
 }

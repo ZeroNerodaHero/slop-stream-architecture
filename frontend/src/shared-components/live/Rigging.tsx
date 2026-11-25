@@ -6,16 +6,12 @@ import {
   faceLinesAtom,
   faceMirrorAtom,
   type FaceReading,
-  livePanelsAtom,
-  modelAtom,
   readerCameraAtom,
   rigPictureAtom,
   screenMaySeePageAtom,
-  setLivePanel,
   watchFaceMarks
 } from '@/infra/atoms/publish-atoms';
 import type { FaceLines, FaceMarks } from '@/infra/face';
-import { Collapsible } from '@/shared-components/live/Collapsible';
 import { cn } from '@/utils/cn';
 
 const WORDS: Record<FaceReading, string> = {
@@ -48,7 +44,7 @@ const FOLLOW_S = 0.6;
 const HEAD_UP = 0.06;
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
-function RigBody() {
+export function RigBody({ dock = false }: { dock?: boolean }) {
   const stream = useAtomValue(readerCameraAtom);
   const face = useAtomValue(faceAtom);
   const mirror = useAtomValue(faceMirrorAtom);
@@ -223,8 +219,12 @@ function RigBody() {
   const words = WORDS[face];
   return (
     <>
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-3 p-3">
-        <div id="rig-view" className="relative w-full max-w-md overflow-hidden border border-primaryStroke bg-black" style={{ aspectRatio: String(aspect) }}>
+      <div className={dock ? 'flex flex-wrap items-start gap-3 p-3' : 'grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-3 p-3'}>
+        <div
+          id="rig-view"
+          className={cn('relative overflow-hidden border border-primaryStroke bg-black', dock ? 'h-36 max-w-full shrink-0' : 'w-full max-w-md')}
+          style={{ aspectRatio: String(aspect) }}
+        >
           <div className={cn('absolute inset-0', mirror && '-scale-x-100')}>
             <video
               ref={videoRef}
@@ -246,7 +246,7 @@ function RigBody() {
             </p>
           )}
         </div>
-        <div ref={numbersRef} id="rig-numbers" className="flex min-w-0 max-w-sm flex-col gap-2.5">
+        <div ref={numbersRef} id="rig-numbers" className={cn('flex min-w-0 max-w-sm flex-col', dock ? 'min-w-[10rem] flex-1 gap-1.5' : 'gap-2.5')}>
           {BARS.map((bar) => (
             <div key={bar.id} className="flex flex-col gap-1">
               <div className="flex items-baseline justify-between gap-2 text-xs">
@@ -286,22 +286,5 @@ function RigBody() {
           : "only you see this. your camera's picture is not sent."}
       </p>
     </>
-  );
-}
-
-export function Rigging() {
-  const model = useAtomValue(modelAtom);
-  const open = useAtomValue(livePanelsAtom).rig;
-  if (!model) return null;
-  return (
-    <Collapsible
-      id="rig"
-      title="rigging"
-      open={open}
-      onToggle={() => setLivePanel('rig', !open)}
-      className="mt-3"
-    >
-      <RigBody />
-    </Collapsible>
   );
 }

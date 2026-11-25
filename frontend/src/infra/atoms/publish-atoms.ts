@@ -20,6 +20,7 @@ import {
   startModel,
   warmModelFiles
 } from '@/infra/face';
+import { type DockTab, type LivePanels, readPanels } from '@/infra/live-dock';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { readModel } from '@/infra/model-file';
 import {
@@ -127,17 +128,10 @@ export const sourceStatusAtom = atom('');
 export const hasAvatarAtom = atom((get) => get(sourcesAtom).some((s) => s.kind === 'avatar'));
 const storedLastAtom = atomWithStorage<unknown>('settings.lastArrangement', null, undefined, { getOnInit: true });
 const lastArrangementAtom = atom((get) => validPreset(get(storedLastAtom)));
-export interface LivePanels {
-  sources: boolean;
-  rig: boolean;
-  sound: boolean;
-}
-const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', { sources: true, rig: true, sound: true }, undefined, { getOnInit: true });
-export const livePanelsAtom = atom<LivePanels>((get) => {
-  const raw = get(storedPanelsAtom);
-  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return { sources: p.sources !== false, rig: p.rig !== false, sound: p.sound !== false };
-});
+const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', readPanels(null), undefined, { getOnInit: true });
+export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
+const storedDockTabAtom = atomWithStorage<unknown>('settings.liveDockTab', 'sources', undefined, { getOnInit: true });
+export const liveDockTabAtom = atom((get) => get(storedDockTabAtom));
 
 export interface MixRow {
   id: string;
@@ -1257,6 +1251,10 @@ export function removeSource(id: string) {
 
 export function setLivePanel(name: keyof LivePanels, open: boolean) {
   store.set(storedPanelsAtom, { ...store.get(livePanelsAtom), [name]: open });
+}
+
+export function setLiveDockTab(tab: DockTab) {
+  store.set(storedDockTabAtom, tab);
 }
 
 async function imageRatio(url: string): Promise<number> {
