@@ -1,24 +1,28 @@
 import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from 'react';
 
+import { type Box, BOXES_KEY, clampBox, parseBoxes, saveBox, type WindowId } from '@/infra/debug/window-store';
+
 export const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
 export const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 320;
 const MIN_H = 200;
 
-export interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 
-export function useDialogBox() {
+function storedBox(id: WindowId): Box | null {
+  try {
+    const box = parseBoxes(localStorage.getItem(BOXES_KEY))[id];
+    return box ? clampBox(box, room(), { w: MIN_W, h: MIN_H }) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function useDialogBox(id: WindowId) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const stop = useRef<(() => void) | null>(null);
-  const [box, setBox] = useState<Box | null>(null);
+  const [box, setBox] = useState<Box | null>(() => storedBox(id));
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -37,21 +41,28 @@ export function useDialogBox() {
     const startX = e.clientX;
     const startY = e.clientY;
     const pointerId = e.pointerId;
+    let last: Box | null = null;
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       const r = room();
       if (kind === 'move') {
-        setBox({ x: clamp(rect.left + dx, 0, r.w - rect.width), y: clamp(rect.top + dy, 0, r.h - rect.height), w: rect.width, h: rect.height });
+        last = { x: clamp(rect.left + dx, 0, r.w - rect.width), y: clamp(rect.top + dy, 0, r.h - rect.height), w: rect.width, h: rect.height };
       } else {
         const w = clamp(rect.width + dx, MIN_W, r.w - rect.left);
         const h = clamp(rect.height + dy, MIN_H, r.h - rect.top);
-        setBox({ x: rect.left, y: rect.top, w, h });
+        last = { x: rect.left, y: rect.top, w, h };
       }
+      setBox(last);
     };
     const end = (ev: PointerEvent) => {
-      if (ev.pointerId === pointerId) stop.current?.();
+      if (ev.pointerId !== pointerId) return;
+      stop.current?.();
+      if (!last) return;
+      try {
+        saveBox(localStorage, id, last);
+      } catch {}
     };
     stop.current = () => {
       stop.current = null;

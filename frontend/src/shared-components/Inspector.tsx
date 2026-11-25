@@ -52,7 +52,7 @@ export function Inspector() {
 }
 
 function InspectorPanel() {
-  const { dialogRef, box, press } = useDialogBox();
+  const { dialogRef, box, press } = useDialogBox('messages');
   const listRef = useRef<HTMLUListElement | null>(null);
   const stuck = useRef(true);
   const [expanded, setExpanded] = useState<FrameEntry | null>(null);
