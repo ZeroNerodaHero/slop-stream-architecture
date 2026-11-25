@@ -114,7 +114,7 @@ export function chatLayoutClass(side: ChatSide, open: boolean, fluid = false): s
   if (side !== 'left' && side !== 'right') return '';
   return cn(
     'beside:grid beside:grid-rows-[auto_1fr] beside:items-start beside:transition-[grid-template-columns,column-gap] beside:duration-300 beside:ease-out motion-reduce:beside:transition-none',
-    open ? 'beside:gap-x-6 bubble:beside:gap-x-2' : 'beside:gap-x-0',
+    open ? (fluid ? 'beside:gap-x-3 bubble:beside:gap-x-1' : 'beside:gap-x-6 bubble:beside:gap-x-2') : 'beside:gap-x-0',
     open ? OPEN_COLUMNS[side][fluid ? 'fluid' : 'fixed'] : side === 'right' ? 'beside:grid-cols-[minmax(0,1fr)_0px]' : 'beside:grid-cols-[0px_minmax(0,1fr)]'
   );
 }
