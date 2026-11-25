@@ -4,15 +4,17 @@ import { useAtomValue } from 'jotai';
 import { openInspector, openQuality, openTimings } from '@/infra/atoms/inspector-atoms';
 import {
   messagesEnabledAtom,
-  perfEnabledAtom,
+  perfModeAtom,
   qualityEnabledAtom,
   setMessagesEnabled,
-  setPerfEnabled,
+  setPerfMode,
   setQualityEnabled,
   setTimingsEnabled,
   timingsEnabledAtom
 } from '@/infra/atoms/settings-atoms';
+import { PERF_MODES } from '@/infra/debug-flag';
 import { Button } from '@/shared-components/Button';
+import { Segmented } from '@/shared-components/Segmented';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Block, CHECKBOX, Info } from '@/shared-components/user-modal/parts';
 
@@ -43,24 +45,32 @@ const ROWS = [
     enabled: qualityEnabledAtom,
     set: setQualityEnabled,
     open: openQuality
-  },
-  {
-    id: 'perf',
-    switchId: 'perf-switch',
-    word: 'perf overlay',
-    tip: 'fps, main thread busy, memory and network in the top right corner. never leaves this browser',
-    enabled: perfEnabledAtom,
-    set: setPerfEnabled,
-    open: null
   }
 ] as const;
 
+const PERF_OPTIONS = PERF_MODES.map((mode) => ({ value: mode, label: mode }));
+
+function PerfRow() {
+  const mode = useAtomValue(perfModeAtom);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
+      <span className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
+        <span>perf overlay</span>
+        <Info tip="fps, main thread busy, memory and network in the top right corner. extended adds a graph of the last minute under each. never leaves this browser" />
+      </span>
+      <span className="flex items-center gap-1.5">
+        <Segmented id="perf-mode" label="perf overlay" options={PERF_OPTIONS} value={mode} onChange={setPerfMode} />
+        <span aria-hidden className="h-7 w-7" />
+      </span>
+    </div>
+  );
+}
+
 function DebugRow({ row }: { row: (typeof ROWS)[number] }) {
   const on = useAtomValue(row.enabled);
-  const show = row.open;
   const open = () => {
     row.set(true);
-    show?.();
+    row.open();
   };
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
@@ -70,15 +80,11 @@ function DebugRow({ row }: { row: (typeof ROWS)[number] }) {
       </span>
       <span className="flex items-center gap-1.5">
         <input id={row.switchId} type="checkbox" checked={on} onChange={(e) => row.set(e.target.checked)} className={CHECKBOX} />
-        {show ? (
-          <Tooltip content={`open ${row.word}`}>
-            <Button id={`${row.id}-open-settings`} size="sm" aria-label={`open ${row.word}`} onClick={open} className="h-7 w-7 p-0">
-              <RiArrowRightUpLine aria-hidden size={16} />
-            </Button>
-          </Tooltip>
-        ) : (
-          <span aria-hidden className="h-7 w-7" />
-        )}
+        <Tooltip content={`open ${row.word}`}>
+          <Button id={`${row.id}-open-settings`} size="sm" aria-label={`open ${row.word}`} onClick={open} className="h-7 w-7 p-0">
+            <RiArrowRightUpLine aria-hidden size={16} />
+          </Button>
+        </Tooltip>
       </span>
     </div>
   );
@@ -91,6 +97,7 @@ export function AdvancedTab() {
         {ROWS.map((row) => (
           <DebugRow key={row.id} row={row} />
         ))}
+        <PerfRow />
       </Block>
     </div>
   );

@@ -18,6 +18,17 @@ export function migrateDebugSettings(storage: Pick<Storage, 'getItem' | 'setItem
   storage.removeItem('settings.inspector');
 }
 
+export type PerfMode = 'off' | 'on' | 'extended';
+
+export const PERF_MODES: readonly PerfMode[] = ['off', 'on', 'extended'];
+
+export const PERF_KEY = 'settings.debugPerf';
+
+export function perfModeOf(raw: unknown): PerfMode {
+  if (raw === true) return 'on';
+  return raw === 'on' || raw === 'extended' ? raw : 'off';
+}
+
 export function perfDebugOn(): boolean {
   try {
     return new URLSearchParams(location.search).get('perfdebug') === '1' || localStorage.getItem('perfdebug') === '1';

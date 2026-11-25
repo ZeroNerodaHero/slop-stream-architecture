@@ -1,18 +1,22 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEBUG_KEYS, migrateDebugSettings } from '../src/infra/debug-flag.ts';
+import { DEBUG_KEYS, migrateDebugSettings, PERF_KEY, PERF_MODES, perfModeOf } from '../src/infra/debug-flag.ts';
 import {
   busyOf,
   fpsOf,
   kbpsOf,
+  HISTORY,
   lagOf,
   type PerfDeps,
+  PerfHistory,
   type PerfEntryLike,
   type PerfObserverCtor,
   type PerfSnapshot,
   PerfSampler,
-  type PressureCtor
+  type PressureCtor,
+  rangeOf,
+  sparkLines
 } from '../src/infra/debug/perf-hud.ts';
 
 function rig(opts: { types?: string[]; memory?: number | null; pressure?: boolean; stats?: boolean } = {}) {
@@ -251,4 +255,53 @@ test('the old inspector migration leaves the perf switch alone', () => {
   migrateDebugSettings(storage);
   assert.equal(Object.values(DEBUG_KEYS).includes('settings.debugPerf'), false);
   assert.equal(data.has('settings.debugPerf'), false);
+});
+
+test('the perf setting reads the old switch as a mode', () => {
+  assert.equal(PERF_KEY, 'settings.debugPerf');
+  assert.deepEqual(PERF_MODES, ['off', 'on', 'extended']);
+  assert.equal(perfModeOf(true), 'on');
+  assert.equal(perfModeOf(false), 'off');
+  assert.equal(perfModeOf('on'), 'on');
+  assert.equal(perfModeOf('extended'), 'extended');
+  for (const raw of ['off', 'true', 'ON', 1, 0, null, undefined, {}, []]) assert.equal(perfModeOf(raw), 'off');
+});
+
+function snapOf(i: number, extra: Partial<PerfSnapshot> = {}): PerfSnapshot {
+  return { fps: i, busy: i / 100, lagMs: 0, memoryMb: 10 + i, downKBps: i, totalMb: 0, videoKbps: null, pressure: null, ...extra };
+}
+
+test('the history keeps the last 60 samples oldest first', () => {
+  const h = new PerfHistory();
+  assert.equal(h.size, HISTORY);
+  assert.deepEqual(h.values('fps'), []);
+  for (let i = 0; i < 3; i++) h.push(snapOf(i));
+  assert.deepEqual(h.values('fps'), [0, 1, 2]);
+  for (let i = 3; i < 75; i++) h.push(snapOf(i));
+  const fps = h.values('fps');
+  assert.equal(h.length, 60);
+  assert.equal(fps.length, 60);
+  assert.equal(fps[0], 15);
+  assert.equal(fps[59], 74);
+  assert.ok(h.values('videoKbps').every((v) => Number.isNaN(v)));
+});
+
+test('graph ranges: fps 0 to max(60, peak), busy 0 to 1, the rest auto', () => {
+  assert.deepEqual(rangeOf('fps', [30, 58]), [0, 60]);
+  assert.deepEqual(rangeOf('fps', [30, 120]), [0, 120]);
+  assert.deepEqual(rangeOf('busy', [0.2]), [0, 1]);
+  const [lo, hi] = rangeOf('memoryMb', [100, 110]);
+  assert.ok(lo < 100 && lo > 90 && hi > 110 && hi < 120);
+  const [dlo, dhi] = rangeOf('downKBps', [0, 0, Number.NaN]);
+  assert.equal(dlo, 0);
+  assert.ok(dhi > 0);
+});
+
+test('a sparkline is right aligned and breaks on a missing sample', () => {
+  const lines = sparkLines([0, 60, Number.NaN, 30, 30], [0, 60], 96, 18, 5, 0);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], '0.0,18.0 24.0,0.0');
+  assert.equal(lines[1], '72.0,9.0 96.0,9.0');
+  const short = sparkLines([10, 20], [0, 20], 96, 18, 60, 0);
+  assert.equal(short[0], `${(96 - 96 / 59).toFixed(1)},9.0 96.0,0.0`);
 });
