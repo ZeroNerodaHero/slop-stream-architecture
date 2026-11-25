@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 
 import { record } from '@/infra/atoms/inspector-atoms';
 import { messagesEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { socketLink, socketTick } from '@/infra/debug/sockets';
 import { report } from '@/infra/report';
 import { type FromCore, openBrowserSocket, type Port, RtCore, type ToCore } from '@/infra/rt/core';
 import { type Release, TopicRefs } from '@/infra/rt/refs';
@@ -53,11 +54,13 @@ const refs = new TopicRefs((topics, peek) => send?.({ kind: 'set', topics, peek 
 function deliver(msg: FromCore) {
   switch (msg.kind) {
     case 'phase':
+      socketLink('rt', msg.phase, SOURCE);
       if (msg.phase !== 'open') held = new Set();
       store.set(rtPhaseAtom, msg.phase);
       for (const l of phaseListeners) l(msg.phase);
       return;
     case 'frame': {
+      socketTick('rt');
       const frame = msg.frame;
       if (frame.type === 'subbed' && Array.isArray(frame.topics)) held = new Set(frame.topics.filter((t): t is string => typeof t === 'string'));
       const topic = typeof frame.topic === 'string' ? frame.topic : null;

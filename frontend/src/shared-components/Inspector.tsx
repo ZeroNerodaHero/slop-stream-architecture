@@ -18,9 +18,9 @@ import {
   toggleInspectorDir,
   toggleInspectorPaused
 } from '@/infra/atoms/inspector-atoms';
-import { eventsPhaseAtom, eventsTransportAtom } from '@/infra/events';
 import type { FrameEntry } from '@/infra/frames';
 import { useIsMobile } from '@/infra/mobile';
+import { SocketRow } from '@/shared-components/debug/SocketRow';
 import { FRAME, GRIP, useDialogBox } from '@/shared-components/debug/useDialogBox';
 import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -62,8 +62,6 @@ function InspectorPanel() {
   const dirs = useAtomValue(inspectorDirsAtom);
   const paused = useAtomValue(inspectorPausedAtom);
   const frozen = useAtomValue(inspectorFrozenAtom);
-  const phase = useAtomValue(eventsPhaseAtom);
-  const transport = useAtomValue(eventsTransportAtom);
   const mobile = useIsMobile();
   useSheetBack(closeInspector);
 
@@ -116,9 +114,6 @@ function InspectorPanel() {
         title={mobile ? undefined : 'drag to move'}
       >
         <span className="font-semibold">messages</span>
-        <span className="text-xs text-textTertiary">
-          /events {phase} · {transport === 'worker' ? 'one socket for the browser' : transport === 'tab' ? 'a socket for this tab' : 'no socket'}
-        </span>
         <span className="ml-auto flex items-center gap-1">
           <Tooltip content={paused ? 'resume' : 'pause the view (the recorder goes on)'}>
             <button
@@ -170,6 +165,7 @@ function InspectorPanel() {
           </Tooltip>
         </span>
       </header>
+      <SocketRow />
 
       <div className="flex flex-wrap items-center gap-2 border-b border-primaryStroke px-3 py-2">
         <input

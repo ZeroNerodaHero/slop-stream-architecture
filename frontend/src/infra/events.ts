@@ -5,6 +5,7 @@ import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { bindInspectorToWorker, keep, record, replaceEntries, unbindInspector } from '@/infra/atoms/inspector-atoms';
 import { identifiedAs, presenceChanged, presenceLost } from '@/infra/atoms/presence-atoms';
 import { messagesEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { socketLink, socketTick, trackSocket } from '@/infra/debug/sockets';
 import EventsWorker from '@/infra/events.worker?sharedworker';
 import { type ClientFrame, type FrameEntry, type FromWorker, type LinkPhase, parseServerFrame, type ServerFrame, TAB_PING_MS, type ToWorker } from '@/infra/frames';
 import { relayUrl } from '@/infra/relay';
@@ -101,9 +102,11 @@ class WorkerLink implements Link {
       const msg = e.data;
       switch (msg.kind) {
         case 'link':
+          socketLink('events', msg.phase, SOURCE);
           setPhase(msg.phase);
           break;
         case 'frame':
+          socketTick('events');
           dispatch(msg.frame);
           break;
         case 'entry':
@@ -183,7 +186,7 @@ class TabLink implements Link {
     if (this.closed) return;
     this.timer = null;
     setPhase('connecting');
-    const socket = new WebSocket(relayUrl(SOURCE));
+    const socket = trackSocket('events', new WebSocket(relayUrl(SOURCE)), SOURCE);
     this.ws = socket;
     socket.onopen = () => {
       if (this.ws !== socket) return;
@@ -278,9 +281,13 @@ class RtLink implements Link {
     this.offs.push(
       onRtFrame((frame) => {
         if (typeof frame.topic === 'string' || RT_OWN.has(frame.type)) return;
+        socketTick('events');
         dispatch(frame as unknown as ServerFrame);
       }),
-      onRtPhase((phase) => setPhase(phase))
+      onRtPhase((phase) => {
+        socketLink('events', phase, '/rt');
+        setPhase(phase);
+      })
     );
     for (const name of allWanted()) this.watch(name);
   }

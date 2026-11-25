@@ -5,6 +5,7 @@ import { askLatest, type ChatLine, takeHistoryFrom, warmChat } from '@/infra/ato
 import { presenceChanged, presencesAtom } from '@/infra/atoms/presence-atoms';
 import { pipAtom, socialsAtom, watchNameAtom, watchPhaseAtom, type WatchPhase, watchWelcomeAtom } from '@/infra/atoms/watch-state';
 import { welcomeOf } from '@/infra/atoms/welcome-atoms';
+import { trackSocket } from '@/infra/debug/sockets';
 import { eventsEverOpened, eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
 import { onPrefetch, prefetch, PREFETCH_TTL_MS, takePrefetched } from '@/infra/prefetch';
@@ -118,7 +119,7 @@ function makeWarm(name: string, url = WS_PATH): Warm {
     () => perfMark('offer'),
     () => undefined
   );
-  const ws = new WebSocket(relayUrl(url));
+  const ws = trackSocket('video', new WebSocket(relayUrl(url)), url);
   ws.addEventListener('open', () => perfMark('ws-open'), { once: true });
   return { name, url, pc: warmPc, videoTransceivers, offer, ws, born: performance.now() };
 }
@@ -184,6 +185,7 @@ function takeBoot(name: string): { warm: Warm; grant: Promise<WatchGrant> } | nu
     closeWarm(warm);
     return null;
   }
+  trackSocket('video', boot.ws, WS_PATH);
   perfBegin('boot', name, boot.born);
   perfMark('peer', boot.born);
   if (boot.offerAt !== undefined) perfMark('offer', boot.offerAt);

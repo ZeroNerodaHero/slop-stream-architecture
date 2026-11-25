@@ -6,6 +6,7 @@ import rnnoiseSimdWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise_simd.wa
 import rnnoiseWorkletUrl from '@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url';
 
 import { api, messageOf, statusOf } from '@/infra/api';
+import { trackSocket } from '@/infra/debug/sockets';
 import { socketUrl } from '@/infra/frames';
 import { FLOOR_DB, type Level, levelAnalyser, levelOf } from '@/infra/mic-level';
 import { store } from '@/infra/store';
@@ -260,7 +261,7 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
   }
   if (mine !== attempt) return;
 
-  const ws = new WebSocket(socketUrl(grant.url, location.href));
+  const ws = trackSocket('voice', new WebSocket(socketUrl(grant.url, location.href)), grant.url);
   live.ws = ws;
   ws.onopen = () => ws.send(JSON.stringify({ role: 'voice', grant: grant.grant, sdp: trimOffer(pc.localDescription?.sdp ?? '') }));
   ws.onclose = (e: CloseEvent) => fail(mine, closedWord(store.get(voiceCallAtom), e.code));

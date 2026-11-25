@@ -4,6 +4,7 @@ import { atomWithStorage } from 'jotai/utils';
 import { api, type GroupBadge, type Owner } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
+import { trackSocket } from '@/infra/debug/sockets';
 import { encodeEmotes, tokensAsTyped } from '@/infra/emotes';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { type Attached, Attachments, idsOf, isPictureRefusal, MAX_CHAT_IMAGES, releaseAttached, wordsOf } from '@/infra/chat-attach';
@@ -215,7 +216,7 @@ export function warmChat(name: string) {
     return;
   }
   dropWarm();
-  warm = { name, ws: new WebSocket(relayUrl(`/chat/${chatPath(name)}`)), me: store.get(meAtom), timer: setTimeout(dropWarm, WARM_CHAT_MS) };
+  warm = { name, ws: trackSocket('chat', new WebSocket(relayUrl(`/chat/${chatPath(name)}`)), `/chat/${chatPath(name)}`), me: store.get(meAtom), timer: setTimeout(dropWarm, WARM_CHAT_MS) };
 }
 
 function takeWarmChat(name: string): WebSocket | null {
@@ -748,7 +749,7 @@ export class ChatRoom {
 
     this.loadHistory();
     store.set(this.phaseAtom, 'connecting');
-    const ws = (this.server ? null : takeWarmChat(this.key)) ?? new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`));
+    const ws = (this.server ? null : takeWarmChat(this.key)) ?? trackSocket('chat', new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`)), `/chat/${chatPath(this.key)}`);
     this.ws = ws;
     this.me = known;
     this.nick = me ? '' : nick;
