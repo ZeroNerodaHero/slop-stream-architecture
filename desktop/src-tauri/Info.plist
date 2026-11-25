@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>nodentity uses your microphone when you go live or join voice.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>nodentity uses your camera when you go live or turn on video in voice.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>nodentity captures desktop audio when you add it to your stream.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>nodentity captures a window or screen when you share it on your stream.</string>
+</dict>
+</plist>

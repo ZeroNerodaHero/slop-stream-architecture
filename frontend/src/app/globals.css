@@ -271,4 +271,25 @@ body {
   .range-box:enabled:hover::-moz-range-thumb {
     background: rgb(var(--primary-color-hover));
   }
+  .range-box.range-thin {
+    height: 20px;
+    border-radius: var(--r-control);
+  }
+  .range-box.range-thin::-webkit-slider-runnable-track {
+    height: 4px;
+    border: 0;
+    background: linear-gradient(to right, rgb(var(--primary-color)) var(--pct, 0%), rgb(var(--primary-stroke)) var(--pct, 0%));
+  }
+  .range-box.range-thin::-moz-range-track {
+    height: 4px;
+    border: 0;
+    background: rgb(var(--primary-stroke));
+  }
+  .range-box.range-thin::-moz-range-progress {
+    height: 4px;
+    background: rgb(var(--primary-color));
+  }
+  .range-box.range-thin::-webkit-slider-thumb {
+    margin-top: -6px;
+  }
 }

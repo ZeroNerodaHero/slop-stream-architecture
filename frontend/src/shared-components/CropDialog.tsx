@@ -1,5 +1,6 @@
+import { RiAddLine, RiRefreshLine, RiSubtractLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { messageOf } from '@/infra/api';
 import { answerCrop, swapCropFile, type CropRequest, cropRequestAtom } from '@/infra/atoms/crop-atoms';
@@ -10,23 +11,27 @@ import {
   cornerRect,
   formatWord,
   isWhole,
-  minScale,
+  maxZoom,
   movedRect,
   outputSize,
   pictureFor,
   type Rect,
-  scaleOf,
-  scaledRect
+  scaledRect,
+  zoomedRect,
+  zoomOf
 } from '@/infra/picture';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
 import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const NUDGE = 0.01;
 const ARROWS: Record<string, readonly [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 const STEP = 1.1;
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
+const ZOOM_KEYS: Record<string, number> = { ArrowRight: 1 / STEP, ArrowUp: 1 / STEP, ArrowLeft: STEP, ArrowDown: STEP, PageUp: 1 / STEP ** 3, PageDown: STEP ** 3 };
+const ZOOM_BUTTON = 'h-7 w-7 shrink-0 px-0 py-0 max-md:h-11 max-md:w-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:border-primaryStroke aria-disabled:hover:bg-backgroundSecondary';
 function cutOut(x: number, y: number, w: number, h: number): string {
   const [l, t, r, b] = [`${x}px`, `${y}px`, `${x + w}px`, `${y + h}px`];
   return `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l} ${t}, ${l} ${b}, ${r} ${b}, ${r} ${t}, ${l} ${t})`;
@@ -37,6 +42,11 @@ const CORNERS = [
   { id: 'sw', sx: -1, sy: 1, className: '-bottom-px -left-px cursor-nesw-resize border-b-2 border-l-2' },
   { id: 'se', sx: 1, sy: 1, className: '-bottom-px -right-px cursor-nwse-resize border-b-2 border-r-2' }
 ] as const;
+
+function spanOf(points: Map<number, { x: number; y: number }>): number {
+  const [a, b] = [...points.values()];
+  return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+}
 
 interface Loaded {
   picture: ImageBitmap;
@@ -64,6 +74,8 @@ function CropBox({ request }: { request: CropRequest }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const fingers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ from: Rect; span: number } | null>(null);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -128,6 +140,33 @@ function CropBox({ request }: { request: CropRequest }) {
   }, [loaded]);
 
   useEffect(() => {
+    if (!loaded) return;
+    const { width, height } = loaded.picture;
+    const touched = fingers.current;
+    const move = (e: PointerEvent) => {
+      if (!touched.has(e.pointerId)) return;
+      touched.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const pinching = pinch.current;
+      const span = spanOf(touched);
+      if (pinching && span > 0) setRect(scaledRect(pinching.from, pinching.span / span, aspect, width, height));
+    };
+    const lift = (e: PointerEvent) => {
+      if (!touched.delete(e.pointerId)) return;
+      if (touched.size < 2) pinch.current = null;
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', lift);
+    window.addEventListener('pointercancel', lift);
+    return () => {
+      touched.clear();
+      pinch.current = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', lift);
+      window.removeEventListener('pointercancel', lift);
+    };
+  }, [loaded]);
+
+  useEffect(() => {
     if (rect && k > 0) boxRef.current?.focus();
   }, [rect !== null && k > 0]);
 
@@ -135,7 +174,7 @@ function CropBox({ request }: { request: CropRequest }) {
   useSheetBack(close);
 
   const press = (e: ReactPointerEvent<HTMLElement>, kind: 'move' | 'resize', sx = 0, sy = 0) => {
-    if (!loaded || !rect || e.button !== 0 || stop.current || k === 0) return;
+    if (!loaded || !rect || e.button !== 0 || stop.current || pinch.current || k === 0) return;
     const { width, height } = loaded.picture;
     const from = rect;
     const { pointerId, clientX: startX, clientY: startY } = e;
@@ -159,6 +198,28 @@ function CropBox({ request }: { request: CropRequest }) {
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', end);
+  };
+
+  const touch = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'touch' || !rect) return;
+    fingers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (fingers.current.size !== 2) return;
+    const span = spanOf(fingers.current);
+    if (span <= 0) return;
+    stop.current?.();
+    pinch.current = { from: rect, span };
+  };
+
+  const scaleBy = (factor: number) => {
+    if (!loaded) return;
+    const { width, height } = loaded.picture;
+    setRect((r) => (r ? scaledRect(r, factor, aspect, width, height) : r));
+  };
+
+  const zoomTo = (to: number) => {
+    if (!loaded) return;
+    const { width, height } = loaded.picture;
+    setRect((r) => (r ? zoomedRect(r, to, aspect, width, height) : r));
   };
 
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -208,14 +269,20 @@ function CropBox({ request }: { request: CropRequest }) {
     const { width, height } = loaded.picture;
     const out = outputSize(spec, rect, width, height);
     const whole = !spec.size && isWhole(rect, width, height) && file.size <= spec.max;
-    goes = spec.size
-      ? `goes up as a ${out.width}×${out.height} ${formatWord(spec.type ?? 'image/jpeg')}`
-      : whole
-        ? `goes up as it is: ${out.width}×${out.height}${file.type ? ` ${formatWord(file.type)}` : ''}`
-        : `goes up cut to ${out.width}×${out.height} ${formatWord(assetType(file))}`;
-    zoom = 1 / scaleOf(rect, width, height);
-    zoomMost = 1 / minScale(width, height, aspect);
+    goes = spec.stored
+      ? `goes up as a ${spec.stored.width}×${spec.stored.height} ${formatWord(spec.stored.type)}`
+      : spec.size
+        ? `goes up as a ${out.width}×${out.height} ${formatWord(spec.type ?? 'image/jpeg')}`
+        : whole
+          ? `goes up as it is: ${out.width}×${out.height}${file.type ? ` ${formatWord(file.type)}` : ''}`
+          : `goes up cut to ${out.width}×${out.height} ${formatWord(assetType(file))}`;
+    zoom = Math.min(zoomOf(rect, width, height), maxZoom(width, height, aspect));
+    zoomMost = maxZoom(width, height, aspect);
   }
+  const ready = Boolean(loaded && rect);
+  const atFit = !ready || zoom <= 1.0005;
+  const atMost = !ready || zoom >= zoomMost * 0.9995;
+  const filled = zoomMost > 1 ? (zoom - 1) / (zoomMost - 1) : 0;
 
   return (
     <dialog
@@ -240,7 +307,7 @@ function CropBox({ request }: { request: CropRequest }) {
         {spec.where}. drag the box to move it, pull a corner or use the slider to scale it. what is inside goes up.
       </p>
 
-      <div ref={stageRef} className={cn('relative mt-4 flex h-[min(56dvh,440px)] w-full items-center justify-center overflow-hidden bg-black', GRIP)}>
+      <div ref={stageRef} onPointerDownCapture={touch} className={cn('relative mt-4 flex h-[min(56dvh,440px)] w-full items-center justify-center overflow-hidden bg-black', GRIP)}>
         {loaded && rect && k > 0 ? (
           <div className="relative overflow-hidden" style={{ width: loaded.picture.width * k, height: loaded.picture.height * k }}>
             <img src={loaded.url} alt="" draggable={false} className="block h-full w-full" />
@@ -276,10 +343,19 @@ function CropBox({ request }: { request: CropRequest }) {
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <label htmlFor="crop-zoom" className="text-sm text-textSecondary">
-          zoom
-        </label>
+      <div className="mt-2 flex items-center gap-2">
+        <Tooltip content="zoom out">
+          <Button
+            id="crop-zoom-out"
+            size="sm"
+            aria-label="zoom out"
+            aria-disabled={atFit}
+            onClick={() => !atFit && scaleBy(STEP)}
+            className={ZOOM_BUTTON}
+          >
+            <RiSubtractLine aria-hidden size={16} />
+          </Button>
+        </Tooltip>
         <input
           id="crop-zoom"
           type="range"
@@ -287,27 +363,47 @@ function CropBox({ request }: { request: CropRequest }) {
           max={zoomMost}
           step={0.01}
           value={zoom}
-          disabled={!loaded || !rect}
+          disabled={!ready}
           aria-label="zoom"
-          title={`${zoom.toFixed(1)}×`}
-          onChange={(e) => {
-            if (!loaded || !rect) return;
-            const { width, height } = loaded.picture;
-            setRect(scaledRect(rect, 1 / e.target.valueAsNumber / scaleOf(rect, width, height), aspect, width, height));
+          aria-valuetext={`${zoom.toFixed(1)} times`}
+          onChange={(e) => zoomTo(e.target.valueAsNumber)}
+          onKeyDown={(e) => {
+            const factor = ZOOM_KEYS[e.key];
+            if (factor === undefined && e.key !== 'Home' && e.key !== 'End') return;
+            e.preventDefault();
+            if (factor !== undefined) scaleBy(factor);
+            else zoomTo(e.key === 'Home' ? 1 : zoomMost);
           }}
-          className="h-1 min-w-[8rem] flex-1 accent-primaryBlue"
+          style={{ '--pct': `calc(8px + (100% - 16px) * ${filled})` } as CSSProperties}
+          className="range-box range-thin min-w-0 flex-1"
         />
-        <button
+        <Tooltip content="zoom in">
+          <Button
+            id="crop-zoom-in"
+            size="sm"
+            aria-label="zoom in"
+            aria-disabled={atMost}
+            onClick={() => !atMost && scaleBy(1 / STEP)}
+            className={ZOOM_BUTTON}
+          >
+            <RiAddLine aria-hidden size={16} />
+          </Button>
+        </Tooltip>
+        <span id="crop-zoom-value" aria-hidden className="w-9 shrink-0 text-right text-sm tabular-nums text-textSecondary">
+          {`${zoom.toFixed(1)}×`}
+        </span>
+        <Button
           id="crop-reset"
-          type="button"
+          size="sm"
           disabled={!loaded}
           onClick={() => loaded && setRect(centredRect(loaded.picture.width, loaded.picture.height, aspect))}
-          className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline disabled:opacity-40"
+          className="h-7 shrink-0 gap-1.5 py-0 max-md:h-11 max-md:px-2.5"
         >
-          start over
-        </button>
+          <RiRefreshLine aria-hidden size={14} />
+          reset
+        </Button>
       </div>
-      <p id="crop-size" className="mt-2 min-h-4 text-xs text-textTertiary" aria-live="polite">
+      <p id="crop-size" className="mt-1 min-h-4 text-xs text-textTertiary" aria-live="polite">
         {goes}
       </p>
 
