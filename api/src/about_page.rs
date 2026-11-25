@@ -1042,6 +1042,41 @@ mod tests {
     }
 
     #[test]
+    fn an_about_card_comes_back_as_it_was_sent() {
+        let cards = [
+            "<h3>my &lt;rules&gt; &amp; \"stuff\"</h3><p>1. be nice\n2. no spoilers\t&lt;3 &amp; &amp;amp; &gt;\n\n🐺 café\u{a0}ok</p><blockquote>https://example.com/a?b=1&amp;c=2#x</blockquote>",
+            "<h3>what i stream</h3><p></p>",
+            "<p></p>",
+        ];
+        for html in cards {
+            assert_eq!(sanitize_html(html), html);
+        }
+        let wolves = format!("<p>{}</p>", "&amp;🐺".repeat(1110));
+        assert_eq!(wolves.len(), TEXT_MAX - 3);
+        assert_eq!(sanitize_html(&wolves), wolves);
+        let edge = format!("<p>{}</p>", "a".repeat(TEXT_MAX - 8));
+        assert_eq!(edge.len(), TEXT_MAX - 1);
+        assert_eq!(sanitize_html(&edge), edge);
+        let mut have = HashMap::new();
+        have.insert(9, ("image".into(), "image/png".into()));
+        have.insert(10, ("text".into(), "text/plain".into()));
+        let body = PageBody {
+            blocks: vec![
+                Incoming { kind: "text".into(), id: 10, x: 1600, y: 300, z: 1, w: 0, h: 0, html: cards[0].into(), look: LookIn::default() },
+                Incoming { kind: "text".into(), id: 0, x: 1600, y: 301, z: 1, w: 0, h: 0, html: cards[2].into(), look: LookIn::default() },
+                Incoming { kind: "image".into(), id: 9, x: 1600, y: 350, z: 1, w: 0, h: 0, html: String::new(), look: LookIn::default() },
+                Incoming { kind: "text".into(), id: 0, x: 1600, y: 500, z: 0, w: 0, h: 0, html: cards[1].into(), look: LookIn::default() },
+            ],
+        };
+        let kept = plan(&body, &have).unwrap();
+        let spots: Vec<(&str, i32, i32, i32)> = kept.iter().map(|b| (b.kind, b.x, b.y, b.z)).collect();
+        assert_eq!(spots, vec![("text", 1600, 300, 1), ("text", 1600, 301, 1), ("image", 1600, 350, 1), ("text", 1600, 500, 0)]);
+        assert_eq!(kept[0].id, 10);
+        assert_eq!(kept[0].html.as_deref(), Some(cards[0]));
+        assert_eq!(kept[3].html.as_deref(), Some(cards[1]));
+    }
+
+    #[test]
     fn a_link_is_http_or_it_is_not_a_link() {
         assert_eq!(
             sanitize_html("<a href=\"https://example.com/a\">x</a>"),
