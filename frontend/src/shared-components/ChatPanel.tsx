@@ -1219,7 +1219,7 @@ export function ChatPanel({
                   type="button"
                   id="chat-picture"
                   aria-label={takesVideos ? 'picture or video' : 'picture'}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-background text-textTertiary disabled:opacity-40"
                   disabled={pictures.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -1253,7 +1253,7 @@ export function ChatPanel({
                   placeholder="comment"
                   aria-label={`comment as ${asStreamer ? name : speaker}`}
                   autoComplete="off"
-                  className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
+                  className={cn(INPUT, 'h-8 min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
                 />
               </div>
               <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : null}>
