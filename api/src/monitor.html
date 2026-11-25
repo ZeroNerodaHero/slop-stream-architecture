@@ -46,13 +46,14 @@
   #q { width: 190px; font: inherit; font-size: 13px; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 3px 8px; }
   #q:focus { outline: none; border-color: var(--blue); }
   .picker { position: relative; }
-  .picker > button, .picker > span { display: flex; align-items: center; gap: 4px; background: none; border: 1px solid transparent; padding: 2px 5px; font-size: 12px; color: var(--t3); white-space: nowrap; }
+  .picker > button { display: flex; align-items: center; gap: 4px; background: none; border: 1px solid transparent; padding: 2px 5px; font-size: 12px; color: var(--t3); white-space: nowrap; }
   .picker > button:hover, .picker > button[aria-expanded="true"], .picker > button:focus-visible { color: var(--t1); border-color: var(--stroke); outline: none; }
-  .site { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--t3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .site { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 27px; padding: 0 11px 0 9px; border: 1px solid var(--stroke); border-radius: 999px; background: var(--bg3); font-size: 11px; color: var(--t3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .site:empty { display: none; }
   .site .tipped { text-decoration: none; color: var(--t2); }
   .site .tipped:hover, .site .tipped.on { color: var(--t1); }
   .site .tipped b { font-weight: 600; color: var(--t1); }
-  .site .tipped.sd { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--t3); }
+  .site .tipped.sd { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--t3); }
   .site .sd.up { background: var(--up); } .site .sd.down { background: var(--down); } .site .sd.warn { background: var(--orange); }
   .site.old .tipped b { color: var(--t2); }
   .picker ul { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 100%; background: var(--bg2); border: 1px solid var(--t3); padding: 2px 0; }
@@ -2529,13 +2530,10 @@
       if ($box.dataset.sig === sig) return;
       $box.dataset.sig = sig;
       $box.replaceChildren();
-      if (t) {
-        const s = el('span', null, t.name);
-        s.title = `the only box watched, ${t.status}`;
-        $box.append(s);
-      }
+      $box.hidden = true;
       return;
     }
+    $box.hidden = false;
     const items = [...(allAllowed() ? [{ id: ALL, label: 'all boxes', note: `${targets.filter((t) => t.status === 'up').length}/${targets.length} up` }] : []), ...targets.map((t) => ({ id: t.name, label: t.name, status: t.status }))];
     const sig = `${items.map((i) => `${i.id}:${i.status || i.note}`).join('|')}|${shown}`;
     if ($box.dataset.sig === sig && $box.firstChild) return;
