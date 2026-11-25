@@ -5,6 +5,7 @@ export interface Layer {
   active: boolean;
   scaleResolutionDownBy: number;
   maxBitrate: number;
+  maxFramerate: number;
 }
 
 export interface Top {
@@ -17,24 +18,25 @@ export interface Encoding {
   active?: boolean;
   scaleResolutionDownBy?: number;
   maxBitrate?: number;
+  maxFramerate?: number;
 }
 
 export const RIDS: readonly Rid[] = ['q', 'h', 'f'];
 export const TOP_HEIGHT = 1080;
+export const MAX_FRAMERATE = 30;
 export const SINGLE_HEIGHT = 720;
 export const SINGLE_BITRATE = 2_500_000;
 const UNKNOWN_HEIGHT = 720;
 const DIVIDE: Record<Rid, number> = { q: 3, h: 1.5, f: 1 };
 const MIN_HEIGHT: Record<Rid, number> = { q: 180, h: 240, f: 0 };
-const LOWER_SHARE = 0.8;
 const SHARE_OF_TOP: Record<Rid, number> = { q: 0.15, h: 0.45, f: 1 };
 const MIN_LAYER_BITRATE = 60_000;
 const RATES: readonly (readonly [number, number])[] = [
   [180, 150_000],
-  [360, 600_000],
-  [540, 1_200_000],
-  [720, 2_500_000],
-  [1080, 4_500_000]
+  [360, 500_000],
+  [540, 800_000],
+  [720, 1_200_000],
+  [1080, 2_500_000]
 ];
 
 export function bitrateFor(height: number): number {
@@ -64,19 +66,19 @@ export function cameraLayers(sourceHeight: number | undefined, top?: Top): Layer
     let maxBitrate: number;
     if (rid === 'f') maxBitrate = top?.maxBitrate ?? bitrateFor(height);
     else if (top) maxBitrate = Math.max(MIN_LAYER_BITRATE, Math.round(top.maxBitrate * SHARE_OF_TOP[rid]));
-    else maxBitrate = Math.round(bitrateFor(height) * LOWER_SHARE);
-    return { rid, active, scaleResolutionDownBy: topScale * DIVIDE[rid], maxBitrate };
+    else maxBitrate = bitrateFor(height);
+    return { rid, active, scaleResolutionDownBy: topScale * DIVIDE[rid], maxBitrate, maxFramerate: MAX_FRAMERATE };
   });
 }
 
 export function singleLayer(sourceHeight: number | undefined, top?: Top): Omit<Layer, 'rid' | 'active'> {
   const source = sourceOf(sourceHeight);
   const height = Math.max(1, Math.min(source, top?.height ?? SINGLE_HEIGHT));
-  return { scaleResolutionDownBy: source / height, maxBitrate: top?.maxBitrate ?? SINGLE_BITRATE };
+  return { scaleResolutionDownBy: source / height, maxBitrate: top?.maxBitrate ?? SINGLE_BITRATE, maxFramerate: MAX_FRAMERATE };
 }
 
 export function sendEncodings(sourceHeight: number | undefined): Encoding[] {
-  return cameraLayers(sourceHeight).map(({ rid, active, scaleResolutionDownBy, maxBitrate }) => ({ rid, active, scaleResolutionDownBy, maxBitrate }));
+  return cameraLayers(sourceHeight).map(({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }) => ({ rid, active, scaleResolutionDownBy, maxBitrate, maxFramerate }));
 }
 
 export function applyLayers(encodings: Encoding[], sourceHeight: number | undefined, top?: Top): number {
@@ -84,6 +86,7 @@ export function applyLayers(encodings: Encoding[], sourceHeight: number | undefi
     const one = singleLayer(sourceHeight, top);
     encodings[0]!.scaleResolutionDownBy = one.scaleResolutionDownBy;
     encodings[0]!.maxBitrate = one.maxBitrate;
+    encodings[0]!.maxFramerate = one.maxFramerate;
     return one.maxBitrate;
   }
   const layers = cameraLayers(sourceHeight, top);
@@ -94,6 +97,7 @@ export function applyLayers(encodings: Encoding[], sourceHeight: number | undefi
     encoding.active = layer.active;
     encoding.scaleResolutionDownBy = layer.scaleResolutionDownBy;
     encoding.maxBitrate = layer.maxBitrate;
+    encoding.maxFramerate = layer.maxFramerate;
     if (layer.active) total += layer.maxBitrate;
   }
   return total;

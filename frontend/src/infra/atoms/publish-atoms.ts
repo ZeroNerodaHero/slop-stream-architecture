@@ -39,7 +39,7 @@ import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
-import { applyLayers, sendEncodings, SINGLE_BITRATE, SINGLE_HEIGHT, type Top } from '@/infra/simulcast';
+import { applyLayers, MAX_FRAMERATE, sendEncodings, SINGLE_BITRATE, SINGLE_HEIGHT, type Top } from '@/infra/simulcast';
 import {
   arrangedAfterAdd,
   arrangedAfterRemove,
@@ -80,8 +80,8 @@ const CAMERA_SHARING_BITRATE = 500_000;
 const SCREENS_BITRATE = 3_000_000;
 const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting'];
 const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'mic-blocked', 'no-mic', 'failed'];
-const CAMERA_VIDEO: MediaTrackConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 } };
-const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } };
+const CAMERA_VIDEO: MediaTrackConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: MAX_FRAMERATE, max: MAX_FRAMERATE } };
+const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: MAX_FRAMERATE } };
 interface DisplayHints extends DisplayMediaStreamOptions {
   selfBrowserSurface?: 'include' | 'exclude';
   surfaceSwitching?: 'include' | 'exclude';
@@ -429,7 +429,7 @@ class ModelGone extends Error {}
 const faceVideo = (deviceId: string): MediaTrackConstraints => ({
   width: { ideal: 640 },
   height: { ideal: 480 },
-  frameRate: { ideal: 30 },
+  frameRate: { ideal: MAX_FRAMERATE, max: MAX_FRAMERATE },
   ...(deviceId && { deviceId: { exact: deviceId } })
 });
 
@@ -938,7 +938,7 @@ export async function goLive(): Promise<void> {
   if (sound) myPc.addTransceiver(sound, { direction: 'sendonly', streams: [camera] });
   else myPc.addTransceiver('audio', { direction: 'sendonly' });
   screenSenders = Array.from({ length: SCREEN_SLOTS }, (_, i) => {
-    const init: RTCRtpTransceiverInit = { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE }] };
+    const init: RTCRtpTransceiverInit = { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE, maxFramerate: MAX_FRAMERATE }] };
     const track = store.get(screenStreamAtom(i))?.getVideoTracks()[0];
     return (track ? myPc.addTransceiver(track, init) : myPc.addTransceiver('video', init)).sender;
   });
@@ -990,7 +990,7 @@ function addCamera(myPc: RTCPeerConnection, camera: MediaStream, picture: MediaS
   try {
     return add(sendEncodings(picture?.getSettings().height));
   } catch {
-    return add([{ maxBitrate: SINGLE_BITRATE }]);
+    return add([{ maxBitrate: SINGLE_BITRATE, maxFramerate: MAX_FRAMERATE }]);
   }
 }
 
@@ -1403,8 +1403,7 @@ async function tune(sender: RTCRtpSender | null, { maxBitrate, scale = 1, maxFra
   if (!encoding) return;
   encoding.maxBitrate = maxBitrate;
   encoding.scaleResolutionDownBy = scale;
-  if (maxFramerate) encoding.maxFramerate = maxFramerate;
-  else delete encoding.maxFramerate;
+  encoding.maxFramerate = Math.min(maxFramerate ?? MAX_FRAMERATE, MAX_FRAMERATE);
   if (degradation) params.degradationPreference = degradation;
   else delete params.degradationPreference;
   await sender.setParameters(params).catch(() => undefined);
