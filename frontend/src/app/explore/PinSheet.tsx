@@ -251,14 +251,14 @@ export function PinSheet({
                 lines={list}
                 lineSide={(line) => (
                   <>
-                    <Tooltip content="go to it">
+                    <Tooltip content="jump to message">
                       <button
                         type="button"
                         data-pin-open={line.id}
-                        aria-label="go to it"
+                        aria-label="jump to message"
                         onClick={() => {
                           onOpenChange(false);
-                          void room.openLine(line.id, channel);
+                          void room.jumpToReply(line.id, channel);
                         }}
                         className={cn(ACTION, 'hover:text-primaryBlue')}
                       >
