@@ -1,83 +1,54 @@
-import {
-  RiAddLine,
-  RiArrowLeftLine,
-  RiArrowRightLine,
-  RiCloseLine,
-  RiDeleteBinLine,
-  RiImageLine,
-  RiMusic2Line,
-  RiPencilLine,
-  RiRefreshLine,
-  RiText,
-  RiVideoLine
-} from '@remixicon/react';
-import { type CSSProperties, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { RiAddLine, RiDeleteBinLine, RiImageLine, RiLink, RiMusic2Line, RiPencilLine, RiRefreshLine, RiVideoLine } from '@remixicon/react';
+import { type ChangeEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import { BLOCKS_MAX, TEXT_MAX, sanitizeHtml } from '@/infra/about';
-import { type PageWire, api } from '@/infra/api';
+import { BLOCKS_MAX } from '@/infra/about';
+import {
+  BODY_MAX,
+  CARD_TITLES,
+  type Card,
+  type CardKey,
+  type CardMedia,
+  LINK_MAX,
+  type MediaKind,
+  TITLE_MAX,
+  blocksToCards,
+  cardsToBlocks,
+  cleanLink,
+  overLimit,
+  shownCards,
+  titleOf,
+  withSavedIds
+} from '@/infra/about-cards';
+import { api } from '@/infra/api';
+import { Button } from '@/shared-components/Button';
 import { ExternalLink } from '@/shared-components/ExternalLink';
-import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable';
-import { Tooltip, type TooltipAt } from '@/shared-components/Tooltip';
+import { INPUT } from '@/shared-components/input';
+import { splitLinks } from '@/shared-components/LinkedText';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-type Kind = 'text' | 'image' | 'video' | 'audio';
-
-interface Cell {
-  key: string;
-  kind: Kind;
-  id: number;
-  cols: number;
-  html: string;
-  src: string;
-  poster?: string;
-}
-
-interface Row {
-  key: string;
-  cells: Cell[];
-}
-
-const KINDS: readonly Kind[] = ['text', 'image', 'video', 'audio'];
-const COLS = 12;
-const COLS_MIN = 2;
-const CELLS_MAX = COLS / COLS_MIN;
-const GAP = 16;
-const UNIT = 800 / COLS;
-const HEIGHT: Record<Kind, number> = { text: 120, image: 180, video: 200, audio: 56 };
-const WIRE: Record<Kind, PageWire['type']> = { text: 'text', image: 'image', video: 'video', audio: 'sound' };
-const ACCEPT: Record<Exclude<Kind, 'text'>, string> = { image: 'image/*', video: 'video/mp4,video/webm', audio: 'audio/*' };
-const NEW = 'new';
-
-const ADD = 'text-sm font-semibold text-primaryBlue disabled:opacity-40';
-const LABEL = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
-const DASHED = 'rounded-card border border-dashed border-primaryStroke';
-const ICON = 'flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary hover:text-textPrimary disabled:opacity-40 disabled:hover:text-textSecondary';
-const PLATE = 'flex gap-0.5 rounded-control border border-primaryStroke bg-background/90 p-0.5';
-const inset = (n: number) => 6 + (n * 26 + 4) + 8;
-const KIND_ICON: Record<Kind, ReactNode> = {
-  text: <RiText size={16} aria-hidden />,
+const ACCEPT: Record<MediaKind, string> = { image: 'image/*', video: 'video/mp4,video/webm', sound: 'audio/*' };
+const MEDIA_WORD: Record<MediaKind, string> = { image: 'picture', video: 'clip', sound: 'sound' };
+const MEDIA_ICON: Record<MediaKind, ReactNode> = {
   image: <RiImageLine size={16} aria-hidden />,
   video: <RiVideoLine size={16} aria-hidden />,
-  audio: <RiMusic2Line size={16} aria-hidden />
+  sound: <RiMusic2Line size={16} aria-hidden />
 };
+const PLACEHOLDER: Record<CardKey, string> = {
+  stream: 'games',
+  when: 'schedule',
+  setup: 'gear',
+  rules: 'rules',
+  links: 'links',
+  faq: 'questions',
+  more: 'about'
+};
+const FROM = 'the streamer put this link on their page, not this site.';
+
+const LABEL = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
+const LINK = 'text-primaryBlue underline-offset-2 hover:underline';
 
 const uid = () => Math.random().toString(36).slice(2, 8);
-
-function makeCell(kind: Kind, part: Partial<Cell> = {}): Cell {
-  return { key: uid(), kind, id: 0, cols: COLS, html: '', src: '', ...part };
-}
-
-function filled(cell: Cell): boolean {
-  return cell.kind === 'text' ? sanitizeHtml(cell.html).length > 0 : cell.src.length > 0;
-}
-
-function used(row: Row): number {
-  return row.cells.reduce((sum, cell) => sum + cell.cols, 0);
-}
-
-function count(rows: Row[]): number {
-  return rows.reduce((sum, row) => sum + row.cells.length, 0);
-}
 
 function revoke(src: string | undefined): void {
   if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
@@ -89,169 +60,14 @@ function fmtClock(seconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function kindOf(type: PageWire['type']): Kind | null {
-  if (type === 'text' || type === 'image' || type === 'video') return type;
-  if (type === 'sound') return 'audio';
-  return null;
-}
-
-function rowsOf(blocks: PageWire[]): Row[] {
-  const byY = new Map<number, PageWire[]>();
-  for (const block of blocks) {
-    if (!kindOf(block.type)) continue;
-    const list = byY.get(block.y) ?? [];
-    list.push(block);
-    byY.set(block.y, list);
+function shortLink(href: string): string {
+  try {
+    const url = new URL(href);
+    const rest = `${url.pathname === '/' ? '' : url.pathname}${url.search}${url.hash}`;
+    return `${url.host.replace(/^www\./, '')}${rest}`;
+  } catch {
+    return href;
   }
-  const rows: Row[] = [];
-  for (const y of [...byY.keys()].sort((a, b) => a - b)) {
-    const list = (byY.get(y) ?? []).sort((a, b) => a.x - b.x || a.z - b.z);
-    let row: Row = { key: uid(), cells: [] };
-    for (const block of list) {
-      const kind = kindOf(block.type);
-      if (!kind) continue;
-      const cols = Math.max(COLS_MIN, Math.min(COLS, Math.round((block.w ?? UNIT * 4) / UNIT)));
-      if (row.cells.length > 0 && (used(row) + cols > COLS || row.cells.length >= CELLS_MAX)) {
-        rows.push(row);
-        row = { key: uid(), cells: [] };
-      }
-      row.cells.push(makeCell(kind, { id: block.id, cols, html: kind === 'text' ? (block.html ?? '') : '', src: block.src ?? '' }));
-    }
-    if (row.cells.length > 0) rows.push(row);
-  }
-  return rows;
-}
-
-function blocksOf(rows: Row[]): PageWire[] {
-  const out: PageWire[] = [];
-  rows.forEach((row, y) => {
-    let start = 0;
-    row.cells.forEach((cell, z) => {
-      const x = Math.round(start * UNIT);
-      start += cell.cols;
-      if (cell.kind !== 'text' && cell.id <= 0) return;
-      const block: PageWire = { type: WIRE[cell.kind], id: Math.max(0, cell.id), x, y, z, w: Math.round(cell.cols * UNIT), h: HEIGHT[cell.kind] };
-      if (cell.kind === 'text') block.html = sanitizeHtml(cell.html);
-      out.push(block);
-    });
-  });
-  return out;
-}
-
-function Rich({ html }: { html: string }) {
-  const safe = sanitizeHtml(html);
-  if (!safe) return null;
-  const doc = new DOMParser().parseFromString(safe, 'text/html');
-  return <div className="about-text whitespace-pre-wrap [overflow-wrap:anywhere]">{[...doc.body.childNodes].map((node, i) => richNode(node, `t${i}`))}</div>;
-}
-
-function richNode(node: Node, key: string): ReactNode {
-  if (node.nodeType === Node.TEXT_NODE) return node.textContent;
-  if (node.nodeType !== Node.ELEMENT_NODE) return null;
-  const el = node as HTMLElement;
-  const name = el.tagName.toLowerCase();
-  const kids = [...el.childNodes].map((child, i) => richNode(child, `${key}-${i}`));
-  if (name === 'br') return <br key={key} />;
-  if (name === 'a') {
-    return (
-      <ExternalLink
-        key={key}
-        href={el.getAttribute('href') ?? ''}
-        from="external link"
-        className="text-primaryBlue hover:underline"
-      >
-        {kids}
-      </ExternalLink>
-    );
-  }
-  if (name === 'p') return <p key={key}>{kids}</p>;
-  if (name === 'b' || name === 'strong') return <strong key={key}>{kids}</strong>;
-  if (name === 'i' || name === 'em') return <em key={key}>{kids}</em>;
-  if (name === 'u') return <u key={key}>{kids}</u>;
-  if (name === 's') return <s key={key}>{kids}</s>;
-  if (name === 'ul')
-    return (
-      <ul key={key} className="list-disc pl-5">
-        {kids}
-      </ul>
-    );
-  if (name === 'ol')
-    return (
-      <ol key={key} className="list-decimal pl-5">
-        {kids}
-      </ol>
-    );
-  if (name === 'li') return <li key={key}>{kids}</li>;
-  if (name === 'h2')
-    return (
-      <h2 key={key} className="text-lg font-semibold">
-        {kids}
-      </h2>
-    );
-  if (name === 'h3')
-    return (
-      <h3 key={key} className="font-semibold">
-        {kids}
-      </h3>
-    );
-  if (name === 'blockquote') return <blockquote key={key}>{kids}</blockquote>;
-  return <span key={key}>{kids}</span>;
-}
-
-function TextEditor({ html, autoFocus, inset, onChange }: { html: string; autoFocus: boolean; inset: number; onChange: (html: string) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const last = useRef(html);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || document.activeElement === el) return;
-    if (el.innerHTML !== html) el.innerHTML = html;
-    last.current = html;
-  }, [html]);
-  useEffect(() => {
-    if (autoFocus) ref.current?.focus();
-  }, [autoFocus]);
-  return (
-    <div
-      ref={ref}
-      contentEditable
-      role="textbox"
-      aria-label="text"
-      aria-multiline
-      data-placeholder="about"
-      suppressContentEditableWarning
-      onInput={() => {
-        const el = ref.current;
-        if (!el) return;
-        const next = sanitizeHtml(el.innerHTML);
-        if (next.length > TEXT_MAX) {
-          el.innerHTML = last.current;
-          return;
-        }
-        last.current = next;
-        onChange(next);
-      }}
-      onBlur={() => {
-        const el = ref.current;
-        if (!el) return;
-        const next = sanitizeHtml(el.innerHTML);
-        el.innerHTML = next;
-        last.current = next;
-        onChange(next);
-      }}
-      style={{ '--inset': `${inset}px` } as CSSProperties}
-      className="about-text min-h-[3.5rem] whitespace-pre-wrap rounded-card border border-primaryStroke bg-background px-2 py-1 outline-none [overflow-wrap:anywhere] before:float-right before:h-7 before:w-[var(--inset)] before:content-[''] focus:border-primaryBlue empty:after:text-textTertiary empty:after:content-[attr(data-placeholder)]"
-    />
-  );
-}
-
-function Icon({ label, at, onClick, disabled, children }: { label: string; at?: TooltipAt; onClick: () => void; disabled?: boolean; children: ReactNode }) {
-  return (
-    <Tooltip content={label} at={at}>
-      <button type="button" aria-label={label} disabled={disabled} onClick={onClick} className={ICON}>
-        {children}
-      </button>
-    </Tooltip>
-  );
 }
 
 function PlayGlyph({ size, playing = false }: { size: number; playing?: boolean }) {
@@ -269,16 +85,15 @@ function PlayGlyph({ size, playing = false }: { size: number; playing?: boolean 
   );
 }
 
-function Clip({ src, poster, editing }: { src: string; poster?: string; editing: boolean }) {
+function Clip({ src }: { src: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [on, setOn] = useState(false);
   const [length, setLength] = useState(0);
   return (
-    <div className="relative aspect-video overflow-hidden rounded-card border border-primaryStroke bg-black">
+    <div className="relative aspect-video w-full overflow-hidden rounded-card border border-primaryStroke bg-black">
       <video
         ref={ref}
         src={src}
-        poster={poster}
         preload="metadata"
         playsInline
         controls={on}
@@ -290,12 +105,11 @@ function Clip({ src, poster, editing }: { src: string; poster?: string; editing:
         <button
           type="button"
           aria-label="play the clip"
-          disabled={editing}
           onClick={() => {
             setOn(true);
             ref.current?.play().catch(() => setOn(false));
           }}
-          className="absolute inset-0 flex items-center justify-center text-white disabled:cursor-default"
+          className="absolute inset-0 flex items-center justify-center text-white"
         >
           <PlayGlyph size={40} />
           {length > 0 && <span className="absolute bottom-2 right-2 rounded-control bg-black/70 px-1.5 text-xs tabular-nums">{fmtClock(length)}</span>}
@@ -305,7 +119,7 @@ function Clip({ src, poster, editing }: { src: string; poster?: string; editing:
   );
 }
 
-function Track({ src, inset }: { src: string; inset: number }) {
+function Track({ src }: { src: string }) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -325,7 +139,7 @@ function Track({ src, inset }: { src: string; inset: number }) {
   };
 
   return (
-    <div className="about-track flex flex-col gap-1.5 rounded-card border border-primaryStroke p-3" data-playing={playing || undefined}>
+    <div className="about-track flex w-full flex-col gap-1.5 rounded-card border border-primaryStroke p-3" data-playing={playing || undefined}>
       <audio
         ref={audio}
         src={src}
@@ -337,8 +151,8 @@ function Track({ src, inset }: { src: string; inset: number }) {
         onLoadedMetadata={(e) => setLength(e.currentTarget.duration)}
         onError={() => setBroken(true)}
       />
-      <div className="flex items-center gap-3" style={{ paddingRight: inset }}>
-        <button type="button" onClick={toggle} disabled={broken} className={cn(ADD, 'inline-flex shrink-0 items-center gap-1')}>
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={toggle} disabled={broken} className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-primaryBlue disabled:opacity-40">
           <PlayGlyph size={14} playing={playing} />
           {playing ? 'pause' : 'play'}
         </button>
@@ -372,57 +186,247 @@ function Track({ src, inset }: { src: string; inset: number }) {
   );
 }
 
-function Body({ cell, editing, focus, inset, onHtml }: { cell: Cell; editing: boolean; focus: boolean; inset: number; onHtml: (html: string) => void }) {
-  if (cell.kind === 'text') return editing ? <TextEditor html={cell.html} autoFocus={focus} inset={inset} onChange={onHtml} /> : <Rich html={cell.html} />;
-  if (cell.kind === 'image')
-    return <img src={cell.src} alt="" draggable={false} className="about-image aspect-video w-full rounded-card border border-primaryStroke bg-black object-cover" />;
-  if (cell.kind === 'video') return <Clip key={cell.src} src={cell.src} poster={cell.poster} editing={editing} />;
-  return <Track key={cell.src} src={cell.src} inset={inset} />;
+function MediaView({ media }: { media: CardMedia }) {
+  if (media.kind === 'image')
+    return <img src={media.src} alt="" draggable={false} className="about-image block h-auto max-h-[28rem] max-w-full rounded-card border border-primaryStroke bg-black" />;
+  if (media.kind === 'video') return <Clip key={media.src} src={media.src} />;
+  return <Track key={media.src} src={media.src} />;
 }
 
-function KindMenu({ column, onPick, onClose }: { column: boolean; onPick: (kind: Kind) => void; onClose: () => void }) {
+function Body({ text }: { text: string }) {
   return (
-    <div className={cn('flex items-center gap-1', column && 'flex-col')}>
-      {KINDS.map((kind) => (
-        <Tooltip key={kind} content={kind} at={column ? 'left' : 'top'}>
-          <button type="button" aria-label={kind} onClick={() => onPick(kind)} className={cn(ICON, 'h-8 w-8 text-primaryBlue hover:text-primaryBlueHover')}>
-            {KIND_ICON[kind]}
-          </button>
-        </Tooltip>
-      ))}
-      <span aria-hidden className={cn('bg-primaryStroke', column ? 'my-1 h-px w-5' : 'mx-1 h-5 w-px')} />
-      <Icon label="close" at={column ? 'left' : 'top'} onClick={onClose}>
-        <RiCloseLine size={16} aria-hidden />
-      </Icon>
-    </div>
+    <p className="about-text whitespace-pre-wrap text-sm leading-relaxed text-textPrimary [overflow-wrap:anywhere]">
+      {splitLinks(text).map((part, i) =>
+        typeof part === 'string' ? (
+          part
+        ) : (
+          <ExternalLink key={i} href={part.href} from={FROM} className={LINK}>
+            {part.text}
+          </ExternalLink>
+        )
+      )}
+    </p>
   );
 }
 
-function AddToRow({ open, onOpen, onPick, onClose }: { open: boolean; onOpen: () => void; onPick: (kind: Kind) => void; onClose: () => void }) {
-  if (open) {
-    return (
-      <div className={cn(DASHED, 'flex w-12 shrink-0 items-center justify-center py-2')}>
-        <KindMenu column onPick={onPick} onClose={onClose} />
-      </div>
-    );
-  }
+function CardView({ card }: { card: Card }) {
+  const link = cleanLink(card.link);
+  const body = card.body.trim() ? card.body.replace(/^\n+|\s+$/g, '') : '';
   return (
-    <Tooltip content="add to this row" at="left">
+    <section id={`about-view-${card.key}`} aria-label={titleOf(card)} className="flex min-w-0 flex-col gap-2">
+      <h3 className={LABEL}>{titleOf(card)}</h3>
+      {body && <Body text={body} />}
+      {link && (
+        <ExternalLink href={link} from={FROM} className={cn(LINK, 'inline-flex min-w-0 items-center gap-1.5 self-start text-sm')}>
+          <RiLink size={16} aria-hidden className="shrink-0" />
+          <span className="truncate">{shortLink(link)}</span>
+        </ExternalLink>
+      )}
+      {card.media
+        .filter((m) => m.src)
+        .map((m) => (
+          <MediaView key={m.key} media={m} />
+        ))}
+    </section>
+  );
+}
+
+function Switch({ id, on, label, onChange }: { id: string; on: boolean; label: string; onChange: (on: boolean) => void }) {
+  const name = `show ${label}`;
+  return (
+    <Tooltip content={name} at="left">
       <button
+        id={id}
         type="button"
-        aria-label="add to this row"
-        onClick={onOpen}
-        className={cn(DASHED, 'flex w-10 shrink-0 items-center justify-center text-primaryBlue hover:border-primaryBlue hover:text-primaryBlueHover')}
+        role="switch"
+        aria-checked={on}
+        aria-label={name}
+        onClick={() => onChange(!on)}
+        className="flex shrink-0 items-center p-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primaryBlue"
       >
-        <RiAddLine size={20} aria-hidden />
+        <span
+          aria-hidden
+          className={cn(
+            'relative h-5 w-9 rounded-control border transition-colors duration-150',
+            on ? 'border-primaryBlue bg-primaryBlue/15' : 'border-primaryStroke bg-background hover:border-secondaryStroke'
+          )}
+        >
+          <span
+            className={cn(
+              'absolute left-px top-px h-4 w-4 rounded-control transition-transform duration-150 motion-reduce:transition-none',
+              on ? 'translate-x-4 bg-primaryBlue' : 'bg-textTertiary'
+            )}
+          />
+        </span>
       </button>
     </Tooltip>
   );
 }
 
+interface CardEditorProps {
+  card: Card;
+  onPatch: (part: Partial<Card>) => void;
+  onAdd: (kind: MediaKind) => void;
+  onReplace: (media: CardMedia) => void;
+  onRemove: (media: CardMedia) => void;
+}
+
+function CardEditor({ card, onPatch, onAdd, onReplace, onRemove }: CardEditorProps) {
+  const [linking, setLinking] = useState(false);
+  const fallback = CARD_TITLES[card.key];
+  const shownTitle = titleOf(card);
+  const showLink = linking || card.link !== '';
+  const badLink = card.link.trim() !== '' && cleanLink(card.link) === null;
+  const empty = card.media.length === 0 && !showLink;
+  const id = `about-card-${card.key}`;
+  return (
+    <section id={id} data-on={card.on || undefined} aria-label={shownTitle} className="rounded-card border border-primaryStroke bg-backgroundSecondary">
+      <div className="flex min-h-12 items-center gap-3 py-2 pl-3 pr-2.5">
+        {card.on ? (
+          <input
+            id={`${id}-title`}
+            aria-label={`title of ${fallback}`}
+            value={card.title}
+            maxLength={TITLE_MAX}
+            placeholder="title"
+            onChange={(e) => onPatch({ title: e.target.value })}
+            onBlur={() => {
+              if (!card.title.trim()) onPatch({ title: fallback });
+            }}
+            className="-ml-1.5 min-w-0 flex-1 rounded-control border border-transparent bg-transparent px-1.5 py-0.5 text-sm font-semibold text-textPrimary outline-none placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue"
+          />
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-textTertiary">{shownTitle}</span>
+        )}
+        <Switch id={`${id}-on`} on={card.on} label={shownTitle} onChange={(on) => onPatch({ on })} />
+      </div>
+      {card.on && (
+        <div className="flex flex-col gap-3 px-3 pb-3">
+          <textarea
+            id={`${id}-body`}
+            aria-label={shownTitle}
+            value={card.body}
+            maxLength={Math.max(BODY_MAX, card.body.length)}
+            placeholder={PLACEHOLDER[card.key]}
+            rows={Math.min(10, Math.max(card.key === 'when' ? 2 : 3, card.body.split('\n').length + 1))}
+            onChange={(e) => onPatch({ body: e.target.value })}
+            className={cn(INPUT, 'block resize-y py-1.5 leading-snug md:text-sm bubble:rounded-card')}
+          />
+          {card.media.map((m) => (
+            <div key={m.key} className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+              <div className={cn('min-w-0', m.kind === 'image' ? 'sm:max-w-[12rem]' : 'sm:flex-1')}>
+                {m.kind === 'image' ? (
+                  <img src={m.src} alt="" draggable={false} className="block h-auto max-h-40 max-w-full rounded-card border border-primaryStroke bg-black" />
+                ) : (
+                  <MediaView media={m} />
+                )}
+                {m.id <= 0 && <span className="mt-1 block text-xs text-textTertiary">uploading</span>}
+              </div>
+              <div className="flex shrink-0 gap-2 sm:flex-col">
+                <Button id={`${id}-replace-${m.key}`} size="sm" className="gap-1.5" onClick={() => onReplace(m)}>
+                  <RiRefreshLine size={16} aria-hidden />
+                  replace
+                </Button>
+                <Button id={`${id}-remove-${m.key}`} size="sm" variant="outline-danger" className="gap-1.5" onClick={() => onRemove(m)}>
+                  <RiDeleteBinLine size={16} aria-hidden />
+                  remove
+                </Button>
+              </div>
+            </div>
+          ))}
+          {showLink && (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <label htmlFor={`${id}-link`} className="sr-only">
+                  link for {shownTitle}
+                </label>
+                <input
+                  id={`${id}-link`}
+                  type="url"
+                  inputMode="url"
+                  value={card.link}
+                  maxLength={LINK_MAX}
+                  placeholder="link"
+                  autoFocus={linking && card.link === ''}
+                  aria-invalid={badLink || undefined}
+                  aria-describedby={badLink ? `${id}-link-bad` : undefined}
+                  onChange={(e) => onPatch({ link: e.target.value })}
+                  className={cn(INPUT, 'min-w-0 flex-1 py-1.5 leading-snug md:text-sm')}
+                />
+                <Button
+                  id={`${id}-link-remove`}
+                  size="sm"
+                  variant="outline-danger"
+                  className="gap-1.5"
+                  onClick={() => {
+                    setLinking(false);
+                    onPatch({ link: '' });
+                  }}
+                >
+                  <RiDeleteBinLine size={16} aria-hidden />
+                  remove
+                </Button>
+              </div>
+              {badLink && (
+                <p id={`${id}-link-bad`} className="text-xs text-decrease">
+                  not a link. it needs to be an http or https address
+                </p>
+              )}
+            </div>
+          )}
+          {empty && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <RiAddLine size={16} aria-hidden className="mr-0.5 text-textTertiary" />
+              <span className="sr-only">add</span>
+              {(['image', 'video', 'sound'] as const).map((kind) => (
+                <Button key={kind} id={`${id}-add-${kind}`} size="sm" className="gap-1.5 px-2.5 font-medium text-textSecondary hover:text-textPrimary" onClick={() => onAdd(kind)}>
+                  {MEDIA_ICON[kind]}
+                  {MEDIA_WORD[kind]}
+                </Button>
+              ))}
+              <Button id={`${id}-add-link`} size="sm" className="gap-1.5 px-2.5 font-medium text-textSecondary hover:text-textPrimary" onClick={() => setLinking(true)}>
+                <RiLink size={16} aria-hidden />
+                link
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const TWO_COLUMNS = 640;
+
+function useTwoColumns(el: HTMLElement | null): boolean {
+  const [two, setTwo] = useState(false);
+  useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => setTwo(el.getBoundingClientRect().width >= TWO_COLUMNS);
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [el]);
+  return two;
+}
+
+function Columns({ items, two, gap }: { items: ReactNode[]; two: boolean; gap: string }) {
+  if (!two) return <div className={cn('flex flex-col', gap)}>{items}</div>;
+  return (
+    <div className={cn('grid grid-cols-2 items-start', gap)}>
+      {[0, 1].map((col) => (
+        <div key={col} className={cn('flex min-w-0 flex-col', gap)}>
+          {items.filter((_, i) => i % 2 === col)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface Pending {
-  at: string;
-  kind: Exclude<Kind, 'text'>;
+  card: CardKey;
+  kind: MediaKind;
   replace?: string;
 }
 
@@ -434,23 +438,22 @@ interface AboutProps {
 
 export function About({ name, edit = false, id }: AboutProps) {
   const box = id ?? `about-${name}`;
-  const [rows, setRows] = useState<Row[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState('');
-  const [menu, setMenu] = useState<string | null>(null);
-  const [focusKey, setFocusKey] = useState<string | null>(null);
-  const [dragging, setDragging] = useState<string | null>(null);
   const dirty = useRef(false);
   const uploads = useRef(0);
   const saving = useRef<Promise<void> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pending = useRef<Pending | null>(null);
-  const rowsRef = useRef(rows);
+  const cardsRef = useRef(cards);
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+  const two = useTwoColumns(frame);
   useEffect(() => {
-    rowsRef.current = rows;
-  }, [rows]);
+    cardsRef.current = cards;
+  }, [cards]);
 
   useEffect(() => {
     if (failed) return;
@@ -459,7 +462,7 @@ export function About({ name, edit = false, id }: AboutProps) {
       .aboutPage(name)
       .then((page) => {
         if (dead || dirty.current) return;
-        setRows(rowsOf(page.blocks));
+        setCards(blocksToCards(page.blocks));
         setLoaded(true);
       })
       .catch(() => {
@@ -470,30 +473,26 @@ export function About({ name, edit = false, id }: AboutProps) {
     };
   }, [name, failed]);
 
-  const persist = (list: Row[]) => {
-    if (uploads.current > 0) {
+  const persist = (list: Card[]) => {
+    if (uploads.current > 0 || saving.current) {
       dirty.current = true;
       setStatus('saving');
       return;
     }
+    const blocks = cardsToBlocks(list);
+    if (overLimit(blocks)) {
+      dirty.current = true;
+      setStatus(`not saved: ${BLOCKS_MAX} pieces at most. take something out`);
+      return;
+    }
     dirty.current = false;
-    const blocks = blocksOf(list);
     setStatus('saving');
+    let ok = false;
     const flight = api
       .saveAboutPage(name, blocks)
       .then((saved) => {
-        const ids = new Map<string, number>();
-        let at = 0;
-        for (const row of list)
-          for (const cell of row.cells) {
-            if (cell.kind !== 'text' && cell.id <= 0) continue;
-            const got = saved.blocks[at++];
-            if (got && cell.id === 0) ids.set(cell.key, got.id);
-          }
-        if (ids.size > 0)
-          setRows((current) =>
-            current.map((row) => ({ ...row, cells: row.cells.map((cell) => (ids.has(cell.key) ? { ...cell, id: ids.get(cell.key) ?? cell.id } : cell)) }))
-          );
+        ok = true;
+        setCards((current) => withSavedIds(current, saved.blocks));
         setStatus('saved');
       })
       .catch((err: unknown) => {
@@ -502,6 +501,7 @@ export function About({ name, edit = false, id }: AboutProps) {
       })
       .finally(() => {
         if (saving.current === flight) saving.current = null;
+        if (ok && dirty.current) persistRef.current(cardsRef.current);
       });
     saving.current = flight;
   };
@@ -512,37 +512,35 @@ export function About({ name, edit = false, id }: AboutProps) {
 
   useEffect(() => {
     if (!edit || failed || !dirty.current) return;
-    const list = rows;
-    const handle = setTimeout(() => persistRef.current(list), 700);
+    const list = cards;
+    const handle = setTimeout(() => {
+      if (dirty.current) persistRef.current(list);
+    }, 700);
     return () => clearTimeout(handle);
-  }, [rows, edit, failed]);
+  }, [cards, edit, failed]);
 
-  const touch = (change: (rows: Row[]) => Row[]) => {
+  const touch = (change: (cards: Card[]) => Card[]) => {
     dirty.current = true;
-    setRows(change);
+    setCards(change);
   };
 
-  const patchCell = (key: string, part: Partial<Cell>) =>
-    touch((list) => list.map((row) => ({ ...row, cells: row.cells.map((c) => (c.key === key ? { ...c, ...part } : c)) })));
+  const patch = (key: CardKey, part: Partial<Card>) => touch((list) => list.map((c) => (c.key === key ? { ...c, ...part } : c)));
 
-  const place = (at: string, cell: Cell) => {
-    if (count(rowsRef.current) >= BLOCKS_MAX) {
-      setStatus(`${BLOCKS_MAX} blocks at most`);
-      return;
-    }
-    touch((list) => {
-      if (at === NEW) return [...list, { key: uid(), cells: [{ ...cell, cols: COLS }] }];
-      return list.map((row) => {
-        if (row.key !== at || row.cells.length >= CELLS_MAX) return row;
-        const free = COLS - used(row);
-        if (free >= COLS_MIN + 1) return { ...row, cells: [...row.cells, { ...cell, cols: free }] };
-        const n = row.cells.length + 1;
-        const base = Math.floor(COLS / n);
-        let extra = COLS - base * n;
-        return { ...row, cells: [...row.cells, cell].map((c) => ({ ...c, cols: base + (extra-- > 0 ? 1 : 0) })) };
-      });
-    });
-  };
+  const patchMedia = (key: CardKey, mediaKey: string, change: (m: CardMedia) => CardMedia | null) =>
+    setCards((list) =>
+      list.map((c) =>
+        c.key === key
+          ? {
+              ...c,
+              media: c.media.flatMap((m) => {
+                if (m.key !== mediaKey) return [m];
+                const next = change(m);
+                return next ? [next] : [];
+              })
+            }
+          : c
+      )
+    );
 
   const openFile = (want: Pending) => {
     pending.current = want;
@@ -553,38 +551,25 @@ export function About({ name, edit = false, id }: AboutProps) {
     input.click();
   };
 
-  const add = (at: string, kind: Kind) => {
-    setMenu(null);
-    if (kind === 'text') {
-      const cell = makeCell('text');
-      setFocusKey(cell.key);
-      place(at, cell);
-      return;
-    }
-    openFile({ at, kind });
-  };
-
-  const upload = async (key: string, kind: Exclude<Kind, 'text'>, file: Blob) => {
+  const upload = async (key: CardKey, mediaKey: string, kind: MediaKind, file: Blob) => {
     uploads.current += 1;
     try {
       await saving.current;
-      const saved = await api.saveAboutFile(name, WIRE[kind] as 'image' | 'video' | 'sound', file);
+      const saved = await api.saveAboutFile(name, kind, file);
       dirty.current = true;
-      setRows((list) =>
-        list.map((row) => ({
-          ...row,
-          cells: row.cells.map((c) => {
-            if (c.key !== key) return c;
-            revoke(c.src);
-            return { ...c, id: saved.id, src: saved.src, poster: undefined };
-          })
-        }))
-      );
+      patchMedia(key, mediaKey, (m) => {
+        revoke(m.src);
+        return { ...m, id: saved.id, src: saved.src };
+      });
     } catch (err: unknown) {
+      patchMedia(key, mediaKey, (m) => {
+        revoke(m.src);
+        return null;
+      });
       setStatus(`not saved: ${err instanceof Error ? err.message : 'could not upload'}`);
     } finally {
       uploads.current -= 1;
-      if (uploads.current === 0 && dirty.current) setRows((list) => [...list]);
+      if (uploads.current === 0 && dirty.current) setCards((list) => [...list]);
     }
   };
 
@@ -594,134 +579,43 @@ export function About({ name, edit = false, id }: AboutProps) {
     pending.current = null;
     if (!file || !want) return;
     const src = URL.createObjectURL(file);
-    let key = want.replace;
-    if (key) {
-      const swap = key;
+    const mediaKey = want.replace ?? uid();
+    if (want.replace) {
       touch((list) =>
-        list.map((row) => ({
-          ...row,
-          cells: row.cells.map((c) => {
-            if (c.key !== swap) return c;
-            revoke(c.src);
-            return { ...c, id: 0, src, poster: undefined };
-          })
-        }))
+        list.map((c) =>
+          c.key === want.card
+            ? {
+                ...c,
+                media: c.media.map((m) => {
+                  if (m.key !== want.replace) return m;
+                  revoke(m.src);
+                  return { ...m, kind: want.kind, id: 0, src };
+                })
+              }
+            : c
+        )
       );
     } else {
-      const cell = makeCell(want.kind, { src });
-      key = cell.key;
-      place(want.at, cell);
+      touch((list) => list.map((c) => (c.key === want.card ? { ...c, link: '', media: [...c.media, { key: mediaKey, kind: want.kind, id: 0, src }] } : c)));
     }
-    void upload(key, want.kind, file);
+    void upload(want.card, mediaKey, want.kind, file);
   };
 
-  const removeCell = (key: string) =>
-    touch((list) =>
-      list
-        .map((row) => ({
-          ...row,
-          cells: row.cells.filter((c) => {
-            if (c.key !== key) return true;
-            revoke(c.src);
-            return false;
-          })
-        }))
-        .filter((row) => row.cells.length > 0)
-    );
-
-  const moveCell = (rowKey: string, from: number, to: number) =>
-    touch((list) =>
-      list.map((row) => {
-        if (row.key !== rowKey || to < 0 || to >= row.cells.length) return row;
-        const cells = [...row.cells];
-        const [cell] = cells.splice(from, 1);
-        if (!cell) return row;
-        cells.splice(to, 0, cell);
-        return { ...row, cells };
-      })
-    );
-
-  const rowKeys = rows.map((row) => row.key);
-  const reorder = useReorder({
-    keys: rowKeys,
-    name: (key) => `row ${rowKeys.indexOf(key) + 1}`,
-    onMove: (key, to) =>
-      touch((list) => {
-        const row = list.find((r) => r.key === key);
-        return row ? movedTo(list, row, to) : list;
-      })
-  });
-
-  const removeRow = (key: string) =>
-    touch((list) =>
-      list.filter((row) => {
-        if (row.key !== key) return true;
-        for (const c of row.cells) revoke(c.src);
-        return false;
-      })
-    );
-
-  const resize = (rowKey: string, index: number, want: number) => {
-    setRows((list) => {
-      const row = list.find((r) => r.key === rowKey);
-      const me = row?.cells[index];
-      if (!row || !me) return list;
-      const cells = row.cells.map((c) => ({ ...c }));
-      const mine = cells[index];
-      if (!mine) return list;
-      let cols = Math.max(COLS_MIN, Math.min(COLS, want));
-      const others = used(row) - me.cols;
-      let over = cols - (COLS - others);
-      if (over > 0) {
-        const next = cells[index + 1];
-        if (next) {
-          const give = Math.min(over, next.cols - COLS_MIN);
-          next.cols -= give;
-          over -= give;
-        }
-        if (over > 0) cols -= over;
-      }
-      mine.cols = cols;
-      if (cells.every((c, i) => c.cols === row.cells[i]?.cols)) return list;
-      dirty.current = true;
-      return list.map((r) => (r.key === rowKey ? { ...r, cells } : r));
-    });
-  };
-
-  const startResize = (e: ReactPointerEvent<HTMLButtonElement>, rowKey: string, index: number, cellKey: string, startCols: number) => {
-    const grid = e.currentTarget.closest<HTMLElement>('[data-row]');
-    if (!grid) return;
-    e.preventDefault();
-    const pitch = (grid.getBoundingClientRect().width + GAP) / COLS;
-    const handle = e.currentTarget;
-    const startX = e.clientX;
-    handle.setPointerCapture(e.pointerId);
-    setDragging(cellKey);
-    const move = (ev: PointerEvent) => resize(rowKey, index, startCols + Math.round((ev.clientX - startX) / pitch));
-    const up = () => {
-      setDragging(null);
-      handle.removeEventListener('pointermove', move);
-      handle.removeEventListener('pointerup', up);
-      handle.removeEventListener('pointercancel', up);
-    };
-    handle.addEventListener('pointermove', move);
-    handle.addEventListener('pointerup', up);
-    handle.addEventListener('pointercancel', up);
+  const removeMedia = (key: CardKey, media: CardMedia) => {
+    revoke(media.src);
+    touch((list) => list.map((c) => (c.key === key ? { ...c, media: c.media.filter((m) => m.key !== media.key) } : c)));
   };
 
   const finish = () => {
-    const kept = rowsRef.current.map((row) => ({ ...row, cells: row.cells.filter((c) => c.kind !== 'text' || filled(c)) })).filter((row) => row.cells.length > 0);
-    setRows(kept);
-    setMenu(null);
     setEditing(false);
-    persistRef.current(kept);
+    if (dirty.current) persistRef.current(cardsRef.current);
   };
 
   if (failed) {
     return (
       <p id={box} data-failed className="text-textSecondary">
         could not load the page.{' '}
-        <button id="about-retry" type="button" className={ADD} onClick={() => setFailed(false)}>
+        <button id="about-retry" type="button" className="text-primaryBlue hover:underline" onClick={() => setFailed(false)}>
           try again
         </button>
       </p>
@@ -730,145 +624,78 @@ export function About({ name, edit = false, id }: AboutProps) {
 
   if (!loaded) return null;
 
-  const shown = editing
-    ? reorder.order.flatMap((key) => rows.filter((row) => row.key === key))
-    : rows.filter((row) => row.cells.some(filled)).map((row) => ({ ...row, cells: row.cells.filter(filled) }));
+  const fileInput = <input ref={fileRef} type="file" className="hidden" onChange={onFile} />;
 
-  if (shown.length === 0 && !editing) {
+  if (editing) {
+    return (
+      <div ref={setFrame} className="flex flex-col gap-3">
+        <div className="flex min-h-8 items-center gap-3">
+          <span className={LABEL}>your about</span>
+          <span className="text-sm text-textTertiary max-md:hidden">· turn on what you want people to see</span>
+          <span role="status" className="ml-auto min-w-0 truncate text-sm text-textTertiary">
+            {status}
+          </span>
+          <Button id="about-done" size="sm" variant="primary" onClick={finish}>
+            done
+          </Button>
+        </div>
+        <section id={box} aria-label={`about ${name}`}>
+          <Columns
+            two={two}
+            gap="gap-3"
+            items={cards.map((card) => (
+              <CardEditor
+                key={card.key}
+                card={card}
+                onPatch={(part) => patch(card.key, part)}
+                onAdd={(kind) => openFile({ card: card.key, kind })}
+                onReplace={(m) => openFile({ card: card.key, kind: m.kind, replace: m.key })}
+                onRemove={(m) => removeMedia(card.key, m)}
+              />
+            ))}
+          />
+        </section>
+        {fileInput}
+      </div>
+    );
+  }
+
+  const shown = shownCards(cards);
+  const editButton = edit && (
+    <Button id="about-edit" size="sm" className="gap-1.5 self-start" onClick={() => setEditing(true)}>
+      <RiPencilLine size={16} aria-hidden />
+      edit
+    </Button>
+  );
+
+  if (shown.length === 0) {
     if (!edit) {
       return (
-        <p id={box} className="text-textSecondary">
+        <p id={box} className="text-sm text-textSecondary">
           {name} hasn't made a page yet.
         </p>
       );
     }
     return (
-      <div id={box} className={cn(DASHED, 'flex h-40 flex-col items-center justify-center gap-2')}>
-        <RiPencilLine size={28} aria-hidden className="text-textTertiary" />
-        <span className="text-textSecondary">nothing here yet</span>
-        <button
-          id="about-blank"
-          type="button"
-          className={ADD}
-          onClick={() => {
-            setEditing(true);
-            setMenu(NEW);
-          }}
-        >
-          start blank
-        </button>
+      <div ref={setFrame} id={box} className="flex flex-col items-start gap-3">
+        <p className="text-sm text-textSecondary">nothing on your about yet. turn on a card or two and fill them in.</p>
+        {editButton}
+        {status && <span className="text-sm text-textTertiary">{status}</span>}
       </div>
     );
   }
 
-  const full = count(rows) >= BLOCKS_MAX;
-
   return (
-    <div className="relative">
-      <section id={box} aria-label={`about ${name}`} {...(editing ? reorder.list : {})} className={cn('flex flex-col', editing ? 'gap-6' : 'gap-4')}>
-        {shown.map((row, r) => (
-          <div key={row.key} {...reorder.item(row.key)} className="flex flex-col gap-1.5">
-            {editing && (
-              <div className="flex items-center gap-3">
-                <DragHandle id={`about-row-drag-${r}`} {...reorder.handle(row.key)} />
-                <span className={LABEL}>row {r + 1}</span>
-                <span className="ml-auto flex gap-0.5">
-                  <Icon label="remove the row" onClick={() => removeRow(row.key)}>
-                    <RiDeleteBinLine size={16} aria-hidden />
-                  </Icon>
-                </span>
-              </div>
-            )}
-            <div className="flex items-stretch gap-3">
-              <div data-row className="grid min-w-0 flex-1 grid-cols-12 gap-4">
-                {row.cells.map((cell, i) => {
-                  const fileKind = cell.kind === 'text' ? null : cell.kind;
-                  const actions = (row.cells.length > 1 ? 2 : 0) + (fileKind ? 1 : 0) + 1;
-                  return (
-                    <div key={cell.key} className="relative col-span-12 min-w-0 sm:[grid-column:span_var(--cols)]" style={{ '--cols': cell.cols } as CSSProperties}>
-                      <Body
-                        cell={cell}
-                        editing={editing}
-                        focus={cell.key === focusKey}
-                        inset={editing ? inset(actions) : 0}
-                        onHtml={(html) => patchCell(cell.key, { html })}
-                      />
-                      {editing && (
-                        <span className={cn(PLATE, 'absolute right-1.5 top-1.5 z-10')}>
-                          {row.cells.length > 1 && (
-                            <>
-                              <Icon label="move left" disabled={i === 0} onClick={() => moveCell(row.key, i, i - 1)}>
-                                <RiArrowLeftLine size={16} aria-hidden />
-                              </Icon>
-                              <Icon label="move right" disabled={i === row.cells.length - 1} onClick={() => moveCell(row.key, i, i + 1)}>
-                                <RiArrowRightLine size={16} aria-hidden />
-                              </Icon>
-                            </>
-                          )}
-                          {fileKind && (
-                            <Icon label="replace" onClick={() => openFile({ at: row.key, kind: fileKind, replace: cell.key })}>
-                              <RiRefreshLine size={16} aria-hidden />
-                            </Icon>
-                          )}
-                          <Icon label="remove" onClick={() => removeCell(cell.key)}>
-                            <RiCloseLine size={16} aria-hidden />
-                          </Icon>
-                        </span>
-                      )}
-                      {editing && (
-                        <Tooltip content={dragging === cell.key ? null : 'drag to resize'} at="right">
-                          <button
-                            type="button"
-                            aria-label="drag to resize"
-                            className="absolute -right-3 bottom-0 top-0 hidden w-2 cursor-ew-resize touch-none border-x border-primaryStroke bg-background hover:border-primaryBlue sm:block"
-                            onPointerDown={(e) => startResize(e, row.key, i, cell.key, cell.cols)}
-                          />
-                        </Tooltip>
-                      )}
-                      {dragging === cell.key && (
-                        <span className="pointer-events-none absolute -right-3 top-1/2 z-20 -translate-y-1/2 translate-x-full whitespace-nowrap rounded-control border border-primaryStroke bg-background px-1.5 text-xs tabular-nums text-textSecondary">
-                          {cell.cols} of {COLS}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {editing && row.cells.length < CELLS_MAX && !full && (
-                <AddToRow open={menu === row.key} onOpen={() => setMenu(row.key)} onPick={(kind) => add(row.key, kind)} onClose={() => setMenu(null)} />
-              )}
-            </div>
-          </div>
-        ))}
-        {editing && !full && (
-          <div className={cn(DASHED, 'flex min-h-14 items-center justify-center px-3 py-3', menu !== NEW && 'hover:border-primaryBlue')}>
-            {menu === NEW ? (
-              <KindMenu column={false} onPick={(kind) => add(NEW, kind)} onClose={() => setMenu(null)} />
-            ) : (
-              <button id="about-add-row" type="button" className={cn(ADD, 'inline-flex items-center gap-1')} onClick={() => setMenu(NEW)}>
-                <RiAddLine size={16} aria-hidden />
-                add a row
-              </button>
-            )}
-          </div>
-        )}
+    <div ref={setFrame} className="flex flex-col gap-4">
+      <section id={box} aria-label={`about ${name}`}>
+        <Columns two={two} gap="gap-x-10 gap-y-6" items={shown.map((card) => <CardView key={card.key} card={card} />)} />
       </section>
       {edit && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-          {editing ? (
-            <button id="about-done" type="button" className={ADD} onClick={finish}>
-              done
-            </button>
-          ) : (
-            <button id="about-edit" type="button" className={ADD} onClick={() => setEditing(true)}>
-              edit
-            </button>
-          )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {editButton}
           {status && <span className="text-sm text-textTertiary">{status}</span>}
         </div>
       )}
-      <input ref={fileRef} type="file" className="hidden" onChange={onFile} />
-      {editing && reorder.status}
     </div>
   );
 }

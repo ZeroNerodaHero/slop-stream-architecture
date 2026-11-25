@@ -19,6 +19,7 @@ import { api } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   cameraAtom,
+  cameraOnlyAtom,
   chatRoomAtom,
   copyWatchUrl,
   enterLivePage,
@@ -40,6 +41,7 @@ import {
   selectedSourceAtom,
   selectSource,
   sentStreamAtom,
+  setCameraOnly,
   sourcesAtom,
   startCamera,
   startPublishPip,
@@ -525,6 +527,7 @@ export function LivePage() {
   const editing = useAtomValue(liveEditingAtom);
   const preset = useAtomValue(livePresetAtom);
   const rail = useAtomValue(liveRailAtom);
+  const cameraOnly = useAtomValue(cameraOnlyAtom);
   const width = useWindowWidth();
   const [deskRef, deskWidth] = useWidthOf(!mobile);
   const windowed = !mobile && chatSide === 'modal';
@@ -547,6 +550,10 @@ export function LivePage() {
       } else reorderSource(id, what === 'forward' ? 'up' : 'down');
     }
   };
+
+  useEffect(() => {
+    setCameraOnly(preset === 'camera');
+  }, [preset]);
 
   useEffect(() => {
     void startCamera();
@@ -586,7 +593,7 @@ export function LivePage() {
         imageUrl={(asset) => api.assetUrl(name, asset)}
         avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }}
         main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
-        edit={edit}
+        edit={cameraOnly ? undefined : edit}
       />
       <ModelLoading />
       {publishing && (

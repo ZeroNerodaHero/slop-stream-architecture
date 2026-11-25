@@ -99,7 +99,7 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
         {LAYOUT_IDS.map((id) => {
           const on = id === layout;
           return (
-            <Tooltip key={id} content={locked ? LOCKED : `${id}: ${LAYOUT_WORDS[id]}${id === 5 ? ', edit mode' : ''}`}>
+            <Tooltip key={id} content={on ? null : locked ? LOCKED : `${id}: ${LAYOUT_WORDS[id]}${id === 5 ? ', edit mode' : ''}`}>
               <button
                 id={`live-layout-${id}`}
                 type="button"

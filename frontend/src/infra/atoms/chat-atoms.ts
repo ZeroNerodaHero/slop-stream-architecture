@@ -527,8 +527,8 @@ export class ChatRoom {
     store.set(this.replyAtom, line);
   }
 
-  async jumpToReply(id: string) {
-    if (!(await this.openLine(id, undefined, 'that line is not here any more'))) return;
+  async jumpToReply(id: string, inChannel?: string) {
+    if (!(await this.openLine(id, inChannel, 'that line is not here any more'))) return;
     store.set(this.flashAtom, id);
     if (this.flashTimer) clearTimeout(this.flashTimer);
     this.flashTimer = setTimeout(() => {

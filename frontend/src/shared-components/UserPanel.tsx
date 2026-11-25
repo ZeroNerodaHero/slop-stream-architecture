@@ -219,7 +219,7 @@ export function UserPanel() {
     if (mobile) return null;
     return (
       <aside aria-label="you" data-side={side} className={COLUMN}>
-        <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED)}>
+        <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED, side === 'left' && 'sidebar-edge-shadow')}>
           <div className={cn('flex flex-1 pt-1', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
             <Bone className="h-8 w-[calc(2rem+2px)]" />
           </div>
@@ -417,7 +417,7 @@ export function UserPanel() {
       }}
       className={cn(COLUMN, friendsOpen && 'z-40')}
     >
-      <div className={cn(panelClass(side), WIDEN, friendsOpen ? EXPANDED : COLLAPSED)}>
+      <div className={cn(panelClass(side), WIDEN, friendsOpen ? EXPANDED : COLLAPSED, side === 'left' && 'sidebar-edge-shadow')}>
         <div className="flex min-h-0 flex-1 flex-col">
           <Suspense fallback={<FriendsSkeleton side={side} open={friendsOpen} />}>
             <Friends open={friendsOpen} side={side} onPick={closeFriends} />

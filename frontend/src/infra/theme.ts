@@ -267,9 +267,18 @@ export function derivePalette({ background, accent, text }: DeriveInput): Palett
   };
 }
 
-export const toCssVars = (p: Palette): Record<string, string> => Object.fromEntries(TOKENS.map((t) => [CSS_VAR[t], rgb(...p[t]).join(' ')]));
-
 export const schemeOf = (p: Palette): 'dark' | 'light' => (isDark(p.background) ? 'dark' : 'light');
+
+export const SIDEBAR_EDGE_SHADOW_VAR = '--sidebar-edge-shadow';
+export const SIDEBAR_EDGE_SHADOW = {
+  dark: '4px 0 12px -6px rgb(0 0 0 / 0.55)',
+  light: '4px 0 12px -6px rgb(0 0 0 / 0.18)'
+} as const;
+
+export const toCssVars = (p: Palette): Record<string, string> => ({
+  ...Object.fromEntries(TOKENS.map((t) => [CSS_VAR[t], rgb(...p[t]).join(' ')])),
+  [SIDEBAR_EDGE_SHADOW_VAR]: SIDEBAR_EDGE_SHADOW[schemeOf(p)]
+});
 
 export function applyPalette(p: Palette, root: HTMLElement = document.documentElement): void {
   const style = root.style;
@@ -280,6 +289,7 @@ export function applyPalette(p: Palette, root: HTMLElement = document.documentEl
 export function clearPalette(root: HTMLElement = document.documentElement): void {
   const style = root.style;
   for (const t of TOKENS) style.removeProperty(CSS_VAR[t]);
+  style.removeProperty(SIDEBAR_EDGE_SHADOW_VAR);
   style.removeProperty('color-scheme');
 }
 
