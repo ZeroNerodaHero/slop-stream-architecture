@@ -24,11 +24,15 @@ export const METRIC_GROUPS: readonly MetricGroup[] = ['chat', 'watch'];
 export const METRIC_SIZE = 100;
 export const ROUTE_MAX = 60;
 export const QUALITY_SIZE = 600;
-export const QUALITY_COLUMNS = ['t', 'session', 'width', 'height', 'fps', 'bitrate', 'lossPct', 'droppedPerSec', 'jitterMs', 'rttMs'] as const;
+export const QUALITY_COLUMNS = ['t', 'session', 'width', 'height', 'fps', 'bitrate', 'lossPct', 'droppedPerSec', 'jitterMs', 'rttMs', 'route'] as const;
 
 export type QualityColumn = (typeof QUALITY_COLUMNS)[number];
-export type QualitySample = Record<QualityColumn, number>;
+export type QualitySample = Record<Exclude<QualityColumn, 'route'>, number>;
 export type Path = 'direct' | 'relay' | null;
+
+const ROUTES: readonly Path[] = [null, 'direct', 'relay'];
+
+export const routeOf = (code: number): Path => ROUTES[code] ?? null;
 
 export class MetricRing {
   readonly buf: Float64Array;
@@ -162,7 +166,7 @@ export class QualityRing {
   }
 
   push(sample: QualitySample, path: Path): void {
-    for (const name of QUALITY_COLUMNS) this.cols[name][this.head] = sample[name];
+    for (const name of QUALITY_COLUMNS) this.cols[name][this.head] = name === 'route' ? ROUTES.indexOf(path) : sample[name];
     this.head = (this.head + 1) % this.size;
     if (this.count < this.size) this.count++;
     this.path = path;
