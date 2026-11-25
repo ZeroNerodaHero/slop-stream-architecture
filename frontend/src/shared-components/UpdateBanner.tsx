@@ -34,7 +34,7 @@ export function UpdateBanner() {
   };
 
   const text = !native
-    ? 'a new version is out'
+    ? 'A new version is out'
     : install.at === 'downloading'
       ? install.text
       : install.at === 'failed'
@@ -44,28 +44,31 @@ export function UpdateBanner() {
   return (
     <div
       id="update-banner"
-      className="fixed inset-x-0 top-0 z-40 flex min-h-8 w-full items-center gap-2 bg-primaryBlue pb-1 pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.75rem+env(safe-area-inset-right))] pt-[calc(0.25rem+env(safe-area-inset-top))] font-sans text-sm text-background"
+      className="fixed inset-x-0 top-0 z-40 grid min-h-8 w-full grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 bg-primaryBlue pb-1 pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.75rem+env(safe-area-inset-right))] pt-[calc(0.25rem+env(safe-area-inset-top))] font-sans text-sm text-background"
     >
-      <p role="status" className="min-w-0 flex-1 truncate font-medium">
+      <span aria-hidden />
+      <p role="status" className="min-w-0 truncate text-center font-medium">
         {text}
       </p>
-      {!native && (
-        <Button id="update-reload" size="sm" className={ACTION} onClick={() => location.reload()}>
-          reload
-        </Button>
-      )}
-      {native && install.at !== 'downloading' && (
-        <Button id="update-install" size="sm" className={ACTION} onClick={() => void update()}>
-          {install.at === 'failed' ? 'retry' : 'update and restart'}
-        </Button>
-      )}
-      {install.at !== 'downloading' && (
-        <Tooltip content="dismiss">
-          <button id="update-dismiss" type="button" aria-label="dismiss" onClick={() => setDismissed(shown)} className={DISMISS}>
-            <RiCloseLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
-      )}
+      <div className="flex items-center justify-end gap-2">
+        {!native && (
+          <Button id="update-reload" size="sm" className={ACTION} onClick={() => location.reload()}>
+            reload
+          </Button>
+        )}
+        {native && install.at !== 'downloading' && (
+          <Button id="update-install" size="sm" className={ACTION} onClick={() => void update()}>
+            {install.at === 'failed' ? 'retry' : 'update and restart'}
+          </Button>
+        )}
+        {install.at !== 'downloading' && (
+          <Tooltip content="dismiss">
+            <button id="update-dismiss" type="button" aria-label="dismiss" onClick={() => setDismissed(shown)} className={DISMISS}>
+              <RiCloseLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
+        )}
+      </div>
     </div>
   );
 }
