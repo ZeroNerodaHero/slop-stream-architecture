@@ -9,3 +9,5 @@ frontend/dist/
 
 .seeded-users
 .seeded-groups
+
+desktop/src-tauri/gen/
