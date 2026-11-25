@@ -127,6 +127,7 @@ the edges in the map are the ones the code makes today. a new service, or one th
 
 one screen high on every tab: the page itself never scrolls, only a long table or list scrolls in its own pane, with its header row stuck on top. checked at 1280x800, 1440x900 and 1512x982.
 
+- the icon: the site's face on the site's red (`rgb(248 81 73)`, `--decrease`) instead of its teal, the purple and the blue between them kept (the blue as the halfway of red and purple). the monitor serves it itself, so the tab has it without the main site: `api/src/stats-icon-32.png` at `/favicon.ico` and `/icon-32.png` (the tab), `api/src/stats-icon-180.png` at `/icon.png` (the apple touch icon and the header's left end, before "stats"). both are made from `frontend/public/icon-512.png` by swapping the three colours and scaling down; a new site icon wants them made again.
 - one slim bar on top: the tabs **Host**, **Containers**, **Endpoints**, **Calls** on the left (arrow keys move between them), and on the right the box, the range (1h, 24h, 7d; not on the architecture, which is live), the search and a status dot.
   - the box: a dropdown drawn by the page (not the browser's), each box with its up/down dot. "all" first where adding up makes sense: the host overview, the container table, endpoints and calls. not on the architecture, which is one box at a time. with one box just its name.
   - the search: on endpoints, calls and the container table, every word must match. `/` focuses it from anywhere, escape clears it.

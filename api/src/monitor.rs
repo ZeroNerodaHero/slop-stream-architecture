@@ -20,6 +20,8 @@ use crate::agent::{round, Container, Sample};
 use crate::timings;
 
 const PAGE: &str = include_str!("monitor.html");
+const ICON_32: &[u8] = include_bytes!("stats-icon-32.png");
+const ICON_180: &[u8] = include_bytes!("stats-icon-180.png");
 const STORE_FILE: &str = "monitor.json";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEP_HOURS: usize = 24 * 7;
@@ -689,6 +691,14 @@ async fn page() -> Html<&'static str> {
     Html(PAGE)
 }
 
+async fn icon_small() -> impl IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "image/png")], ICON_32)
+}
+
+async fn icon_large() -> impl IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "image/png")], ICON_180)
+}
+
 async fn monitor_health(State(app): State<App>) -> Json<Value> {
     Json(json!({ "ok": true, "up_secs": app.started.elapsed().as_secs(), "targets": app.cfg.targets.len(), "build": app.cfg.build }))
 }
@@ -947,6 +957,9 @@ pub async fn run() -> anyhow::Result<()> {
 
     let router = Router::new()
         .route("/", get(page))
+        .route("/favicon.ico", get(icon_small))
+        .route("/icon-32.png", get(icon_small))
+        .route("/icon.png", get(icon_large))
         .route("/health", get(monitor_health))
         .route("/api/monitor", get(state))
         .route("/api/monitor/metrics", get(series))
@@ -967,6 +980,18 @@ pub async fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_icons_are_pngs_the_page_links() {
+        for (icon, side) in [(ICON_32, 32u32), (ICON_180, 180)] {
+            assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");
+            assert_eq!(u32::from_be_bytes(icon[16..20].try_into().unwrap()), side);
+            assert_eq!(u32::from_be_bytes(icon[20..24].try_into().unwrap()), side);
+        }
+        for href in ["href=\"/icon-32.png\"", "href=\"/icon.png\"", "src=\"/icon.png\""] {
+            assert!(PAGE.contains(href), "the page has no {href}");
+        }
+    }
 
     fn ok(up_secs: u64, build: &str) -> Probe {
         let body = json!({ "ok": true, "up_secs": up_secs, "build": build, "video_up_secs": up_secs, "video_build": build });
