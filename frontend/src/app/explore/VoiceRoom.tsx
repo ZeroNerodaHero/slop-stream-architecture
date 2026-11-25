@@ -7,6 +7,7 @@ import {
   RiMicLine,
   RiMicOffFill,
   RiMicOffLine,
+  RiPhoneFill,
   RiSettings3Line,
   RiVolumeMuteLine,
   RiVolumeUpLine
@@ -412,9 +413,17 @@ export function ControlBar({ mobile, dock = false }: { mobile: boolean; dock?: b
         </Control>
       )}
       {dock ? (
-        <Button id="voice-dock-leave" size="sm" variant="outline-danger" className="ml-auto h-8 gap-1.5 py-0 max-md:h-11" onClick={leaveVoice}>
-          <RiLogoutBoxRLine aria-hidden size={16} />
-          leave
+        <Button
+          id="voice-dock-leave"
+          size="sm"
+          variant="outline-danger"
+          aria-label="leave"
+          className="ml-auto h-8 w-8 gap-1.5 px-0 py-0 max-md:h-11 max-md:w-11 xl:w-auto xl:px-3"
+          onClick={leaveVoice}
+        >
+          <RiPhoneFill aria-hidden size={16} className="rotate-[135deg] xl:hidden" />
+          <RiLogoutBoxRLine aria-hidden size={16} className="hidden xl:block" />
+          <span className="hidden xl:inline">leave</span>
         </Button>
       ) : (
         <>
