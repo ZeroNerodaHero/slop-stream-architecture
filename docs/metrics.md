@@ -85,6 +85,7 @@ the agent's docker client is a few lines of http over the unix socket that can o
                                  "runs": [{ "at": "…", "ms": 4, "exit": 0, "output": "" }] },
                       "api": { "from": "agent", "path": "/health", "every_secs": 15,
                                "runs": [{ "at": "…", "ok": true, "status": 200, "ms": 2 }] } } ],
+    "site": { "browsers": 42, "named": 17, "live": 3, "viewers": 118, "calls": 2, "voice": 7 },
     "problems": [] } ] }
 ```
 
@@ -94,6 +95,14 @@ two health signals per container, kept apart:
 
 - `check`, docker's own healthcheck, from the `State.Health` of the inspect the agent already does (read-only, no new request): `failing_streak`, `interval_secs` (its `Config.Healthcheck.Interval`, docker's 30 s when unset) and `runs`, docker's last five results newest first, each its end time, how long it took, its exit code and its output. the output has control characters made spaces, emails, ips, token-like words and url queries masked (the same scrub as the error history), and is cut to 160 characters. no `check`: the container has no healthcheck (its `health` is null too).
 - `api`, an http health endpoint answering: `from` who asks, `path` (never the host), `every_secs`, and `runs`, the last ten newest first, each its time, `ok` (a 2xx), `status`, `ms` and a short `error`. the agent asks every name in `HEALTH_FROM` each sample, `name=url` comma separated; compose sets `chat=http://chat:4100/health,events=http://events:4100/health,home=http://home:4100/health,video=http://video:7880/health,voice=http://voice:7881/health`, and a box's `.env` can set its own `HEALTH_FROM` (empty values fall back to that). a name is a container name, or its compose service. a name whose container is not running is not asked, and its runs go. a timeout is 3 s. the api's `/api/health` is not in the list: that one is the monitor's own poll (below), which goes through the box's caddy like a browser does.
+
+`site`, how the site is used right now, numbers only (never a name, a nick or an address). the agent asks every name in `COUNTS_FROM` each sample, the same `name=url` list, with the same 3 s timeout and only for a running container; compose sets `events=http://events:4100/online,video=http://video:7880/health,voice=http://voice:7881/health`, and a box's `.env` can set its own `COUNTS_FROM`. each name says how to read its answer, from what the services already keep:
+
+- `events` (the gateway's `GET /online`, the names with an `/events` socket and how many each): `named`, how many names, accounts and guest nicks, and `browsers`, the `/events` sockets open now, from that process's session timings (its `open`, above), so a logged-out visitor counts too. one socket per browser, its tabs share it. never less than the named sockets.
+- `video` (its `GET /health`): `live`, the streams being published, and `viewers`, the players connected to them, added up.
+- `voice` (its `GET /health`): `calls`, the rooms with someone seated (an empty room goes), and `voice`, the people seated.
+
+a count whose source did not answer is left out; no `site` when none answered. the sample is the cache: counted once every 15 s, whoever looks.
 
 `problems` names what could not be read in that sample (no socket, no pressure files on an old kernel) instead of failing the whole sample.
 
@@ -113,7 +122,7 @@ the monitor pulls `/api/metrics` from every box in its `TARGETS` every 15 s (`ME
 
 a box with a token whose agent misses `DOWN_AFTER` pulls in a row (3, 45 s) gets an `agent-down` event, `<name> agent DOWN: <why>`, and an `agent-up` when it answers again; both go to `STATS_ALERT_WEBHOOK` too, unless the box is already down (its own down alert said it).
 
-- `GET /api/monitor` (what the page polls) carries each box's newest sample as `metrics`, or `metrics.status` saying why there is none: `no OPS_TOKEN for this box`, `401: ...` (the token is wrong), `404: that box has no OPS_TOKEN for its agent, or its Caddyfile predates /api/metrics`, `no answer in 5s`.
+- `GET /api/monitor` (what the page polls) carries each box's newest sample as `metrics` (its `site` counts too), or `metrics.status` saying why there is none: `no OPS_TOKEN for this box`, `401: ...` (the token is wrong), `404: that box has no OPS_TOKEN for its agent, or its Caddyfile predates /api/metrics`, `no answer in 5s`.
 - `GET /api/monitor/metrics?target=<name>&range=1h|24h|7d`: one range of one box as columns, `{ "t": [...], "host": { "cpu_pct": [...], ... }, "containers": { "api": { "cpu_pct": [...], ... } }, "latest": {...} }`.
 - `GET /api/monitor/architecture?target=<name>`: that box's containers as a graph, from its newest sample (below), with the box's `host: { cpus, mem_total }` for the page's percentages.
 - the monitor's own check of each box (`GET <url>/api/health` every `CHECK_EVERY_SECS`, the one behind up and down) keeps its last ten results, and both answers above put them on that box's `api` container as its `api`, `from: "monitor"`, `path: "/api/health"`. so the api's http health is what the monitor sees from outside, and each other service's is what its own box's agent sees inside: one box or many, each box's endpoints are its own `HEALTH_FROM`, and its api is the monitor's `STATS_TARGETS` entry.
@@ -138,8 +147,9 @@ the edges in the map are the ones the code makes today. a new service, or one th
 one screen high on every tab: the page itself never scrolls, only a long table or list scrolls in its own pane, with its header row stuck on top. checked at 1280x800, 1440x900 and 1512x982.
 
 - the icon: the site's face on the site's red (`rgb(248 81 73)`, `--decrease`) instead of its teal, the purple and the blue between them kept (the blue as the halfway of red and purple). the monitor serves it itself, so the tab has it without the main site: `api/src/stats-icon-32.png` at `/favicon.ico` and `/icon-32.png` (the tab), `api/src/stats-icon-180.png` at `/icon.png` (the apple touch icon and the header's left end, before "stats"). both are made from `frontend/public/icon-512.png` by swapping the three colours and scaling down; a new site icon wants them made again.
-- one slim bar on top: the tabs **Host**, **Containers**, **Endpoints**, **Calls** on the left (arrow keys move between them), and on the right the box, the range (1h, 24h, 7d; not on the architecture, which is live), the search and a status dot.
-  - the box: a dropdown drawn by the page (not the browser's), each box with its up/down dot. "all" first where adding up makes sense: the host overview, the container table, endpoints and calls. not on the architecture, which is one box at a time. with one box just its name.
+- one slim bar on top: the tabs **Host**, **Containers**, **Endpoints**, **Calls** on the left (arrow keys move between them), and on the right the site now, the box, the range (1h, 24h, 7d; not on the architecture, which is live), the search and a status dot.
+  - the site now: `● 42 online · 3 live · 118 watching · 7 voice`, the shown box's `site` counts (above), added up over the boxes on "all". online is `browsers`, voice the people seated (the calls in its hover). hover each for what it counts and where from. the round dot: green the counts are fresh (a sample under 3 intervals plus 15 s old); orange on "all" when some box sends none, its hover names which; grey "no counts" when the box's agent sends none (one from before this, `./scripts/deploy.sh stats` there) or has sent nothing lately; red the box is down. a count nothing answered is left out.
+  - the box: small grey text after the counts, a dropdown drawn by the page (not the browser's), each box with its up/down dot in the list. "all boxes" first where adding up makes sense: the host overview, the container table, endpoints and calls. not on the architecture, which is one box at a time. with one box just its name, no dropdown.
   - the search: on the container table, every word must match. endpoints and calls have theirs in the bar under the cards instead. `/` focuses whichever the tab shows, escape clears it.
   - the dot: green while every refresh works, its tooltip the monitor's build, uptime, check interval and webhook. red when a refresh or a part of the page fails, its tooltip says what.
 - **Host**: the host graphs (cpu with steal and iowait, load, memory, swap, disk, network in and out, pressure) in a grid that fills the screen, hover for the value at a time, and beside them the status the monitor always had (up/down, the 24-hour bar, the health grid, events, error reports). on "all" the status cards side by side.
@@ -384,9 +394,9 @@ in the root `.env` (`.env.example` has them all, empty):
 | `STATS_HTTPS_PORT` | empty: the page only through the app's caddy. a port (8443): the monitor's own caddy on it too, for an origin rule (above) |
 | `OPS_TOKEN` | already there for `/api/errors`; now also the key to this box's `/api/metrics`. empty: the agent's numbers are off, and the page says so |
 
-`HEALTH_FROM` is not in `.env.example`: empty, the agent asks the five services compose names (above). a box that runs other services, or the same ones on other ports, sets its own.
+`HEALTH_FROM` and `COUNTS_FROM` are not in `.env.example`: empty, the agent asks the services compose names (above). a box that runs other services, or the same ones on other ports, sets its own.
 
-compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15, `KEEP_SAMPLES` 240, `TIMINGS_FROM` and `HEALTH_FROM` on the agent, `CHECK_EVERY_SECS` 15, `METRICS_EVERY_SECS` 15 and `DOWN_AFTER` 3 on the monitor. `TIMINGS_PORT` (9300; 0 turns it off) is not set anywhere: the default is the one `TIMINGS_FROM` names.
+compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15, `KEEP_SAMPLES` 240, `TIMINGS_FROM`, `HEALTH_FROM` and `COUNTS_FROM` on the agent, `CHECK_EVERY_SECS` 15, `METRICS_EVERY_SECS` 15 and `DOWN_AFTER` 3 on the monitor. `TIMINGS_PORT` (9300; 0 turns it off) is not set anywhere: the default is the one `TIMINGS_FROM` names.
 
 on a box of its own, `monitor/.env` (`monitor/.env.example`) takes the same `STATS_*` names, plus `MONITOR_IMAGE` (the api image to run), `STATS_HOST` (the site's name, `stats.nodentity.xyz`), `STATS_TLS` (`internal` or an acme email), `MONITOR_PORT` (the loopback port, 3002) and the `*_EVERY_SECS` and `DOWN_AFTER` above. the old names (`TARGETS`, `OPS_TOKENS`, `ALERT_WEBHOOK`) still work there.
 

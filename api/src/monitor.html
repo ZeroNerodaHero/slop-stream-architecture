@@ -46,8 +46,15 @@
   #q { width: 190px; font: inherit; font-size: 13px; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 3px 8px; }
   #q:focus { outline: none; border-color: var(--blue); }
   .picker { position: relative; }
-  .picker > button, .picker > span { display: flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--stroke); padding: 3px 8px; font-size: 13px; white-space: nowrap; }
-  .picker > button:hover, .picker > button[aria-expanded="true"] { border-color: var(--t3); }
+  .picker > button, .picker > span { display: flex; align-items: center; gap: 4px; background: none; border: 1px solid transparent; padding: 2px 5px; font-size: 12px; color: var(--t3); white-space: nowrap; }
+  .picker > button:hover, .picker > button[aria-expanded="true"], .picker > button:focus-visible { color: var(--t1); border-color: var(--stroke); outline: none; }
+  .site { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--t3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .site .tipped { text-decoration: none; color: var(--t2); }
+  .site .tipped:hover, .site .tipped.on { color: var(--t1); }
+  .site .tipped b { font-weight: 600; color: var(--t1); }
+  .site .tipped.sd { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--t3); }
+  .site .sd.up { background: var(--up); } .site .sd.down { background: var(--down); } .site .sd.warn { background: var(--orange); }
+  .site.old .tipped b { color: var(--t2); }
   .picker ul { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 100%; background: var(--bg2); border: 1px solid var(--t3); padding: 2px 0; }
   .picker li { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 0; white-space: nowrap; cursor: pointer; font-size: 13px; }
   .picker li small { color: var(--t3); font-size: 11px; }
@@ -305,6 +312,7 @@
     <span class="brand"><img src="/icon.png" alt="" width="20" height="20">stats</span>
     <nav id="views" class="views" role="tablist" aria-label="what to show"></nav>
     <span class="spacer"></span>
+    <div id="site" class="site" role="group" aria-label="the site right now"></div>
     <div id="box" class="picker"></div>
     <div id="ranges" class="seg" role="group" aria-label="range"></div>
     <input id="q" type="search" placeholder="search" spellcheck="false" autocomplete="off" aria-label="search this tab; every word must match; press / to focus">
@@ -316,6 +324,7 @@
 (() => {
   const $views = document.getElementById('views');
   const $box = document.getElementById('box');
+  const $site = document.getElementById('site');
   const $ranges = document.getElementById('ranges');
   const $q = document.getElementById('q');
   const $status = document.getElementById('status');
@@ -2445,6 +2454,73 @@
     keepHint(stats, held);
   }
 
+  const SITE_COUNTS = [
+    { k: 'browsers', word: 'online', tip: (s) => `browsers with the site open now, signed in or not. each holds one events socket, shared by all its tabs${has(s.named) ? `. ${count(s.named)} of them carry a name, an account or a guest nick` : ''}` },
+    { k: 'live', word: 'live', tip: () => 'streams being published to video now' },
+    { k: 'viewers', word: 'watching', tip: () => 'players connected to those streams, added up over every stream' },
+    { k: 'voice', word: 'voice', tip: (s) => `people seated in voice${has(s.calls) ? `, in ${count(s.calls)} ${s.calls === 1 ? 'call' : 'calls'}` : ''}` },
+  ];
+  const SITE_KEYS = ['browsers', 'named', 'live', 'viewers', 'calls', 'voice'];
+
+  function siteCounts(shown) {
+    const every = (state.monitor && state.monitor.metrics_every_secs) || 15;
+    const now = Date.parse(state.now) + (Date.now() - state.received);
+    const ts = shown === ALL ? state.targets : state.targets.filter((t) => t.name === shown);
+    const age = (t) => (t.metrics && t.metrics.at ? (now - Date.parse(t.metrics.at)) / 1000 : Infinity);
+    const fresh = ts.filter((t) => age(t) <= 3 * every + 15);
+    const from = fresh.filter((t) => t.metrics.site);
+    const sum = {};
+    for (const k of SITE_KEYS) {
+      const vs = from.map((t) => t.metrics.site[k]).filter(has);
+      sum[k] = vs.length ? vs.reduce((a, b) => a + b, 0) : null;
+    }
+    const down = ts.filter((t) => t.status === 'down');
+    const oldest = from.length ? Math.max(...from.map(age)) : null;
+    const where = shown === ALL ? `added up over ${from.length} of ${ts.length} boxes` : `from ${shown}'s agent`;
+    const when = shown === ALL ? `the oldest sampled ${human(Math.max(0, Math.round(oldest || 0)))} ago` : `sampled ${human(Math.max(0, Math.round(oldest || 0)))} ago`;
+    const deploy = 'its agent sends no site counts yet: ./scripts/deploy.sh stats on that box';
+    let g, k, tip;
+    if (down.length === ts.length) {
+      [g, k, tip] = ['down', `${shown === ALL ? 'every box' : shown} down`, `the monitor cannot reach ${down.map((t) => t.name).join(', ')}, so there are no counts`];
+    } else if (!fresh.length) {
+      [g, k, tip] = ['none', 'no fresh counts', `no metrics from ${shown === ALL ? 'any box' : shown} in the last ${human(3 * every + 15)}`];
+    } else if (!from.length) {
+      [g, k, tip] = ['none', 'no counts', shown === ALL ? `no box sends site counts yet: ./scripts/deploy.sh stats on each` : deploy];
+    } else {
+      const missing = ts.filter((t) => !from.includes(t)).map((t) => t.name);
+      g = missing.length || down.length ? 'warn' : 'up';
+      k = g === 'up' ? 'live counts' : `counts from ${from.length} of ${ts.length} boxes`;
+      tip = `${where}, ${when}; ${shown === ALL ? 'each agent counts' : 'counted'} every ${every}s. numbers only, no names.${missing.length ? ` missing: ${missing.join(', ')}.` : ''}`;
+    }
+    return { g, k, tip, sum, where, any: from.length > 0, old: g !== 'up' };
+  }
+
+  function renderSite(shown) {
+    const c = siteCounts(shown);
+    const sig = JSON.stringify(c);
+    if ($site.dataset.sig === sig) return;
+    $site.dataset.sig = sig;
+    const held = holdHint($site);
+    const dot = tipped('', c.tip);
+    dot.dataset.k = c.k;
+    dot.classList.add('sd', c.g);
+    dot.setAttribute('aria-label', c.k);
+    const parts = [dot];
+    const shownCounts = c.any ? SITE_COUNTS.filter((r) => has(c.sum[r.k])) : [];
+    shownCounts.forEach((r, i) => {
+      if (i) parts.push(el('span', null, '·'));
+      const v = c.sum[r.k];
+      const b = tipped('', `${r.tip(c.sum)}. ${c.where}.`);
+      b.dataset.k = `${count(v)} ${r.word}`;
+      b.replaceChildren(el('b', null, count(v)), document.createTextNode(` ${r.word}`));
+      parts.push(b);
+    });
+    if (!shownCounts.length) parts.push(el('span', null, c.k));
+    $site.classList.toggle('old', c.old);
+    $site.replaceChildren(...parts);
+    keepHint($site, held);
+  }
+
   function renderPicker(shown) {
     const targets = state.targets;
     if (targets.length <= 1) {
@@ -2454,14 +2530,13 @@
       $box.dataset.sig = sig;
       $box.replaceChildren();
       if (t) {
-        const s = el('span');
-        s.title = `${t.name} is ${t.status}`;
-        s.append(el('span', `dot ${t.status}`), document.createTextNode(t.name));
+        const s = el('span', null, t.name);
+        s.title = `the only box watched, ${t.status}`;
         $box.append(s);
       }
       return;
     }
-    const items = [...(allAllowed() ? [{ id: ALL, label: 'all', note: `${targets.filter((t) => t.status === 'up').length}/${targets.length} up` }] : []), ...targets.map((t) => ({ id: t.name, label: t.name, status: t.status }))];
+    const items = [...(allAllowed() ? [{ id: ALL, label: 'all boxes', note: `${targets.filter((t) => t.status === 'up').length}/${targets.length} up` }] : []), ...targets.map((t) => ({ id: t.name, label: t.name, status: t.status }))];
     const sig = `${items.map((i) => `${i.id}:${i.status || i.note}`).join('|')}|${shown}`;
     if ($box.dataset.sig === sig && $box.firstChild) return;
     $box.dataset.sig = sig;
@@ -2470,7 +2545,8 @@
     open.setAttribute('aria-haspopup', 'listbox');
     open.setAttribute('aria-expanded', 'false');
     open.setAttribute('aria-label', `box: ${cur.label}`);
-    open.append(...(cur.status ? [el('span', `dot ${cur.status}`)] : []), document.createTextNode(cur.label), el('span', 'dim', '▾'));
+    open.title = 'which box to show';
+    open.append(document.createTextNode(cur.label), el('span', 'dim', '▾'));
     const ul = el('ul');
     ul.setAttribute('role', 'listbox');
     ul.tabIndex = -1;
@@ -2509,6 +2585,7 @@
   }
 
   function renderNav(shown) {
+    renderSite(shown);
     renderPicker(shown);
     $ranges.hidden = sel.tab === 'containers' && sel.cview === 'arch';
     if ($ranges.dataset.sig !== sel.range) {
@@ -2599,6 +2676,8 @@
     if (!state.targets.length) {
       $box.replaceChildren();
       $box.dataset.sig = '';
+      $site.replaceChildren();
+      $site.dataset.sig = '';
       $ranges.hidden = true;
       $views.hidden = true;
       $q.hidden = true;
