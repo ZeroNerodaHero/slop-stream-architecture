@@ -115,7 +115,7 @@ function Card({ id, name, author, meta, picture, on, load, disabled, onPick }: C
         disabled={disabled}
         onClick={onPick}
         className={cn(
-          'flex w-full min-w-0 flex-col border bg-background text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default',
+          'flex w-full min-w-0 flex-col overflow-hidden rounded-card border bg-background text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default',
           on || load ? 'border-primaryBlue disabled:hover:border-primaryBlue' : 'border-primaryStroke disabled:hover:border-primaryStroke',
           !load && 'disabled:opacity-40'
         )}
@@ -153,7 +153,7 @@ function NoPicture({ format }: { format: string }) {
   return (
     <i className="relative flex h-full w-full items-center justify-center bg-backgroundTertiary not-italic text-textTertiary">
       <RiBox3Line aria-hidden size={36} />
-      <small className="absolute left-1.5 top-1.5 border border-primaryStroke bg-backgroundSecondary px-1.5 py-0.5 text-xs font-semibold text-textSecondary">
+      <small className="absolute left-1.5 top-1.5 rounded-control border border-primaryStroke bg-backgroundSecondary px-1.5 py-0.5 text-xs font-semibold text-textSecondary">
         {format}
       </small>
     </i>
@@ -168,7 +168,7 @@ function AddTile({ disabled, full, onPick }: { disabled: boolean; full: boolean;
         type="button"
         disabled={disabled}
         onClick={onPick}
-        className="relative flex w-full min-w-0 flex-col border border-dashed border-secondaryStroke text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:border-secondaryStroke"
+        className="relative flex w-full min-w-0 flex-col overflow-hidden rounded-card border border-dashed border-secondaryStroke text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:border-secondaryStroke"
       >
         <span aria-hidden className="block aspect-square w-full" />
         <span aria-hidden className="invisible block px-2 py-1.5">
@@ -176,7 +176,7 @@ function AddTile({ disabled, full, onPick }: { disabled: boolean; full: boolean;
           <span className="block text-xs">{'\u00a0'}</span>
         </span>
         <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
-          <span aria-hidden className="flex h-7 w-7 items-center justify-center border border-primaryStroke text-primaryBlue">
+          <span aria-hidden className="flex h-7 w-7 items-center justify-center rounded-control border border-primaryStroke text-primaryBlue">
             <RiAddLine size={16} />
           </span>
           <span className="text-sm font-semibold text-textSecondary">add model</span>
@@ -243,7 +243,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           <p className="mt-2 text-sm text-textSecondary">it wears your face. only the model is sent.</p>
         </div>
         <Tooltip content="close" at="left">
-          <button id="model-dialog-close" type="button" aria-label="close" onClick={onClose} className={cn(ICON_BUTTON, 'absolute right-0 top-0', SHEET_CLOSE)}>
+          <button id="model-dialog-close" type="button" aria-label="close" onClick={onClose} className={cn(ICON_BUTTON, 'absolute right-0 top-0 rounded-control', SHEET_CLOSE)}>
             <RiCloseLine aria-hidden size={18} />
           </button>
         </Tooltip>
@@ -311,7 +311,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
                     aria-label={`forget ${model.name}`}
                     disabled={loading}
                     onClick={() => void forgetKeptModel(model.id)}
-                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/kept:opacity-100 disabled:opacity-0"
+                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/kept:opacity-100 disabled:opacity-0"
                   >
                     <RiCloseLine aria-hidden size={12} />
                   </button>
@@ -353,7 +353,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
                     href={place.href}
                     aria-label={place.name}
                     className={cn(
-                      'flex h-12 items-center justify-center border border-primaryStroke bg-background transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none',
+                      'flex h-12 items-center justify-center rounded-card border border-primaryStroke bg-background transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none',
                       place.id === 'vroid-studio' && 'border-dashed'
                     )}
                   >

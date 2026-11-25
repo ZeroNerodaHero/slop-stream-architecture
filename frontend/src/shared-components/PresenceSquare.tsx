@@ -16,7 +16,7 @@ const COLOUR: Record<PresenceStatus, string> = {
 };
 
 const SIZE = {
-  corner: 'absolute -bottom-1 -right-1 h-3 w-3 border-2',
+  corner: 'absolute -bottom-1 -right-1 h-3 w-3 border-2 bubble:h-3.5 bubble:w-3.5 bubble:right-[calc(14.645%-5px)] bubble:bottom-[calc(14.645%-5px)]',
   word: 'relative h-2.5 w-2.5 shrink-0',
   chip: 'relative h-2 w-2 shrink-0'
 } as const;

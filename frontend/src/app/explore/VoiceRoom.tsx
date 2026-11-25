@@ -234,26 +234,37 @@ function Call({ room, channel, className }: { room: GroupRoom; channel: string; 
   );
 }
 
+export type TileSize = 'grid' | 'big' | 'strip' | 'pip' | 'mini';
+
 export function Tile({
   tile,
   size,
   version,
   talking,
   focused,
-  thin = false,
   label,
   onClick
 }: {
   tile: TileOf;
-  size: 'grid' | 'big' | 'strip';
+  size: TileSize;
   version: number | null;
   talking: boolean;
   focused: boolean;
-  thin?: boolean;
   label?: string;
   onClick: () => void;
 }) {
   const what = tile.kind === 'screen' ? `${tile.name}'s screen` : tile.self ? `${tile.name} (you)` : tile.name;
+  const thin = size === 'pip' || size === 'mini';
+  const mini = size === 'mini';
+  const button = (
+    <button
+      type="button"
+      aria-label={mini ? what : (label ?? (focused ? `back to everyone` : `focus ${what}`))}
+      aria-pressed={mini ? undefined : focused}
+      onClick={onClick}
+      className="absolute inset-0 z-10 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue"
+    />
+  );
   return (
     <div
       data-tile={tile.key}
@@ -262,40 +273,44 @@ export function Tile({
       data-video={tile.stream ? 'on' : undefined}
       className={cn(
         'group/tile relative overflow-hidden rounded-card border bg-backgroundTertiary',
-        size === 'big' ? 'h-full w-full' : thin ? 'aspect-[16/10]' : 'aspect-video',
+        size === 'big' ? 'h-full w-full' : 'aspect-video',
         size === 'strip' && 'w-36 shrink-0 max-md:w-28',
         talking ? (thin ? 'border-increase' : 'border-increase outline outline-2 -outline-offset-2 outline-increase') : 'border-primaryStroke hover:border-secondaryStroke bubble:border-transparent bubble:hover:border-secondaryStroke'
       )}
     >
-      <button
-        type="button"
-        aria-label={label ?? (focused ? `back to everyone` : `focus ${what}`)}
-        aria-pressed={focused}
-        onClick={onClick}
-        className="absolute inset-0 z-10 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue"
-      />
+      {mini ? <Tooltip content={what}>{button}</Tooltip> : button}
       {tile.stream ? (
         <Picture stream={tile.stream} mirror={tile.self && tile.kind === 'person'} contain={tile.kind === 'screen' || size === 'big'} />
       ) : (
-        <div className={cn('absolute inset-0 flex items-center justify-center', thin && 'pb-6 xl:pb-0')}>
+        <div className="absolute inset-0 flex items-center justify-center">
           <FaceWithPresence
             name={tile.name}
             version={version}
             ring="border-backgroundTertiary"
             className={cn(
-              size === 'strip' ? 'h-9 w-9 text-sm' : thin ? 'h-7 w-7 text-xs xl:h-12 xl:w-12 xl:text-lg' : size === 'big' ? 'h-24 w-24 text-3xl' : 'h-16 w-16 text-xl max-md:h-12 max-md:w-12 max-md:text-base'
+              size === 'strip'
+                ? 'h-9 w-9 text-sm'
+                : mini
+                  ? 'h-7 w-7 text-xs'
+                  : size === 'pip'
+                    ? 'h-12 w-12 text-lg'
+                    : size === 'big'
+                      ? 'h-24 w-24 text-3xl'
+                      : 'h-16 w-16 text-xl max-md:h-12 max-md:w-12 max-md:text-base'
             )}
           />
         </div>
       )}
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-20 flex max-w-[calc(100%-12px)] items-center gap-1 rounded-control bg-black/70 px-1.5 py-0.5 text-xs text-white">
-        {tile.kind === 'screen' && <RiComputerLine aria-hidden size={12} className="shrink-0" />}
-        {tile.serverMuted && <Mark label="server muted" className="text-decrease" icon={<RiMicOffFill aria-hidden size={12} />} />}
-        {!tile.serverMuted && tile.mute && <Mark label="muted" icon={<RiMicOffLine aria-hidden size={12} />} />}
-        {tile.deaf && <Mark label="deafened" icon={<RiVolumeMuteLine aria-hidden size={12} />} />}
-        {tile.uid && <HeardMutedOnTile uid={tile.uid} />}
-        <span className="min-w-0 truncate">{tile.kind === 'screen' ? `${tile.name}'s screen` : tile.name}</span>
-      </span>
+      {!mini && (
+        <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-20 flex max-w-[calc(100%-12px)] items-center gap-1 rounded-control bg-black/70 px-1.5 py-0.5 text-xs text-white">
+          {tile.kind === 'screen' && <RiComputerLine aria-hidden size={12} className="shrink-0" />}
+          {tile.serverMuted && <Mark label="server muted" className="text-decrease" icon={<RiMicOffFill aria-hidden size={12} />} />}
+          {!tile.serverMuted && tile.mute && <Mark label="muted" icon={<RiMicOffLine aria-hidden size={12} />} />}
+          {tile.deaf && <Mark label="deafened" icon={<RiVolumeMuteLine aria-hidden size={12} />} />}
+          {tile.uid && <HeardMutedOnTile uid={tile.uid} />}
+          <span className="min-w-0 truncate">{tile.kind === 'screen' ? `${tile.name}'s screen` : tile.name}</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -361,25 +376,25 @@ function Picture({ stream, mirror, contain }: { stream: MediaStream; mirror: boo
 const CONTROL =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-control border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue disabled:opacity-50 max-md:h-11 max-md:w-11';
 
-const DOCK_CONTROL = 'h-8 w-8 max-md:h-11 max-md:w-11';
+const PIP_CONTROL = 'h-8 w-8';
 
-export function ControlBar({ mobile, dock = false }: { mobile: boolean; dock?: boolean }) {
+export function ControlBar({ mobile, pip = false }: { mobile: boolean; pip?: boolean }) {
   const call = useAtomValue(voiceCallAtom);
   const muted = useAtomValue(voiceMutedAtom);
   const deaf = useAtomValue(voiceDeafAtom);
   const local = useAtomValue(voiceLocalVideoAtom);
   const ready = call.phase === 'connected';
-  const at = dock ? 'voice-dock' : 'voice-room';
-  const size = dock ? DOCK_CONTROL : undefined;
-  const icon = dock ? 16 : 18;
+  const at = pip ? 'voice-pip' : 'voice-room';
+  const size = pip ? PIP_CONTROL : undefined;
+  const icon = pip ? 16 : 18;
   return (
     <div
       id={`${at}-controls`}
       role="toolbar"
       aria-label="call"
       className={cn(
-        dock
-          ? 'flex shrink-0 flex-wrap items-center gap-1.5 px-2 pb-2'
+        pip
+          ? 'flex shrink-0 items-center gap-1.5 px-2 pb-2'
           : 'flex shrink-0 items-center justify-center gap-2 rounded-b-panel border-t border-primaryStroke bg-backgroundSecondary px-3 py-2 bubble:border-transparent',
         mobile && 'fixed inset-x-0 bottom-0 z-30 rounded-none rounded-t-panel pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
       )}
@@ -412,19 +427,12 @@ export function ControlBar({ mobile, dock = false }: { mobile: boolean; dock?: b
           <RiComputerLine aria-hidden size={icon} />
         </Control>
       )}
-      {dock ? (
-        <Button
-          id="voice-dock-leave"
-          size="sm"
-          variant="outline-danger"
-          aria-label="leave"
-          className="ml-auto h-8 w-8 gap-1.5 px-0 py-0 max-md:h-11 max-md:w-11 xl:w-auto xl:px-3"
-          onClick={leaveVoice}
-        >
-          <RiPhoneFill aria-hidden size={16} className="rotate-[135deg] xl:hidden" />
-          <RiLogoutBoxRLine aria-hidden size={16} className="hidden xl:block" />
-          <span className="hidden xl:inline">leave</span>
-        </Button>
+      {pip ? (
+        <Tooltip content="leave">
+          <Button id="voice-pip-leave" size="sm" variant="outline-danger" aria-label="leave" className="ml-auto h-8 w-8 px-0 py-0" onClick={leaveVoice}>
+            <RiPhoneFill aria-hidden size={16} className="rotate-[135deg]" />
+          </Button>
+        </Tooltip>
       ) : (
         <>
           <Control id="voice-room-settings" label="voice settings" onClick={() => openUserModal('voice')}>

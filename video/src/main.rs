@@ -917,7 +917,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         .collect();
     let watched = planned
         .iter()
-        .filter_map(|(slot, _, viewer)| viewer.as_ref().map(|(feed, viewer, start)| (*slot, *start, Arc::clone(feed), Arc::clone(viewer))))
+        .filter_map(|(slot, _, viewer)| viewer.as_ref().map(|(feed, viewer, start)| (*slot, *start, Arc::clone(feed), Arc::downgrade(&viewer.track))))
         .collect();
     let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched, Some(Arc::clone(&resend)), setup.clone()).await {
         Ok(peer) => Arc::new(peer),
@@ -1094,6 +1094,7 @@ fn tell_view(following: &[(Arc<Feed>, Arc<Viewer>)], view: View) {
 fn leave_all(following: &[(Arc<Feed>, Arc<Viewer>)]) {
     for (feed, viewer) in following {
         feed.leave(viewer);
+        viewer.track.release();
     }
 }
 
@@ -1342,13 +1343,15 @@ async fn negotiate(peer: &RTCPeerConnection, sdp: String, pins: &HashMap<String,
     .map_err(|_| anyhow::anyhow!("negotiation timed out"))?
 }
 
+type Watched = (usize, u8, Arc<Feed>, Weak<ViewerTrack>);
+
 async fn new_peer(
     app: &App,
     role: Role,
     name: &str,
     dead: Arc<Notify>,
     connected: Arc<Notify>,
-    watched: Vec<(usize, u8, Arc<Feed>, Arc<Viewer>)>,
+    watched: Vec<Watched>,
     resend: Option<Arc<Resend>>,
     setup: Arc<timings::Setup>,
 ) -> anyhow::Result<RTCPeerConnection> {
@@ -1383,7 +1386,7 @@ async fn new_peer(
     let tag = format!("{} {name}", role.as_str());
     let hub = app.hub.clone();
     let room = name.to_owned();
-    let watched: Arc<[(usize, u8, Arc<Feed>, Arc<Viewer>)]> = watched.into();
+    let watched: Arc<[Watched]> = watched.into();
     let early_hub = hub.clone();
     let early_room = room.clone();
     let early_watched = Arc::clone(&watched);
@@ -1418,7 +1421,7 @@ async fn new_peer(
             {
                 let asks = watched
                     .iter()
-                    .filter(|(_, _, _, viewer)| !viewer.track.holds_picture())
+                    .filter(|(_, _, _, track)| !track.upgrade().is_some_and(|t| t.holds_picture()))
                     .map(|(slot, level, feed, _)| (*slot, feed.codec(), *level, Ask::Backup(feed.layer(*level).keyframes.load(Ordering::Relaxed))))
                     .collect();
                 let hub = hub.clone();
@@ -2278,5 +2281,119 @@ mod tests {
         let generation = live_room(&hub, "f").await;
         hub.clear("f").await;
         assert_eq!(hub.add_preview("f", generation, 0, ip(1)).await, Err("not live"));
+    }
+
+    fn test_app() -> App {
+        let (_, shutdown) = watch::channel(false);
+        App {
+            hub: Hub::default(),
+            public_ip: "127.0.0.1".to_owned(),
+            mux: UDPMuxDefault::new(UDPMuxParams::new(media_socket(0).expect("a udp socket"))),
+            shutdown,
+            dummy_prefix: "dummy-".to_owned(),
+            dummy_password: None,
+            api_url: "http://127.0.0.1:9".to_owned(),
+            http: reqwest::Client::new(),
+            thumbs: false,
+            started: Instant::now(),
+            build: "test".to_owned(),
+        }
+    }
+
+    async fn recvonly_offer(client: &RTCPeerConnection) -> String {
+        use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+        use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
+        client
+            .add_transceiver_from_kind(RTPCodecType::Video, Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Recvonly, send_encodings: vec![] }))
+            .await
+            .expect("a video transceiver");
+        let offer = client.create_offer(None).await.expect("an offer");
+        let mut gathered = client.gathering_complete_promise().await;
+        client.set_local_description(offer).await.expect("the offer applies");
+        let _ = gathered.recv().await;
+        client.local_description().await.expect("a local description").sdp
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_watch_peer_frees_its_viewer_track_and_resend_rings() {
+        let app = test_app();
+        let mut gone = Vec::new();
+        for _ in 0..3 {
+            let feed = Arc::new(Feed::new(Codec::Vp8, 1));
+            let resend = Arc::new(Resend::default());
+            let track = Arc::new(ViewerTrack::new(crate::media::vp8_capability(), "v".to_owned(), "s".to_owned(), Arc::clone(&resend)));
+            let viewer = Arc::new(Viewer::new(Arc::clone(&track), 0, false));
+            feed.join(Arc::clone(&viewer));
+            let connected = Arc::new(Notify::new());
+            let watched = vec![(0, 0, Arc::clone(&feed), Arc::downgrade(&track))];
+            let setup = Arc::new(timings::Setup::start("webrtc", "watch"));
+            let peer = new_peer(&app, Role::Watch, "s", Arc::new(Notify::new()), Arc::clone(&connected), watched, Some(Arc::clone(&resend)), setup).await.expect("a watch peer");
+            let sender = peer.add_track(Arc::clone(&track) as Arc<dyn TrackLocal + Send + Sync>).await.expect("the viewer track");
+
+            let (media, registry) = media_setup(false, false, None).expect("client media");
+            let client = APIBuilder::new().with_media_engine(media).with_interceptor_registry(registry).build().new_peer_connection(RTCConfiguration::default()).await.expect("a client peer");
+            let answer = negotiate(&peer, recvonly_offer(&client).await, &HashMap::new()).await.expect("an answer");
+            client.set_remote_description(RTCSessionDescription::answer(answer).expect("an answer")).await.expect("the answer applies");
+            tokio::time::timeout(Duration::from_secs(10), connected.notified()).await.expect("the peers connect");
+
+            gone.push((Arc::downgrade(&track), Arc::downgrade(&resend)));
+            feed.leave(&viewer);
+            client.close().await.expect("the client closes");
+            peer.close().await.expect("the peer closes");
+            drop((sender, peer, client, viewer, track, resend));
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while gone.iter().any(|(track, resend)| track.strong_count() > 0 || resend.strong_count() > 0) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let left: Vec<(usize, usize)> = gone.iter().map(|(track, resend)| (track.strong_count(), resend.strong_count())).collect();
+        assert!(left.iter().all(|&(t, r)| t == 0 && r == 0), "viewer tracks and resend state still held after close: {left:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_watch_session_whose_ice_never_completes_releases_its_hold_and_its_track() {
+        let app = test_app();
+        let mut gone = Vec::new();
+        for _ in 0..3 {
+            let feed = Arc::new(Feed::new(Codec::Vp8, 1));
+            let resend = Arc::new(Resend::default());
+            let track = Arc::new(ViewerTrack::new(crate::media::vp8_capability(), "v".to_owned(), "s".to_owned(), Arc::clone(&resend)));
+            let viewer = Arc::new(Viewer::new(Arc::clone(&track), 0, false));
+            feed.join(Arc::clone(&viewer));
+            let following = vec![(Arc::clone(&feed), Arc::clone(&viewer))];
+            let dead = Arc::new(Notify::new());
+            let watched = vec![(0, 0, Arc::clone(&feed), Arc::downgrade(&track))];
+            let setup = Arc::new(timings::Setup::start("webrtc", "watch"));
+            let peer = new_peer(&app, Role::Watch, "s", Arc::clone(&dead), Arc::new(Notify::new()), watched, Some(Arc::clone(&resend)), setup).await.expect("a watch peer");
+            let sender = peer.add_track(Arc::clone(&track) as Arc<dyn TrackLocal + Send + Sync>).await.expect("the viewer track");
+
+            let (media, registry) = media_setup(false, false, None).expect("client media");
+            let client = APIBuilder::new().with_media_engine(media).with_interceptor_registry(registry).build().new_peer_connection(RTCConfiguration::default()).await.expect("a client peer");
+            let unreachable: String = recvonly_offer(&client).await.lines().filter(|l| !l.starts_with("a=candidate") && !l.starts_with("a=end-of-candidates")).map(|l| format!("{l}\r\n")).collect();
+            negotiate(&peer, unreachable, &HashMap::new()).await.expect("an answer");
+            client.close().await.expect("the client closes");
+
+            let now = Instant::now();
+            let key = crate::simulcast::Frame { keyframe: true, picture_id: None, tl0: None, size: None };
+            let delta = crate::simulcast::Frame { keyframe: false, ..key };
+            for seq in 0..200u16 {
+                let packet = webrtc::rtp::packet::Packet { header: webrtc::rtp::header::Header { sequence_number: seq, timestamp: u32::from(seq) * 3000, ssrc: 1, ..Default::default() }, payload: bytes::Bytes::from(vec![0u8; 1000]) };
+                feed.forward(0, &packet, if seq == 0 { &key } else { &delta }, now).await;
+            }
+            assert!(track.holds_picture(), "the unconnected viewer holds its keyframe");
+            assert_ne!(peer.ice_connection_state(), RTCIceConnectionState::Connected);
+
+            leave_all(&following);
+            assert!(!track.holds_picture(), "session end empties the hold");
+            peer.close().await.expect("the peer closes");
+            gone.push((Arc::downgrade(&track), Arc::downgrade(&resend)));
+            drop((sender, peer, client, following, viewer, track, resend, feed));
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while gone.iter().any(|(track, resend)| track.strong_count() > 0 || resend.strong_count() > 0) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let left: Vec<(usize, usize)> = gone.iter().map(|(track, resend)| (track.strong_count(), resend.strong_count())).collect();
+        assert!(left.iter().all(|&(t, r)| t == 0 && r == 0), "viewer tracks and resend state still held after a failed session: {left:?}");
     }
 }

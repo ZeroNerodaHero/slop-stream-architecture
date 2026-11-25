@@ -34,6 +34,8 @@ so each watcher asks at most twice per slot, once each:
 
 **the pre-srtp hold.** the early keyframe used to be lost whenever it beat SRTP, and then the backup trailed to the end of the 300ms gap: ~350ms to a first frame instead of ~100. vp9 lost that race on every join. now each `ViewerTrack` keeps what it is sent from its first keyframe on while writes still return 0 (up to `EARLY_PACKETS`, 600, and `EARLY_BYTES`, 768 KB; past either it drops all of it and holds nothing more), and the first write that goes through sends the held packets in order, then the new one. a new keyframe before SRTP replaces what was held. the packets were already rewritten for this watcher, so the flush looks to it like packets that came a little late. local joins went from ~350ms (bimodal with ~120ms) to ~100ms median for vp8 and 88ms for vp9 (`vp9.md`).
 
+the hold lives only as long as the session. `unbind` (the peer closing) and `leave_all` (every way a watch session ends, including `peer gone` when ICE never completes) call `ViewerTrack::release`, which empties it and stops it filling again. the peer's own state callbacks keep only a `Weak<ViewerTrack>` for the backup's check: a strong one closed a cycle (track, resend interceptor, its per-ssrc writers, the transport, the transport's handlers, the peer's callbacks) and no watch session was ever freed, ~1 MiB each with a full hold. `test/soak.js` measures it (`test/README.md`).
+
 **not at answer time.** an ask when the answer goes out lands a publisher round trip later (tens of ms) while the watcher still has ~400ms of ICE and DTLS to go: it would be dropped for that watcher nearly every time. it would also open the 300ms gap below and push the useful ask back. so nothing asks at answer time.
 
 ## the join rules

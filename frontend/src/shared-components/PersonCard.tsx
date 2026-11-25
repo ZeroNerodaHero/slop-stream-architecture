@@ -108,7 +108,7 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
         className="flex flex-col gap-2.5 rounded-panel border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
       >
         <span className="flex items-center gap-2.5">
-          <span className="relative shrink-0">
+          <span className="relative flex shrink-0">
             <Face name={person.name} version={person.avatar} className="h-8 w-8 text-sm" />
             {presence && (
               <>

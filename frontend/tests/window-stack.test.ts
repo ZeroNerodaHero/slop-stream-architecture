@@ -19,7 +19,7 @@ import {
 } from '../src/infra/window-stack.ts';
 
 test('every floating window kind is in the stack', () => {
-  for (const id of ['messages', 'timings', 'quality', 'chat', 'dm', 'corner', 'notifications'] as const) assert.ok(STACK_IDS.includes(id));
+  for (const id of ['messages', 'timings', 'quality', 'chat', 'dm', 'corner', 'notifications', 'voice'] as const) assert.ok(STACK_IDS.includes(id));
 });
 
 test('raise moves a window to the top and keeps the rest in order', () => {
