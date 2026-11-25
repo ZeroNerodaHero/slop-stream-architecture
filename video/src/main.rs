@@ -6,6 +6,7 @@ mod resend;
 mod simulcast;
 mod thumbs;
 mod timings;
+mod view;
 mod voice;
 
 use std::collections::HashMap;
@@ -48,7 +49,8 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 use crate::fanout::{Feed, Meter, Viewer, ViewerTrack};
 use crate::media::{accept_simulcast, media_setup, opus_capability, vp8_capability};
 use crate::resend::Resend;
-use crate::simulcast::{level_of, parse_vp8, Picker, Signals, Vp8, LEVELS};
+use crate::simulcast::{level_of, parse_vp8, pinned_limits, start_level, Picker, Signals, Vp8, LEVELS};
+use crate::view::{Gate, View, MAX_STRIKES};
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 
 const KEYFRAME_GAP: Duration = Duration::from_millis(1500);
@@ -156,6 +158,7 @@ enum Ask {
     Lost,
     Thumb,
     Switch,
+    Resume,
     Trailing,
 }
 
@@ -182,7 +185,7 @@ impl KeyframeAsks {
         let send = match ask {
             Ask::Lost => since(self.asked).is_none_or(|d| d >= KEYFRAME_GAP),
             Ask::Thumb => since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
-            Ask::Switch => !in_flight && since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
+            Ask::Switch | Ask::Resume => !in_flight && since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
             Ask::Backup(connected) if seen != connected => false,
             Ask::Join | Ask::Backup(_) if in_flight => false,
             Ask::Join | Ask::Backup(_) => match join_recent {
@@ -203,7 +206,7 @@ impl KeyframeAsks {
         }
         self.asked = Some(now);
         self.asked_seen = seen;
-        if !matches!(ask, Ask::Lost | Ask::Thumb | Ask::Switch) {
+        if !matches!(ask, Ask::Lost | Ask::Thumb | Ask::Switch | Ask::Resume) {
             self.join_asked = Some(now);
         }
         Plan::Send
@@ -852,9 +855,8 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
 
         match viewer {
             Some((feed, viewer, start)) => {
-                let cap = if preview { start } else { LEVELS as u8 - 1 };
                 let tag = format!("{what} {name}");
-                tokio::spawn(follow(app.hub.clone(), name.clone(), tag, slot, feed, viewer, sender, start, cap));
+                tokio::spawn(follow(app.hub.clone(), name.clone(), tag, slot, feed, viewer, sender, start, preview));
             }
             None => {
                 tokio::spawn(async move { while sender.read_rtcp().await.is_ok() {} });
@@ -873,6 +875,8 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         }
     };
     let mut counted: Option<u64> = None;
+    let mut gate = Gate::new(Instant::now());
+    let mut strikes = 0;
 
     if send(&mut socket, Out::sdp(answer)).await.is_ok() {
         log::info!("watch {name}: joined");
@@ -884,7 +888,19 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         let mut tick = tokio::time::interval(VIEWERS_TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            if strikes > MAX_STRIKES {
+                log::info!("watch {name}: closed after {strikes} bad frames");
+                let _ = send(&mut socket, Out::error("bad frames")).await;
+                let _ = socket.send(Message::Close(None)).await;
+                break;
+            }
+            let due = gate.due();
             tokio::select! {
+                _ = async { if let Some(at) = due { tokio::time::sleep_until(at.into()).await } }, if due.is_some() => {
+                    if let Some(view) = gate.tick(Instant::now()) {
+                        tell_view(&following, view);
+                    }
+                }
                 _ = connected.notified(), if counted.is_none() => {
                     let Some(ip) = media_ip(&peer).await.or(forwarded) else {
                         log::warn!("watch {name}: connected, but no address to count it by");
@@ -911,10 +927,22 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
                         break;
                     }
                 }
-                _ = wait_until_socket_closes(&mut socket) => {
-                    log::info!("watch {name}: left");
-                    break;
-                }
+                msg = socket.recv() => match msg {
+                    Some(Ok(Message::Text(text))) => match View::parse(&text) {
+                        Some(view) if view != gate.wanted() => {
+                            if let Some(view) = gate.want(view, Instant::now()) {
+                                tell_view(&following, view);
+                            }
+                        }
+                        _ => strikes += 1,
+                    },
+                    Some(Ok(Message::Binary(_))) => strikes += 1,
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                        log::info!("watch {name}: left");
+                        break;
+                    }
+                    _ => {}
+                },
                 _ = async { let _ = generation.wait_for(|g| *g != my_generation).await; } => {
                     log::info!("watch {name}: stream ended");
                     let _ = send(&mut socket, Out::event("ended")).await;
@@ -957,6 +985,12 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     leave_all(&following);
     let _ = peer.close().await;
     drop(session);
+}
+
+fn tell_view(following: &[(Arc<Feed>, Arc<Viewer>)], view: View) {
+    for (_, viewer) in following {
+        viewer.want_view(view);
+    }
 }
 
 fn leave_all(following: &[(Arc<Feed>, Arc<Viewer>)]) {
@@ -1023,28 +1057,81 @@ impl Health {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed>, viewer: Arc<Viewer>, sender: Arc<RTCRtpSender>, start: u8, cap: u8) {
-    let mut picker = Picker::new(start, cap, Instant::now());
+async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed>, viewer: Arc<Viewer>, sender: Arc<RTCRtpSender>, start: u8, preview: bool) {
+    let top = LEVELS as u8 - 1;
+    let limits = |view: View| if preview || view == View::Small { pinned_limits(feed.offered()) } else { (top, top) };
+    let mut picker = Picker::new(start, top, Instant::now());
+    let (cap, ceiling) = limits(View::Full);
+    picker.limit(cap, ceiling);
     let mut health = Health::default();
     let mut tick = tokio::time::interval(FOLLOW_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut moving: Option<(Instant, Option<u8>)> = None;
     let mut asked: Option<Instant> = None;
+    let mut resumed: Option<Instant> = None;
+    let mut view = View::Full;
     let joined = Instant::now();
     loop {
         tokio::select! {
+            _ = viewer.view_changed() => {
+                let next = viewer.view();
+                if next == view {
+                    continue;
+                }
+                let was = std::mem::replace(&mut view, next);
+                let now = Instant::now();
+                log::info!("{tag}: slot {slot} view {was:?} -> {next:?}");
+                if next == View::Hidden {
+                    viewer.pause();
+                    moving = None;
+                    asked = None;
+                    resumed = None;
+                    continue;
+                }
+                let (cap, ceiling) = limits(next);
+                picker.limit(cap, ceiling);
+                let layers = feed.views(now);
+                if was == View::Hidden {
+                    picker.resume(now);
+                    health.reset();
+                }
+                if !preview && next == View::Full {
+                    picker.lift(start_level(&layers, feed.offered(), false), now);
+                }
+                picker.decide(now, &layers, None, &Signals::default());
+                let target = picker.target();
+                viewer.set_target(target);
+                if was == View::Hidden {
+                    viewer.resume();
+                    resumed = Some(now);
+                    asked = Some(now);
+                    hub.request_keyframe(&room, slot, target, Ask::Resume).await;
+                } else if viewer.current() != Some(target) {
+                    moving = Some((now, viewer.current()));
+                    asked = Some(now);
+                    hub.request_keyframe(&room, slot, target, Ask::Switch).await;
+                }
+            }
             read = sender.read_rtcp() => {
                 let Ok((packets, _)) = read else { break };
                 let now = Instant::now();
-                if health.read(&packets, viewer.track.ssrc(), viewer.track.floor(), now) {
+                if health.read(&packets, viewer.track.ssrc(), viewer.track.floor(), now) && view != View::Hidden {
                     let level = viewer.current().unwrap_or_else(|| viewer.target());
                     let ask = if now.saturating_duration_since(joined) < JOIN_PLI_WINDOW { Ask::Join } else { Ask::Lost };
                     hub.request_keyframe(&room, slot, level, ask).await;
                 }
             }
             _ = tick.tick() => {
+                if view == View::Hidden {
+                    continue;
+                }
                 let now = Instant::now();
-                let signals = health.signals(now, viewer.sent());                let current = viewer.current();
+                let signals = health.signals(now, viewer.sent());
+                let current = viewer.current();
+                if let (Some(since), Some(on)) = (resumed, current) {
+                    log::info!("{tag}: slot {slot} picture back on layer {on} {}ms after the resume", feed.switched_after(&viewer, since).as_millis());
+                    resumed = None;
+                }
                 let before = picker.target();
                 if let Some(why) = picker.decide(now, &feed.views(now), current, &signals) {
                     viewer.set_target(picker.target());
@@ -1063,7 +1150,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
                         health.reset();
                     }
                 }
-                let pending = current.is_some_and(|c| c != target) || (current.is_none() && target != start);
+                let pending = current.is_some_and(|c| c != target) || (current.is_none() && (target != start || resumed.is_some()));
                 if pending && asked.is_none_or(|at| now.saturating_duration_since(at) >= SWITCH_REASK) {
                     asked = Some(now);
                     hub.request_keyframe(&room, slot, target, Ask::Switch).await;
@@ -1563,15 +1650,6 @@ async fn send(socket: &mut WebSocket, msg: Out) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn wait_until_socket_closes(socket: &mut WebSocket) {
-    while let Some(msg) = socket.recv().await {
-        match msg {
-            Ok(Message::Close(_)) | Err(_) => break,
-            _ => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1642,6 +1720,18 @@ mod tests {
         assert_eq!(asks.decide(Ask::Switch, t + FORCED_KEYFRAME_GAP, 1), Plan::Send);
         assert_eq!(asks.join_asked, None);
         assert_eq!(asks.decide(Ask::Join, t + FORCED_KEYFRAME_GAP + ms(10), 1), Plan::Skip);
+    }
+
+    #[test]
+    fn many_resumes_on_one_layer_share_one_keyframe_per_gap() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        let sent = (0..25u64).filter(|i| asks.decide(Ask::Resume, t + ms(i * 20), 0) == Plan::Send).count();
+        assert_eq!(sent, 1);
+        assert_eq!(asks.decide(Ask::Resume, t + FORCED_KEYFRAME_GAP, 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Switch, t + FORCED_KEYFRAME_GAP + ms(100), 2), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Lost, t + FORCED_KEYFRAME_GAP + ms(100), 2), Plan::Skip);
+        assert_eq!(asks.join_asked, None);
     }
 
     #[test]

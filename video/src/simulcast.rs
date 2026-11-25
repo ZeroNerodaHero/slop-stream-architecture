@@ -143,6 +143,7 @@ pub struct Rewrite {
     pid_off: u16,
     tl0_off: u8,
     last: Option<Last>,
+    paused: bool,
 }
 
 fn newer(a: u16, b: u16) -> bool {
@@ -150,7 +151,19 @@ fn newer(a: u16, b: u16) -> bool {
 }
 
 impl Rewrite {
+    pub fn pause(&mut self) {
+        self.paused = true;
+        self.layer = None;
+    }
+
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
     pub fn admit(&mut self, layer: u8, target: u8, seq: u16, ts: u32, vp8: &Vp8, now: Instant) -> Option<Admit> {
+        if self.paused {
+            return None;
+        }
         let switched = layer == target && self.layer != Some(layer) && vp8.keyframe;
         if switched {
             self.switch_to(layer, seq, ts, vp8, now);
@@ -222,6 +235,7 @@ pub enum Why {
 pub struct Picker {
     target: u8,
     cap: u8,
+    ceiling: u8,
     changed: Instant,
     healthy_since: Option<Instant>,
     up_wait: Duration,
@@ -238,7 +252,24 @@ fn above(layers: &[LayerView; LEVELS], from: u8, cap: u8) -> Option<u8> {
 
 impl Picker {
     pub fn new(start: u8, cap: u8, now: Instant) -> Self {
-        Self { target: start, cap, changed: now, healthy_since: None, up_wait: BASE_UP_WAIT, last_up: None }
+        Self { target: start, cap, ceiling: LEVELS as u8 - 1, changed: now, healthy_since: None, up_wait: BASE_UP_WAIT, last_up: None }
+    }
+
+    pub fn limit(&mut self, cap: u8, ceiling: u8) {
+        self.cap = cap;
+        self.ceiling = ceiling.max(cap);
+    }
+
+    pub fn resume(&mut self, now: Instant) {
+        self.changed = now;
+        self.healthy_since = None;
+        self.last_up = None;
+    }
+
+    pub fn lift(&mut self, level: u8, now: Instant) {
+        if level > self.target && level <= self.cap {
+            self.set(level, now);
+        }
     }
 
     pub fn target(&self) -> u8 {
@@ -254,7 +285,7 @@ impl Picker {
     pub fn decide(&mut self, now: Instant, layers: &[LayerView; LEVELS], current: Option<u8>, signals: &Signals) -> Option<Why> {
         if !layers[self.target as usize].live {
             let start = self.target.min(self.cap);
-            let next = if layers[start as usize].live { Some(start) } else { below(layers, start).or_else(|| above(layers, start, LEVELS as u8 - 1)) };
+            let next = if layers[start as usize].live { Some(start) } else { below(layers, start).or_else(|| above(layers, start, self.ceiling)) };
             if let Some(next) = next.filter(|n| *n != self.target) {
                 self.set(next, now);
                 return Some(Why::Gone);
@@ -318,24 +349,27 @@ impl Picker {
 }
 
 pub const START_BUDGET_BPS: u64 = 1_500_000;
-const PREVIEW_MIN_HEIGHT: u32 = 360;
 
-pub fn start_level(layers: &[LayerView; LEVELS], offered: u8, preview: bool) -> u8 {
+fn offered_levels(offered: u8) -> impl DoubleEndedIterator<Item = u8> {
+    (0..LEVELS as u8).filter(move |l| offered & (1 << l) != 0)
+}
+
+pub fn pinned_limits(offered: u8) -> (u8, u8) {
+    let low = offered_levels(offered).next().unwrap_or(0);
+    let ceiling = offered_levels(offered).rev().nth(1).unwrap_or(low);
+    (low, ceiling.max(low))
+}
+
+pub fn start_level(layers: &[LayerView; LEVELS], offered: u8, pinned: bool) -> u8 {
     let live: Vec<u8> = (0..LEVELS as u8).filter(|l| layers[*l as usize].live).collect();
+    if pinned {
+        let (low, ceiling) = pinned_limits(offered);
+        return live.iter().copied().find(|l| *l <= ceiling).unwrap_or(low);
+    }
     let known = !live.is_empty() && live.iter().all(|l| layers[*l as usize].bps > 0);
     if !known {
-        let offered: Vec<u8> = (0..LEVELS as u8).filter(|l| offered & (1 << l) != 0).collect();
-        let lowest = offered.first().copied().unwrap_or(0);
-        return if preview { lowest } else { offered.iter().rev().find(|l| **l <= 1).copied().unwrap_or(lowest) };
-    }
-    if preview {
-        let tall = live.iter().find(|l| layers[**l as usize].height >= PREVIEW_MIN_HEIGHT);
-        let any_height = live.iter().any(|l| layers[*l as usize].height > 0);
-        return match (tall, any_height) {
-            (Some(l), _) => *l,
-            (None, true) => *live.last().unwrap_or(&0),
-            (None, false) => live[0],
-        };
+        let lowest = offered_levels(offered).next().unwrap_or(0);
+        return offered_levels(offered).rev().find(|l| *l <= 1).unwrap_or(lowest);
     }
     live.iter().rev().find(|l| layers[**l as usize].bps <= START_BUDGET_BPS).copied().unwrap_or(live[0])
 }
@@ -476,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn new_viewers_start_at_or_under_the_budget_and_previews_on_360() {
+    fn new_viewers_start_at_or_under_the_budget_and_previews_on_the_lowest() {
         assert_eq!(start_level(&three(RATES), 0b111, false), 1);
         assert_eq!(start_level(&three(RATES), 0b111, true), 0);
         assert_eq!(start_level(&three([150_000, 500_000, 1_200_000]), 0b111, false), 2);
@@ -485,7 +519,12 @@ mod tests {
             LayerView { live: true, bps: 600_000, height: 480 },
             LayerView { live: true, bps: 2_000_000, height: 720 },
         ];
-        assert_eq!(start_level(&small, 0b111, true), 1);
+        assert_eq!(start_level(&small, 0b111, true), 0);
+        let mut no_bottom = three(RATES);
+        no_bottom[0].live = false;
+        assert_eq!(start_level(&no_bottom, 0b111, true), 1);
+        no_bottom[1].live = false;
+        assert_eq!(start_level(&no_bottom, 0b111, true), 0);
         let single = [LayerView { live: true, bps: 180_000, height: 240 }, LayerView::default(), LayerView::default()];
         assert_eq!(start_level(&single, 0b001, false), 0);
         assert_eq!(start_level(&single, 0b001, true), 0);
@@ -494,6 +533,95 @@ mod tests {
         assert_eq!(start_level(&fresh, 0b110, false), 1);
         assert_eq!(start_level(&fresh, 0b110, true), 1);
         assert_eq!(start_level(&fresh, 0b001, false), 0);
+    }
+
+    #[test]
+    fn a_pinned_viewer_is_held_to_the_lowest_layer_and_never_the_top() {
+        assert_eq!(pinned_limits(0b111), (0, 1));
+        assert_eq!(pinned_limits(0b011), (0, 0));
+        assert_eq!(pinned_limits(0b110), (1, 1));
+        assert_eq!(pinned_limits(0b001), (0, 0));
+        assert_eq!(pinned_limits(0b100), (2, 2));
+        assert_eq!(pinned_limits(0), (0, 0));
+        let t = Instant::now();
+        let mut layers = three(RATES);
+        let mut p = Picker::new(2, 2, t);
+        let (cap, ceiling) = pinned_limits(0b111);
+        p.limit(cap, ceiling);
+        assert_eq!(p.decide(t, &layers, None, &Signals::default()), Some(Why::Cap));
+        assert_eq!(p.target(), 0);
+        for step in 1..80 {
+            p.decide(t + ms(step * 500), &layers, Some(p.target()), &healthy());
+        }
+        assert_eq!(p.target(), 0);
+        layers[0].live = false;
+        assert_eq!(p.decide(t + ms(41_000), &layers, Some(0), &healthy()), Some(Why::Gone));
+        assert_eq!(p.target(), 1);
+        layers[1].live = false;
+        assert_eq!(p.decide(t + ms(41_500), &layers, Some(1), &healthy()), None);
+        assert_eq!(p.target(), 1);
+        layers[0].live = true;
+        assert_eq!(p.decide(t + ms(42_000), &layers, None, &healthy()), Some(Why::Gone));
+        assert_eq!(p.target(), 0);
+    }
+
+    #[test]
+    fn leaving_the_pin_lifts_to_the_start_layer_and_resume_restarts_the_climb_wait() {
+        let t = Instant::now();
+        let layers = three(RATES);
+        let mut p = Picker::new(0, 0, t);
+        p.lift(1, t);
+        assert_eq!(p.target(), 0);
+        p.limit(2, 2);
+        p.lift(1, t + ms(100));
+        assert_eq!(p.target(), 1);
+        p.lift(0, t + ms(100));
+        assert_eq!(p.target(), 1);
+        assert_eq!(p.decide(t + ms(200), &layers, Some(1), &healthy()), None);
+        p.resume(t + ms(10_000));
+        let mut now = t + ms(10_000);
+        while p.target() == 1 {
+            now += ms(250);
+            p.decide(now, &layers, Some(1), &healthy());
+        }
+        assert_eq!(now, t + ms(10_250) + BASE_UP_WAIT);
+    }
+
+    #[test]
+    fn a_pause_drops_everything_and_the_resume_waits_for_a_keyframe_and_stays_continuous() {
+        let t = Instant::now();
+        let mut r = Rewrite::default();
+        r.admit(1, 1, 100, 10_000, &key(50, 5), t).unwrap();
+        let before = r.admit(1, 1, 101, 13_000, &delta(51, 5), t + ms(33)).unwrap();
+        r.pause();
+        assert_eq!(r.admit(1, 1, 102, 16_000, &delta(52, 5), t + ms(66)), None);
+        assert_eq!(r.admit(1, 1, 500, 900_000, &key(400, 60), t + ms(5000)), None);
+        r.resume();
+        assert_eq!(r.admit(1, 1, 501, 903_000, &delta(401, 60), t + ms(10_000)), None);
+        assert_eq!(r.admit(0, 1, 9000, 5, &key(7, 1), t + ms(10_010)), None);
+        let back = r.admit(1, 1, 502, 906_000, &key(402, 61), t + ms(10_033)).unwrap();
+        assert!(back.switched);
+        assert_eq!(back.seq, before.seq.wrapping_add(1));
+        assert_eq!(back.ts, before.ts.wrapping_add(10_000 * 90));
+        assert_eq!(402u16.wrapping_add(back.pid_off) & 0x7fff, 52);
+        assert_eq!(61u8.wrapping_add(back.tl0_off), 6);
+        let next = r.admit(1, 1, 503, 909_000, &delta(403, 61), t + ms(10_066)).unwrap();
+        assert_eq!((next.seq, next.ts), (before.seq.wrapping_add(2), back.ts.wrapping_add(3000)));
+        r.pause();
+        r.resume();
+        let other = r.admit(2, 2, 70, 1, &key(9, 9), t + ms(20_000)).unwrap();
+        assert!(other.switched);
+        assert_eq!(other.seq, next.seq.wrapping_add(1));
+    }
+
+    #[test]
+    fn a_pause_before_the_first_packet_starts_fresh() {
+        let t = Instant::now();
+        let mut r = Rewrite::default();
+        r.pause();
+        r.resume();
+        let first = r.admit(0, 0, 40, 800, &key(3, 3), t).unwrap();
+        assert_eq!((first.seq, first.ts, first.pid_off, first.tl0_off), (40, 800, 0, 0));
     }
 
     #[test]

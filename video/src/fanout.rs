@@ -9,8 +9,11 @@ use webrtc::rtp::packet::Packet;
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType};
 use webrtc::track::track_local::{TrackLocal, TrackLocalContext, TrackLocalWriter};
 
+use tokio::sync::Notify;
+
 use crate::resend::Resend;
 use crate::simulcast::{rewrite_payload, start_level, LayerView, Rewrite, Vp8, LEVELS, NO_LEVEL};
+use crate::view::View;
 
 const LIVE_WITHIN: Duration = Duration::from_millis(1000);
 const METER_WINDOW: Duration = Duration::from_millis(500);
@@ -84,8 +87,8 @@ impl Feed {
         })
     }
 
-    pub fn start_level(&self, preview: bool) -> u8 {
-        start_level(&self.views(Instant::now()), self.offered, preview)
+    pub fn start_level(&self, pinned: bool) -> u8 {
+        start_level(&self.views(Instant::now()), self.offered, pinned)
     }
 
     pub fn arrived(&self, level: u8, size: usize, vp8: &Vp8, meter: &mut Meter, now: Instant) {
@@ -139,13 +142,14 @@ impl Feed {
             let target = viewer.target.load(Ordering::Relaxed);
             let admit = {
                 let mut rewrite = viewer.rewrite.lock().unwrap_or_else(|e| e.into_inner());
-                rewrite.admit(level, target, packet.header.sequence_number, packet.header.timestamp, vp8, now)
+                let admit = rewrite.admit(level, target, packet.header.sequence_number, packet.header.timestamp, vp8, now);
+                if admit.is_some_and(|a| a.switched) {
+                    viewer.current.store(level, Ordering::Relaxed);
+                    viewer.switched_ms.store(self.ms(now), Ordering::Relaxed);
+                }
+                admit
             };
             let Some(admit) = admit else { continue };
-            if admit.switched {
-                viewer.current.store(level, Ordering::Relaxed);
-                viewer.switched_ms.store(self.ms(now), Ordering::Relaxed);
-            }
             out.header.sequence_number = admit.seq;
             out.header.timestamp = admit.ts;
             out.payload = if admit.pid_off == 0 && admit.tl0_off == 0 {
@@ -181,11 +185,45 @@ pub struct Viewer {
     sent: AtomicU64,
     switched_ms: AtomicU64,
     rewrite: Mutex<Rewrite>,
+    view: AtomicU8,
+    woken: Notify,
 }
 
 impl Viewer {
     pub fn new(track: Arc<ViewerTrack>, start: u8) -> Self {
-        Self { track, target: AtomicU8::new(start), current: AtomicU8::new(NO_LEVEL), sent: AtomicU64::new(0), switched_ms: AtomicU64::new(0), rewrite: Mutex::new(Rewrite::default()) }
+        Self {
+            track,
+            target: AtomicU8::new(start),
+            current: AtomicU8::new(NO_LEVEL),
+            sent: AtomicU64::new(0),
+            switched_ms: AtomicU64::new(0),
+            rewrite: Mutex::new(Rewrite::default()),
+            view: AtomicU8::new(View::Full.code()),
+            woken: Notify::new(),
+        }
+    }
+
+    pub fn want_view(&self, view: View) {
+        self.view.store(view.code(), Ordering::Relaxed);
+        self.woken.notify_one();
+    }
+
+    pub fn view(&self) -> View {
+        View::from_code(self.view.load(Ordering::Relaxed))
+    }
+
+    pub async fn view_changed(&self) {
+        self.woken.notified().await
+    }
+
+    pub fn pause(&self) {
+        let mut rewrite = self.rewrite.lock().unwrap_or_else(|e| e.into_inner());
+        rewrite.pause();
+        self.current.store(NO_LEVEL, Ordering::Relaxed);
+    }
+
+    pub fn resume(&self) {
+        self.rewrite.lock().unwrap_or_else(|e| e.into_inner()).resume();
     }
 
     pub fn target(&self) -> u8 {
