@@ -21,21 +21,41 @@
       }
     ],
     "security": {
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "category": "SocialNetworking",
     "shortDescription": "nodentity",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "./Entitlements.plist",
+      "infoPlist": "./Info.plist",
+      "signingIdentity": "-"
+    }
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBMEVGNzM2NTQ1QjM4RDcKUldUWE9GdFVOdmNPR3U4L3lSL1poZUIzdHNjSVlaejA2OFk2dUltOFlwU2Z5MC93ZjRZcGZjbGMK",
-      "endpoints": ["https://github.com/ZeroNerodaHero/slop-stream-architecture/releases/latest/download/latest.json"],
+      "endpoints": [
+        "https://github.com/ZeroNerodaHero/slop-stream-architecture/releases/latest/download/latest.json"
+      ],
       "windows": {
         "installMode": "passive"
       }
