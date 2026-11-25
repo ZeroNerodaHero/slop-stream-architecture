@@ -32,6 +32,25 @@ pub(crate) struct Sample {
     pub(crate) problems: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) timings: Vec<crate::timings::Timing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) site: Option<Site>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub(crate) struct Site {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) browsers: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) named: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) live: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) viewers: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) calls: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) voice: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -115,6 +134,7 @@ const KEEP_API_RUNS: usize = 10;
 const MAX_CHECK_OUTPUT: usize = 160;
 const DOCKER_DEFAULT_INTERVAL_SECS: f64 = 30.0;
 const API_TIMEOUT: Duration = Duration::from_secs(3);
+const COUNTS_MAX_BYTES: usize = 1 << 20;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
@@ -193,8 +213,8 @@ fn parse_check(inspect: &Value) -> Option<Check> {
     Some(Check { failing_streak: h.get("FailingStreak").and_then(Value::as_u64).unwrap_or(0), interval_secs: Some(interval), runs })
 }
 
-fn health_from_env() -> Vec<(String, String)> {
-    env::var("HEALTH_FROM")
+fn pairs_from_env(key: &str) -> Vec<(String, String)> {
+    env::var(key)
         .unwrap_or_default()
         .split(',')
         .filter_map(|e| e.trim().split_once('='))
@@ -217,7 +237,7 @@ struct ApiProbes {
 
 impl ApiProbes {
     fn from_env() -> ApiProbes {
-        ApiProbes { client: reqwest::Client::builder().timeout(API_TIMEOUT).build().expect("http client"), from: health_from_env(), runs: HashMap::new() }
+        ApiProbes { client: reqwest::Client::builder().timeout(API_TIMEOUT).build().expect("http client"), from: pairs_from_env("HEALTH_FROM"), runs: HashMap::new() }
     }
 
     async fn run(&mut self, at: DateTime<Utc>, running: &[&str]) {
@@ -255,6 +275,60 @@ impl ApiProbes {
             let Some(runs) = self.runs.get(name).filter(|r| !r.is_empty()) else { continue };
             c.api = Some(ApiHealth { from: "agent".into(), path: path_of(url), every_secs, runs: runs.iter().cloned().collect() });
         }
+    }
+}
+
+struct Counts {
+    client: reqwest::Client,
+    from: Vec<(String, String)>,
+}
+
+impl Counts {
+    fn from_env() -> Counts {
+        Counts { client: reqwest::Client::builder().timeout(API_TIMEOUT).build().expect("http client"), from: pairs_from_env("COUNTS_FROM") }
+    }
+
+    async fn read(&self, running: &[&str], timings: &[crate::timings::Timing]) -> Option<Site> {
+        let mut set = JoinSet::new();
+        for (kind, url) in self.from.iter().filter(|(k, _)| running.contains(&k.as_str())) {
+            let (client, kind, url) = (self.client.clone(), kind.clone(), url.clone());
+            set.spawn(async move {
+                let res = client.get(&url).send().await.ok().filter(|r| r.status().is_success())?;
+                let body = res.bytes().await.ok().filter(|b| b.len() <= COUNTS_MAX_BYTES)?;
+                Some((kind, serde_json::from_slice::<Value>(&body).ok()?))
+            });
+        }
+        let mut site = Site::default();
+        let mut any = false;
+        while let Some(res) = set.join_next().await {
+            let Ok(Some((kind, body))) = res else { continue };
+            any |= site.fill(&kind, &body, timings);
+        }
+        any.then_some(site)
+    }
+}
+
+impl Site {
+    fn fill(&mut self, kind: &str, body: &Value, timings: &[crate::timings::Timing]) -> bool {
+        match kind {
+            "events" => {
+                let Some(names) = body.as_object() else { return false };
+                let named_sockets: u64 = names.values().filter_map(Value::as_u64).sum();
+                let open: u64 = timings.iter().filter(|t| t.kind == "session" && t.name == "/events" && crate::timings::dir_of(&t.kind, &t.dir) == "in").map(|t| t.open).sum();
+                self.named = Some(names.len() as u64);
+                self.browsers = Some(open.max(named_sockets));
+            }
+            "video" => {
+                self.live = body.get("live").and_then(Value::as_u64);
+                self.viewers = body.get("viewers").and_then(Value::as_u64);
+            }
+            "voice" => {
+                self.calls = body.get("rooms").and_then(Value::as_u64);
+                self.voice = body.get("peers").and_then(Value::as_u64);
+            }
+            _ => return false,
+        }
+        true
     }
 }
 
@@ -701,6 +775,7 @@ async fn sample_loop(app: App) {
     let mut last_problems: Vec<String> = vec![];
     let mut collector = crate::timings::Collector::from_env();
     let mut probes = ApiProbes::from_env();
+    let counts = Counts::from_env();
     loop {
         tick.tick().await;
         let at = Utc::now();
@@ -722,9 +797,10 @@ async fn sample_loop(app: App) {
         };
         let running: Option<Vec<&str>> = (!containers.is_empty()).then(|| containers.iter().filter(|c| c.state == "running").flat_map(|c| [Some(c.name.as_str()), c.service.as_deref()]).flatten().collect());
         let timings = collector.collect(&mut problems, running.as_deref()).await;
-        if let Some(up) = running.as_deref() {
-            probes.run(at, up).await;
-        }
+        let site = match running.as_deref() {
+            Some(up) => tokio::join!(probes.run(at, up), counts.read(up, &timings)).1,
+            None => None,
+        };
         probes.attach(&mut containers, app.cfg.every.as_secs());
         if problems != last_problems {
             for p in problems.iter().filter(|p| !last_problems.contains(p)) {
@@ -733,7 +809,7 @@ async fn sample_loop(app: App) {
             last_problems = problems.clone();
         }
         let mut ring = app.ring.lock().await;
-        ring.push_back(Sample { at, host, containers, problems, timings });
+        ring.push_back(Sample { at, host, containers, problems, timings, site });
         while ring.len() > app.cfg.keep {
             ring.pop_front();
         }
@@ -852,11 +928,17 @@ pub async fn run() -> anyhow::Result<()> {
     } else {
         log::info!("agent: endpoint timings from {}", sources.join(", "));
     }
-    let health: Vec<String> = health_from_env().into_iter().map(|(n, u)| format!("{n} {}", path_of(&u))).collect();
+    let health: Vec<String> = pairs_from_env("HEALTH_FROM").into_iter().map(|(n, u)| format!("{n} {}", path_of(&u))).collect();
     if health.is_empty() {
         log::info!("agent: no HEALTH_FROM, so no service health checks from this box");
     } else {
         log::info!("agent: service health from {}", health.join(", "));
+    }
+    let counts: Vec<String> = pairs_from_env("COUNTS_FROM").into_iter().map(|(n, u)| format!("{n} {}", path_of(&u))).collect();
+    if counts.is_empty() {
+        log::info!("agent: no COUNTS_FROM, so no site counts from this box");
+    } else {
+        log::info!("agent: site counts from {}", counts.join(", "));
     }
     if cfg.token.is_none() {
         log::warn!("no OPS_TOKEN: GET /api/metrics answers 404 to everyone. set OPS_TOKEN in .env");
@@ -982,7 +1064,7 @@ mod tests {
 
     #[test]
     fn a_sample_reads_back() {
-        let s = Sample { at: DateTime::from_timestamp(1_800_000_000, 0).unwrap(), host: Host { cpu_pct: Some(1.5), ..Default::default() }, containers: vec![], problems: vec![], timings: vec![] };
+        let s = Sample { at: DateTime::from_timestamp(1_800_000_000, 0).unwrap(), host: Host { cpu_pct: Some(1.5), ..Default::default() }, containers: vec![], problems: vec![], timings: vec![], site: None };
         let back: Sample = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }
@@ -1015,6 +1097,24 @@ mod tests {
         assert_eq!(path_of("http://chat:4100/health"), "/health");
         assert_eq!(path_of("https://user:pw@box.example/api/health?token=abc"), "/api/health");
         assert_eq!(path_of("http://video:7880"), "/");
+    }
+
+    #[test]
+    fn site_counts_are_numbers_only() {
+        let open = |name: &str, n: u64| crate::timings::Timing { kind: "session".into(), method: "ws".into(), name: name.into(), dir: "in".into(), open: n, ..Default::default() };
+        let timings = [open("/events", 5), open("/rt", 9)];
+        let mut site = Site::default();
+        assert!(site.fill("events", &json!({ "al": 2, "bo": 1 }), &timings));
+        assert!(site.fill("video", &json!({ "ok": true, "live": 3, "viewers": 118 }), &timings));
+        assert!(site.fill("voice", &json!({ "ok": true, "rooms": 2, "peers": 7 }), &timings));
+        assert!(!site.fill("chat", &json!({}), &timings));
+        assert_eq!(site, Site { browsers: Some(5), named: Some(2), live: Some(3), viewers: Some(118), calls: Some(2), voice: Some(7) });
+        let text = serde_json::to_string(&site).unwrap();
+        assert!(!text.contains("\"al\"") && !text.contains("\"bo\""), "{text}");
+        let mut few = Site::default();
+        assert!(few.fill("events", &json!({ "al": 4 }), &[]));
+        assert_eq!((few.browsers, few.named), (Some(4), Some(1)));
+        assert!(!Site::default().fill("events", &json!("ok"), &[]));
     }
 
     #[test]

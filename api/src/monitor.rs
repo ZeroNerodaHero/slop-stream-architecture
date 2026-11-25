@@ -275,6 +275,7 @@ impl History {
             "host": latest.map(|s| &s.host),
             "containers": latest.map(|s| s.containers.iter().filter(|c| c.state == "running").count()),
             "problems": latest.map(|s| &s.problems),
+            "site": latest.and_then(|s| s.site.as_ref()),
         })
     }
 }
@@ -1226,8 +1227,12 @@ mod tests {
         assert_eq!(s["containers"]["video"]["cpu_pct"], json!([null, 9.0]));
         assert_eq!(s["containers"]["api"]["cpu_pct"], json!([1.0, 2.0]));
         assert_eq!(h.summary()["containers"], json!(2));
+        assert_eq!(h.summary()["site"], Value::Null);
         let back: HashMap<String, History> = serde_json::from_slice(&serde_json::to_vec(&HashMap::from([("prod".to_string(), h)])).unwrap()).unwrap();
         assert_eq!(back["prod"].tiers[0].len(), 2);
+        let mut h = History::default();
+        h.add(Sample { site: Some(crate::agent::Site { live: Some(3), viewers: Some(118), ..Default::default() }), ..sample(30, 5.0, &[]) });
+        assert_eq!(h.summary()["site"], json!({ "live": 3, "viewers": 118 }));
     }
 
     #[test]
