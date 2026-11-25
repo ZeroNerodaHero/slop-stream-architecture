@@ -23,23 +23,17 @@ import {
   cameraAtom,
   cameraOn,
   canShareScreenAtom,
-  canStartAtom,
   deleteImage,
   fitSourceTo,
-  goLive,
   hasAvatarAtom,
   hasCameraAtom,
   hasMicAtom,
-  isPublishingAtom,
   libraryAtom,
   modelAtom,
   modelLoadingAtom,
   moveSourceTo,
   placeImage,
-  liveViewersAtom,
-  publishMessageAtom,
   publishPhaseAtom,
-  publishToneAtom,
   removeSource,
   screenShareSupported,
   screenStreamAtom,
@@ -50,22 +44,20 @@ import {
   sourceStatusAtom,
   sourcesAtom,
   startMic,
-  stopLive,
   streamNameAtom,
   toggleSource
 } from '@/infra/atoms/publish-atoms';
-import { openUserModal } from '@/infra/atoms/user-modal-atoms';
-import { isValidName } from '@/infra/names';
+import type { Place } from '@/infra/live-dock';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import type { Source } from '@/infra/scene';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { DockPanel } from '@/shared-components/live/Dock';
 import { DragHandle, type DragHandleProps, useReorder } from '@/shared-components/Reorderable';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
-import { ViewerCount } from '@/shared-components/ViewerCount';
 
 const ROW = 'group/row relative flex h-11 w-full min-w-0 items-center gap-2 border-l-2 pl-0.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
 const ROW_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
@@ -460,68 +452,7 @@ function SourceDetail({ source, hasCamera }: { source: Source; hasCamera: boolea
   );
 }
 
-export function StartStop({ className = 'flex flex-col gap-2 p-2', status = false }: { className?: string; status?: boolean }) {
-  const publishing = useAtomValue(isPublishingAtom);
-  const message = useAtomValue(publishMessageAtom);
-  const tone = useAtomValue(publishToneAtom);
-  const viewers = useAtomValue(liveViewersAtom);
-  const canStart = useAtomValue(canStartAtom);
-  const canShare = useAtomValue(canShareScreenAtom);
-  const named = isValidName(useAtomValue(streamNameAtom));
-  return (
-    <div className={className}>
-      {publishing ? (
-        <Button id="stop" variant="danger" className="w-full" onClick={() => stopLive()}>
-          stop
-        </Button>
-      ) : (
-        <Button id="start" variant="primary" className="w-full" disabled={!canStart} onClick={() => void goLive()}>
-          start
-        </Button>
-      )}
-      {!publishing && !named && (
-        <button
-          id="pick-name"
-          type="button"
-          className="text-xs text-textTertiary underline-offset-2 hover:text-textPrimary hover:underline"
-          onClick={() => openUserModal('profile')}
-        >
-          pick a name first
-        </button>
-      )}
-      {publishing && screenShareSupported && (
-        <button
-          id="share-screen"
-          type="button"
-          disabled={!canShare}
-          title={canShare ? undefined : `${SCREEN_SLOTS} screens at most`}
-          className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
-          onClick={() => void shareScreen()}
-        >
-          share screen
-        </button>
-      )}
-      {status && message && (
-        <p
-          id="status"
-          aria-live="polite"
-          className={cn('pt-2 text-center text-sm', tone === 'live' ? 'text-increase' : tone === 'bad' ? 'text-decrease' : 'text-textSecondary')}
-        >
-          {tone === 'live' && <span aria-hidden className="mr-1.5 inline-block h-2 w-2 bg-increase align-middle" />}
-          {message}
-          {tone === 'live' && viewers !== null && (
-            <span className="text-textSecondary">
-              {' · '}
-              <ViewerCount id="viewers" count={viewers} />
-            </span>
-          )}
-        </p>
-      )}
-    </div>
-  );
-}
-
-export function SourcesBody({ onModel, split = false }: { onModel: () => void; split?: boolean }) {
+function SourcesBody({ onModel, split = false }: { onModel: () => void; split?: boolean }) {
   const sources = useAtomValue(sourcesAtom);
   const selectedId = useAtomValue(selectedSourceAtom);
   const status = useAtomValue(sourceStatusAtom);
@@ -568,5 +499,14 @@ export function SourcesBody({ onModel, split = false }: { onModel: () => void; s
         split && <p className="px-3 py-2.5 text-xs text-textTertiary">pick a source to set it up</p>
       )}
     </div>
+  );
+}
+
+export function SourcesModule({ place, onModel }: { place: Place; onModel: () => void }) {
+  const count = useAtomValue(sourcesAtom).length;
+  return (
+    <DockPanel tab="sources" place={place} count={count || undefined}>
+      <SourcesBody onModel={onModel} />
+    </DockPanel>
   );
 }

@@ -20,7 +20,6 @@ import {
   startModel,
   warmModelFiles
 } from '@/infra/face';
-import { type DockTab, type LivePanels, readPanels } from '@/infra/live-dock';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { readModel } from '@/infra/model-file';
 import {
@@ -128,10 +127,6 @@ export const sourceStatusAtom = atom('');
 export const hasAvatarAtom = atom((get) => get(sourcesAtom).some((s) => s.kind === 'avatar'));
 const storedLastAtom = atomWithStorage<unknown>('settings.lastArrangement', null, undefined, { getOnInit: true });
 const lastArrangementAtom = atom((get) => validPreset(get(storedLastAtom)));
-const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', readPanels(null), undefined, { getOnInit: true });
-export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
-const storedDockTabAtom = atomWithStorage<unknown>('settings.liveDockTab', 'sources', undefined, { getOnInit: true });
-export const liveDockTabAtom = atom((get) => get(storedDockTabAtom));
 
 export interface MixRow {
   id: string;
@@ -455,6 +450,49 @@ async function refreshFaceCameras() {
       devices.filter((d) => d.kind === 'videoinput' && d.deviceId).map((d, i) => ({ id: d.deviceId, label: d.label || `camera ${i + 1}` }))
     );
   } catch {
+  }
+}
+
+export const micDevicesAtom = atom<{ id: string; label: string }[]>([]);
+export const micDeviceAtom = atom((get) => get(cameraAtom)?.getAudioTracks()[0]?.getSettings().deviceId ?? '');
+
+export async function refreshMicDevices(): Promise<void> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    store.set(
+      micDevicesAtom,
+      devices.filter((d) => d.kind === 'audioinput' && d.deviceId).map((d, i) => ({ id: d.deviceId, label: d.label || `mic ${i + 1}` }))
+    );
+  } catch {
+    store.set(micDevicesAtom, []);
+  }
+}
+
+export async function setMicDevice(deviceId: string): Promise<void> {
+  const had = store.get(cameraAtom);
+  if (!had || had.getAudioTracks()[0]?.getSettings().deviceId === deviceId) return;
+  const generation = liveGeneration;
+  let fresh: MediaStream;
+  try {
+    fresh = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+  } catch {
+    store.set(sourceStatusAtom, 'that mic did not open');
+    return;
+  }
+  const track = fresh.getAudioTracks()[0];
+  if (!track || generation !== liveGeneration || store.get(cameraAtom) !== had) {
+    fresh.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  had.getAudioTracks().forEach((t) => t.stop());
+  store.set(cameraAtom, new MediaStream([track, ...had.getVideoTracks()]));
+  store.set(sourceStatusAtom, '');
+  if (mixer?.has('mic')) {
+    const row = store.get(mixRowsAtom).find((r) => r.id === 'mic');
+    mixer.add('mic', track, row?.level ?? 1, row?.muted ?? false);
+  } else if (pc) {
+    const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
+    await sender?.replaceTrack(track).catch(() => undefined);
   }
 }
 
@@ -1247,14 +1285,6 @@ export function removeSource(id: string) {
   if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
   else if (source.kind === 'camera') cameraOff();
   else dropSource(id);
-}
-
-export function setLivePanel(name: keyof LivePanels, open: boolean) {
-  store.set(storedPanelsAtom, { ...store.get(livePanelsAtom), [name]: open });
-}
-
-export function setLiveDockTab(tab: DockTab) {
-  store.set(storedDockTabAtom, tab);
 }
 
 async function imageRatio(url: string): Promise<number> {

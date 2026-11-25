@@ -23,6 +23,7 @@ import {
   setModelBackground
 } from '@/infra/atoms/publish-atoms';
 import { modelSurvivesHiddenTab, type RigInfo, type RigPart } from '@/infra/face';
+import { Button } from '@/shared-components/Button';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
@@ -43,7 +44,6 @@ type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
 const HIDDEN_TAB = 'in this browser the model stops moving while this tab is hidden';
 const WELL = cn(ICON_BUTTON, 'relative cursor-pointer flex-col gap-0.5 has-[:focus-visible]:border-primaryBlue');
-const ACTION = 'text-xs font-semibold text-primaryBlue disabled:opacity-40';
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 
 function rigWords(rig: RigInfo): string {
@@ -74,7 +74,7 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
   const hasMoods = rig !== null && (rig.parts.includes('brows') || rig.parts.includes('smile'));
   const faceless = rig?.kind === 'none';
   return (
-    <div id="model-controls" className="relative flex flex-col gap-2 border-t border-primaryStroke px-3 py-2.5">
+    <div id="model-controls" className="relative flex flex-col gap-2 px-3 py-2.5">
       <div className="flex items-center gap-2">
         <p id="model-name" className="min-w-0 truncate text-sm font-semibold text-textPrimary">
           {model.name}
@@ -177,9 +177,6 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
             />
           </label>
         </Tooltip>
-        <button id="face-rest" type="button" className={cn(ACTION, 'ml-auto')} onClick={restFace}>
-          rest face
-        </button>
       </div>
       {cameras.length > 1 && (
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-textSecondary">
@@ -194,18 +191,16 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
           />
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <button id="model-change" type="button" className={ACTION} onClick={onChange}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button id="model-change" size="sm" onClick={onChange}>
           another model
-        </button>
-        <button
-          id="source-real-cam"
-          type="button"
-          className="text-xs font-semibold text-textTertiary"
-          onClick={() => (publishing ? setAsking(true) : void backToCamera())}
-        >
+        </Button>
+        <Button id="face-rest" size="sm" onClick={restFace}>
+          rest face
+        </Button>
+        <Button id="source-real-cam" size="sm" onClick={() => (publishing ? setAsking(true) : void backToCamera())}>
           use the camera
-        </button>
+        </Button>
       </div>
       {asking && (
         <ConfirmDialog
