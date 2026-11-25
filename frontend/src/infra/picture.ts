@@ -161,6 +161,57 @@ export function cornerRect(from: Rect, sx: number, sy: number, dx: number, dy: n
   return { x: sx < 0 ? ax - w : ax, y: sy < 0 ? ay - h : ay, w, h };
 }
 
+export type Turns = 0 | 1 | 2 | 3;
+
+export function nextTurn(turns: Turns): Turns {
+  return ((turns + 1) % 4) as Turns;
+}
+
+export function turnedSize(width: number, height: number, turns: Turns): { width: number; height: number } {
+  return turns % 2 ? { width: height, height: width } : { width, height };
+}
+
+export function turnPoint(p: { x: number; y: number }, width: number, height: number, turns: Turns): { x: number; y: number } {
+  let { x, y } = p;
+  let [w, h] = [width, height];
+  for (let i = 0; i < turns; i++) {
+    [x, y] = [h - y, x];
+    [w, h] = [h, w];
+  }
+  return { x, y };
+}
+
+export function turnRect(rect: Rect, width: number, height: number, turns: Turns): Rect {
+  const a = turnPoint({ x: rect.x, y: rect.y }, width, height, turns);
+  const b = turnPoint({ x: rect.x + rect.w, y: rect.y + rect.h }, width, height, turns);
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+}
+
+export function sourceRect(rect: Rect, width: number, height: number, turns: Turns): Rect {
+  const turned = turnedSize(width, height, turns);
+  return turnRect(rect, turned.width, turned.height, ((4 - turns) % 4) as Turns);
+}
+
+export function rotatedCrop(rect: Rect, width: number, height: number, aspect: number | null): Rect {
+  const turned = turnRect(rect, width, height, 1);
+  const [nw, nh] = [height, width];
+  if (aspect === null) return movedRect(turned, 0, 0, nw, nh);
+  const zoom = clamp(zoomOf(rect, width, height), 1, maxZoom(nw, nh, aspect));
+  const fit = centredRect(nw, nh, aspect);
+  const w = fit.w / zoom;
+  const h = w / aspect;
+  const cx = turned.x + turned.w / 2;
+  const cy = turned.y + turned.h / 2;
+  return movedRect({ x: cx - w / 2, y: cy - h / 2, w, h }, 0, 0, nw, nh);
+}
+
+export function drawTransform(turns: Turns, width: number, height: number): [number, number, number, number, number, number] {
+  if (turns === 1) return [0, 1, -1, 0, width, 0];
+  if (turns === 2) return [-1, 0, 0, -1, width, height];
+  if (turns === 3) return [0, -1, 1, 0, 0, height];
+  return [1, 0, 0, 1, 0, 0];
+}
+
 export function isWhole(rect: Rect, width: number, height: number): boolean {
   return rect.x <= 0.5 && rect.y <= 0.5 && rect.x + rect.w >= width - 0.5 && rect.y + rect.h >= height - 0.5;
 }
@@ -185,7 +236,7 @@ export function formatWord(type: string): string {
   return type === 'image/jpeg' ? 'jpeg' : type === 'image/webp' ? 'webp' : type === 'image/gif' ? 'gif' : 'png';
 }
 
-function drawScaled(source: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, width: number, height: number): HTMLCanvasElement {
+function drawScaled(source: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, width: number, height: number, turns: Turns = 0): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -193,14 +244,17 @@ function drawScaled(source: CanvasImageSource, sx: number, sy: number, sw: numbe
   if (!ctx) throw new Error('no canvas');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, width, height);
+  const local = turnedSize(width, height, turns);
+  ctx.setTransform(...drawTransform(turns, width, height));
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, local.width, local.height);
   return canvas;
 }
 
-export async function cutPicture(picture: ImageBitmap, rect: Rect, width: number, height: number, type: string, quality?: number): Promise<Blob> {
+export async function cutPicture(picture: ImageBitmap, rect: Rect, width: number, height: number, type: string, quality?: number, turns: Turns = 0): Promise<Blob> {
   let source: CanvasImageSource = picture;
   let { x, y, w, h } = rect;
-  while (w >= width * 2 && h >= height * 2) {
+  const local = turnedSize(width, height, turns);
+  while (w >= local.width * 2 && h >= local.height * 2) {
     const half = drawScaled(source, x, y, w, h, Math.round(w / 2), Math.round(h / 2));
     source = half;
     x = 0;
@@ -208,7 +262,7 @@ export async function cutPicture(picture: ImageBitmap, rect: Rect, width: number
     w = half.width;
     h = half.height;
   }
-  const canvas = drawScaled(source, x, y, w, h, width, height);
+  const canvas = drawScaled(source, x, y, w, h, width, height, turns);
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make the picture'))), type, quality);
   });
@@ -216,20 +270,27 @@ export async function cutPicture(picture: ImageBitmap, rect: Rect, width: number
 
 const kb = (bytes: number) => (bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} mb` : `${bytes / 1024} kb`);
 
-export async function pictureFor(spec: PictureSpec, file: Blob, picture: ImageBitmap, rect: Rect): Promise<Blob> {
+export function keepsFile(spec: PictureSpec, file: Blob, rect: Rect, width: number, height: number, turns: Turns): boolean {
+  return !spec.size && turns === 0 && isWhole(rect, width, height) && file.size <= spec.max;
+}
+
+export async function pictureFor(spec: PictureSpec, file: Blob, picture: ImageBitmap, rect: Rect, turns: Turns = 0): Promise<Blob> {
+  const { width, height } = turnedSize(picture.width, picture.height, turns);
   if (spec.size) {
     const type = spec.type ?? 'image/jpeg';
+    const from = sourceRect(rect, picture.width, picture.height, turns);
     for (const quality of type === 'image/png' ? [undefined] : spec.qualities) {
-      const cut = await cutPicture(picture, rect, spec.size.width, spec.size.height, type, quality);
+      const cut = await cutPicture(picture, from, spec.size.width, spec.size.height, type, quality, turns);
       if (cut.size <= spec.max) return cut;
     }
     throw new Error(`too much detail for ${kb(spec.max)}. try a plainer picture`);
   }
-  if (isWhole(rect, picture.width, picture.height) && file.size <= spec.max) return file;
-  const r = wholePixels(rect, picture.width, picture.height);
+  if (keepsFile(spec, file, rect, width, height, turns)) return file;
+  const r = wholePixels(rect, width, height);
+  const from = sourceRect(r, picture.width, picture.height, turns);
   const type = assetType(file);
   for (const quality of type === 'image/png' ? [undefined] : spec.qualities) {
-    const cut = await cutPicture(picture, r, r.w, r.h, type, quality);
+    const cut = await cutPicture(picture, from, r.w, r.h, type, quality, turns);
     if (cut.size <= spec.max) return cut;
   }
   throw new Error(`over ${kb(spec.max)} as a ${formatWord(type)}. try a smaller part`);

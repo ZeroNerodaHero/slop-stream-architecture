@@ -1,4 +1,4 @@
-import { RiAddLine, RiRefreshLine, RiSubtractLine } from '@remixicon/react';
+import { RiAddLine, RiClockwiseLine, RiRefreshLine, RiSubtractLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
@@ -10,13 +10,17 @@ import {
   centredRect,
   cornerRect,
   formatWord,
-  isWhole,
+  keepsFile,
   maxZoom,
   movedRect,
+  nextTurn,
   outputSize,
   pictureFor,
   type Rect,
+  rotatedCrop,
   scaledRect,
+  type Turns,
+  turnedSize,
   zoomedRect,
   zoomOf
 } from '@/infra/picture';
@@ -70,6 +74,8 @@ function CropBox({ request }: { request: CropRequest }) {
   const stop = useRef<(() => void) | null>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [rect, setRect] = useState<Rect | null>(null);
+  const [turns, setTurns] = useState<Turns>(0);
+  const size = loaded ? turnedSize(loaded.picture.width, loaded.picture.height, turns) : null;
   const [k, setK] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -114,34 +120,35 @@ function CropBox({ request }: { request: CropRequest }) {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage || !loaded) return;
     const fit = () => {
       const { width, height } = stage.getBoundingClientRect();
-      setK(Math.min(width / loaded.picture.width, height / loaded.picture.height));
+      const turned = turnedSize(loaded.picture.width, loaded.picture.height, turns);
+      setK(Math.min(width / turned.width, height / turned.height));
     };
     fit();
     const watcher = new ResizeObserver(fit);
     watcher.observe(stage);
     return () => watcher.disconnect();
-  }, [loaded]);
+  }, [loaded, turns]);
 
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage || !loaded) return;
-    const { width, height } = loaded.picture;
+    const { width, height } = turnedSize(loaded.picture.width, loaded.picture.height, turns);
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       setRect((r) => (r ? scaledRect(r, e.deltaY > 0 ? STEP : 1 / STEP, aspect, width, height) : r));
     };
     stage.addEventListener('wheel', onWheel, { passive: false });
     return () => stage.removeEventListener('wheel', onWheel);
-  }, [loaded]);
+  }, [loaded, turns]);
 
   useEffect(() => {
     if (!loaded) return;
-    const { width, height } = loaded.picture;
+    const { width, height } = turnedSize(loaded.picture.width, loaded.picture.height, turns);
     const touched = fingers.current;
     const move = (e: PointerEvent) => {
       if (!touched.has(e.pointerId)) return;
@@ -164,7 +171,7 @@ function CropBox({ request }: { request: CropRequest }) {
       window.removeEventListener('pointerup', lift);
       window.removeEventListener('pointercancel', lift);
     };
-  }, [loaded]);
+  }, [loaded, turns]);
 
   useEffect(() => {
     if (rect && k > 0) boxRef.current?.focus();
@@ -174,8 +181,8 @@ function CropBox({ request }: { request: CropRequest }) {
   useSheetBack(close);
 
   const press = (e: ReactPointerEvent<HTMLElement>, kind: 'move' | 'resize', sx = 0, sy = 0) => {
-    if (!loaded || !rect || e.button !== 0 || stop.current || pinch.current || k === 0) return;
-    const { width, height } = loaded.picture;
+    if (!size || !rect || e.button !== 0 || stop.current || pinch.current || k === 0) return;
+    const { width, height } = size;
     const from = rect;
     const { pointerId, clientX: startX, clientY: startY } = e;
     const node = e.currentTarget;
@@ -211,20 +218,20 @@ function CropBox({ request }: { request: CropRequest }) {
   };
 
   const scaleBy = (factor: number) => {
-    if (!loaded) return;
-    const { width, height } = loaded.picture;
+    if (!size) return;
+    const { width, height } = size;
     setRect((r) => (r ? scaledRect(r, factor, aspect, width, height) : r));
   };
 
   const zoomTo = (to: number) => {
-    if (!loaded) return;
-    const { width, height } = loaded.picture;
+    if (!size) return;
+    const { width, height } = size;
     setRect((r) => (r ? zoomedRect(r, to, aspect, width, height) : r));
   };
 
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!loaded || !rect) return;
-    const { width, height } = loaded.picture;
+    if (!size || !rect) return;
+    const { width, height } = size;
     const arrow = ARROWS[e.key];
     if (arrow) {
       e.preventDefault();
@@ -236,12 +243,28 @@ function CropBox({ request }: { request: CropRequest }) {
     }
   };
 
+  const rotate = () => {
+    if (!size || !rect || busy) return;
+    stop.current?.();
+    pinch.current = null;
+    setRect(rotatedCrop(rect, size.width, size.height, aspect));
+    setTurns(nextTurn(turns));
+  };
+
+  const reset = () => {
+    if (!loaded || busy) return;
+    stop.current?.();
+    pinch.current = null;
+    setTurns(0);
+    setRect(centredRect(loaded.picture.width, loaded.picture.height, aspect));
+  };
+
   const use = async () => {
     if (!loaded || !rect || busy) return;
     setBusy(true);
     setError('');
     try {
-      const picture = await pictureFor(spec, file, loaded.picture, rect);
+      const picture = await pictureFor(spec, file, loaded.picture, rect, turns);
       if (named) {
         const fault = named.fault(name);
         if (fault) throw new Error(fault);
@@ -265,10 +288,10 @@ function CropBox({ request }: { request: CropRequest }) {
   let goes = '';
   let zoom = 1;
   let zoomMost = 1;
-  if (loaded && rect) {
-    const { width, height } = loaded.picture;
+  if (size && rect) {
+    const { width, height } = size;
     const out = outputSize(spec, rect, width, height);
-    const whole = !spec.size && isWhole(rect, width, height) && file.size <= spec.max;
+    const whole = keepsFile(spec, file, rect, width, height, turns);
     goes = spec.stored
       ? `goes up as a ${spec.stored.width}×${spec.stored.height} ${formatWord(spec.stored.type)}`
       : spec.size
@@ -304,13 +327,26 @@ function CropBox({ request }: { request: CropRequest }) {
         {spec.title}
       </h2>
       <p id="crop-hint" className="mt-2 text-sm text-textSecondary">
-        {spec.where}. drag the box to move it, pull a corner or use the slider to scale it. what is inside goes up.
+        {spec.where}. drag the box to move it, pull a corner or use the slider to scale it, turn it a quarter at a time. what is inside goes up.
       </p>
 
       <div ref={stageRef} onPointerDownCapture={touch} className={cn('relative mt-4 flex h-[min(56dvh,440px)] w-full items-center justify-center overflow-hidden bg-black', GRIP)}>
-        {loaded && rect && k > 0 ? (
-          <div className="relative overflow-hidden" style={{ width: loaded.picture.width * k, height: loaded.picture.height * k }}>
-            <img src={loaded.url} alt="" draggable={false} className="block h-full w-full" />
+        {loaded && size && rect && k > 0 ? (
+          <div className="relative overflow-hidden" style={{ width: size.width * k, height: size.height * k }}>
+            <img
+              id="crop-picture"
+              src={loaded.url}
+              alt=""
+              draggable={false}
+              className="absolute block max-w-none"
+              style={{
+                width: loaded.picture.width * k,
+                height: loaded.picture.height * k,
+                left: ((size.width - loaded.picture.width) * k) / 2,
+                top: ((size.height - loaded.picture.height) * k) / 2,
+                transform: turns ? `rotate(${turns * 90}deg)` : undefined
+              }}
+            />
             <div aria-hidden className="pointer-events-none absolute inset-0 bg-black/60" style={{ clipPath: cutOut(rect.x * k, rect.y * k, rect.w * k, rect.h * k) }} />
             <div
               ref={boxRef}
@@ -344,6 +380,11 @@ function CropBox({ request }: { request: CropRequest }) {
       </div>
 
       <div className="mt-2 flex items-center gap-2">
+        <Tooltip content="reset">
+          <Button id="crop-reset" size="sm" aria-label="reset" aria-disabled={!ready || busy} onClick={reset} className={ZOOM_BUTTON}>
+            <RiRefreshLine aria-hidden size={16} />
+          </Button>
+        </Tooltip>
         <Tooltip content="zoom out">
           <Button
             id="crop-zoom-out"
@@ -392,16 +433,11 @@ function CropBox({ request }: { request: CropRequest }) {
         <span id="crop-zoom-value" aria-hidden className="w-9 shrink-0 text-right text-sm tabular-nums text-textSecondary">
           {`${zoom.toFixed(1)}×`}
         </span>
-        <Button
-          id="crop-reset"
-          size="sm"
-          disabled={!loaded}
-          onClick={() => loaded && setRect(centredRect(loaded.picture.width, loaded.picture.height, aspect))}
-          className="h-7 shrink-0 gap-1.5 py-0 max-md:h-11 max-md:px-2.5"
-        >
-          <RiRefreshLine aria-hidden size={14} />
-          reset
-        </Button>
+        <Tooltip content="rotate">
+          <Button id="crop-rotate" size="sm" aria-label="rotate" aria-disabled={!ready || busy} onClick={rotate} className={ZOOM_BUTTON}>
+            <RiClockwiseLine aria-hidden size={16} />
+          </Button>
+        </Tooltip>
       </div>
       <p id="crop-size" className="mt-1 min-h-4 text-xs text-textTertiary" aria-live="polite">
         {goes}
