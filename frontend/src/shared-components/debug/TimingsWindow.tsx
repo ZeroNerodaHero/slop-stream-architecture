@@ -6,7 +6,7 @@ import type { TimingsCollector } from '@/infra/debug/collector';
 import { METRIC_GROUPS, METRICS } from '@/infra/debug/rings';
 import { summarize } from '@/infra/debug/stats';
 import { DebugPanel } from '@/shared-components/debug/DebugPanel';
-import { type MetricGroupRows, TimingsView } from '@/shared-components/debug/TimingsView';
+import { Legend, type MetricGroupRows, TimingsView } from '@/shared-components/debug/TimingsView';
 import { useCollected } from '@/shared-components/debug/useCollected';
 
 function timingGroups(c: TimingsCollector): MetricGroupRows[] {
@@ -44,7 +44,7 @@ function TimingsPanel() {
     <DebugPanel
       id="timings"
       label="timings"
-      note="the last 100 of each"
+      actions={<Legend />}
       place="left-auto right-16 top-16 h-[min(440px,calc(100dvh-8rem))] w-[min(600px,calc(100vw-8rem))]"
       onClose={closeTimings}
     >

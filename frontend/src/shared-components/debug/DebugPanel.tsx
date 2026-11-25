@@ -15,6 +15,7 @@ export function DebugPanel({
   note,
   place,
   onClose,
+  actions,
   children
 }: {
   id: WindowId;
@@ -23,6 +24,7 @@ export function DebugPanel({
   note?: ReactNode;
   place: string;
   onClose: () => void;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   const { dialogRef, box, press } = useDialogBox(id);
@@ -53,7 +55,8 @@ export function DebugPanel({
         {lead}
         <span className="font-semibold">{label}</span>
         {note && <span className="min-w-0 truncate text-xs text-textTertiary">{note}</span>}
-        <span className="ml-auto flex items-center gap-1">
+        <span className="ml-auto flex items-center gap-2">
+          {actions}
           <Tooltip content="close">
             <button
               id={`${id}-close`}
