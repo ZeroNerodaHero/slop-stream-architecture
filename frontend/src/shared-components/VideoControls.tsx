@@ -4,10 +4,11 @@ import { type ButtonHTMLAttributes, type ReactNode, type RefObject, useRef } fro
 import { dialAtom, muteVideo, mutedAtom, setVolume, settleDial, unmuteVideo } from '@/infra/atoms/watch-atoms';
 import { cn } from '@/utils/cn';
 
-export const CHIP = 'flex h-8 items-center border border-white/10 bg-black/70 text-sm font-semibold text-white backdrop-blur-sm transition-colors duration-150';
+export const CHIP =
+  'flex h-8 items-center rounded-control border border-white/10 bg-black/70 text-sm font-semibold text-white backdrop-blur-sm transition-colors duration-150';
 export const CHIP_BUTTON = cn(CHIP, 'hover:border-primaryBlue hover:bg-black/90 hover:text-primaryBlue');
 const TIP =
-  'pointer-events-none absolute whitespace-nowrap border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-white opacity-0 transition-opacity duration-150 group-hover/control:opacity-100 group-focus-visible/control:opacity-100';
+  'pointer-events-none absolute whitespace-nowrap rounded-card border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-white opacity-0 transition-opacity duration-150 group-hover/control:opacity-100 group-focus-visible/control:opacity-100';
 const TIP_AT = {
   'above-left': 'bottom-full left-0 mb-2',
   'above-right': 'bottom-full right-0 mb-2',
@@ -48,7 +49,7 @@ export function IconButton({ label, tipAt = 'above-right', active = false, tone 
         aria-label={label}
         aria-pressed={active || undefined}
         className={cn(
-          'flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primaryBlue disabled:cursor-default disabled:opacity-50 max-md:min-h-11 max-md:min-w-11 [&_svg]:h-[18px] [&_svg]:w-[18px]',
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primaryBlue disabled:cursor-default disabled:opacity-50 max-md:min-h-11 max-md:min-w-11 [&_svg]:h-[18px] [&_svg]:w-[18px]',
           active && 'border-primaryBlue text-primaryBlue',
           className
         )}

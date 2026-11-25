@@ -61,7 +61,7 @@ export function WelcomeEditor({ id }: { id: string }) {
         maxLength={MAX_WELCOME_CHARS}
         disabled={!canEdit || !on}
         aria-describedby={`${id}-count`}
-        className={cn(INPUT, 'mt-2 block w-full resize-y py-1.5')}
+        className={cn(INPUT, 'mt-2 block w-full resize-y py-1.5 bubble:rounded-card')}
       />
       <div id={`${id}-preview`} className="mt-3 flex flex-col">
         <div className="flex items-center justify-between gap-3">

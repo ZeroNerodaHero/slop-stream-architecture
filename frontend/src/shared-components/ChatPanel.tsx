@@ -36,7 +36,7 @@ import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { ChatVideoPlayer, MediaGoneNote } from '@/shared-components/ChatVideoPlayer';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { Face } from '@/shared-components/Face';
-import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
+import { IN_PILL, INPUT, INPUT_BUTTON, PILL } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { useMentionComplete } from '@/shared-components/MentionComplete';
@@ -1019,7 +1019,7 @@ export function ChatPanel({
           <header
             onPointerDown={bar.grip}
             title="drag to move"
-            className={cn('flex cursor-move items-center justify-between gap-3 border-b border-primaryStroke py-1.5 pl-3 pr-1 text-sm', CHAT_GRIP)}
+            className={cn('flex cursor-move items-center justify-between gap-3 border-b border-primaryStroke bubble:border-transparent py-1.5 pl-3 pr-1 text-sm', CHAT_GRIP)}
           >
             <span className="truncate font-semibold">chat</span>
             <span className="flex items-center gap-1">
@@ -1038,7 +1038,7 @@ export function ChatPanel({
       id="chat"
       data-phase={phase}
       data-room={room.key}
-      className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
+      className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col bubble:border-transparent', className))}
       onDragOver={needsNick ? undefined : dragFiles}
       onDrop={needsNick ? undefined : (e) => dropFiles(e, pickFiles)}
       onPaste={needsNick ? undefined : (e) => pasteFiles(e, pickFiles)}
@@ -1048,7 +1048,7 @@ export function ChatPanel({
           onPointerDown={bar?.grip}
           title={bar ? 'drag to move' : undefined}
           className={cn(
-            'flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm max-md:sr-only',
+            'flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm bubble:border-transparent max-md:sr-only',
             bar && cn('cursor-move pr-1', CHAT_GRIP)
           )}
         >
@@ -1142,9 +1142,9 @@ export function ChatPanel({
         )}
       </div>
 
-      <footer className="border-t border-primaryStroke p-2">
+      <footer className="border-t border-primaryStroke p-2 bubble:border-transparent bubble:md:p-[7px]">
         {needsNick ? (
-          <div className="relative flex flex-wrap gap-2">
+          <div className={cn('relative flex flex-wrap gap-2', PILL)}>
             <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
             <label htmlFor="chat-nick" className="sr-only">
               your nick
@@ -1159,7 +1159,7 @@ export function ChatPanel({
               placeholder="nickname"
               maxLength={24}
               autoComplete="off"
-              className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
+              className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]', IN_PILL)}
             />
             <Button id="chat-join" variant="primary" className={cn(INPUT_BUTTON, 'h-[1.875rem] text-sm')} disabled={!nickOk} onClick={open}>
               join
@@ -1203,7 +1203,7 @@ export function ChatPanel({
                 ))}
               </div>
             )}
-            <div className="relative flex items-center gap-2">
+            <div className={cn('relative flex items-center gap-2', PILL)}>
               {emotes.list}
               {mentions.list}
               <Tooltip
@@ -1219,7 +1219,7 @@ export function ChatPanel({
                   type="button"
                   id="chat-picture"
                   aria-label={takesVideos ? 'picture or video' : 'picture'}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-background text-textTertiary disabled:opacity-40"
+                  className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textTertiary disabled:opacity-40', IN_PILL)}
                   disabled={pictures.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -1253,7 +1253,7 @@ export function ChatPanel({
                   placeholder="comment"
                   aria-label={`comment as ${asStreamer ? name : speaker}`}
                   autoComplete="off"
-                  className={cn(INPUT, 'h-8 min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
+                  className={cn(INPUT, 'h-8 min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]', IN_PILL)}
                 />
               </div>
               <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : 'send'}>

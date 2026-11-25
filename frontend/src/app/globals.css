@@ -19,6 +19,27 @@
   --increase: 63 185 80;
   --decrease: 248 81 73;
   --caution: 240 150 50;
+  --r-panel: 0px;
+  --r-control: 0px;
+  --r-bubble: 0px;
+  --r-avatar: 0px;
+  --r-card: 0px;
+}
+
+:root[data-shape='soft'] {
+  --r-panel: 6px;
+  --r-control: 6px;
+  --r-bubble: 6px;
+  --r-avatar: 6px;
+  --r-card: 6px;
+}
+
+:root[data-shape='bubble'] {
+  --r-panel: 14px;
+  --r-control: 999px;
+  --r-bubble: 16px;
+  --r-avatar: 50%;
+  --r-card: 12px;
 }
 
 html {

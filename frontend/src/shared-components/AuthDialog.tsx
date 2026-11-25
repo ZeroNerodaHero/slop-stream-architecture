@@ -48,7 +48,7 @@ function AuthBox({ mode }: { mode: AuthMode }) {
         closeAuthDialog();
       }}
       className={cn(
-        'm-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-5 py-4 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm',
+        'm-auto w-[min(420px,calc(100vw-3rem))] md:rounded-panel border border-primaryStroke bg-backgroundSecondary px-5 py-4 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm',
         SHEET_DIALOG
       )}
     >
@@ -63,7 +63,7 @@ function AuthBox({ mode }: { mode: AuthMode }) {
               aria-keyshortcuts="Escape"
               onClick={close}
               className={cn(
-                'flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+                'flex h-8 w-8 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
                 SHEET_CLOSE
               )}
             >

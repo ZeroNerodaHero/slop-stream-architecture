@@ -314,7 +314,7 @@ export function WatchPage() {
           <Skeleton
             id="player-loading"
             label="loading the stream"
-            className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0', videoCap)}
+            className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary bubble:border-transparent max-md:rounded-none max-md:border-t-0', videoCap)}
             style={mobile ? strip.style : undefined}
           >
             {backdrop ?? <Bone className="absolute inset-0" />}
@@ -327,7 +327,7 @@ export function WatchPage() {
           </Skeleton>
         ) : (
           <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
-            <div className={cn('relative aspect-video w-full overflow-hidden border border-primaryStroke bg-black max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
+            <div className={cn('relative aspect-video w-full overflow-hidden rounded-panel border border-primaryStroke bg-black bubble:border-transparent max-md:rounded-none max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
               {shownThumb ? (
                 <img
                   id={offline !== null ? 'offline-picture' : undefined}
@@ -344,7 +344,7 @@ export function WatchPage() {
                 <span
                   title={offlineNote || undefined}
                   className={cn(
-                    'absolute bottom-2 left-2 flex max-w-[calc(100%-5rem)] items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white',
+                    'absolute bottom-2 left-2 flex max-w-[calc(100%-5rem)] items-center gap-1.5 rounded-control border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white',
                     mobile && strip.overlay
                   )}
                 >
@@ -372,7 +372,7 @@ export function WatchPage() {
         <div data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
           <SceneView
             id="scene"
-            className={cn('max-md:border-t-0', mobile && strip.frame)}
+            className={cn('max-md:rounded-none max-md:border-t-0', mobile && strip.frame)}
             layers={layers}
             streamFor={slotStreamAtom}
             imageUrl={(asset) => api.assetUrl(name, asset)}
@@ -580,9 +580,14 @@ export function WatchPage() {
         {deskTabs.length > 0 && (
           <div
             id="watch-tabs"
-            className={cn('mt-4 min-w-0', chatSide === 'right' && 'beside:col-start-1 beside:mt-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-2 beside:mt-0')}
+            className={cn(
+              'mt-4 min-w-0',
+              chatSide === 'right' && 'beside:col-start-1 beside:mt-0',
+              chatSide === 'left' && 'beside:col-start-2 beside:row-start-2 beside:mt-0',
+              'bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:p-3 bubble:pt-2'
+            )}
           >
-            <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke">
+            <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke bubble:border-transparent">
               {deskTabs.map((t) => {
                 const on = t === deskTab;
                 return (

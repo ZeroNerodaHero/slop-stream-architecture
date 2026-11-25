@@ -15,6 +15,7 @@ export function roveTabs(e: KeyboardEvent<HTMLElement>) {
   button.focus();
 }
 
-export const TAB = '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150';
+export const TAB =
+  '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150 soft:rounded-t-control bubble:rounded-control bubble:border-transparent';
 export const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 export const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';

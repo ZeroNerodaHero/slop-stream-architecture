@@ -37,7 +37,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const PEEK_MS = 200;
-const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+const ICON_BUTTON = 'shrink-0 rounded-control border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
 const COLUMN = 'px-[calc(0.75rem-1px)] max-md:px-[calc(1.25rem-1px)]';
 
@@ -178,7 +178,7 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
         draggable={false}
         aria-label={`${person.name} · ${PRESENCE_WORD[person.presence]}`}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
+          'flex min-w-0 flex-1 items-center gap-2 rounded-control border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
           ROW_TAP,
           ROW_H,
           mirrored && 'flex-row-reverse'
@@ -413,7 +413,7 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
         draggable={false}
         aria-label={`${words.title}${words.tag ? ` #${words.tag}` : ''} · ${count}`}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
+          'flex min-w-0 flex-1 items-center gap-2 rounded-control border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
           ROW_TAP,
           ROW_H,
           mirrored && 'flex-row-reverse'
@@ -424,12 +424,12 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
             name={server.name}
             color={server.color}
             icon={server.icon}
-            className="h-8 w-8 border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
+            className="h-8 w-8 rounded-card border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
           />
           {live > 0 && (
             <span
               aria-hidden
-              className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center border-2 border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
+              className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-control border-2 border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
             >
               {live}
             </span>

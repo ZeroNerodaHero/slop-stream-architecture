@@ -187,7 +187,7 @@ function Corner({ mark, actions, open, firstInList }: { mark?: ReactNode; action
           data-line-actions
           onPointerMove={yieldToMention}
           className={cn(
-            'absolute right-2 z-10 flex items-center border border-primaryStroke bg-backgroundSecondary',
+            'absolute right-2 z-10 flex items-center overflow-hidden rounded-control border border-primaryStroke bg-backgroundSecondary',
             top,
             open ? ACTIONS_SHOWN : ACTIONS_HIDDEN,
             yielding && '!pointer-events-none !opacity-0'
@@ -202,7 +202,7 @@ function Corner({ mark, actions, open, firstInList }: { mark?: ReactNode; action
 }
 
 export const BAR_BUTTON =
-  'flex h-7 w-7 items-center justify-center text-textSecondary hover:bg-primaryStroke/30 hover:text-textPrimary focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue max-md:h-11 max-md:w-11';
+  'flex h-7 w-7 items-center justify-center rounded-control text-textSecondary hover:bg-primaryStroke/30 hover:text-textPrimary focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue max-md:h-11 max-md:w-11';
 
 function BarButton({ label, onClick, disabled, id, children }: { label: string; onClick?: () => void; disabled?: boolean; id: string; children: ReactNode }) {
   return (
@@ -311,7 +311,7 @@ function MoreMenu({ items }: { items: LineMenuItem[] }) {
               if (to instanceof Node && (menu.current?.contains(to) || button.current === to)) return;
               setOpen(false);
             }}
-            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
+            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
           >
             {items.map((item) => (
               <li key={item.key} role="none" className={item.divider ? 'mt-1 border-t border-primaryStroke pt-1' : undefined}>
@@ -444,7 +444,7 @@ export function ReplyQuote({ shape, quote, onJump, color }: { shape: ChatStyle; 
 
 function Side({ side }: { side?: ReactNode }) {
   if (!side) return null;
-  return <span className="flex shrink-0 flex-col self-start border border-primaryStroke bg-backgroundSecondary">{side}</span>;
+  return <span className="flex shrink-0 flex-col self-start overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary">{side}</span>;
 }
 
 export function ChatLineShape({
@@ -551,7 +551,7 @@ export function ChatLineShape({
         <span
           data-bubble
           className={cn(
-            'relative flex max-w-[85%] flex-col border px-2.5 py-[3px] [overflow-wrap:anywhere]',
+            'relative flex max-w-[85%] flex-col rounded-bubble border px-2.5 py-[3px] [overflow-wrap:anywhere]',
             mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
           )}
         >

@@ -228,7 +228,7 @@ function CropBox({ request }: { request: CropRequest }) {
       onClick={onBackdropClick}
       onClose={() => answerCrop(id, answer.current)}
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(720px,calc(100vw-2rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60 sm:p-6',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(720px,calc(100vw-2rem))] overflow-y-auto md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60 sm:p-6',
         SHEET_DIALOG
       )}
     >

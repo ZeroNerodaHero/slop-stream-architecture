@@ -72,8 +72,11 @@ const SECTION_TITLE = 'flex items-baseline gap-2 border-b-4 pb-1 text-xl font-se
 const LIVE_LINE = 'border-increase';
 const OFFLINE_LINE = 'border-textTertiary';
 const SECTION_COUNT = 'text-textSecondary';
-const CARD = 'border border-primaryStroke bg-backgroundSecondary';
-const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
+const CARD = 'overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary bubble:border-transparent';
+const CARD_LINK = cn(
+  CARD,
+  'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue bubble:hover:bg-backgroundTertiary bubble:focus-within:border-primaryBlue'
+);
 
 const PersonCard = lazy(() => import('@/shared-components/PersonCard').then((m) => ({ default: m.PersonCard })));
 
@@ -161,7 +164,7 @@ function Face({ stream }: { stream: LiveStream }) {
   return (
     <span
       aria-hidden
-      className="flex h-9 w-9 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundTertiary text-base font-semibold uppercase text-textSecondary"
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-avatar border border-primaryStroke bg-backgroundTertiary text-base font-semibold uppercase text-textSecondary"
     >
       {stream.name[0]}
     </span>
@@ -198,7 +201,7 @@ function Card({
         onFocus={() => onEnter('keyboard')}
         onBlur={onLeave}
       >
-        <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
+        <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black bubble:m-1.5 bubble:mb-0 bubble:rounded-card bubble:border-b-0">
           <div className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105">
             {thumbs.length > 0 ? (
               <BlurredPicture
@@ -216,12 +219,12 @@ function Card({
             )}
             {playing && <PreviewVideo name={stream.name} />}
           </div>
-          <span className="absolute right-3 top-3 z-10 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
-            <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
+          <span className="absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-control border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+            <span aria-hidden className="h-2 w-2 animate-pulse bg-increase bubble:rounded-avatar" />
             <LiveSince since={stream.since} />
           </span>
           {typeof stream.viewers === 'number' && (
-            <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
+            <span className="absolute bottom-3 right-3 z-10 rounded-control border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
               <ViewerCount id={`${idPrefix}viewers-${stream.name}`} count={stream.viewers} />
             </span>
           )}

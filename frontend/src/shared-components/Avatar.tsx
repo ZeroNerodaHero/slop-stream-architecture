@@ -16,7 +16,7 @@ export function Avatar({ name, version, className }: AvatarProps) {
       draggable={false}
       loading="lazy"
       decoding="async"
-      className={cn('mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle', className)}
+      className={cn('mr-3 inline-block h-10 w-10 rounded-avatar border border-primaryStroke object-cover align-middle', className)}
     />
   );
 }

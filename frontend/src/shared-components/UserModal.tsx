@@ -45,7 +45,7 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
 const GROUP_LABEL = 'hidden px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
 const SIDE_TAB = cn(
   'flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm font-semibold leading-tight transition-colors duration-150',
-  'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
+  'rounded-control border-b-2 sm:w-full sm:border-b-0 sm:border-l-2 bubble:border-transparent',
   'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue'
 );
 
@@ -110,7 +110,7 @@ function UserDialog() {
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col sm:flex-row',
         'm-0 h-dvh max-h-none w-full max-w-none border-0 max-md:mt-[var(--vvt,0px)] max-md:h-[var(--vvh,100dvh)]',
-        'md:m-auto md:h-[min(680px,calc(100dvh-3rem))] md:w-[min(960px,calc(100vw-3rem))] md:border md:border-primaryStroke',
+        'md:m-auto md:h-[min(680px,calc(100dvh-3rem))] md:w-[min(960px,calc(100vw-3rem))] md:rounded-panel md:border md:border-primaryStroke',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
@@ -263,7 +263,7 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
             aria-keyshortcuts="Escape"
             onClick={onClose}
             className={cn(
-              'flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+              'flex h-8 w-8 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
               SHEET_CLOSE
             )}
           >
