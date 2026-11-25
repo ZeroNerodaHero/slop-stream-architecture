@@ -310,7 +310,7 @@ function CardEditor({ card, onPatch, onAdd, onReplace, onRemove }: CardEditorPro
             placeholder={PLACEHOLDER[card.key]}
             rows={Math.min(10, Math.max(card.key === 'when' ? 2 : 3, card.body.split('\n').length + 1))}
             onChange={(e) => onPatch({ body: e.target.value })}
-            className={cn(INPUT, 'block resize-y py-1.5 md:text-sm bubble:rounded-card')}
+            className={cn(INPUT, 'block resize-y py-1.5 leading-snug md:text-sm bubble:rounded-card')}
           />
           {card.media.map((m) => (
             <div key={m.key} className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
@@ -351,7 +351,7 @@ function CardEditor({ card, onPatch, onAdd, onReplace, onRemove }: CardEditorPro
                   aria-invalid={badLink || undefined}
                   aria-describedby={badLink ? `${id}-link-bad` : undefined}
                   onChange={(e) => onPatch({ link: e.target.value })}
-                  className={cn(INPUT, 'min-w-0 flex-1 py-1.5 md:text-sm')}
+                  className={cn(INPUT, 'min-w-0 flex-1 py-1.5 leading-snug md:text-sm')}
                 />
                 <Button
                   id={`${id}-link-remove`}
