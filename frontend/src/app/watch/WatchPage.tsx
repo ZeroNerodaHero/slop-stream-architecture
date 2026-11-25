@@ -277,7 +277,10 @@ export function WatchPage() {
 
   const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? phoneTabs : watchTabs;
   const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
-  const videoCap = chatTab && deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]';
+  const theater = !mobile && !chatTab;
+  const videoCap = chatTab
+    ? deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]'
+    : theater && 'mx-auto max-w-[max(480px,calc((100dvh_-_var(--page-top,4rem)_-_3.5rem_-_2.5rem)_*_16_/_9))]';
 
   const chipDots = phase === 'connecting' || phase === 'connected';
   const chipWords = chipDots
@@ -463,10 +466,27 @@ export function WatchPage() {
   const deskStatus = (
     <div className="relative">
       <StatusLine text={message} tone={tone} className="my-0 sr-only" />
-      <span className="sr-only">
-        <ViewerCount id="viewers" count={viewers} />
-        {followersCount}
-      </span>
+      {!theater && (
+        <span className="sr-only">
+          <ViewerCount id="viewers" count={viewers} />
+          {followersCount}
+        </span>
+      )}
+    </div>
+  );
+  const onAir = phase === 'watching' || phase === 'connecting' || phase === 'connected' || phase === 'reconnecting';
+  const headline = !name || phase === 'loading' || phase === 'bad-name' ? null : onAir ? 'live' : (NOT_LIVE_WORDS[presence] ?? 'offline');
+  const dot = (
+    <span aria-hidden className="text-textTertiary">
+      ·
+    </span>
+  );
+  const stripInfo = (
+    <div className="relative flex min-w-0 flex-1 items-baseline gap-2 whitespace-nowrap pb-1.5 text-sm bubble:pb-0">
+      {headline && <span className={cn('min-w-0 truncate font-semibold', onAir ? 'text-increase' : 'text-textPrimary')}>{headline}</span>}
+      {headline && viewers !== null && dot}
+      <ViewerCount id="viewers" count={viewers} className="shrink-0 text-textSecondary" />
+      {followersCount && <span className="sr-only">{followersCount}</span>}
     </div>
   );
 
@@ -573,8 +593,9 @@ export function WatchPage() {
       mobileSub={streamNumbers(name ? followers : null, viewers)}
       mobileEnd={rowEnd}
       wide
+      fluid
     >
-      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen)}>
+      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen, theater)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-1')}>
           {player}
           {deskStatus}
@@ -584,31 +605,37 @@ export function WatchPage() {
           <div
             id="watch-tabs"
             className={cn(
-              'mt-4 min-w-0',
+              'min-w-0',
+              theater ? 'mt-2' : 'mt-4',
               chatSide === 'right' && 'beside:col-start-1 beside:mt-0',
               chatSide === 'left' && 'beside:col-start-2 beside:row-start-2 beside:mt-0',
-              'bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:p-3 bubble:pt-2'
+              theater && 'beside:mt-2',
+              'bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:p-3 bubble:pt-2',
+              theater && 'bubble:py-0'
             )}
           >
-            <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke bubble:border-transparent">
-              {deskTabs.map((t) => {
-                const on = t === deskTab;
-                return (
-                  <button
-                    key={t}
-                    id={`tab-${t}`}
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
-                    tabIndex={on ? 0 : -1}
-                    onClick={() => setTab(t)}
-                    className={cn(TAB, t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
-                  >
-                    {t}
-                  </button>
-                );
-              })}
+            <div id={theater ? 'watch-strip' : undefined} className={cn('flex border-b border-primaryStroke bubble:border-transparent', theater && 'min-h-12 items-end gap-4 bubble:items-center')}>
+              {theater && stripInfo}
+              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className={cn('flex gap-1', theater ? 'shrink-0' : 'flex-1')}>
+                {deskTabs.map((t) => {
+                  const on = t === deskTab;
+                  return (
+                    <button
+                      key={t}
+                      id={`tab-${t}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
+                      tabIndex={on ? 0 : -1}
+                      onClick={() => setTab(t)}
+                      className={cn(TAB, theater && 'text-sm', t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             {deskTab !== 'chat' && (
               <div id={`panel-${deskTab}`} role="tabpanel" aria-labelledby={`tab-${deskTab}`} className="pt-4">
@@ -637,7 +664,7 @@ export function WatchPage() {
             inert={chatTab && deskTab !== 'chat' ? true : undefined}
             className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
           >
-            <ChatSlot tabbed={chatTab}>
+            <ChatSlot tabbed={chatTab} fluid={theater}>
               <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
             </ChatSlot>
           </div>

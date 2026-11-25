@@ -13,6 +13,7 @@ interface PageFrameProps {
   titleId?: string;
   aside?: ReactNode;
   wide?: boolean;
+  fluid?: boolean;
   mobileTitle?: ReactNode;
   mobileSub?: ReactNode;
   mobileEnd?: ReactNode;
@@ -113,6 +114,7 @@ export function PageFrame({
   titleId,
   aside,
   wide = false,
+  fluid = false,
   mobileTitle,
   mobileSub,
   mobileEnd,
@@ -143,7 +145,7 @@ export function PageFrame({
     };
   }, [titled, mobile]);
 
-  const width = wide ? 'max-w-[1360px]' : 'max-w-[960px]';
+  const width = fluid ? undefined : wide ? 'max-w-[1360px]' : 'max-w-[960px]';
 
   if (mobile) {
     const named = mobileTitle ?? title;
