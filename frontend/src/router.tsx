@@ -4,16 +4,16 @@ import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-d
 
 import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
+import { authDialogAtom } from '@/infra/atoms/auth-atoms';
+import { cropRequestAtom } from '@/infra/atoms/crop-atoms';
 import { dmOpenAtom } from '@/infra/atoms/dm-atoms';
 import { inspectorOpenAtom, qualityOpenAtom, timingsOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
+import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
 import { panelSideAtom, perfModeAtom } from '@/infra/atoms/settings-atoms';
+import { userModalOpenAtom } from '@/infra/atoms/user-modal-atoms';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
-import { AuthDialog } from '@/shared-components/AuthDialog';
-import { CropDialog } from '@/shared-components/CropDialog';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
-import { ProfilePopup } from '@/shared-components/ProfilePopup';
-import { UserModal } from '@/shared-components/UserModal';
 import { UserPanel } from '@/shared-components/UserPanel';
 import { WhenUsed } from '@/shared-components/WhenUsed';
 import { cn } from '@/utils/cn';
@@ -24,6 +24,10 @@ const Inspector = lazy(() => import('@/shared-components/Inspector').then((m) =>
 const TimingsWindow = lazy(() => import('@/shared-components/debug/TimingsWindow').then((m) => ({ default: m.TimingsWindow })));
 const QualityWindow = lazy(() => import('@/shared-components/debug/QualityWindow').then((m) => ({ default: m.QualityWindow })));
 const PerfHud = lazy(() => import('@/shared-components/debug/PerfHud').then((m) => ({ default: m.PerfHud })));
+const UserModal = lazy(() => import('@/shared-components/UserModal').then((m) => ({ default: m.UserModal })));
+const AuthDialog = lazy(() => import('@/shared-components/AuthDialog').then((m) => ({ default: m.AuthDialog })));
+const ProfilePopup = lazy(() => import('@/shared-components/ProfilePopup').then((m) => ({ default: m.ProfilePopup })));
+const CropDialog = lazy(() => import('@/shared-components/CropDialog').then((m) => ({ default: m.CropDialog })));
 
 function FriendChatWhenUsed() {
   const open = useAtomValue(dmOpenAtom);
@@ -70,6 +74,42 @@ function QualityWhenUsed() {
   );
 }
 
+function UserModalWhenUsed() {
+  const open = useAtomValue(userModalOpenAtom);
+  return (
+    <WhenUsed on={open}>
+      <UserModal />
+    </WhenUsed>
+  );
+}
+
+function AuthDialogWhenUsed() {
+  const mode = useAtomValue(authDialogAtom);
+  return (
+    <WhenUsed on={mode !== null}>
+      <AuthDialog />
+    </WhenUsed>
+  );
+}
+
+function ProfilePopupWhenUsed() {
+  const target = useAtomValue(profilePopupAtom);
+  return (
+    <WhenUsed on={target !== null}>
+      <ProfilePopup />
+    </WhenUsed>
+  );
+}
+
+function CropDialogWhenUsed() {
+  const request = useAtomValue(cropRequestAtom);
+  return (
+    <WhenUsed on={request !== null}>
+      <CropDialog />
+    </WhenUsed>
+  );
+}
+
 function Shell() {
   const side = useAtomValue(panelSideAtom);
   const perf = useAtomValue(perfModeAtom);
@@ -84,10 +124,10 @@ function Shell() {
       <MiniPlayer />
       <FriendChatWhenUsed />
       <NotificationsWhenUsed />
-      <UserModal />
-      <AuthDialog />
-      <ProfilePopup />
-      <CropDialog />
+      <UserModalWhenUsed />
+      <AuthDialogWhenUsed />
+      <ProfilePopupWhenUsed />
+      <CropDialogWhenUsed />
       <InspectorWhenUsed />
       <TimingsWhenUsed />
       <QualityWhenUsed />

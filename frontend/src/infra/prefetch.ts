@@ -71,6 +71,26 @@ export function loadFirstPage(): Promise<unknown> | null {
   return route ? pageLoaders[route.kind]() : null;
 }
 
+export function warmOverlays(): void {
+  let done = false;
+  const load = () => {
+    if (done) return;
+    done = true;
+    void import('@/shared-components/UserModal');
+    void import('@/shared-components/AuthDialog');
+    void import('@/shared-components/ProfilePopup');
+    void import('@/shared-components/CropDialog');
+  };
+  const schedule = () => {
+    const idle = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+    if (idle) idle(load, { timeout: 2000 });
+    else setTimeout(load, 500);
+  };
+  if (document.readyState === 'complete') schedule();
+  else window.addEventListener('load', schedule, { once: true });
+  setTimeout(schedule, 5000);
+}
+
 interface Entry {
   answer: Promise<unknown>;
   ask: () => Promise<unknown>;
