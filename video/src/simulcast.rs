@@ -25,11 +25,15 @@ const UP_HELD: Duration = Duration::from_secs(30);
 
 pub fn level_of(rid: &str) -> Option<u8> {
     match rid {
-        "" | "q" => Some(0),
-        "h" => Some(1),
-        "f" => Some(2),
+        "" | "q" | "cq" => Some(0),
+        "h" | "ch" => Some(1),
+        "f" | "cf" => Some(2),
         _ => None,
     }
+}
+
+pub fn is_copy_rid(rid: &str) -> bool {
+    matches!(rid, "cq" | "ch" | "cf")
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,30 +44,77 @@ pub struct PictureId {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Vp8 {
+pub struct Frame {
     pub keyframe: bool,
     pub picture_id: Option<PictureId>,
     pub tl0: Option<(u8, usize)>,
     pub size: Option<(u16, u16)>,
 }
 
-pub fn parse_vp8(payload: &[u8]) -> Vp8 {
-    let mut out = Vp8::default();
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Codec {
+    #[default]
+    Vp8,
+    Vp9,
+}
+
+pub const CODECS: usize = 2;
+
+impl Codec {
+
+    pub fn index(self) -> usize {
+        match self {
+            Codec::Vp8 => 0,
+            Codec::Vp9 => 1,
+        }
+    }
+
+    pub fn of_mime(mime: &str) -> Option<Codec> {
+        if mime.eq_ignore_ascii_case("video/VP8") {
+            Some(Codec::Vp8)
+        } else if mime.eq_ignore_ascii_case("video/VP9") {
+            Some(Codec::Vp9)
+        } else {
+            None
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Codec::Vp8 => "VP8",
+            Codec::Vp9 => "VP9",
+        }
+    }
+
+    pub fn parse(self, payload: &[u8]) -> Frame {
+        match self {
+            Codec::Vp8 => parse_vp8(payload),
+            Codec::Vp9 => parse_vp9(payload),
+        }
+    }
+}
+
+fn read_picture_id(payload: &[u8], at: usize) -> Option<(PictureId, usize)> {
+    let id = *payload.get(at)?;
+    if id & 0x80 != 0 {
+        let low = *payload.get(at + 1)?;
+        Some((PictureId { value: (u16::from(id & 0x7f) << 8) | u16::from(low), wide: true, at }, at + 2))
+    } else {
+        Some((PictureId { value: u16::from(id), wide: false, at }, at + 1))
+    }
+}
+
+pub fn parse_vp8(payload: &[u8]) -> Frame {
+    let mut out = Frame::default();
     let Some(&first) = payload.first() else { return out };
     let mut at = 1;
     if first & 0x80 != 0 {
         let Some(&ext) = payload.get(at) else { return out };
         at += 1;
         if ext & 0x80 != 0 {
-            let Some(&id) = payload.get(at) else { return out };
-            if id & 0x80 != 0 {
-                let Some(&low) = payload.get(at + 1) else { return out };
-                out.picture_id = Some(PictureId { value: (u16::from(id & 0x7f) << 8) | u16::from(low), wide: true, at });
-                at += 2;
-            } else {
-                out.picture_id = Some(PictureId { value: u16::from(id), wide: false, at });
-                at += 1;
-            }
+            let Some((id, next)) = read_picture_id(payload, at) else { return out };
+            out.picture_id = Some(id);
+            at = next;
         }
         if ext & 0x40 != 0 {
             let Some(&tl0) = payload.get(at) else { return out };
@@ -88,6 +139,60 @@ pub fn parse_vp8(payload: &[u8]) -> Vp8 {
     out
 }
 
+const VP9_MAX_DIFFS: usize = 3;
+
+pub fn parse_vp9(payload: &[u8]) -> Frame {
+    let mut out = Frame::default();
+    let Some(&first) = payload.first() else { return out };
+    let inter = first & 0x40 != 0;
+    let layered = first & 0x20 != 0;
+    let flexible = first & 0x10 != 0;
+    let begins = first & 0x08 != 0;
+    let structure = first & 0x02 != 0;
+    let mut at = 1;
+    if first & 0x80 != 0 {
+        let Some((id, next)) = read_picture_id(payload, at) else { return out };
+        out.picture_id = Some(id);
+        at = next;
+    }
+    let mut spatial = 0;
+    if layered {
+        let Some(&layer) = payload.get(at) else { return out };
+        spatial = (layer >> 1) & 0x07;
+        at += 1;
+        if !flexible {
+            let Some(&tl0) = payload.get(at) else { return out };
+            out.tl0 = Some((tl0, at));
+            at += 1;
+        }
+    }
+    if flexible && inter {
+        for _ in 0..VP9_MAX_DIFFS {
+            let Some(&diff) = payload.get(at) else { return out };
+            at += 1;
+            if diff & 0x01 == 0 {
+                break;
+            }
+        }
+    }
+    out.keyframe = begins && !inter && spatial == 0;
+    if structure {
+        out.size = vp9_size(payload, at);
+    }
+    out
+}
+
+fn vp9_size(payload: &[u8], at: usize) -> Option<(u16, u16)> {
+    let head = *payload.get(at)?;
+    if head & 0x10 == 0 {
+        return None;
+    }
+    let layers = usize::from(head >> 5) + 1;
+    let last = at + 1 + (layers - 1) * 4;
+    let size = payload.get(last..last + 4)?;
+    Some((u16::from_be_bytes([size[0], size[1]]), u16::from_be_bytes([size[2], size[3]])))
+}
+
 fn picture_mask(wide: bool) -> u16 {
     if wide {
         0x7fff
@@ -96,12 +201,12 @@ fn picture_mask(wide: bool) -> u16 {
     }
 }
 
-pub fn rewrite_payload(payload: &Bytes, vp8: &Vp8, pid_off: u16, tl0_off: u8) -> Bytes {
+pub fn rewrite_payload(payload: &Bytes, frame: &Frame, pid_off: u16, tl0_off: u8) -> Bytes {
     if pid_off == 0 && tl0_off == 0 {
         return payload.clone();
     }
     let mut out = BytesMut::from(&payload[..]);
-    if let Some(pid) = vp8.picture_id {
+    if let Some(pid) = frame.picture_id {
         let value = pid.value.wrapping_add(pid_off) & picture_mask(pid.wide);
         if pid.wide {
             out[pid.at] = 0x80 | (value >> 8) as u8;
@@ -110,7 +215,7 @@ pub fn rewrite_payload(payload: &Bytes, vp8: &Vp8, pid_off: u16, tl0_off: u8) ->
             out[pid.at] = value as u8;
         }
     }
-    if let Some((tl0, at)) = vp8.tl0 {
+    if let Some((tl0, at)) = frame.tl0 {
         out[at] = tl0.wrapping_add(tl0_off);
     }
     out.freeze()
@@ -160,13 +265,13 @@ impl Rewrite {
         self.paused = false;
     }
 
-    pub fn admit(&mut self, layer: u8, target: u8, seq: u16, ts: u32, vp8: &Vp8, now: Instant) -> Option<Admit> {
+    pub fn admit(&mut self, layer: u8, target: u8, seq: u16, ts: u32, frame: &Frame, now: Instant) -> Option<Admit> {
         if self.paused {
             return None;
         }
-        let switched = layer == target && self.layer != Some(layer) && vp8.keyframe;
+        let switched = layer == target && self.layer != Some(layer) && frame.keyframe;
         if switched {
-            self.switch_to(layer, seq, ts, vp8, now);
+            self.switch_to(layer, seq, ts, frame, now);
         } else if self.layer != Some(layer) || newer(self.base_seq, seq) {
             return None;
         }
@@ -176,8 +281,8 @@ impl Rewrite {
         }
         let out_seq = seq.wrapping_add(self.seq_off);
         let out_ts = ts.wrapping_add(self.ts_off);
-        let pid = vp8.picture_id.map(|p| p.value.wrapping_add(self.pid_off) & picture_mask(p.wide));
-        let tl0 = vp8.tl0.map(|(t, _)| t.wrapping_add(self.tl0_off));
+        let pid = frame.picture_id.map(|p| p.value.wrapping_add(self.pid_off) & picture_mask(p.wide));
+        let tl0 = frame.tl0.map(|(t, _)| t.wrapping_add(self.tl0_off));
         match &mut self.last {
             Some(last) if !newer(out_seq, last.seq) => {}
             last => {
@@ -188,7 +293,7 @@ impl Rewrite {
         Some(Admit { seq: out_seq, ts: out_ts, pid_off: self.pid_off, tl0_off: self.tl0_off, switched })
     }
 
-    fn switch_to(&mut self, layer: u8, seq: u16, ts: u32, vp8: &Vp8, now: Instant) {
+    fn switch_to(&mut self, layer: u8, seq: u16, ts: u32, frame: &Frame, now: Instant) {
         self.layer = Some(layer);
         self.base_seq = seq;
         let Some(last) = self.last else {
@@ -198,11 +303,11 @@ impl Rewrite {
         let gap = now.saturating_duration_since(last.at).as_micros().min(u128::from(u32::MAX / 2)) as u32;
         let step = (gap / 1000 * 90).max(1);
         self.ts_off = last.ts.wrapping_add(step).wrapping_sub(ts);
-        self.pid_off = match (last.pid, vp8.picture_id) {
+        self.pid_off = match (last.pid, frame.picture_id) {
             (Some(prev), Some(pid)) => prev.wrapping_add(1).wrapping_sub(pid.value) & picture_mask(pid.wide),
             _ => 0,
         };
-        self.tl0_off = match (last.tl0, vp8.tl0) {
+        self.tl0_off = match (last.tl0, frame.tl0) {
             (Some(prev), Some((tl0, _))) => prev.wrapping_add(1).wrapping_sub(tl0),
             _ => 0,
         };
@@ -382,12 +487,12 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    fn key(pid: u16, tl0: u8) -> Vp8 {
-        Vp8 { keyframe: true, picture_id: Some(PictureId { value: pid, wide: true, at: 2 }), tl0: Some((tl0, 4)), size: None }
+    fn key(pid: u16, tl0: u8) -> Frame {
+        Frame { keyframe: true, picture_id: Some(PictureId { value: pid, wide: true, at: 2 }), tl0: Some((tl0, 4)), size: None }
     }
 
-    fn delta(pid: u16, tl0: u8) -> Vp8 {
-        Vp8 { keyframe: false, ..key(pid, tl0) }
+    fn delta(pid: u16, tl0: u8) -> Frame {
+        Frame { keyframe: false, ..key(pid, tl0) }
     }
 
     #[test]
@@ -397,29 +502,117 @@ mod tests {
         assert_eq!(level_of("h"), Some(1));
         assert_eq!(level_of("f"), Some(2));
         assert_eq!(level_of("x"), None);
+        assert_eq!((level_of("cq"), level_of("ch"), level_of("cf")), (Some(0), Some(1), Some(2)));
+        assert!(is_copy_rid("cq") && !is_copy_rid("q") && !is_copy_rid(""));
     }
 
     #[test]
     fn parses_picture_id_tl0_and_keyframe_size() {
         let payload = [0x90, 0xe0, 0x81, 0x23, 0x05, 0x40, 0x50, 0x02, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x07, 0x38, 0x04];
-        let vp8 = parse_vp8(&payload);
-        assert!(vp8.keyframe);
-        assert_eq!(vp8.picture_id, Some(PictureId { value: 0x0123, wide: true, at: 2 }));
-        assert_eq!(vp8.tl0, Some((0x05, 4)));
-        assert_eq!(vp8.size, Some((1920, 1080)));
+        let frame = parse_vp8(&payload);
+        assert!(frame.keyframe);
+        assert_eq!(frame.picture_id, Some(PictureId { value: 0x0123, wide: true, at: 2 }));
+        assert_eq!(frame.tl0, Some((0x05, 4)));
+        assert_eq!(frame.size, Some((1920, 1080)));
         let narrow = parse_vp8(&[0x80, 0x80, 0x12, 0x01]);
         assert_eq!(narrow.picture_id, Some(PictureId { value: 0x12, wide: false, at: 2 }));
         assert!(!narrow.keyframe);
-        assert_eq!(parse_vp8(&[0x90, 0x80, 0x92]), Vp8::default());
+        assert_eq!(parse_vp8(&[0x90, 0x80, 0x92]), Frame::default());
+    }
+
+    const VP9_KEY: [u8; 17] = [0xaa, 0x81, 0x23, 0x00, 0x05, 0x18, 0x07, 0x80, 0x04, 0x38, 0x01, 0x04, 0x01, 0x82, 0x49, 0x83, 0x42];
+
+    #[test]
+    fn parses_a_vp9_keyframe_with_its_structure() {
+        let frame = parse_vp9(&VP9_KEY);
+        assert!(frame.keyframe);
+        assert_eq!(frame.picture_id, Some(PictureId { value: 0x0123, wide: true, at: 1 }));
+        assert_eq!(frame.tl0, Some((0x05, 4)));
+        assert_eq!(frame.size, Some((1920, 1080)));
+        assert_eq!(Codec::Vp9.parse(&VP9_KEY), frame);
+    }
+
+    #[test]
+    fn parses_vp9_delta_flexible_and_upper_layer_frames() {
+        let delta = parse_vp9(&[0xe8, 0x81, 0x24, 0x20, 0x05, 0x11]);
+        assert!(!delta.keyframe);
+        assert_eq!(delta.picture_id, Some(PictureId { value: 0x0124, wide: true, at: 1 }));
+        assert_eq!(delta.tl0, Some((0x05, 4)));
+        assert_eq!(delta.size, None);
+
+        let flexible = parse_vp9(&[0xf8, 0x12, 0x00, 0x03, 0x02, 0x11]);
+        assert!(!flexible.keyframe);
+        assert_eq!(flexible.picture_id, Some(PictureId { value: 0x12, wide: false, at: 1 }));
+        assert_eq!(flexible.tl0, None);
+
+        let flexible_key = parse_vp9(&[0xb8, 0x12, 0x00, 0x11]);
+        assert!(flexible_key.keyframe);
+        assert_eq!(flexible_key.tl0, None);
+
+        assert!(!parse_vp9(&[0xa8, 0x81, 0x23, 0x02, 0x05, 0x11]).keyframe);
+        assert!(!parse_vp9(&[0xa0, 0x81, 0x23, 0x00, 0x05, 0x11]).keyframe);
+        assert!(parse_vp9(&[0x88, 0x7f, 0x11]).keyframe);
+        assert!(parse_vp9(&[0x08, 0x11]).keyframe);
+    }
+
+    #[test]
+    fn a_short_vp9_descriptor_is_never_a_keyframe() {
+        assert_eq!(parse_vp9(&[]), Frame::default());
+        assert!(!parse_vp9(&[0xaa]).keyframe);
+        assert!(!parse_vp9(&[0xaa, 0x81]).keyframe);
+        assert!(!parse_vp9(&[0xaa, 0x81, 0x23]).keyframe);
+        assert!(!parse_vp9(&[0xaa, 0x81, 0x23, 0x00]).keyframe);
+        assert!(!parse_vp9(&[0xf8, 0x12, 0x00, 0x03]).keyframe);
+        assert_eq!(parse_vp9(&[0xaa, 0x81, 0x23, 0x00, 0x05, 0x18, 0x07]).size, None);
+        assert_eq!(parse_vp9(&[0xaa, 0x81, 0x23, 0x00, 0x05, 0x08]).size, None);
+    }
+
+    #[test]
+    fn vp8_and_vp9_are_told_apart_by_mime() {
+        assert_eq!(Codec::of_mime("video/VP8"), Some(Codec::Vp8));
+        assert_eq!(Codec::of_mime("video/vp9"), Some(Codec::Vp9));
+        assert_eq!(Codec::of_mime("video/H264"), None);
+        assert_eq!(Codec::Vp8.parse(&VP9_KEY).keyframe, parse_vp8(&VP9_KEY).keyframe);
+    }
+
+    #[test]
+    fn rewrites_a_vp9_picture_id_and_tl0_in_a_copy() {
+        let payload = Bytes::from_static(&VP9_KEY);
+        let moved = rewrite_payload(&payload, &parse_vp9(&payload), 0x7fff, 3);
+        let again = parse_vp9(&moved);
+        assert_eq!(again.picture_id.unwrap().value, 0x0122);
+        assert_eq!(again.tl0.unwrap().0, 0x08);
+        assert_eq!(again.size, Some((1920, 1080)));
+        assert!(again.keyframe);
+        assert_eq!(&moved[5..], &VP9_KEY[5..]);
+        let flexible = Bytes::from_static(&[0xf8, 0x7f, 0x00, 0x03, 0x02, 0x11]);
+        let out = rewrite_payload(&flexible, &parse_vp9(&flexible), 2, 9);
+        assert_eq!(&out[..], &[0xf8, 0x01, 0x00, 0x03, 0x02, 0x11]);
+    }
+
+    #[test]
+    fn a_vp9_switch_waits_for_a_keyframe_and_continues_picture_id_and_tl0() {
+        let t = Instant::now();
+        let mut r = Rewrite::default();
+        let first = r.admit(0, 0, 10, 1000, &parse_vp9(&VP9_KEY), t).unwrap();
+        assert!(first.switched);
+        let delta = parse_vp9(&[0xe8, 0x81, 0x24, 0x20, 0x05, 0x11]);
+        assert!(r.admit(0, 0, 11, 4000, &delta, t).is_some());
+        assert_eq!(r.admit(1, 1, 500, 90000, &parse_vp9(&[0xe8, 0x80, 0x10, 0x20, 0x40, 0x11]), t), None);
+        let upper = r.admit(1, 1, 501, 93000, &parse_vp9(&[0xaa, 0x80, 0x11, 0x00, 0x41, 0x18, 0x07, 0x80, 0x04, 0x38, 0x00]), t).unwrap();
+        assert!(upper.switched);
+        assert_eq!(upper.seq, 12);
+        assert_eq!(0x11u16.wrapping_add(upper.pid_off) & 0x7fff, 0x0125);
+        assert_eq!(0x41u8.wrapping_add(upper.tl0_off), 0x06);
     }
 
     #[test]
     fn rewrites_picture_id_and_tl0_in_a_copy() {
         let payload = Bytes::from_static(&[0x90, 0xe0, 0xff, 0xfe, 0x05, 0x40, 0x50]);
-        let vp8 = parse_vp8(&payload);
-        let same = rewrite_payload(&payload, &vp8, 0, 0);
+        let frame = parse_vp8(&payload);
+        let same = rewrite_payload(&payload, &frame, 0, 0);
         assert_eq!(same.as_ptr(), payload.as_ptr());
-        let moved = rewrite_payload(&payload, &vp8, 3, 250);
+        let moved = rewrite_payload(&payload, &frame, 3, 250);
         let again = parse_vp8(&moved);
         assert_eq!(again.picture_id.unwrap().value, 1);
         assert_eq!(again.tl0.unwrap().0, 255);

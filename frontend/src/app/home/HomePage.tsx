@@ -44,6 +44,21 @@ const GROUPS_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3'
 const FEATURED_GRID = 'grid grid-cols-1 gap-4 lg:grid-cols-2';
 const GROUPS_GUESS = 6;
 const PEOPLE_GUESS = 8;
+const RECENT_GUESS = 6;
+
+const RECENT_COUNT_KEY = 'home:recent-count';
+function recentSkeletonCount(): number {
+  try {
+    const raw = localStorage.getItem(RECENT_COUNT_KEY);
+    if (raw !== null) {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 0) return Math.min(n, 48);
+    }
+  } catch {
+    return RECENT_GUESS;
+  }
+  return RECENT_GUESS;
+}
 
 const homeHoverAtom = atom<string | null>(null);
 
@@ -485,6 +500,7 @@ function RecentlyOffline({ liveKey }: { liveKey: string | null }) {
   });
   const seenKey = useRef<string | null>(null);
   const { refetch } = recent;
+  const [skeletonCount] = useState(recentSkeletonCount);
 
   useEffect(() => {
     if (liveKey === null) return;
@@ -493,6 +509,36 @@ function RecentlyOffline({ liveKey }: { liveKey: string | null }) {
   }, [liveKey, refetch]);
 
   const list: Recent[] = recent.data ?? [];
+
+  useEffect(() => {
+    if (!recent.data) return;
+    try {
+      localStorage.setItem(RECENT_COUNT_KEY, String(list.length));
+    } catch {
+      return;
+    }
+  }, [recent.data, list.length]);
+
+  const loading = !recent.data && !recent.error;
+  if (loading) {
+    if (skeletonCount === 0) return null;
+    return (
+      <Part id="recent" title="recently offline" line={OFFLINE_LINE} heading="recently offline">
+        <Skeleton id="recent-loading" className={RECENT_GRID}>
+          {Array.from({ length: skeletonCount }, (_, i) => (
+            <div key={i} className={cn(CARD_LINK, 'flex items-center gap-2 p-2.5')}>
+              <Bone className="h-10 w-10 shrink-0" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <Bone className="h-6 w-20 max-w-full" />
+                <Bone className="h-4 w-28 max-w-full" />
+              </div>
+              <Bone className="h-11 w-16 shrink-0" />
+            </div>
+          ))}
+        </Skeleton>
+      </Part>
+    );
+  }
   if (!recent.data || list.length === 0) return null;
   return (
     <Part

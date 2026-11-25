@@ -6,7 +6,7 @@ import { loadMe } from '@/infra/atoms/auth-atoms';
 import { applyStoredShape, applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
 import { startEvents } from '@/infra/events';
 import { installMobileKeyboard } from '@/infra/keyboard';
-import { installPrefetch, loadFirstPage } from '@/infra/prefetch';
+import { installPrefetch, loadFirstPage, warmOverlays } from '@/infra/prefetch';
 import { queryClient } from '@/infra/query-client';
 import { installReporting, report } from '@/infra/report';
 import { router } from '@/router';
@@ -59,3 +59,5 @@ const render = () =>
 const waits = [loadFirstPage(), window.__bootCss].filter((wait) => wait !== null && wait !== undefined);
 if (waits.length > 0) void Promise.allSettled(waits).then(render);
 else render();
+
+warmOverlays();

@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -12,12 +12,14 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalContext, TrackLocalWriter
 use tokio::sync::Notify;
 
 use crate::resend::Resend;
-use crate::simulcast::{rewrite_payload, start_level, LayerView, Rewrite, Vp8, LEVELS, NO_LEVEL};
+use crate::simulcast::{rewrite_payload, start_level, Codec, Frame, LayerView, Rewrite, LEVELS, NO_LEVEL};
 use crate::view::View;
 
 const LIVE_WITHIN: Duration = Duration::from_millis(1000);
 const METER_WINDOW: Duration = Duration::from_millis(500);
 const CACHED_PAYLOADS: usize = 4;
+const EARLY_PACKETS: usize = 600;
+const EARLY_BYTES: usize = 768 * 1024;
 
 #[derive(Default)]
 pub struct Layer {
@@ -30,6 +32,7 @@ pub struct Layer {
 
 pub struct Feed {
     epoch: Instant,
+    codec: Codec,
     offered: u8,
     layers: [Layer; LEVELS],
     viewers: RwLock<Arc<[Arc<Viewer>]>>,
@@ -47,8 +50,16 @@ impl Meter {
 }
 
 impl Feed {
-    pub fn new(offered: u8) -> Self {
-        Self { epoch: Instant::now(), offered, layers: Default::default(), viewers: RwLock::new(Arc::from(Vec::new())) }
+    pub fn new(codec: Codec, offered: u8) -> Self {
+        Self { epoch: Instant::now(), codec, offered, layers: Default::default(), viewers: RwLock::new(Arc::from(Vec::new())) }
+    }
+
+    pub fn codec(&self) -> Codec {
+        self.codec
+    }
+
+    pub fn has_full_viewers(&self) -> bool {
+        self.viewers.read().unwrap_or_else(|e| e.into_inner()).iter().any(|v| !v.preview && v.view() == View::Full)
     }
 
     pub fn offered(&self) -> u8 {
@@ -91,12 +102,12 @@ impl Feed {
         start_level(&self.views(Instant::now()), self.offered, pinned)
     }
 
-    pub fn arrived(&self, level: u8, size: usize, vp8: &Vp8, meter: &mut Meter, now: Instant) {
+    pub fn arrived(&self, level: u8, size: usize, frame: &Frame, meter: &mut Meter, now: Instant) {
         let layer = &self.layers[level as usize];
         layer.last_ms.store(self.ms(now), Ordering::Relaxed);
-        if vp8.keyframe {
+        if frame.keyframe {
             layer.keyframes.fetch_add(1, Ordering::Relaxed);
-            if let Some((_, height)) = vp8.size {
+            if let Some((_, height)) = frame.size {
                 layer.height.store(u32::from(height), Ordering::Relaxed);
             }
         }
@@ -128,7 +139,7 @@ impl Feed {
         *viewers = next.into();
     }
 
-    pub async fn forward(&self, level: u8, packet: &Packet, vp8: &Vp8, now: Instant) -> usize {
+    pub async fn forward(&self, level: u8, packet: &Packet, frame: &Frame, now: Instant) -> usize {
         let viewers = Arc::clone(&self.viewers.read().unwrap_or_else(|e| e.into_inner()));
         if viewers.is_empty() {
             return 0;
@@ -142,7 +153,7 @@ impl Feed {
             let target = viewer.target.load(Ordering::Relaxed);
             let admit = {
                 let mut rewrite = viewer.rewrite.lock().unwrap_or_else(|e| e.into_inner());
-                let admit = rewrite.admit(level, target, packet.header.sequence_number, packet.header.timestamp, vp8, now);
+                let admit = rewrite.admit(level, target, packet.header.sequence_number, packet.header.timestamp, frame, now);
                 if admit.is_some_and(|a| a.switched) {
                     viewer.current.store(level, Ordering::Relaxed);
                     viewer.switched_ms.store(self.ms(now), Ordering::Relaxed);
@@ -155,7 +166,7 @@ impl Feed {
             out.payload = if admit.pid_off == 0 && admit.tl0_off == 0 {
                 packet.payload.clone()
             } else {
-                cached(&mut cache, &packet.payload, vp8, admit.pid_off, admit.tl0_off)
+                cached(&mut cache, &packet.payload, frame, admit.pid_off, admit.tl0_off)
             };
             let n = viewer.track.write(&mut out, admit.switched).await;
             if n > 0 {
@@ -167,11 +178,11 @@ impl Feed {
     }
 }
 
-fn cached(cache: &mut [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS], payload: &bytes::Bytes, vp8: &Vp8, pid_off: u16, tl0_off: u8) -> bytes::Bytes {
+fn cached(cache: &mut [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS], payload: &bytes::Bytes, frame: &Frame, pid_off: u16, tl0_off: u8) -> bytes::Bytes {
     if let Some((_, _, bytes)) = cache.iter().flatten().find(|(p, t, _)| *p == pid_off && *t == tl0_off) {
         return bytes.clone();
     }
-    let bytes = rewrite_payload(payload, vp8, pid_off, tl0_off);
+    let bytes = rewrite_payload(payload, frame, pid_off, tl0_off);
     if let Some(free) = cache.iter_mut().find(|c| c.is_none()) {
         *free = Some((pid_off, tl0_off, bytes.clone()));
     }
@@ -180,6 +191,7 @@ fn cached(cache: &mut [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS], payloa
 
 pub struct Viewer {
     pub track: Arc<ViewerTrack>,
+    preview: bool,
     target: AtomicU8,
     current: AtomicU8,
     sent: AtomicU64,
@@ -190,9 +202,10 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    pub fn new(track: Arc<ViewerTrack>, start: u8) -> Self {
+    pub fn new(track: Arc<ViewerTrack>, start: u8, preview: bool) -> Self {
         Self {
             track,
+            preview,
             target: AtomicU8::new(start),
             current: AtomicU8::new(NO_LEVEL),
             sent: AtomicU64::new(0),
@@ -249,6 +262,13 @@ struct Bound {
     writer: Arc<dyn TrackLocalWriter + Send + Sync>,
 }
 
+#[derive(Default)]
+struct Early {
+    held: Vec<Packet>,
+    bytes: usize,
+    spilled: bool,
+}
+
 pub struct ViewerTrack {
     id: String,
     stream_id: String,
@@ -256,11 +276,65 @@ pub struct ViewerTrack {
     bound: Mutex<Option<Bound>>,
     resend: Arc<Resend>,
     floor: AtomicU32,
+    ready: AtomicBool,
+    early: Mutex<Early>,
 }
 
 impl ViewerTrack {
     pub fn new(codec: RTCRtpCodecCapability, id: String, stream_id: String, resend: Arc<Resend>) -> Self {
-        Self { id, stream_id, codec, bound: Mutex::new(None), resend, floor: AtomicU32::new(u32::MAX) }
+        Self { id, stream_id, codec, bound: Mutex::new(None), resend, floor: AtomicU32::new(u32::MAX), ready: AtomicBool::new(false), early: Mutex::new(Early::default()) }
+    }
+
+    pub fn holds_picture(&self) -> bool {
+        self.ready.load(Ordering::Relaxed) || !self.early.lock().unwrap_or_else(|e| e.into_inner()).held.is_empty()
+    }
+
+    fn hold(&self, packet: &Packet) {
+        let mut early = self.early.lock().unwrap_or_else(|e| e.into_inner());
+        if early.spilled {
+            return;
+        }
+        early.bytes += packet.payload.len();
+        if early.held.len() >= EARLY_PACKETS || early.bytes > EARLY_BYTES {
+            *early = Early { spilled: true, ..Early::default() };
+            return;
+        }
+        early.held.push(packet.clone());
+    }
+
+    async fn deliver(&self, writer: &Arc<dyn TrackLocalWriter + Send + Sync>, packet: &Packet) -> usize {
+        if self.ready.load(Ordering::Relaxed) {
+            return writer.write_rtp(packet).await.unwrap_or(0);
+        }
+        let held = std::mem::take(&mut self.early.lock().unwrap_or_else(|e| e.into_inner()).held);
+        let Some(first) = held.first() else {
+            let n = writer.write_rtp(packet).await.unwrap_or(0);
+            if n > 0 {
+                self.ready.store(true, Ordering::Relaxed);
+            } else {
+                self.hold(packet);
+            }
+            return n;
+        };
+        let n = writer.write_rtp(first).await.unwrap_or(0);
+        if n == 0 {
+            let mut early = self.early.lock().unwrap_or_else(|e| e.into_inner());
+            let later = std::mem::replace(&mut early.held, held);
+            early.held.extend(later);
+            drop(early);
+            self.hold(packet);
+            return 0;
+        }
+        self.ready.store(true, Ordering::Relaxed);
+        let mut written = n;
+        for held in &held[1..] {
+            written += writer.write_rtp(held).await.unwrap_or(0);
+        }
+        written + writer.write_rtp(packet).await.unwrap_or(0)
+    }
+
+    pub fn codec(&self) -> &RTCRtpCodecCapability {
+        &self.codec
     }
 
     pub fn floor(&self) -> Option<u16> {
@@ -286,8 +360,11 @@ impl ViewerTrack {
         if switched {
             self.floor.store(u32::from(packet.header.sequence_number), Ordering::Relaxed);
             self.resend.floor(packet.header.ssrc, packet.header.sequence_number);
+            if !self.ready.load(Ordering::Relaxed) {
+                *self.early.lock().unwrap_or_else(|e| e.into_inner()) = Early::default();
+            }
         }
-        writer.write_rtp(packet).await.unwrap_or(0)
+        self.deliver(&writer, packet).await
     }
 }
 
@@ -327,5 +404,90 @@ impl TrackLocal for ViewerTrack {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use webrtc::interceptor::Attributes;
+
+    #[derive(Debug, Default)]
+    struct Gate {
+        open: AtomicBool,
+        got: Mutex<Vec<u16>>,
+    }
+
+    #[async_trait]
+    impl TrackLocalWriter for Gate {
+        async fn write_rtp_with_attributes(&self, pkt: &Packet, _: &Attributes) -> webrtc::error::Result<usize> {
+            if !self.open.load(Ordering::Relaxed) {
+                return Ok(0);
+            }
+            self.got.lock().unwrap().push(pkt.header.sequence_number);
+            Ok(pkt.payload.len() + 12)
+        }
+
+        async fn write(&self, _: &[u8]) -> webrtc::error::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    fn bound_track(gate: &Arc<Gate>) -> ViewerTrack {
+        let track = ViewerTrack::new(crate::media::vp8_capability(), "v".to_owned(), "s".to_owned(), Arc::new(Resend::default()));
+        *track.bound.lock().unwrap() = Some(Bound { ssrc: 7, payload_type: 96, writer: Arc::clone(gate) as _ });
+        track
+    }
+
+    fn packet(seq: u16, bytes: usize) -> Packet {
+        Packet { header: Header { sequence_number: seq, ..Header::default() }, payload: bytes::Bytes::from(vec![0u8; bytes]) }
+    }
+
+    #[tokio::test]
+    async fn packets_before_srtp_is_up_are_held_and_flushed_in_order() {
+        let gate = Arc::new(Gate::default());
+        let track = bound_track(&gate);
+        assert!(!track.holds_picture());
+        assert_eq!(track.write(&mut packet(10, 100), true).await, 0);
+        assert_eq!(track.write(&mut packet(11, 100), false).await, 0);
+        assert!(track.holds_picture());
+        gate.open.store(true, Ordering::Relaxed);
+        assert_eq!(track.write(&mut packet(12, 100), false).await, 3 * 112);
+        assert_eq!(track.write(&mut packet(13, 100), false).await, 112);
+        assert_eq!(*gate.got.lock().unwrap(), vec![10, 11, 12, 13]);
+        assert!(track.holds_picture());
+    }
+
+    #[tokio::test]
+    async fn a_new_keyframe_before_srtp_replaces_what_was_held() {
+        let gate = Arc::new(Gate::default());
+        let track = bound_track(&gate);
+        track.write(&mut packet(10, 100), true).await;
+        track.write(&mut packet(11, 100), false).await;
+        track.write(&mut packet(500, 100), true).await;
+        gate.open.store(true, Ordering::Relaxed);
+        track.write(&mut packet(501, 100), false).await;
+        assert_eq!(*gate.got.lock().unwrap(), vec![500, 501]);
+    }
+
+    #[tokio::test]
+    async fn too_much_before_srtp_is_dropped_and_then_holds_nothing() {
+        let gate = Arc::new(Gate::default());
+        let track = bound_track(&gate);
+        track.write(&mut packet(0, 1200), true).await;
+        for seq in 1..=EARLY_PACKETS as u16 {
+            track.write(&mut packet(seq, 1200), false).await;
+        }
+        assert!(!track.holds_picture());
+        gate.open.store(true, Ordering::Relaxed);
+        track.write(&mut packet(9000, 100), false).await;
+        assert_eq!(*gate.got.lock().unwrap(), vec![9000]);
+    }
+
+    #[tokio::test]
+    async fn an_unbound_track_holds_nothing() {
+        let track = ViewerTrack::new(crate::media::vp8_capability(), "v".to_owned(), "s".to_owned(), Arc::new(Resend::default()));
+        assert_eq!(track.write(&mut packet(1, 100), true).await, 0);
+        assert!(!track.holds_picture());
     }
 }

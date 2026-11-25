@@ -441,7 +441,7 @@ async fn put_avatar(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, 
 }
 
 async fn stream(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owner: Option<&Grant>) -> anyhow::Result<()> {
-    let (media, registry) = media_setup(false, None)?;
+    let (media, registry) = media_setup(false, false, None)?;
     let api = APIBuilder::new()
         .with_media_engine(media)
         .with_interceptor_registry(registry)

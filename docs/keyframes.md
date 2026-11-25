@@ -2,7 +2,7 @@
 
 built. how `video` gets a joining watcher its first picture, and why it does that with keyframe requests to the publisher and not with a cache of the last keyframe.
 
-a watcher can decode nothing until a keyframe: every vp8 delta frame refers to the frame before it. a browser publisher sends a keyframe only when asked (a PLI or FIR) or when its resolution changes. no periodic keyframes. so a new watcher's first picture is one PLI to the publisher, the publisher encoding a keyframe, and that keyframe copied out to every watcher of the slot.
+a watcher can decode nothing until a keyframe: every vp8 or vp9 delta frame refers to the frame before it. a browser publisher sends a keyframe only when asked (a PLI or FIR) or when its resolution changes. no periodic keyframes. so a new watcher's first picture is one PLI to the publisher, the publisher encoding a keyframe, and that keyframe copied out to every watcher of the slot.
 
 ## who asks
 
@@ -27,15 +27,18 @@ so each watcher asks at most twice per slot, once each:
 
 1. **early, at ICE connected** (`on_ice_connection_state_change`, `Connected` or `Completed`). ICE is done and only the DTLS handshake is left, ~one or two watcher round trips. the keyframe takes a publisher round trip plus the encode, about as long, so it often lands just after SRTP is up and the watcher has a picture one handshake sooner than before.
 2. **backup, at peer `Connected`**. it carries the slot's keyframe count read the moment the peer connected. it asks unless a keyframe is still to come:
+   - the watcher's track already holds a picture (`ViewerTrack::holds_picture`, below): skip.
    - a keyframe was forwarded since this watcher connected (the count moved): skip, the watcher has it.
    - a request is on its way (under `KEYFRAME_IN_FLIGHT`, 500ms, and nothing forwarded since): skip, it lands after `Connected`.
    - otherwise the early keyframe (or someone else's) went by before SRTP was up: ask again, by the join rules below.
+
+**the pre-srtp hold.** the early keyframe used to be lost whenever it beat SRTP, and then the backup trailed to the end of the 300ms gap: ~350ms to a first frame instead of ~100. vp9 lost that race on every join. now each `ViewerTrack` keeps what it is sent from its first keyframe on while writes still return 0 (up to `EARLY_PACKETS`, 600, and `EARLY_BYTES`, 768 KB; past either it drops all of it and holds nothing more), and the first write that goes through sends the held packets in order, then the new one. a new keyframe before SRTP replaces what was held. the packets were already rewritten for this watcher, so the flush looks to it like packets that came a little late. local joins went from ~350ms (bimodal with ~120ms) to ~100ms median for vp8 and 88ms for vp9 (`vp9.md`).
 
 **not at answer time.** an ask when the answer goes out lands a publisher round trip later (tens of ms) while the watcher still has ~400ms of ICE and DTLS to go: it would be dropped for that watcher nearly every time. it would also open the 300ms gap below and push the useful ask back. so nothing asks at answer time.
 
 ## the join rules
 
-each layer counts the keyframes it forwards (`parse_vp8` in `simulcast.rs`, on the first packet of partition 0, read in the publish loop, one atomic add). each request notes the count. so `KeyframeAsks::decide` knows whether a keyframe is **on its way** (a request under `KEYFRAME_IN_FLIGHT`, 500ms, old, and nothing forwarded since) or **gone** (one was forwarded since).
+each layer counts the keyframes it forwards (`parse_vp8` or `parse_vp9` in `simulcast.rs`, by the layer's codec, read in the publish loop, one atomic add). a vp9 camera's slot has a feed per codec (`vp9.md`), and asks are kept per codec and layer. each request notes the count. so `KeyframeAsks::decide` knows whether a keyframe is **on its way** (a request under `KEYFRAME_IN_FLIGHT`, 500ms, old, and nothing forwarded since) or **gone** (one was forwarded since).
 
 `Join` (early) and `Backup` share these, after the backup's own check above:
 
@@ -68,4 +71,4 @@ if it is built later (a box-made 360 rung, `bitrates.md`, would make keyframes o
 
 ## codecs
 
-`media.rs` registers opus and vp8 only, so vp8 is the one video codec a publisher can send and the one with keyframe detection. a slot of any other codec counts no keyframes: a request to it looks on its way for 500ms and a join in that time shares it, which is no worse than the 300ms drop before.
+`media.rs` registers opus and vp8 for every peer, and vp9 profile 0 for publish peers (`vp9.md`). vp8 and vp9 both have keyframe detection. there is no other video codec a publisher can be answered.

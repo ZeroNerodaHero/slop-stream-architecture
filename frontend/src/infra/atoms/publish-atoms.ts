@@ -39,7 +39,8 @@ import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
-import { applyLayers, MAX_FRAMERATE, sendEncodings, SINGLE_BITRATE, SINGLE_HEIGHT, type Top } from '@/infra/simulcast';
+import { cameraCodec, vp8Only, vp9First } from '@/infra/camera-codec';
+import { applyCopy, applyLayers, type Codec, copyEncodings, MAX_FRAMERATE, sendEncodings, SINGLE_BITRATE, SINGLE_HEIGHT, type Top } from '@/infra/simulcast';
 import {
   arrangedAfterAdd,
   arrangedAfterRemove,
@@ -233,6 +234,9 @@ let heartbeat: ReturnType<typeof setInterval> | null = null;
 let sceneTimer: ReturnType<typeof setTimeout> | null = null;
 let tuneTimer: ReturnType<typeof setTimeout> | null = null;
 let cameraSender: RTCRtpSender | null = null;
+let copySender: RTCRtpSender | null = null;
+let sendingCodec: Codec = 'vp8';
+let copyUpper = false;
 let screenSenders: RTCRtpSender[] = [];
 let mixer: Mixer | null = null;
 let modelSession: ModelSession | null = null;
@@ -361,7 +365,7 @@ export function cameraOff() {
   }
   camera.getVideoTracks().forEach((track) => track.stop());
   store.set(cameraAtom, new MediaStream(camera.getAudioTracks()));
-  cameraSender?.replaceTrack(null).catch(() => undefined);
+  void setCameraTrack(null);
   store.set(storedMicOnlyAtom, true);
   dropSource('cam');
   ensureAvatarSource();
@@ -392,7 +396,7 @@ export async function cameraOn(): Promise<void> {
   const track = picture.getVideoTracks()[0]!;
   track.contentHint = 'motion';
   store.set(cameraAtom, new MediaStream([...had.getAudioTracks(), track]));
-  cameraSender?.replaceTrack(track).catch(() => undefined);
+  void setCameraTrack(track);
   setSources(store.get(sourcesAtom).map((s) => (s.kind === 'avatar' ? { ...s, shown: false } : s)));
   ensureCameraSource();
   store.set(sourceStatusAtom, '');
@@ -631,7 +635,7 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   };
   if (stale()) return giveUp();
   session.track.contentHint = 'motion';
-  if (cameraSender) await cameraSender.replaceTrack(session.track).catch(() => undefined);
+  await setCameraTrack(session.track);
   void tuneSenders();
   if (stale()) return giveUp();
   const sound = before?.getAudioTracks() ?? opened?.mic?.getAudioTracks() ?? [];
@@ -833,7 +837,7 @@ export async function backToCamera(): Promise<void> {
   }
   const track = picture.getVideoTracks()[0]!;
   track.contentHint = 'motion';
-  if (cameraSender) await cameraSender.replaceTrack(track).catch(() => undefined);
+  await setCameraTrack(track);
   void tuneSenders();
   store.set(cameraAtom, new MediaStream([...had.getAudioTracks(), track]));
   dropModel();
@@ -905,6 +909,8 @@ export async function goLive(): Promise<void> {
   const camera = store.get(cameraAtom);
   const name = store.get(streamNameAtom);
   if (!camera || !isValidName(name) || pc) return;
+  const codec = await cameraCodec();
+  if (pc || store.get(cameraAtom) !== camera) return;
   if (store.get(pipAtom)) endWatch();
   store.set(chatRoomAtom, name);
 
@@ -933,7 +939,9 @@ export async function goLive(): Promise<void> {
 
   const picture = camera.getVideoTracks()[0];
   if (picture) picture.contentHint = 'motion';
-  cameraSender = addCamera(myPc, camera, picture);
+  const added = addCamera(myPc, camera, picture, codec);
+  cameraSender = added.sender;
+  sendingCodec = added.codec;
   const sound = mixer?.outputTrack ?? mic;
   if (sound) myPc.addTransceiver(sound, { direction: 'sendonly', streams: [camera] });
   else myPc.addTransceiver('audio', { direction: 'sendonly' });
@@ -942,6 +950,8 @@ export async function goLive(): Promise<void> {
     const track = store.get(screenStreamAtom(i))?.getVideoTracks()[0];
     return (track ? myPc.addTransceiver(track, init) : myPc.addTransceiver('video', init)).sender;
   });
+  copySender = sendingCodec === 'vp9' ? addCopy(myPc, camera, picture) : null;
+  if (!copySender) sendingCodec = 'vp8';
 
   try {
     await myPc.setLocalDescription(await myPc.createOffer());
@@ -964,6 +974,10 @@ export async function goLive(): Promise<void> {
       signal: myAbort.signal,
       onMessage: (msg) => {
         if (msg.event === 'viewers') store.set(liveViewersAtom, viewersOf(msg));
+        if (msg.event === 'copy') {
+          copyUpper = msg.full === true;
+          void tuneSenders();
+        }
       }
     });
   } catch (err) {
@@ -979,19 +993,69 @@ export async function goLive(): Promise<void> {
   if (gone()) return;
   startPublishStats();
   announceSlots();
+  settleCodec();
   void tuneSenders();
 }
 
-function addCamera(myPc: RTCPeerConnection, camera: MediaStream, picture: MediaStreamTrack | undefined): RTCRtpSender {
+function steer(transceiver: RTCRtpTransceiver, order: (codecs: RTCRtpCodec[]) => RTCRtpCodec[]): boolean {
+  try {
+    const codecs = RTCRtpSender.getCapabilities('video')?.codecs;
+    if (!codecs?.length) return false;
+    transceiver.setCodecPreferences(order(codecs));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function addCamera(myPc: RTCPeerConnection, camera: MediaStream, picture: MediaStreamTrack | undefined, codec: Codec): { sender: RTCRtpSender; codec: Codec } {
   const add = (encodings: RTCRtpEncodingParameters[]) => {
     const init: RTCRtpTransceiverInit = { direction: 'sendonly', streams: [camera], sendEncodings: encodings };
-    return (picture ? myPc.addTransceiver(picture, init) : myPc.addTransceiver('video', init)).sender;
+    return picture ? myPc.addTransceiver(picture, init) : myPc.addTransceiver('video', init);
   };
-  try {
-    return add(sendEncodings(picture?.getSettings().height));
-  } catch {
-    return add([{ maxBitrate: SINGLE_BITRATE, maxFramerate: MAX_FRAMERATE }]);
+  const height = picture?.getSettings().height;
+  for (const tried of codec === 'vp9' ? (['vp9', 'vp8'] as const) : (['vp8'] as const)) {
+    try {
+      const transceiver = add(sendEncodings(height, tried));
+      return { sender: transceiver.sender, codec: tried === 'vp9' && steer(transceiver, vp9First) ? 'vp9' : 'vp8' };
+    } catch {
+      continue;
+    }
   }
+  return { sender: add([{ maxBitrate: SINGLE_BITRATE, maxFramerate: MAX_FRAMERATE }]).sender, codec: 'vp8' };
+}
+
+function addCopy(myPc: RTCPeerConnection, camera: MediaStream, picture: MediaStreamTrack | undefined): RTCRtpSender | null {
+  let transceiver: RTCRtpTransceiver;
+  try {
+    const init: RTCRtpTransceiverInit = { direction: 'sendonly', streams: [camera], sendEncodings: copyEncodings(picture?.getSettings().height) };
+    transceiver = picture ? myPc.addTransceiver(picture, init) : myPc.addTransceiver('video', init);
+  } catch {
+    return null;
+  }
+  if (steer(transceiver, vp8Only)) return transceiver.sender;
+  transceiver.direction = 'inactive';
+  return null;
+}
+
+function answeredCodec(sender: RTCRtpSender | null): Codec | null {
+  const mime = sender?.getParameters().codecs?.[0]?.mimeType.toLowerCase();
+  return mime === 'video/vp9' ? 'vp9' : mime === 'video/vp8' ? 'vp8' : null;
+}
+
+function settleCodec() {
+  if (sendingCodec !== 'vp9' || answeredCodec(cameraSender) === 'vp9') return;
+  sendingCodec = 'vp8';
+  const copy = copySender;
+  copySender = null;
+  if (!copy) return;
+  const params = copy.getParameters();
+  for (const encoding of params.encodings ?? []) encoding.active = false;
+  copy.setParameters(params).catch(() => undefined);
+}
+
+async function setCameraTrack(track: MediaStreamTrack | null): Promise<void> {
+  await Promise.all([cameraSender, copySender].map((sender) => sender?.replaceTrack(track).catch(() => undefined)));
 }
 
 function sendHeartbeat() {
@@ -1362,13 +1426,14 @@ async function tuneSenders() {
   const stage = shown.reduce<Source | null>((best, s) => (!best || s.box.w * s.box.h > best.box.w * best.box.h ? s : best), null);
   const camera = sources.find((s) => s.kind === 'camera');
   const height = cameraSender?.track?.getSettings().height;
-  if (!screens.length || stage?.kind === 'camera') {
-    cameraCap = await tuneCamera(cameraSender, height);
-  } else {
+  let top: Top | undefined;
+  if (screens.length && stage?.kind !== 'camera') {
     const w = camera?.shown ? camera.box.w : 0.5;
     const cap = Math.round(Math.min(CAMERA_SHARING_BITRATE, Math.max(CAMERA_MIN_BITRATE, CAMERA_BPS_PER_WIDTH * w)));
-    cameraCap = await tuneCamera(cameraSender, height, { height: Math.min(height || SINGLE_HEIGHT, SINGLE_HEIGHT) / cameraScale(w), maxBitrate: cap });
+    top = { height: Math.min(height || SINGLE_HEIGHT, SINGLE_HEIGHT) / cameraScale(w), maxBitrate: cap };
   }
+  const main = await tuneCamera(cameraSender, height, top);
+  cameraCap = main + (await tuneCopy(copySender, height, top));
   const stageScreen = stage?.kind === 'screen' ? stage.slot : screens.length ? screens[0]!.slot + 1 : null;
   for (const [i, sender] of screenSenders.entries()) {
     if (!sender.track) {
@@ -1384,7 +1449,17 @@ async function tuneCamera(sender: RTCRtpSender | null, height: number | undefine
   if (!sender) return cameraCap;
   const params = sender.getParameters();
   if (!params.encodings?.length) return cameraCap;
-  const total = applyLayers(params.encodings, height, top);
+  const total = applyLayers(params.encodings, height, top, sendingCodec);
+  delete params.degradationPreference;
+  await sender.setParameters(params).catch(() => undefined);
+  return total;
+}
+
+async function tuneCopy(sender: RTCRtpSender | null, height: number | undefined, top?: Top): Promise<number> {
+  if (!sender) return 0;
+  const params = sender.getParameters();
+  if (!params.encodings?.length) return 0;
+  const total = applyCopy(params.encodings, height, top, copyUpper);
   delete params.degradationPreference;
   await sender.setParameters(params).catch(() => undefined);
   return total;
@@ -1454,6 +1529,9 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
   }
   cameraCap = SINGLE_BITRATE;
   cameraSender = null;
+  copySender = null;
+  sendingCodec = 'vp8';
+  copyUpper = false;
   screenSenders = [];
   store.set(liveViewersAtom, null);
   const owner = store.get(ownerAtom);

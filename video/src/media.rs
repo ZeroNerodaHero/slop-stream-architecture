@@ -1,5 +1,5 @@
 use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8, MIME_TYPE_VP9};
 use webrtc::interceptor::nack::generator::Generator;
 use webrtc::interceptor::nack::responder::Responder;
 use webrtc::interceptor::registry::Registry;
@@ -16,16 +16,16 @@ pub fn opus_capability() -> RTCRtpCodecCapability {
     }
 }
 
-pub fn vp8_capability() -> RTCRtpCodecCapability {
+fn video_capability(mime_type: &str, sdp_fmtp_line: &str) -> RTCRtpCodecCapability {
     let feedback = |typ: &str, parameter: &str| RTCPFeedback {
         typ: typ.to_owned(),
         parameter: parameter.to_owned(),
     };
     RTCRtpCodecCapability {
-        mime_type: MIME_TYPE_VP8.to_owned(),
+        mime_type: mime_type.to_owned(),
         clock_rate: 90000,
         channels: 0,
-        sdp_fmtp_line: String::new(),
+        sdp_fmtp_line: sdp_fmtp_line.to_owned(),
         rtcp_feedback: vec![
             feedback("goog-remb", ""),
             feedback("ccm", "fir"),
@@ -35,7 +35,22 @@ pub fn vp8_capability() -> RTCRtpCodecCapability {
     }
 }
 
-pub fn media_setup(twcc: bool, resend: Option<std::sync::Arc<crate::resend::Resend>>) -> anyhow::Result<(MediaEngine, Registry)> {
+pub fn vp8_capability() -> RTCRtpCodecCapability {
+    video_capability(MIME_TYPE_VP8, "")
+}
+
+pub fn vp9_capability() -> RTCRtpCodecCapability {
+    video_capability(MIME_TYPE_VP9, "profile-id=0")
+}
+
+pub fn capability_of(codec: crate::simulcast::Codec) -> RTCRtpCodecCapability {
+    match codec {
+        crate::simulcast::Codec::Vp8 => vp8_capability(),
+        crate::simulcast::Codec::Vp9 => vp9_capability(),
+    }
+}
+
+pub fn media_setup(twcc: bool, vp9: bool, resend: Option<std::sync::Arc<crate::resend::Resend>>) -> anyhow::Result<(MediaEngine, Registry)> {
     let mut media = MediaEngine::default();
     media.register_codec(
         RTCRtpCodecParameters {
@@ -53,6 +68,16 @@ pub fn media_setup(twcc: bool, resend: Option<std::sync::Arc<crate::resend::Rese
         },
         RTPCodecType::Video,
     )?;
+    if vp9 {
+        media.register_codec(
+            RTCRtpCodecParameters {
+                capability: vp9_capability(),
+                payload_type: 98,
+                ..Default::default()
+            },
+            RTPCodecType::Video,
+        )?;
+    }
 
     let mut registry = Registry::new();
     match resend {
@@ -155,7 +180,7 @@ mod tests {
 
     #[test]
     fn publish_media_accepts_simulcast_rids() {
-        let (mut media, _) = super::media_setup(true, None).unwrap();
+        let (mut media, _) = super::media_setup(true, true, None).unwrap();
         assert!(super::accept_simulcast(&mut media).is_ok());
     }
 }

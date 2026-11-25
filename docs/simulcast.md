@@ -1,6 +1,6 @@
 # simulcast
 
-built. the camera is sent as up to three vp8 layers and `video` picks one per watcher, so a watcher on a weak link gets a smaller picture instead of loss. screens are still one encoding.
+built. the camera is sent as up to three layers (vp8, or vp9 with a vp8 copy, `vp9.md`) and `video` picks one per watcher, so a watcher on a weak link gets a smaller picture instead of loss. screens are still one encoding.
 
 ## the publisher (`frontend/src/infra/simulcast.ts`)
 
@@ -8,7 +8,7 @@ the camera transceiver is added with three `sendEncodings`, rids `q`, `h`, `f`, 
 
 every encoding, camera layers, the single-encoding fallback and screens, carries `maxFramerate: 30`, and every capture (camera, face camera, screens) asks for `frameRate` at most 30.
 
-caps follow the layer's height through this table, linear between points:
+caps follow the layer's height through this table, linear between points (vp8; vp9 layers get 0.7 of it, `vp9.md`):
 
 | height | cap |
 |---|---|
@@ -26,12 +26,12 @@ the publisher's own stats panel folds the layers of one track into one line: the
 
 ## the sfu (`video/src/simulcast.rs`, `fanout.rs`, `resend.rs`)
 
-the publish peer registers the mid and rid header extensions, so webrtc-rs answers the offer's `a=rid:… send` lines and fires `on_track` once per rid. each video slot holds a `Feed` with three `Layer`s (ssrc, last packet time, bitrate as an ewma over 500ms windows, keyframe count, keyframe height). a slot offered without rids is one layer at level 0: the dummy and old publishers.
+the publish peer registers the mid and rid header extensions, so webrtc-rs answers the offer's `a=rid:… send` lines and fires `on_track` once per rid. each video slot holds a `Feed` with three `Layer`s (ssrc, last packet time, bitrate as an ewma over 500ms windows, keyframe count, keyframe height). a slot offered without rids is one layer at level 0: the dummy and old publishers. a vp9 camera's slot holds a vp9 feed and a vp8 one (`vp9.md`).
 
 every watcher of a video slot has its own `ViewerTrack` (a `TrackLocal` with one binding) and a `Viewer`: target layer, current layer, and a `Rewrite`. the publish loop for each layer calls `Feed::forward`, which for each watcher asks its `Rewrite` whether to send the packet:
 
 - a packet of the watcher's current layer goes out with its sequence number and timestamp shifted.
-- the first packet of a keyframe on the target layer switches the watcher: the sequence number continues at last sent + 1, the timestamp at last sent + the wall time since (90 kHz, at least 1), the vp8 picture id and tl0picidx at last sent + 1. from then on only that layer is sent.
+- the first packet of a keyframe on the target layer switches the watcher: the sequence number continues at last sent + 1, the timestamp at last sent + the wall time since (90 kHz, at least 1), the vp8 or vp9 picture id and tl0picidx at last sent + 1. from then on only that layer is sent.
 - anything else is dropped.
 
 the payload is copied only when the picture id or tl0 offset is not zero, and the copy is shared by every watcher with the same offsets (four per packet). the header is built fresh without the publisher's header extensions, whose ids mean nothing on the watcher's side. no lock is held across an await; the watcher list is an `Arc<[Arc<Viewer>]>` swapped on join and leave.

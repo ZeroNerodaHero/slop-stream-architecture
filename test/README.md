@@ -18,4 +18,6 @@ the default suite is listed in `scripts/test.sh`: e2e, dup, chat, auth, groups, 
 
 `voice-video.js` and `voice-spike.js` are not in the default suite; `./scripts/test.sh voice-video` runs the first. `voice-spike.js` needs `video voice` running with VOICE_DEV_OPEN=1 (VOICE_URL, default ws://127.0.0.1:7881/ws) and checks two browsers hear each other.
 
-`simulcast.js` is not in the default suite and needs no server: it starts its own `video` (a release build, `VIDEO_BIN`) on loopback with a mock api and checks the camera's simulcast layers, joins, pausing a hidden watcher and pinning a small one (`SKIP_PAUSE=1` leaves that out), layer switches under a squeeze and the dummy. `node test/simulcast.js`; `docs/simulcast.md` has the knobs.
+`simulcast.js` is not in the default suite and needs no server: it starts its own `video` (a release build, `VIDEO_BIN`) on loopback with a mock api and checks the camera's simulcast layers, joins, pausing a hidden watcher and pinning a small one (`SKIP_PAUSE=1` leaves that out), layer switches under a squeeze and the dummy. `node test/simulcast.js`; `docs/simulcast.md` has the knobs. `MODE=vp9` publishes vp9 with the vp8 copy and adds vp8-only watchers (`docs/vp9.md`).
+
+`codec-quality.sh` encodes clips offline with ffmpeg libvpx vp8 and vp9 at a few bitrates and prints actual kbps, psnr and ssim. `CLIPS` adds y4m files or urls (xiph's derf clips work), `RATES` and `SECONDS_LONG` set the grid.
