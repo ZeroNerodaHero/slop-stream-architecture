@@ -11,6 +11,8 @@ Do not add `shadow`, `shadow-*`, `hover:shadow-*`, `drop-shadow`, or a `box-shad
 
 The one exception is not a box: the speaker glyph and the volume dial sit straight on the video with a `drop-shadow` under them so they read over a bright frame (`VideoControls.tsx`). Leave it.
 
+The only allowed `box-shadow` exception, approved by Billy: the soft shadow on the right edge of the desktop left sidebar (`#user-panel`), driven by `--sidebar-edge-shadow`. Each theme sets that variable (`toCssVars` in `src/infra/theme.ts`, dark default on `:root` in `globals.css`), and the one rule `.sidebar-edge-shadow { box-shadow: var(--sidebar-edge-shadow); }` in `globals.css` is the only line `no-box-shadow.sh` lets through. Do not reuse the class or the variable anywhere else.
+
 ```tsx
 // ❌ BAD
 <Link className="border border-transparent hover:border-primaryBlue hover:shadow-hard-blue">

@@ -19,6 +19,7 @@
   --increase: 63 185 80;
   --decrease: 248 81 73;
   --caution: 240 150 50;
+  --sidebar-edge-shadow: 4px 0 12px -6px rgb(0 0 0 / 0.55);
   --r-panel: 0px;
   --r-control: 0px;
   --r-bubble: 0px;
@@ -201,6 +202,12 @@ body {
   --decrease: var(--solid-decrease);
   color: rgb(var(--text-primary));
   text-shadow: none;
+}
+
+@media (min-width: 768px) {
+  .sidebar-edge-shadow {
+    box-shadow: var(--sidebar-edge-shadow);
+  }
 }
 
 @layer components {
