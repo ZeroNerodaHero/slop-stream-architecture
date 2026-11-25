@@ -290,11 +290,11 @@ export function UserPanel() {
               onClick={closeFriends}
               className={cn(
                 NAME_LINE,
-                'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
+                'group/name flex w-full items-center gap-1.5 text-left focus-visible:border-primaryBlue focus-visible:outline-none',
                 mirrored && 'flex-row-reverse text-right'
               )}
             >
-              <span id="me" className="truncate font-semibold">
+              <span id="me" className="truncate font-semibold group-hover/name:underline">
                 {me}
               </span>
               <Tooltip content="logged in: this name is yours">
@@ -341,7 +341,7 @@ export function UserPanel() {
                 spellCheck={false}
                 className={cn(
                   NAME_LINE,
-                  'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background',
+                  'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary focus:border-primaryBlue focus:bg-background',
                   mirrored ? 'pl-6 text-right' : 'pr-6'
                 )}
               />
