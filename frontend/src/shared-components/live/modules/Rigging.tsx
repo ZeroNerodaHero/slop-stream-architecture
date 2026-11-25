@@ -5,6 +5,7 @@ import {
   faceAtom,
   faceLinesAtom,
   faceMirrorAtom,
+  modelAtom,
   type FaceReading,
   readerCameraAtom,
   rigPictureAtom,
@@ -12,6 +13,9 @@ import {
   watchFaceMarks
 } from '@/infra/atoms/publish-atoms';
 import type { FaceLines, FaceMarks } from '@/infra/face';
+import type { Place } from '@/infra/live-dock';
+import { DockPanel } from '@/shared-components/live/Dock';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const WORDS: Record<FaceReading, string> = {
@@ -32,9 +36,9 @@ const BARS: readonly { id: string; label: string; of: (marks: FaceMarks) => numb
   { id: 'brows-down', label: 'brows down', of: (marks) => Math.max(0, -marks.brows) }
 ];
 const TURNS: readonly { id: string; label: string; of: (marks: FaceMarks) => number }[] = [
-  { id: 'turn', label: 'head turn', of: (marks) => marks.yaw },
-  { id: 'nod', label: 'head nod', of: (marks) => marks.pitch },
-  { id: 'tilt', label: 'head tilt', of: (marks) => marks.roll }
+  { id: 'turn', label: 'turn', of: (marks) => marks.yaw },
+  { id: 'nod', label: 'nod', of: (marks) => marks.pitch },
+  { id: 'tilt', label: 'tilt', of: (marks) => marks.roll }
 ];
 const REST: FaceMarks = { points: null, yaw: 0, pitch: 0, roll: 0, mouth: 0, blink: 0, smile: 0, brows: 0 };
 const ASPECT = 4 / 3;
@@ -44,7 +48,7 @@ const FOLLOW_S = 0.6;
 const HEAD_UP = 0.06;
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
-export function RigBody({ dock = false }: { dock?: boolean }) {
+function RigBody({ place }: { place: Place }) {
   const stream = useAtomValue(readerCameraAtom);
   const face = useAtomValue(faceAtom);
   const mirror = useAtomValue(faceMirrorAtom);
@@ -217,12 +221,17 @@ export function RigBody({ dock = false }: { dock?: boolean }) {
   }, [lines, reading]);
 
   const words = WORDS[face];
+  const tall = place === 'phone';
+  const note =
+    sharing && picture
+      ? "only you see this. your camera's picture is hidden while you share a screen: a share of this page would send it."
+      : "only you see this. your camera's picture is not sent."
   return (
-    <>
-      <div className={dock ? 'flex flex-wrap items-start gap-3 p-3' : 'grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-3 p-3'}>
+    <div className="flex flex-col">
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 pb-1.5 pt-2">
         <div
           id="rig-view"
-          className={cn('relative overflow-hidden border border-primaryStroke bg-black', dock ? 'h-36 max-w-full shrink-0' : 'w-full max-w-md')}
+          className={cn('relative max-w-full shrink-0 overflow-hidden rounded-card border border-primaryStroke bg-black', tall ? 'w-full' : 'h-16')}
           style={{ aspectRatio: String(aspect) }}
         >
           <div className={cn('absolute inset-0', mirror && '-scale-x-100')}>
@@ -240,37 +249,39 @@ export function RigBody({ dock = false }: { dock?: boolean }) {
           {words && (
             <p
               id="rig-words"
-              className="absolute bottom-2 left-2 max-w-[calc(100%-1rem)] border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white"
+              className="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate rounded-control border border-white/10 bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white"
             >
               {words}
             </p>
           )}
         </div>
-        <div ref={numbersRef} id="rig-numbers" className={cn('flex min-w-0 max-w-sm flex-col', dock ? 'min-w-[10rem] flex-1 gap-1.5' : 'gap-2.5')}>
-          {BARS.map((bar) => (
-            <div key={bar.id} className="flex flex-col gap-1">
-              <div className="flex items-baseline justify-between gap-2 text-xs">
-                <span className="truncate text-textSecondary">{bar.label}</span>
-                <span id={`rig-${bar.id}-value`} className="tabular-nums text-textPrimary">
-                  0%
+        <div ref={numbersRef} id="rig-numbers" className="flex min-w-[9rem] flex-1 flex-col gap-1.5">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(5.5rem,1fr))] gap-x-3 gap-y-1">
+            {BARS.map((bar) => (
+              <div key={bar.id} className="flex min-w-0 flex-col gap-0.5">
+                <div className="flex items-baseline justify-between gap-2 text-xs">
+                  <span className="truncate text-textSecondary">{bar.label}</span>
+                  <span id={`rig-${bar.id}-value`} className="tabular-nums text-textPrimary">
+                    0%
+                  </span>
+                </div>
+                <span
+                  id={`rig-${bar.id}`}
+                  role="meter"
+                  aria-label={bar.label}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={0}
+                  className="block h-1 w-full bg-backgroundTertiary"
+                >
+                  <span className="block h-full w-0 bg-primaryBlue" />
                 </span>
               </div>
-              <span
-                id={`rig-${bar.id}`}
-                role="meter"
-                aria-label={bar.label}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={0}
-                className="block h-1 w-full bg-backgroundTertiary"
-              >
-                <span className="block h-full w-0 bg-primaryBlue" />
-              </span>
-            </div>
-          ))}
-          <div className="flex flex-col gap-1.5 border-t border-primaryStroke pt-2.5">
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-x-2 border-t border-primaryStroke pt-1.5">
             {TURNS.map((turn) => (
-              <div key={turn.id} className="flex items-baseline justify-between gap-2 text-xs">
+              <div key={turn.id} className="flex min-w-0 items-baseline justify-between gap-1 text-xs">
                 <span className="truncate text-textSecondary">{turn.label}</span>
                 <span id={`rig-${turn.id}`} data-value="0" className="tabular-nums text-textPrimary">
                   0°
@@ -280,11 +291,20 @@ export function RigBody({ dock = false }: { dock?: boolean }) {
           </div>
         </div>
       </div>
-      <p id="rig-note" className="border-t border-primaryStroke px-3 py-2 text-xs text-textTertiary">
-        {sharing && picture
-          ? "only you see this. your camera's picture is hidden while you share a screen: a share of this page would send it."
-          : "only you see this. your camera's picture is not sent."}
-      </p>
-    </>
+      <Tooltip content={note}>
+        <p id="rig-note" className="truncate px-3 pb-1.5 text-[11px] leading-tight text-textTertiary">
+          {note}
+        </p>
+      </Tooltip>
+    </div>
+  );
+}
+
+export function RigModule({ place }: { place: Place }) {
+  const model = useAtomValue(modelAtom);
+  return (
+    <DockPanel tab="rig" place={place}>
+      {model ? <RigBody place={place} /> : <p className="px-3 py-2.5 text-sm text-textTertiary">the rigging, your face read live, is here once a model is on.</p>}
+    </DockPanel>
   );
 }

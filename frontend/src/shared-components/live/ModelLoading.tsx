@@ -71,7 +71,7 @@ export function ModelLoading() {
   return (
     <div id="model-loading" data-step={load.step} className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/70">
       <div className="flex w-56 max-w-[80%] flex-col items-center gap-3 text-center">
-        <span className="block h-24 w-24 overflow-hidden border border-white/25 bg-black">
+        <span className="block h-24 w-24 overflow-hidden rounded-card border border-white/25 bg-black">
           <ModelPicture key={`${choice.kind}-${choice.id}`} choice={choice} />
         </span>
         <p id="model-loading-name" className="max-w-full truncate text-sm font-semibold text-white">

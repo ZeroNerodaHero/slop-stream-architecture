@@ -1,22 +1,31 @@
-import { RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiMicLine, RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import {
+  hasMicAtom,
+  isPublishingAtom,
   MASTER,
   masterRowAtom,
   mixClipping,
   mixerOpenAtom,
   mixerRunningAtom,
   type MixRow,
+  micDeviceAtom,
+  micDevicesAtom,
   mixRowsAtom,
   readMixLevel,
+  refreshMicDevices,
   resumeMixer,
+  setMicDevice,
   setMixLevel,
   setMixMuted
 } from '@/infra/atoms/publish-atoms';
+import type { Place } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { DevicePick } from '@/shared-components/live/DevicePick';
+import { DockPanel } from '@/shared-components/live/Dock';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -133,5 +142,47 @@ export function MixerBody() {
         <Row row={{ ...master, id: MASTER }} master />
       </ul>
     </>
+  );
+}
+
+const refreshMics = () => void refreshMicDevices();
+
+function MicPick() {
+  const hasMic = useAtomValue(hasMicAtom);
+  const devices = useAtomValue(micDevicesAtom);
+  const current = useAtomValue(micDeviceAtom);
+  if (!hasMic) return <p className="px-3 py-2 text-sm text-textTertiary">no mic: the stream is silent</p>;
+  return (
+    <div className="px-3 py-2">
+      <DevicePick
+        id="mic-device"
+        label="the mic that goes out"
+        icon={RiMicLine}
+        value={current}
+        devices={devices}
+        fallback="default mic"
+        on={hasMic}
+        refresh={refreshMics}
+        onPick={(id) => void setMicDevice(id)}
+      />
+    </div>
+  );
+}
+
+function SoundBody() {
+  const publishing = useAtomValue(isPublishingAtom);
+  return (
+    <div className="flex flex-col">
+      {publishing ? <MixerBody /> : <p className="px-3 pt-2.5 text-sm text-textTertiary">a fader for the mic and the mix is here once you are live.</p>}
+      <MicPick />
+    </div>
+  );
+}
+
+export function SoundModule({ place }: { place: Place }) {
+  return (
+    <DockPanel tab="sound" place={place}>
+      <SoundBody />
+    </DockPanel>
   );
 }
