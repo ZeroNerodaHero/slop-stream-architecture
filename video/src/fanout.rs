@@ -4,10 +4,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use webrtc::rtp::header::Header;
 use webrtc::rtp::packet::Packet;
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType};
 use webrtc::track::track_local::{TrackLocal, TrackLocalContext, TrackLocalWriter};
 
+use crate::resend::Resend;
 use crate::simulcast::{rewrite_payload, start_level, LayerView, Rewrite, Vp8, LEVELS, NO_LEVEL};
 
 const LIVE_WITHIN: Duration = Duration::from_millis(1000);
@@ -128,7 +130,9 @@ impl Feed {
         if viewers.is_empty() {
             return 0;
         }
-        let mut out = packet.clone();
+        let h = &packet.header;
+        let header = Header { version: h.version, padding: h.padding, marker: h.marker, payload_type: h.payload_type, sequence_number: h.sequence_number, timestamp: h.timestamp, ssrc: h.ssrc, ..Header::default() };
+        let mut out = Packet { header, payload: packet.payload.clone() };
         let mut cache: [Option<(u16, u8, bytes::Bytes)>; CACHED_PAYLOADS] = Default::default();
         let mut written = 0;
         for viewer in viewers.iter() {
@@ -149,7 +153,7 @@ impl Feed {
             } else {
                 cached(&mut cache, &packet.payload, vp8, admit.pid_off, admit.tl0_off)
             };
-            let n = viewer.track.write(&mut out).await;
+            let n = viewer.track.write(&mut out, admit.switched).await;
             if n > 0 {
                 viewer.sent.fetch_add(1, Ordering::Relaxed);
                 written += n;
@@ -212,18 +216,19 @@ pub struct ViewerTrack {
     stream_id: String,
     codec: RTCRtpCodecCapability,
     bound: Mutex<Option<Bound>>,
+    resend: Arc<Resend>,
 }
 
 impl ViewerTrack {
-    pub fn new(codec: RTCRtpCodecCapability, id: String, stream_id: String) -> Self {
-        Self { id, stream_id, codec, bound: Mutex::new(None) }
+    pub fn new(codec: RTCRtpCodecCapability, id: String, stream_id: String, resend: Arc<Resend>) -> Self {
+        Self { id, stream_id, codec, bound: Mutex::new(None), resend }
     }
 
     pub fn ssrc(&self) -> Option<u32> {
         self.bound.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|b| b.ssrc)
     }
 
-    async fn write(&self, packet: &mut Packet) -> usize {
+    async fn write(&self, packet: &mut Packet, switched: bool) -> usize {
         let writer = {
             let bound = self.bound.lock().unwrap_or_else(|e| e.into_inner());
             match bound.as_ref() {
@@ -235,6 +240,9 @@ impl ViewerTrack {
                 _ => return 0,
             }
         };
+        if switched {
+            self.resend.floor(packet.header.ssrc, packet.header.sequence_number);
+        }
         writer.write_rtp(packet).await.unwrap_or(0)
     }
 }

@@ -148,10 +148,6 @@ fn newer(a: u16, b: u16) -> bool {
 }
 
 impl Rewrite {
-    pub fn layer(&self) -> Option<u8> {
-        self.layer
-    }
-
     pub fn admit(&mut self, layer: u8, target: u8, seq: u16, ts: u32, vp8: &Vp8, now: Instant) -> Option<Admit> {
         let switched = layer == target && self.layer != Some(layer) && vp8.keyframe;
         if switched {
@@ -280,7 +276,8 @@ impl Picker {
         let remb = signals.remb.map(|r| r as f64);
         let remb_low = remb.is_some_and(|r| rate > 0.0 && r < rate * REMB_DOWN);
         let congested = signals.loss >= LOSS_DOWN || signals.nack >= NACK_DOWN || remb_low;
-        let settled = now.saturating_duration_since(self.changed) >= SETTLE;
+        let just_up = self.last_up.is_some_and(|(at, _)| at == self.changed);
+        let settled = just_up || now.saturating_duration_since(self.changed) >= SETTLE;
         if congested {
             self.healthy_since = None;
             if !settled {
@@ -423,7 +420,6 @@ mod tests {
         assert_eq!(r.admit(1, 2, 1003, 59_000, &delta(303, 41), t + ms(100)), None);
         let next = r.admit(2, 2, 7002, 906_000, &delta(9002, 201), t + ms(133)).unwrap();
         assert_eq!((next.seq, next.ts), (1004, 56_000 + 34 * 90 + 3000));
-        assert_eq!(r.layer(), Some(2));
     }
 
     #[test]
@@ -583,14 +579,16 @@ mod tests {
         }
         assert_eq!(p.decide(t + ms(8500), &layers, Some(1), &healthy()), Some(Why::Healthy));
         let lossy = Signals { loss: 0.3, ..healthy() };
-        assert_eq!(p.decide(t + ms(11_000), &layers, Some(2), &lossy), Some(Why::Congested));
+        assert_eq!(p.decide(t + ms(8750), &layers, Some(1), &lossy), None);
+        assert_eq!(p.decide(t + ms(9000), &layers, Some(2), &lossy), Some(Why::Congested));
         assert_eq!(p.up_wait, AFTER_DOWN_WAIT * 2);
-        let mut now = t + ms(11_000);
+        assert_eq!(p.decide(t + ms(9250), &layers, Some(1), &lossy), None);
+        let mut now = t + ms(9000);
         while p.target() == 1 {
             now += ms(500);
             p.decide(now, &layers, Some(1), &healthy());
         }
-        assert!(now - (t + ms(11_000)) >= AFTER_DOWN_WAIT * 2);
+        assert!(now - (t + ms(9000)) >= AFTER_DOWN_WAIT * 2);
         p.decide(now + UP_HELD, &layers, Some(2), &healthy());
         assert_eq!(p.up_wait, BASE_UP_WAIT);
     }

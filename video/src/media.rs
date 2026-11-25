@@ -35,7 +35,7 @@ pub fn vp8_capability() -> RTCRtpCodecCapability {
     }
 }
 
-pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
+pub fn media_setup(twcc: bool, resend: Option<std::sync::Arc<crate::resend::Resend>>) -> anyhow::Result<(MediaEngine, Registry)> {
     let mut media = MediaEngine::default();
     media.register_codec(
         RTCRtpCodecParameters {
@@ -55,7 +55,10 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     )?;
 
     let mut registry = Registry::new();
-    registry.add(Box::new(Responder::builder().with_log2_size(9)));
+    match resend {
+        Some(resend) => registry.add(Box::new(crate::resend::Builder(resend))),
+        None => registry.add(Box::new(Responder::builder().with_log2_size(9))),
+    }
     registry.add(Box::new(Generator::builder()));
     registry = configure_rtcp_reports(registry);
     if twcc {
@@ -152,7 +155,7 @@ mod tests {
 
     #[test]
     fn publish_media_accepts_simulcast_rids() {
-        let (mut media, _) = super::media_setup(true).unwrap();
+        let (mut media, _) = super::media_setup(true, None).unwrap();
         assert!(super::accept_simulcast(&mut media).is_ok());
     }
 }

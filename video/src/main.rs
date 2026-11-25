@@ -2,6 +2,7 @@ mod dummy;
 mod fanout;
 mod limits;
 mod media;
+mod resend;
 mod simulcast;
 mod thumbs;
 mod timings;
@@ -46,6 +47,7 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 
 use crate::fanout::{Feed, Meter, Viewer, ViewerTrack};
 use crate::media::{accept_simulcast, media_setup, opus_capability, vp8_capability};
+use crate::resend::Resend;
 use crate::simulcast::{level_of, parse_vp8, Picker, Signals, Vp8, LEVELS};
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 
@@ -582,7 +584,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
     let setup = Arc::new(timings::Setup::start("webrtc", "publish"));
 
     let dead = Arc::new(Notify::new());
-    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new()), Vec::new(), setup.clone()).await {
+    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new()), Vec::new(), None, setup.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("publish {name}: peer setup: {e}");
@@ -821,7 +823,8 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
             _ => None,
         })
         .collect();
-    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched, setup.clone()).await {
+    let resend = Arc::new(Resend::default());
+    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched, Some(Arc::clone(&resend)), setup.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("watch {name}: peer setup: {e}");
@@ -834,7 +837,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     for ((slot, out, track_id), start) in tracks.into_iter().zip(starts) {
         let (local, viewer): (Arc<dyn TrackLocal + Send + Sync>, _) = match (&out, start) {
             (SlotOut::Video(feed), Some(start)) => {
-                let viewer = Arc::new(Viewer::new(Arc::new(ViewerTrack::new(vp8_capability(), track_id, name.clone())), start));
+                let viewer = Arc::new(Viewer::new(Arc::new(ViewerTrack::new(vp8_capability(), track_id, name.clone(), Arc::clone(&resend))), start));
                 feed.join(Arc::clone(&viewer));
                 following.push((Arc::clone(feed), Arc::clone(&viewer)));
                 (Arc::clone(&viewer.track) as _, Some((Arc::clone(feed), viewer, start)))
@@ -1037,8 +1040,7 @@ async fn follow(hub: Hub, room: String, tag: String, slot: usize, feed: Arc<Feed
             }
             _ = tick.tick() => {
                 let now = Instant::now();
-                let signals = health.signals(now, viewer.sent());
-                let current = viewer.current();
+                let signals = health.signals(now, viewer.sent());                let current = viewer.current();
                 let before = picker.target();
                 if let Some(why) = picker.decide(now, &feed.views(now), current, &signals) {
                     viewer.set_target(picker.target());
@@ -1126,9 +1128,10 @@ async fn new_peer(
     dead: Arc<Notify>,
     connected: Arc<Notify>,
     watched: Vec<(usize, u8, Arc<Feed>)>,
+    resend: Option<Arc<Resend>>,
     setup: Arc<timings::Setup>,
 ) -> anyhow::Result<RTCPeerConnection> {
-    let (mut media, registry) = media_setup(role == Role::Publish)?;
+    let (mut media, registry) = media_setup(role == Role::Publish, resend)?;
     if role == Role::Publish {
         accept_simulcast(&mut media)?;
     }
