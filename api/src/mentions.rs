@@ -7,6 +7,8 @@ use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use redis::streams::StreamRangeReply;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -15,6 +17,7 @@ use crate::auth::{self, Me};
 use crate::follows::clean_query;
 use crate::groups::{channel_names, sees_sql};
 use crate::oauth::linked_sql;
+use crate::timings::Redis;
 use crate::{valid_name, ApiError, AppState};
 
 const MAX_MENTIONS: usize = 5;
@@ -131,13 +134,48 @@ fn aimed(row: &str) -> String {
     format!("{row}.id <> $2 AND {row}.name ~>=~ $3 AND {row}.name ~<~ ($3 || '~')")
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Spoke {
+    uids: Vec<Option<Uuid>>,
+    names: Vec<String>,
+}
+
+fn spoke_of(lines: impl IntoIterator<Item = (Option<Uuid>, String)>) -> Spoke {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut spoke = Spoke::default();
+    for (uid, name) in lines {
+        let key = uid.map_or_else(|| format!("@{name}"), |id| id.to_string());
+        if seen.insert(key) {
+            spoke.uids.push(uid);
+            spoke.names.push(name);
+        }
+    }
+    spoke
+}
+
+async fn recent_speakers(redis: &Redis, room: &str) -> Spoke {
+    let mut r = redis.clone();
+    let reply: StreamRangeReply = match r.xrevrange_count(crate::chat::room_key(room), "+", "-", CHATTER_SCAN).await {
+        Ok(reply) => reply,
+        Err(e) => {
+            log::warn!("mentions: {room}: {e}");
+            return Spoke::default();
+        }
+    };
+    spoke_of(reply.ids.into_iter().filter_map(|entry| {
+        let name: String = entry.get("from")?;
+        let uid = entry.get::<String>("uid").and_then(|u| Uuid::parse_str(&u).ok());
+        Some((uid, name))
+    }))
+}
+
 fn recent_chatters() -> &'static str {
-    "SELECT n.user_id, min(n.ord) AS ord
-     FROM (SELECT coalesce(l.user_id, t.id) AS user_id, row_number() OVER (ORDER BY l.at DESC, l.seq DESC) AS ord
-           FROM (SELECT user_id, speaker, at, seq FROM chat_lines WHERE room = $1 ORDER BY at DESC, seq DESC LIMIT $5) l
-           LEFT JOIN streamers t ON l.user_id IS NULL AND t.name = l.speaker AND t.is_test) n
-     WHERE n.user_id IS NOT NULL
-     GROUP BY n.user_id"
+    "SELECT coalesce(u.id, t.id) AS user_id, min(c.ord) AS ord
+     FROM unnest($5::uuid[], $7::text[]) WITH ORDINALITY AS c(uid, speaker, ord)
+     LEFT JOIN streamers u ON u.id = c.uid
+     LEFT JOIN streamers t ON c.uid IS NULL AND t.name = c.speaker AND t.is_test
+     WHERE coalesce(u.id, t.id) IS NOT NULL
+     GROUP BY 1"
 }
 
 fn picked_sql(picked: &str) -> String {
@@ -174,12 +212,12 @@ fn channel_sql() -> String {
     let sees = sees_sql("s.id", "false");
     picked_sql(&format!(
         "(SELECT s.id, 1 AS tier, said.ord FROM ({chatters}) said JOIN streamers s ON s.id = said.user_id
-              JOIN channels c ON c.server = $7 AND c.name = $8
+              JOIN channels c ON c.server = $1 AND c.name = $8
           WHERE {fit} AND {sees} ORDER BY said.ord LIMIT $4)
          UNION ALL
          (SELECT s.id, 2, 0::bigint FROM memberships m JOIN streamers s ON s.id = m.user_id
-              JOIN channels c ON c.server = $7 AND c.name = $8
-          WHERE $6 AND m.group_name = $7 AND {fit} AND {sees} ORDER BY s.name USING ~<~ LIMIT $4)"
+              JOIN channels c ON c.server = $1 AND c.name = $8
+          WHERE $6 AND m.group_name = $1 AND {fit} AND {sees} ORDER BY s.name USING ~<~ LIMIT $4)"
     ))
 }
 
@@ -218,19 +256,21 @@ async fn dm_hits(db: &PgPool, me: Uuid, name: &str, q: &str) -> Result<Vec<Hit>,
     Ok(vec![Hit { name, verified, oauth_verified, avatar }])
 }
 
-pub(crate) async fn suggest(db: &PgPool, me: Uuid, admin: bool, ctx: &Ctx, q: &str, limit: i64) -> Result<Vec<Hit>, ApiError> {
+pub(crate) async fn suggest(db: &PgPool, redis: &Redis, me: Uuid, admin: bool, ctx: &Ctx, q: &str, limit: i64) -> Result<Vec<Hit>, ApiError> {
     let take = limit * 2;
     let everyone = !q.is_empty();
     let rows: Vec<HitRow> = match ctx {
         Ctx::Dm(name) => return dm_hits(db, me, name, q).await,
         Ctx::Stream(streamer) => {
+            let spoke = recent_speakers(redis, streamer).await;
             sqlx::query_as(&stream_sql())
                 .bind(streamer)
                 .bind(me)
                 .bind(q)
                 .bind(take)
-                .bind(CHATTER_SCAN)
+                .bind(&spoke.uids)
                 .bind(everyone)
+                .bind(&spoke.names)
                 .fetch_all(db)
                 .await?
         }
@@ -238,14 +278,15 @@ pub(crate) async fn suggest(db: &PgPool, me: Uuid, admin: bool, ctx: &Ctx, q: &s
             if !crate::groups::may_see_text(db, server, channel, Some(me), admin).await? {
                 return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_SEEN));
             }
+            let spoke = recent_speakers(redis, &format!("{server}/{channel}")).await;
             sqlx::query_as(&channel_sql())
-                .bind(format!("{server}/{channel}"))
+                .bind(server)
                 .bind(me)
                 .bind(q)
                 .bind(take)
-                .bind(CHATTER_SCAN)
+                .bind(&spoke.uids)
                 .bind(everyone)
-                .bind(server)
+                .bind(&spoke.names)
                 .bind(channel)
                 .fetch_all(db)
                 .await?
@@ -269,7 +310,7 @@ async fn mentions(State(s): State<AppState>, Me(me): Me, q: Result<Query<Mention
     auth::limit(&s, &format!("rl:mention:{}", me.id), WINDOW_SECS, PER_MINUTE, "too many lookups. wait a minute").await?;
     let ctx = parse_ctx(&q.ctx).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "no such place"))?;
     let admin = s.admins.iter().any(|a| a.id == me.id);
-    let hits = suggest(&s.db, me.id, admin, &ctx, &clean_query(&q.q), limit_of(q.limit)).await?;
+    let hits = suggest(&s.db, &s.redis, me.id, admin, &ctx, &clean_query(&q.q), limit_of(q.limit)).await?;
     Ok(([(header::CACHE_CONTROL, CACHE)], Json(hits)))
 }
 
@@ -382,22 +423,49 @@ mod tests {
     #[test]
     fn the_queries_bind_what_they_use() {
         let stream = stream_sql();
-        for n in 1..=6 {
+        for n in 1..=7 {
             assert!(stream.contains(&format!("${n}")), "${n} in {stream}");
         }
-        assert!(!stream.contains("$7"));
+        assert!(!stream.contains("$8"));
         let channel = channel_sql();
         for n in 1..=8 {
             assert!(channel.contains(&format!("${n}")), "${n} in {channel}");
         }
         assert!(!channel.contains("$9"));
-        assert!(channel.contains("c.server = $7 AND c.name = $8"));
-        assert!(stream.contains("LIMIT $5) l") && channel.contains("LIMIT $5) l"));
+        assert!(channel.contains("c.server = $1 AND c.name = $8"));
+        assert!(stream.contains("unnest($5::uuid[], $7::text[])") && channel.contains("unnest($5::uuid[], $7::text[])"));
+        assert!(!stream.contains("chat_lines") && !channel.contains("chat_lines"));
     }
 
-    async fn says(pool: &PgPool, room: &str, n: i64, speaker: &str, user: Option<Uuid>) {
+    #[test]
+    fn the_speakers_are_kept_once_each_newest_first() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let got = spoke_of(vec![
+            (Some(a), "ann".to_owned()),
+            (None, "pixelfan".to_owned()),
+            (Some(b), "bob".to_owned()),
+            (Some(a), "ann".to_owned()),
+            (None, "pixelfan".to_owned()),
+            (None, "ann".to_owned()),
+        ]);
+        assert_eq!(got.uids, vec![Some(a), None, Some(b), None]);
+        assert_eq!(got.names, vec!["ann", "pixelfan", "bob", "ann"]);
+    }
+
+    async fn redis() -> Redis {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/15".into());
+        crate::connect_redis(&url).await
+    }
+
+    async fn says(_pool: &PgPool, room: &str, n: i64, speaker: &str, user: Option<Uuid>) {
         let id = format!("{}-0", 1_729_000_000_000i64 + n);
-        crate::history::store(pool, room, &id, speaker, user, "hi", None, None, false, user.is_some(), &[], None, &[]).await.unwrap();
+        let uid = user.map(|u| u.to_string());
+        let mut fields = vec![("from", speaker), ("text", "hi")];
+        if let Some(uid) = &uid {
+            fields.push(("uid", uid.as_str()));
+        }
+        let _: String = redis().await.xadd(crate::chat::room_key(room), &id, &fields).await.unwrap();
     }
 
     async fn follow(pool: &PgPool, from: Uuid, to: Uuid) {
@@ -422,6 +490,9 @@ mod tests {
 
     async fn forget(pool: &PgPool, ids: &[Uuid], rooms: &[String]) {
         sqlx::query("DELETE FROM chat_lines WHERE room = ANY($1)").bind(rooms).execute(pool).await.unwrap();
+        for room in rooms {
+            let _: i64 = redis().await.del(crate::chat::room_key(room)).await.unwrap();
+        }
         sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(ids).execute(pool).await.unwrap();
     }
 
@@ -454,7 +525,7 @@ mod tests {
         let ctx = Ctx::Stream(room.clone());
         let ask = |q: String, limit: i64| {
             let (pool, ctx) = (pool.clone(), ctx.clone());
-            async move { names(suggest(&pool, me, false, &ctx, &q, limit).await.unwrap()) }
+            async move { names(suggest(&pool, &redis().await, me, false, &ctx, &q, limit).await.unwrap()) }
         };
 
         assert_eq!(ask(String::new(), 8).await, vec![n("s"), n("t"), n("a"), n("b"), n("f"), n("o")], "no one else on an empty q");
@@ -467,7 +538,7 @@ mod tests {
         assert_eq!(ask(n("u"), 6).await, Vec::<String>::new(), "never an unverified name");
         assert_eq!(ask(n("zz"), 6).await, Vec::<String>::new());
 
-        let own = names(suggest(&pool, streamer, false, &ctx, "", 6).await.unwrap());
+        let own = names(suggest(&pool, &redis().await, streamer, false, &ctx, "", 6).await.unwrap());
         assert_eq!(own, vec![n("t"), n("c"), n("a"), n("b")], "a streamer never sees themself");
 
         forget(&pool, &[streamer, me, a, b, f, o, u, t, z], &[room]).await;
@@ -526,7 +597,7 @@ mod tests {
 
         let got = |who: Uuid, ctx: Ctx, q: String| {
             let pool = pool.clone();
-            async move { suggest(&pool, who, false, &ctx, &q, 8).await }
+            async move { suggest(&pool, &redis().await, who, false, &ctx, &q, 8).await }
         };
         assert_eq!(names(got(me, in_secret.clone(), String::new()).await.unwrap()), vec![n("d"), n("a")], "a chatter who lost the channel is left out");
         assert_eq!(names(got(me, in_secret.clone(), p.clone()).await.unwrap()), vec![n("d"), n("a"), n("m"), n("t")], "members who see it, never one who can't or an outsider");
@@ -538,7 +609,7 @@ mod tests {
         assert_eq!(status_of(got(outside, in_secret.clone(), String::new()).await.unwrap_err()), StatusCode::FORBIDDEN);
         let nowhere = Ctx::Channel(group.clone(), "nowhere".into());
         assert_eq!(status_of(got(me, nowhere, String::new()).await.unwrap_err()), StatusCode::FORBIDDEN);
-        assert!(suggest(&pool, x, true, &in_secret, "", 8).await.is_ok(), "a site admin sees every channel");
+        assert!(suggest(&pool, &redis().await, x, true, &in_secret, "", 8).await.is_ok(), "a site admin sees every channel");
 
         sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&pool).await.unwrap();
         forget(&pool, &[me, a, b, m, x, outside, t, d, u], &[secret]).await;
@@ -563,7 +634,7 @@ mod tests {
         befriend(&pool, me, d).await;
         let dm = |name: String, q: String| {
             let pool = pool.clone();
-            async move { suggest(&pool, me, false, &Ctx::Dm(name), &q, 6).await }
+            async move { suggest(&pool, &redis().await, me, false, &Ctx::Dm(name), &q, 6).await }
         };
 
         assert_eq!(names(dm(n("f"), String::new()).await.unwrap()), vec![n("f")]);
@@ -645,13 +716,13 @@ mod tests {
         follow(&pool, me, f).await;
         let ctx = Ctx::Stream(room.clone());
 
-        let empty = names(suggest(&pool, me, false, &ctx, "", 8).await.unwrap());
+        let empty = names(suggest(&pool, &redis().await, me, false, &ctx, "", 8).await.unwrap());
         assert_eq!(empty, vec![n("s"), n("v"), n("o"), n("f")]);
         assert!(!empty.contains(&n("c")) && !empty.contains(&n("g")));
-        let lettered = names(suggest(&pool, me, false, &ctx, &p[..1], 8).await.unwrap());
+        let lettered = names(suggest(&pool, &redis().await, me, false, &ctx, &p[..1], 8).await.unwrap());
         assert_eq!(lettered.first(), Some(&n("s")));
         assert!(!lettered.contains(&n("c")) && !lettered.contains(&n("g")));
-        let unverified: Vec<String> = suggest(&pool, me, false, &ctx, "", 8).await.unwrap().into_iter().filter(|h| !h.verified).map(|h| h.name).collect();
+        let unverified: Vec<String> = suggest(&pool, &redis().await, me, false, &ctx, "", 8).await.unwrap().into_iter().filter(|h| !h.verified).map(|h| h.name).collect();
         assert_eq!(unverified, vec![n("s"), n("o")]);
 
         forget(&pool, &[streamer, other, me, v, f, g], &[room]).await;
