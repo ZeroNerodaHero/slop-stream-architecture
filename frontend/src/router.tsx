@@ -14,6 +14,7 @@ import { panelSideAtom, perfModeAtom } from '@/infra/atoms/settings-atoms';
 import { userModalOpenAtom } from '@/infra/atoms/user-modal-atoms';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
+import { UpdateBanner } from '@/shared-components/UpdateBanner';
 import { UserPanel } from '@/shared-components/UserPanel';
 import { WhenUsed } from '@/shared-components/WhenUsed';
 import { cn } from '@/utils/cn';
@@ -136,6 +137,7 @@ function Shell() {
           <PerfHud mode={perf} />
         </Suspense>
       )}
+      <UpdateBanner />
     </div>
   );
 }

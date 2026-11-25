@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "nodentity",
+  "version": "0.1.0",
+  "identifier": "xyz.nodentity.app",
+  "build": {
+    "devUrl": "https://nodentity.xyz",
+    "frontendDist": "https://nodentity.xyz"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "nodentity",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "nsis"],
+    "createUpdaterArtifacts": true,
+    "category": "SocialNetworking",
+    "shortDescription": "nodentity",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBMEVGNzM2NTQ1QjM4RDcKUldUWE9GdFVOdmNPR3U4L3lSL1poZUIzdHNjSVlaejA2OFk2dUltOFlwU2Z5MC93ZjRZcGZjbGMK",
+      "endpoints": ["https://github.com/ZeroNerodaHero/slop-stream-architecture/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

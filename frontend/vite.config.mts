@@ -196,7 +196,16 @@ const deferStylesheet = (stylesheet: string, path: string): Plugin => {
   };
 };
 
+const versionFile = (build: string): Plugin => ({
+  name: 'version-file',
+  apply: 'build',
+  generateBundle() {
+    this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ build })}\n` });
+  }
+});
+
 export default defineConfig(({ mode }) => {
+  const build = process.env.BUILD || 'dev';
   const here = fileURLToPath(new URL('.', import.meta.url));
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
   const own = loadEnv(mode, here, '');
@@ -231,10 +240,11 @@ export default defineConfig(({ mode }) => {
         { path: '^/watch/[^/]+/?$', module: '/src/app/watch/WatchPage.tsx' }
       ]),
       deferStylesheet(join(here, 'src', 'app', 'globals.css'), '^/$'),
+      versionFile(build),
       showDocs && techDocs(docsDir)
     ],
     define: {
-      __BUILD__: JSON.stringify(process.env.BUILD || 'dev')
+      __BUILD__: JSON.stringify(build)
     },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) }
