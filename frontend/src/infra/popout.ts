@@ -1,4 +1,4 @@
-import { applyTextSizeTo, applyThemeTo, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
+import { applyShapeOf, applyTextSizeTo, applyThemeTo, shapeAtom, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
 import { store } from '@/infra/store';
 
 interface DocumentPictureInPicture {
@@ -39,15 +39,18 @@ export async function openPopout(width: number, height: number, onClose: (win: W
   const root = doc.documentElement;
   applyThemeTo(root);
   applyTextSizeTo(root);
+  applyShapeOf(root);
   root.style.scrollbarGutter = 'auto';
   root.style.overflow = 'hidden';
   const unsubTheme = store.sub(themeAtom, () => applyThemeTo(root));
   const unsubSize = store.sub(textSizeAtom, () => applyTextSizeTo(root));
+  const unsubShape = store.sub(shapeAtom, () => applyShapeOf(root));
   win.addEventListener(
     'pagehide',
     () => {
       unsubTheme();
       unsubSize();
+      unsubShape();
       onClose(win);
     },
     { once: true }

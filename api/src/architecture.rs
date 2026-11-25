@@ -127,7 +127,7 @@ pub(crate) fn graph(s: &Sample) -> Value {
                 "state": c.state, "health": c.health, "exit_code": c.exit_code,
                 "tier": known.map(|k| k.tier).unwrap_or(DEFAULT_TIER), "description": known.map(|k| k.description.as_str()),
                 "networks": c.networks, "ports": c.ports, "cpu_pct": c.cpu_pct, "mem_bytes": c.mem_bytes, "mem_limit": c.mem_limit,
-                "rx_bps": c.rx_bps, "tx_bps": c.tx_bps, "restarts": c.restarts, "up_since": c.up_since, "outside": false,
+                "rx_bps": c.rx_bps, "tx_bps": c.tx_bps, "restarts": c.restarts, "up_since": c.up_since, "outside": false, "check": c.check, "api": c.api,
             })
         })
         .collect();

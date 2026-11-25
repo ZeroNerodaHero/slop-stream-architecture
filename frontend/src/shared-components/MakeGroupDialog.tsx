@@ -111,7 +111,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
       onClick={onClick}
       onClose={onClose}
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto md:rounded-panel border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >

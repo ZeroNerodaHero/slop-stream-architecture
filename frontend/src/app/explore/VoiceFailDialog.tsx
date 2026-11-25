@@ -76,7 +76,7 @@ function FailBox({ error, onClose, onRetry }: VoiceFailDialogProps) {
         if (retrying.current) onRetry();
         else onClose();
       }}
-      className={cn('m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
+      className={cn('m-auto w-[min(420px,calc(100vw-3rem))] md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
     >
       <SheetGrab onDismiss={close} />
       <h2 id="voice-fail-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">

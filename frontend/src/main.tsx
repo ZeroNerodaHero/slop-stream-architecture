@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 
 import { loadMe } from '@/infra/atoms/auth-atoms';
-import { applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
+import { applyStoredShape, applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
 import { startEvents } from '@/infra/events';
 import { installMobileKeyboard } from '@/infra/keyboard';
 import { installPrefetch, loadFirstPage } from '@/infra/prefetch';
@@ -19,6 +19,7 @@ if (!root) throw new Error('index.html has no #root');
 
 applyStoredTheme();
 applyStoredTextSize();
+applyStoredShape();
 
 installReporting();
 

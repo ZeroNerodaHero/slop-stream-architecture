@@ -128,7 +128,7 @@ function AddMenu({ onModel }: { onModel: () => void }) {
           id="add-source-menu"
           role="menu"
           aria-label="add a source"
-          className="absolute right-0 top-full z-20 mt-1 w-56 border border-primaryStroke bg-backgroundSecondary py-1"
+          className="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1"
         >
           {!hasCamera && (
             <button

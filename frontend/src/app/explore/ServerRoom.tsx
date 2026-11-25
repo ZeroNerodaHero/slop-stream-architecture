@@ -475,7 +475,7 @@ function HoverMenu({
               if (to instanceof Node && (menu.current?.contains(to) || plus.current === to)) return;
               close();
             }}
-            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
+            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
           >
             <li role="none" className="px-3 pb-1 pt-0.5 text-xs text-textTertiary">
               {label}
@@ -1564,7 +1564,7 @@ function ChannelDialog({
         onClose();
       }}
       className={cn(
-        'm-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-6 py-4 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto w-[min(460px,calc(100vw-3rem))] md:rounded-panel border border-primaryStroke bg-backgroundSecondary px-6 py-4 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >
@@ -2175,7 +2175,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
         onClose();
       }}
       className={cn(
-        'm-auto h-[min(680px,calc(100dvh-3rem))] w-[min(880px,calc(100vw-3rem))] overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary',
+        'm-auto h-[min(680px,calc(100dvh-3rem))] w-[min(880px,calc(100vw-3rem))] overflow-hidden md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary',
         'flex-col open:flex sm:flex-row backdrop:bg-black/60',
         PAGE_DIALOG
       )}
@@ -2250,7 +2250,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             aria-keyshortcuts="Escape"
             onClick={close}
             className={cn(
-              'absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+              'absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
               SHEET_CLOSE
             )}
           >

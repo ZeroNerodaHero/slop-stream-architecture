@@ -41,7 +41,7 @@ export function DebugPanel({
       style={box && !mobile ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined}
       className={cn(
         FRAME,
-        'fixed z-50 m-0 flex flex-col overflow-hidden p-0 text-sm text-textPrimary open:flex',
+        'fixed m-0 flex flex-col overflow-hidden p-0 text-sm text-textPrimary open:flex',
         mobile ? 'inset-x-0 bottom-0 top-auto h-[60dvh] w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]' : !box && place
       )}
     >

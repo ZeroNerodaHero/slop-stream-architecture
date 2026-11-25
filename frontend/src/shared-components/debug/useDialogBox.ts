@@ -1,7 +1,7 @@
 import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from 'react';
 
 import { type Box, BOXES_KEY, clampBox, parseBoxes, saveBox, type WindowId } from '@/infra/debug/window-store';
-import { dropWindow, raiseWindow, stackZ, subscribeStack } from '@/infra/debug/window-stack';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 
 export const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
 export const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
@@ -25,23 +25,13 @@ export function useDialogBox(id: WindowId) {
   const stop = useRef<(() => void) | null>(null);
   const [box, setBox] = useState<Box | null>(() => storedBox(id));
 
+  useStackedWindow(dialogRef, id);
+
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.show();
-    const paint = () => {
-      const z = String(stackZ(id));
-      if (dialog && dialog.style.zIndex !== z) dialog.style.zIndex = z;
-    };
-    const front = () => raiseWindow(id);
-    const unsubscribe = subscribeStack(paint);
-    dialog?.addEventListener('pointerdown', front, true);
-    raiseWindow(id);
-    paint();
     return () => {
       stop.current?.();
-      dialog?.removeEventListener('pointerdown', front, true);
-      unsubscribe();
-      dropWindow(id);
       if (dialog?.open) dialog.close();
     };
   }, [id]);

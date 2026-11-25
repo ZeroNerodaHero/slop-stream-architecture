@@ -52,11 +52,14 @@ export function Segmented<T extends string>({
       role="radiogroup"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className={cn('relative inline-grid h-7 auto-cols-fr grid-flow-col border border-primaryStroke bg-backgroundSecondary text-xs font-semibold', className)}
+      className={cn(
+        'relative inline-grid h-7 auto-cols-fr grid-flow-col rounded-control border border-primaryStroke bg-backgroundSecondary text-xs font-semibold',
+        className
+      )}
     >
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 border border-secondaryStroke bg-backgroundTertiary transition-transform duration-150 ease-out motion-reduce:transition-none"
+        className="absolute inset-y-0 left-0 rounded-control border border-secondaryStroke bg-backgroundTertiary transition-transform duration-150 ease-out motion-reduce:transition-none"
         style={{ width: `${100 / options.length}%`, transform: `translateX(${index * 100}%)` }}
       />
       {options.map((o, i) => {
@@ -74,7 +77,7 @@ export function Segmented<T extends string>({
             tabIndex={on ? 0 : -1}
             onClick={() => onChange(o.value)}
             className={cn(
-              'relative border border-transparent px-2.5 outline-none transition-colors duration-100 focus-visible:border-primaryBlue',
+              'relative rounded-control border border-transparent px-2.5 outline-none transition-colors duration-100 focus-visible:border-primaryBlue',
               on ? 'text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
             )}
           >

@@ -373,7 +373,7 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
         onClose();
       }}
       className={cn(
-        'm-auto flex max-h-[min(720px,calc(100dvh-3rem))] w-[min(560px,calc(100vw-3rem))] flex-col border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary backdrop:bg-black/60 [&:not([open])]:hidden',
+        'm-auto flex max-h-[min(720px,calc(100dvh-3rem))] w-[min(560px,calc(100vw-3rem))] flex-col md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary backdrop:bg-black/60 [&:not([open])]:hidden',
         SHEET_DIALOG
       )}
     >

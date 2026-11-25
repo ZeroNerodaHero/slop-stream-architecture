@@ -16,7 +16,9 @@ import { type ChatBox as Box, keepStreamBox, keptStreamBox } from '@/infra/atoms
 import { chatClearAtom, type ChatSide, chatModalOpenAtom, chatSideAtom, setChatClear, setChatModalOpen } from '@/infra/atoms/settings-atoms';
 import { MOBILE_QUERY, useIsMobile } from '@/infra/mobile';
 import { store } from '@/infra/store';
+import { raiseWindow } from '@/infra/window-stack';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { ChatIcon, IconButton } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
 
@@ -107,7 +109,7 @@ export function chatLayoutClass(side: ChatSide, open: boolean): string {
   if (side !== 'left' && side !== 'right') return '';
   return cn(
     'beside:grid beside:grid-rows-[auto_1fr] beside:items-start beside:transition-[grid-template-columns,column-gap] beside:duration-300 beside:ease-out motion-reduce:beside:transition-none',
-    open ? 'beside:gap-x-6' : 'beside:gap-x-0',
+    open ? 'beside:gap-x-6 bubble:beside:gap-x-2' : 'beside:gap-x-0',
     side === 'right' && (open ? 'beside:grid-cols-[minmax(0,1fr)_360px]' : 'beside:grid-cols-[minmax(0,1fr)_0px]'),
     side === 'left' && (open ? 'beside:grid-cols-[360px_minmax(0,1fr)]' : 'beside:grid-cols-[0px_minmax(0,1fr)]')
   );
@@ -129,6 +131,8 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
   const [shown, setShown] = useState(false);
   const [held, setHeld] = useState(open);
   const [clip, setClip] = useState(false);
+
+  useStackedWindow(ref, 'chat', modal);
 
   useEffect(() => {
     keepStreamBox(box);
@@ -207,6 +211,7 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     }
     if (settingsOpen()) return;
     if (!dialog.open) dialog.show();
+    raiseWindow('chat');
     if (reduceMotion()) {
       setShown(true);
       return;
@@ -350,7 +355,7 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
       className={cn(
         modal
           ? cn(
-      'group fixed z-40 m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
+      'group fixed m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
               'origin-center transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
               shown ? 'translate-x-0 scale-100 opacity-100' : cn('pointer-events-none scale-[0.98] opacity-0', fromLeft ? '-translate-x-3' : 'translate-x-3'),
               clear && 'chat-clear',

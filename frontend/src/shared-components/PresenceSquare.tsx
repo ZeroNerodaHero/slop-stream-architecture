@@ -37,7 +37,7 @@ export function PresenceSquare({ status, size = 'corner', className, id, labelle
       id={id}
       data-presence={status}
       {...(labelled ? { role: 'img', 'aria-label': PRESENCE_WORD[status] } : { 'aria-hidden': true })}
-      className={cn('block', SIZE[size], COLOUR[status], className)}
+      className={cn('block soft:rounded-[3px] bubble:rounded-avatar', SIZE[size], COLOUR[status], className)}
     />
   );
   if (!labelled) return square;

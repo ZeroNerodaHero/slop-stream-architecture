@@ -28,6 +28,7 @@ import { panelClassName } from '@/shared-components/Panel';
 import { Who } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 import { ago } from '@/utils/since';
 
@@ -248,6 +249,7 @@ function NotificationsList() {
   const [fresh, setFresh] = useState<ReadonlySet<number>>(() => new Set());
   const openedAt = useRef(pathname);
   const mobile = useIsMobile();
+  useStackedWindow(dialogRef, 'notifications', !mobile);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -328,7 +330,8 @@ function NotificationsList() {
       style={mobile ? undefined : style}
       className={panelClassName(
         cn(
-          'fixed z-50 m-0 flex max-h-[min(560px,calc(100dvh-5.5rem))] flex-col overflow-hidden p-0 text-base text-textPrimary open:flex',
+          'fixed m-0 flex max-h-[min(560px,calc(100dvh-5.5rem))] flex-col overflow-hidden p-0 text-base text-textPrimary open:flex',
+          mobile && 'z-50',
           !style && !mobile && 'left-auto right-5 top-[4.5rem] w-[min(400px,calc(100vw-2.5rem))]',
           mobile && 'inset-x-0 bottom-0 top-auto w-full max-w-none max-h-[85dvh] border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
         )

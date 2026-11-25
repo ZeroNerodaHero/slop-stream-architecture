@@ -1,6 +1,20 @@
 import { useAtomValue } from 'jotai';
 
-import { customFrom, paletteAtom, setCustomColor, setTextSize, setTheme, TEXT_SIZES, type TextSize, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
+import {
+  customFrom,
+  paletteAtom,
+  setCustomColor,
+  setShape,
+  setTextSize,
+  setTheme,
+  SHAPES,
+  shapeAtom,
+  TEXT_SIZES,
+  type TextSize,
+  textSizeAtom,
+  themeAtom
+} from '@/infra/atoms/settings-atoms';
+import { type Shape } from '@/infra/shape';
 import { contrast, hex, type Palette, PRESET_LABELS, PRESET_NAMES, PRESETS, type TokenName, TOKENS } from '@/infra/theme';
 import { Button } from '@/shared-components/Button';
 import { FIELDSET, Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
@@ -21,17 +35,65 @@ const TOKEN_LABEL: Record<TokenName, string> = {
   decrease: 'danger'
 };
 
+const SHAPE_LOOK: Record<Shape, { panel: string; line: string; chip: string; avatar: string }> = {
+  block: {
+    panel: 'rounded-none border border-primaryStroke bg-backgroundSecondary',
+    line: 'rounded-none border border-primaryStroke bg-background',
+    chip: 'rounded-none',
+    avatar: 'rounded-none'
+  },
+  soft: {
+    panel: 'rounded-[4px] border border-primaryStroke bg-backgroundSecondary',
+    line: 'rounded-[3px] border border-primaryStroke bg-background',
+    chip: 'rounded-[3px]',
+    avatar: 'rounded-[3px]'
+  },
+  bubble: {
+    panel: 'rounded-[8px] bg-backgroundSecondary',
+    line: 'rounded-[999px] bg-backgroundTertiary',
+    chip: 'rounded-[999px]',
+    avatar: 'rounded-[999px]'
+  }
+};
+
+function ShapeSwatch({ shape }: { shape: Shape }) {
+  const look = SHAPE_LOOK[shape];
+  return (
+    <span aria-hidden className={cn('flex h-16 w-full min-w-0 items-center gap-1.5 overflow-hidden px-2 max-md:h-12 max-md:gap-1 max-md:px-1.5', look.panel)}>
+      <span className={cn('h-2.5 w-2.5 shrink-0 bg-primaryBlue', look.avatar)} />
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className={cn('h-2.5 w-[85%]', look.line)} />
+        <span className={cn('h-2.5 w-[55%]', look.line)} />
+      </span>
+      <span className={cn('h-3 w-5 shrink-0 bg-primaryBlue max-md:w-3', look.chip)} />
+    </span>
+  );
+}
+
+function ShapePicker() {
+  const shape = useAtomValue(shapeAtom);
+  return (
+    <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 md:gap-3">
+      {SHAPES.map((s) => (
+        <div key={s} className="grid min-w-0">
+          <OptionCard id={`shape-${s}`} name="shape" checked={shape === s} onChange={() => setShape(s)} picture={<ShapeSwatch shape={s} />} label={s} compact />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const css = (c: readonly number[]) => `rgb(${c.join(' ')})`;
 
 function Swatch({ palette }: { palette: Palette }) {
   return (
     <span
       aria-hidden
-      className="flex h-16 w-full min-w-0 items-center overflow-hidden p-1 max-md:h-12"
+      className="flex h-16 w-full min-w-0 items-center overflow-hidden p-1 soft:rounded-[4px] bubble:rounded-[8px] max-md:h-12"
       style={{ backgroundColor: css(palette.background), border: `1px solid ${css(palette.primaryStroke)}` }}
     >
       <span
-        className="flex h-full min-w-0 flex-1 items-center gap-1 px-1"
+        className="flex h-full min-w-0 flex-1 items-center gap-1 px-1 soft:rounded-[2px] bubble:rounded-[5px]"
         style={{
           backgroundColor: css(palette.backgroundSecondary),
           border: `1px solid ${css(palette.primaryStroke)}`
@@ -59,7 +121,10 @@ const SIZE_WORDS: Record<TextSize, string> = {
 
 function SizeSwatch({ size }: { size: TextSize }) {
   return (
-    <span aria-hidden className="flex h-16 w-full items-center justify-center border border-primaryStroke bg-background [--aa:1.75rem] max-md:h-9 max-md:[--aa:0.95rem]">
+    <span
+      aria-hidden
+      className="flex h-16 w-full items-center justify-center border border-primaryStroke bg-background soft:rounded-[4px] bubble:rounded-[8px] [--aa:1.75rem] max-md:h-9 max-md:[--aa:0.95rem]"
+    >
       <span className="font-semibold leading-none" style={{ fontSize: `calc(${size / 100} * var(--aa))` }}>
         Aa
       </span>
@@ -76,6 +141,11 @@ export function AppearanceTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
+      <fieldset className={FIELDSET}>
+        <legend className={SECTION_TITLE}>shape</legend>
+        <ShapePicker />
+      </fieldset>
+
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>theme</legend>
         <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">

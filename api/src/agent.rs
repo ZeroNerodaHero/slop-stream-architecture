@@ -104,6 +104,158 @@ pub(crate) struct Container {
     pub(crate) ports: Vec<Port>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) depends_on: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) check: Option<Check>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) api: Option<ApiHealth>,
+}
+
+const KEEP_CHECK_RUNS: usize = 5;
+const KEEP_API_RUNS: usize = 10;
+const MAX_CHECK_OUTPUT: usize = 160;
+const DOCKER_DEFAULT_INTERVAL_SECS: f64 = 30.0;
+const API_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub(crate) struct Check {
+    pub(crate) failing_streak: u64,
+    pub(crate) interval_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) runs: Vec<CheckRun>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub(crate) struct CheckRun {
+    pub(crate) at: Option<DateTime<Utc>>,
+    pub(crate) ms: Option<u64>,
+    pub(crate) exit: Option<i64>,
+    pub(crate) output: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub(crate) struct ApiHealth {
+    pub(crate) from: String,
+    pub(crate) path: String,
+    pub(crate) every_secs: u64,
+    pub(crate) runs: Vec<ApiRun>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub(crate) struct ApiRun {
+    pub(crate) at: Option<DateTime<Utc>>,
+    pub(crate) ok: bool,
+    pub(crate) status: Option<u16>,
+    pub(crate) ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+}
+
+fn short_output(text: &str) -> String {
+    let clean: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let s = crate::timings::scrub(&clean);
+    if s.chars().count() <= MAX_CHECK_OUTPUT {
+        return s;
+    }
+    let mut out: String = s.chars().take(MAX_CHECK_OUTPUT - 1).collect();
+    out.push('…');
+    out
+}
+
+pub(crate) fn api_error(text: &str) -> String {
+    short_output(text)
+}
+
+fn parse_check(inspect: &Value) -> Option<Check> {
+    let h = inspect.pointer("/State/Health").filter(|h| h.is_object())?;
+    let interval = inspect.pointer("/Config/Healthcheck/Interval").and_then(Value::as_u64).filter(|ns| *ns > 0).map_or(DOCKER_DEFAULT_INTERVAL_SECS, |ns| ns as f64 / 1e9);
+    let runs = h
+        .get("Log")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .rev()
+        .take(KEEP_CHECK_RUNS)
+        .map(|r| {
+            let start = time_at(r, &["Start"]);
+            let at = time_at(r, &["End"]);
+            CheckRun {
+                at,
+                ms: start.zip(at).and_then(|(s, e)| u64::try_from((e - s).num_milliseconds()).ok()),
+                exit: r.get("ExitCode").and_then(Value::as_i64),
+                output: short_output(r.get("Output").and_then(Value::as_str).unwrap_or("")),
+            }
+        })
+        .collect();
+    Some(Check { failing_streak: h.get("FailingStreak").and_then(Value::as_u64).unwrap_or(0), interval_secs: Some(interval), runs })
+}
+
+fn health_from_env() -> Vec<(String, String)> {
+    env::var("HEALTH_FROM")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|e| e.trim().split_once('='))
+        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+        .filter(|(k, v)| !k.is_empty() && v.starts_with("http"))
+        .collect()
+}
+
+fn path_of(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let path = rest.find('/').map_or("/", |i| &rest[i..]);
+    path.split(['?', '#']).next().unwrap_or("/").to_owned()
+}
+
+struct ApiProbes {
+    client: reqwest::Client,
+    from: Vec<(String, String)>,
+    runs: HashMap<String, VecDeque<ApiRun>>,
+}
+
+impl ApiProbes {
+    fn from_env() -> ApiProbes {
+        ApiProbes { client: reqwest::Client::builder().timeout(API_TIMEOUT).build().expect("http client"), from: health_from_env(), runs: HashMap::new() }
+    }
+
+    async fn run(&mut self, at: DateTime<Utc>, running: &[&str]) {
+        let mut set = JoinSet::new();
+        for (name, url) in self.from.iter().filter(|(n, _)| running.contains(&n.as_str())) {
+            let (client, name, url) = (self.client.clone(), name.clone(), url.clone());
+            set.spawn(async move {
+                let t0 = Instant::now();
+                let res = client.get(&url).send().await;
+                let ms = t0.elapsed().as_millis() as u64;
+                let status = res.as_ref().ok().map(|r| r.status().as_u16());
+                let ok = status.is_some_and(|s| (200..300).contains(&s));
+                let error = (!ok).then(|| match &res {
+                    Err(e) if e.is_timeout() => format!("no answer in {}s", API_TIMEOUT.as_secs()),
+                    Ok(_) => format!("answered {}", status.unwrap_or(0)),
+                    Err(_) => api_error(&crate::timings::reqwest_why(&res).1),
+                });
+                let run = ApiRun { at: Some(at), ok, status, ms, error };
+                (name, run)
+            });
+        }
+        while let Some(res) = set.join_next().await {
+            let Ok((name, run)) = res else { continue };
+            let ring = self.runs.entry(name).or_default();
+            ring.push_front(run);
+            ring.truncate(KEEP_API_RUNS);
+        }
+        self.runs.retain(|name, _| running.contains(&name.as_str()));
+    }
+
+    fn attach(&self, containers: &mut [Container], every_secs: u64) {
+        for c in containers.iter_mut() {
+            let found = self.from.iter().find(|(n, _)| *n == c.name).or_else(|| self.from.iter().find(|(n, _)| c.service.as_deref() == Some(n.as_str())));
+            let Some((name, url)) = found else { continue };
+            let Some(runs) = self.runs.get(name).filter(|r| !r.is_empty()) else { continue };
+            c.api = Some(ApiHealth { from: "agent".into(), path: path_of(url), every_secs, runs: runs.iter().cloned().collect() });
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -489,6 +641,7 @@ async fn one_container(socket: String, summary: Value) -> Option<(String, Contai
     if let Ok(inspect) = docker_get(&socket, &format!("/containers/{id}/json")).await {
         c.restarts = u64_at(&inspect, &["RestartCount"]);
         c.health = str_at(&inspect, &["State", "Health", "Status"]).map(str::to_owned);
+        c.check = parse_check(&inspect);
         if state == "running" {
             c.up_since = time_at(&inspect, &["State", "StartedAt"]);
         } else {
@@ -547,6 +700,7 @@ async fn sample_loop(app: App) {
     let mut info: Option<DockerInfo> = None;
     let mut last_problems: Vec<String> = vec![];
     let mut collector = crate::timings::Collector::from_env();
+    let mut probes = ApiProbes::from_env();
     loop {
         tick.tick().await;
         let at = Utc::now();
@@ -556,7 +710,7 @@ async fn sample_loop(app: App) {
         let mut problems = vec![];
         let (host, raw) = read_host(&app.cfg, &info.clone().unwrap_or_default(), host_prev.as_ref(), &mut problems);
         host_prev = Some(raw);
-        let containers = match read_containers(&app.cfg, &cont_prev, host.mem_total).await {
+        let mut containers = match read_containers(&app.cfg, &cont_prev, host.mem_total).await {
             Ok((list, raws)) => {
                 cont_prev = raws;
                 list
@@ -568,6 +722,10 @@ async fn sample_loop(app: App) {
         };
         let running: Option<Vec<&str>> = (!containers.is_empty()).then(|| containers.iter().filter(|c| c.state == "running").flat_map(|c| [Some(c.name.as_str()), c.service.as_deref()]).flatten().collect());
         let timings = collector.collect(&mut problems, running.as_deref()).await;
+        if let Some(up) = running.as_deref() {
+            probes.run(at, up).await;
+        }
+        probes.attach(&mut containers, app.cfg.every.as_secs());
         if problems != last_problems {
             for p in problems.iter().filter(|p| !last_problems.contains(p)) {
                 log::warn!("{p}");
@@ -693,6 +851,12 @@ pub async fn run() -> anyhow::Result<()> {
         log::info!("agent: no TIMINGS_FROM, so no endpoint timings from this box");
     } else {
         log::info!("agent: endpoint timings from {}", sources.join(", "));
+    }
+    let health: Vec<String> = health_from_env().into_iter().map(|(n, u)| format!("{n} {}", path_of(&u))).collect();
+    if health.is_empty() {
+        log::info!("agent: no HEALTH_FROM, so no service health checks from this box");
+    } else {
+        log::info!("agent: service health from {}", health.join(", "));
     }
     if cfg.token.is_none() {
         log::warn!("no OPS_TOKEN: GET /api/metrics answers 404 to everyone. set OPS_TOKEN in .env");
@@ -821,5 +985,46 @@ mod tests {
         let s = Sample { at: DateTime::from_timestamp(1_800_000_000, 0).unwrap(), host: Host { cpu_pct: Some(1.5), ..Default::default() }, containers: vec![], problems: vec![], timings: vec![] };
         let back: Sample = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn a_healthcheck_reads_newest_first_short_and_scrubbed() {
+        let inspect = json!({
+            "Config": { "Healthcheck": { "Test": ["CMD", "true"], "Interval": 15_000_000_000u64 } },
+            "State": { "Health": { "Status": "healthy", "FailingStreak": 2, "Log": [
+                { "Start": "2026-11-25T04:00:00.000Z", "End": "2026-11-25T04:00:00.120Z", "ExitCode": 1, "Output": "curl: (7) failed to connect to 10.0.0.7 port 4000\n" },
+                { "Start": "2026-11-25T04:00:15.000Z", "End": "2026-11-25T04:00:15.004Z", "ExitCode": 0, "Output": format!("ok {}", "x".repeat(400)) },
+            ] } }
+        });
+        let c = parse_check(&inspect).unwrap();
+        assert_eq!(c.failing_streak, 2);
+        assert_eq!(c.interval_secs, Some(15.0));
+        assert_eq!(c.runs.len(), 2);
+        assert_eq!(c.runs[0].exit, Some(0));
+        assert_eq!(c.runs[0].ms, Some(4));
+        assert_eq!(c.runs[0].output.chars().count(), MAX_CHECK_OUTPUT);
+        assert_eq!(c.runs[1].output, "curl: (7) failed to connect to <ip> port 4000");
+        assert_eq!(c.runs[1].at.unwrap().to_rfc3339(), "2026-11-25T04:00:00.120+00:00");
+        assert!(parse_check(&json!({ "State": { "Status": "running" } })).is_none());
+        let image_default = parse_check(&json!({ "State": { "Health": { "Status": "starting", "Log": [] } } })).unwrap();
+        assert_eq!(image_default.interval_secs, Some(DOCKER_DEFAULT_INTERVAL_SECS));
+    }
+
+    #[test]
+    fn a_health_url_shows_only_its_path() {
+        assert_eq!(path_of("http://chat:4100/health"), "/health");
+        assert_eq!(path_of("https://user:pw@box.example/api/health?token=abc"), "/api/health");
+        assert_eq!(path_of("http://video:7880"), "/");
+    }
+
+    #[test]
+    fn probes_attach_by_name_or_service() {
+        let mut p = ApiProbes { client: reqwest::Client::new(), from: vec![("chat".into(), "http://chat:4100/health".into())], runs: HashMap::new() };
+        p.runs.insert("chat".into(), VecDeque::from([ApiRun { ok: true, status: Some(200), ms: 3, ..Default::default() }]));
+        let mut cs = vec![Container { name: "stream-chat-1".into(), service: Some("chat".into()), ..Default::default() }, Container { name: "redis".into(), ..Default::default() }];
+        p.attach(&mut cs, 15);
+        let a = cs[0].api.as_ref().unwrap();
+        assert_eq!((a.from.as_str(), a.path.as_str(), a.every_secs, a.runs.len()), ("agent", "/health", 15, 1));
+        assert!(cs[1].api.is_none());
     }
 }

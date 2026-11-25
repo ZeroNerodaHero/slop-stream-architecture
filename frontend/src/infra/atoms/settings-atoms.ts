@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
 import { DEBUG_KEYS, migrateDebugSettings, PERF_KEY, type PerfMode, perfModeOf } from '@/infra/debug-flag';
+import { applyShapeTo, type Shape, shapeOf } from '@/infra/shape';
 import { store } from '@/infra/store';
 import {
   applyPalette,
@@ -315,6 +316,25 @@ store.sub(themeAtom, () => applyTheme(store.get(themeAtom)));
 
 export function applyStoredTheme() {
   applyTheme(store.get(themeAtom));
+}
+
+export { SHAPES, type Shape } from '@/infra/shape';
+
+const storedShapeAtom = atomWithStorage<unknown>('settings.shape', 'block', undefined, { getOnInit: true });
+export const shapeAtom = atom((get): Shape => shapeOf(get(storedShapeAtom)));
+
+export function setShape(shape: Shape) {
+  store.set(storedShapeAtom, shape);
+}
+
+export function applyShapeOf(root: HTMLElement) {
+  applyShapeTo(root, store.get(shapeAtom));
+}
+
+store.sub(shapeAtom, () => applyShapeOf(document.documentElement));
+
+export function applyStoredShape() {
+  applyShapeOf(document.documentElement);
 }
 
 export type TextSize = 80 | 90 | 100 | 110 | 125;

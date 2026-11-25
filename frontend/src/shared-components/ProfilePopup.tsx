@@ -74,7 +74,7 @@ function LiveStream({ name, onGo, backdrop }: { name: string; onGo: () => void; 
       onClick={onGo}
       draggable={false}
       aria-label={`watch ${name}`}
-      className="relative block border border-primaryStroke outline-none transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue"
+      className="relative block overflow-hidden rounded-card border border-primaryStroke outline-none transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue"
     >
       {backdrop}
       <StreamStill name={name} className={cn('w-full border-0', backdrop !== null && 'bg-transparent')} />
@@ -88,8 +88,8 @@ function LiveStream({ name, onGo, backdrop }: { name: string; onGo: () => void; 
         onPlaying={() => setPlayingStream(stream)}
         className={cn('absolute inset-0 h-full w-full object-cover', !playing && 'opacity-0')}
       />
-      <span className="absolute left-3 top-3 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
-        <span aria-hidden className="h-2 w-2 animate-pulse bg-increase motion-reduce:animate-none" />
+      <span className="absolute left-3 top-3 flex items-center gap-1.5 rounded-control border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+        <span aria-hidden className="h-2 w-2 animate-pulse bg-increase motion-reduce:animate-none bubble:rounded-avatar" />
         live
       </span>
     </Link>
@@ -184,7 +184,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
       className={cn(
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col',
-        'm-0 max-h-none w-full max-w-none border border-primaryStroke',
+        'm-0 max-h-none w-full max-w-none border border-primaryStroke md:rounded-panel',
         SHEET_DIALOG,
         'md:mx-auto md:mb-auto md:mt-[8dvh] md:h-fit md:max-h-[calc(92dvh-1.5rem)] md:min-h-[min(22rem,calc(92dvh-1.5rem))] md:w-[min(720px,calc(100vw-3rem))]',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
@@ -222,7 +222,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             aria-keyshortcuts="Escape"
             onClick={close}
             className={cn(
-              'flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
               SHEET_CLOSE
             )}
           >

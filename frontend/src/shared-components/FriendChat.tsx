@@ -74,8 +74,9 @@ import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { ProfileLink, profilePath, useShowProfile } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
+import { IN_PILL, INPUT, INPUT_BUTTON, PILL } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
@@ -600,6 +601,7 @@ export function FriendChat() {
     return kept && fitted(kept);
   });
   const ref = useRef<HTMLElement | null>(null);
+  useStackedWindow(ref, 'dm', open && !mobile);
   const input = useRef<HTMLInputElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -886,7 +888,7 @@ export function FriendChat() {
       >
         <header
           {...(mobile ? sheet.grip : { onPointerDown: (e: ReactPointerEvent) => press(e, 'move'), title: 'drag to move' })}
-          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'shrink-0 cursor-auto gap-1 py-0.5 pr-1', mobile && name && 'pl-1')}
+          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2 bubble:border-transparent', GRIP, mobile && 'shrink-0 cursor-auto gap-1 py-0.5 pr-1', mobile && name && 'pl-1')}
         >
           {name && dm ? (
             <>
@@ -1054,7 +1056,7 @@ export function FriendChat() {
               onDragOver={dragFiles}
               onDrop={(e) => dropFiles(e, pickFiles)}
               onPaste={(e) => pasteFiles(e, pickFiles)}
-              className={cn('border-t border-primaryStroke p-2', mobile && 'shrink-0', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
+              className={cn('border-t border-primaryStroke p-2 bubble:border-transparent bubble:md:p-[7px]', mobile && 'shrink-0', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
             >
               {replyTo && (
                 <div id="friend-chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
@@ -1086,7 +1088,7 @@ export function FriendChat() {
                   ))}
                 </div>
               )}
-              <div className="relative flex items-center gap-2">
+              <div className={cn('relative flex items-center gap-2', PILL)}>
                 <label htmlFor="friend-chat-text" className="sr-only">
                   message {name}
                 </label>
@@ -1096,7 +1098,8 @@ export function FriendChat() {
                     id="friend-chat-picture"
                     aria-label="picture or video"
                     className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-background text-textTertiary hover:text-textPrimary disabled:opacity-40',
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textTertiary hover:text-textPrimary disabled:opacity-40',
+                      IN_PILL,
                       mobile && 'h-11 w-11'
                     )}
                     disabled={pictures.length >= MAX_CHAT_IMAGES}
@@ -1137,7 +1140,7 @@ export function FriendChat() {
                   aria-label={`message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
-                  className={cn(INPUT, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-8 text-sm')}
+                  className={cn(INPUT, IN_PILL, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-8 text-sm')}
                 />
                 <Tooltip content="send">
                   <Button
@@ -1199,7 +1202,7 @@ export function FriendChat() {
       style={style}
       className={panelClassName(
         cn(
-          'group fixed z-50 flex text-base',
+          'group fixed flex text-base',
           !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-[324px]' : 'left-[324px]')
         )
       )}
