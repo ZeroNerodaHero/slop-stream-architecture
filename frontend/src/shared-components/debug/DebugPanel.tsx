@@ -14,13 +14,15 @@ export function DebugPanel({
   note,
   place,
   onClose,
+  actions,
   children
 }: {
   id: WindowId;
   label: string;
-  note: string;
+  note?: string;
   place: string;
   onClose: () => void;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   const { dialogRef, box, press } = useDialogBox(id);
@@ -49,8 +51,9 @@ export function DebugPanel({
         }}
       >
         <span className="font-semibold">{label}</span>
-        <span className="text-xs text-textTertiary">{note}</span>
-        <span className="ml-auto flex items-center gap-1">
+        {note && <span className="text-xs text-textTertiary">{note}</span>}
+        <span className="ml-auto flex items-center gap-2">
+          {actions}
           <Tooltip content="close">
             <button
               id={`${id}-close`}
