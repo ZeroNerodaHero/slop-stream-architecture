@@ -1,4 +1,4 @@
-import { RiAddLine, RiArrowLeftSLine, RiCloseLine, RiImageAddLine, RiLoader4Line, RiSearchLine } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiArrowUpLine, RiCloseLine, RiImageAddLine, RiLoader4Line, RiSearchLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -1139,24 +1139,27 @@ export function FriendChat() {
                   autoComplete="off"
                   className={cn(INPUT, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-8 text-sm')}
                 />
-                <Button
-                  id="friend-chat-send"
-                  type="submit"
-                  onPointerDown={keepFocus}
-                  variant="primary"
-                  className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-8 text-sm')}
-                  disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending}
-                  aria-busy={sending || undefined}
-                >
-                  {sending ? (
-                    <span className="relative flex items-center">
-                      <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
-                      <span className="sr-only">sending</span>
-                    </span>
-                  ) : (
-                    'send'
-                  )}
-                </Button>
+                <Tooltip content="send">
+                  <Button
+                    id="friend-chat-send"
+                    type="submit"
+                    aria-label="send"
+                    onPointerDown={keepFocus}
+                    variant="primary"
+                    className={cn(INPUT_BUTTON, 'shrink-0 px-0 py-0', mobile ? 'h-11 w-11' : 'h-8 w-8 text-sm')}
+                    disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending}
+                    aria-busy={sending || undefined}
+                  >
+                    {sending ? (
+                      <span className="relative flex items-center">
+                        <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
+                        <span className="sr-only">sending</span>
+                      </span>
+                    ) : (
+                      <RiArrowUpLine aria-hidden size={18} />
+                    )}
+                  </Button>
+                </Tooltip>
               </div>
               <div className={cn('flex items-center justify-between gap-2 text-xs', (notice || left < 50) && 'mt-1')}>
                 <span id="friend-chat-notice" className={cn('text-decrease', notice && 'min-h-[1em]')} aria-live="polite">

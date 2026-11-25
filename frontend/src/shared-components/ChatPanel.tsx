@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiLoader4Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiArrowUpLine, RiCloseLine, RiImageAddLine, RiLoader4Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
@@ -1256,11 +1256,15 @@ export function ChatPanel({
                   className={cn(INPUT, 'h-8 min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
                 />
               </div>
-              <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : null}>
+              <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : 'send'}>
                 <Button
                   id="chat-send"
                   variant={wait > 0 ? 'danger' : 'primary'}
-                  className="h-8 shrink-0 px-4 py-0 text-sm tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                  className={cn(
+                    'h-8 shrink-0 py-0 text-sm tabular-nums max-md:h-11 max-md:text-[length:max(1rem,16px)]',
+                    wait > 0 ? 'px-4 max-md:min-w-11' : 'w-8 px-0 max-md:w-11'
+                  )}
+                  aria-label={wait > 0 ? undefined : 'send'}
                   disabled={!canSend}
                   aria-busy={sending || undefined}
                   data-wait={wait > 0 ? wait : undefined}
@@ -1284,7 +1288,7 @@ export function ChatPanel({
                       <span className="sr-only">sending</span>
                     </span>
                   ) : (
-                    'send'
+                    <RiArrowUpLine aria-hidden size={18} />
                   )}
                 </Button>
               </Tooltip>
