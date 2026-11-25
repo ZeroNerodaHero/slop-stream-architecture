@@ -1659,6 +1659,9 @@
 
   function timingCards(v, target, rows) {
     const ui = v.ui;
+    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}`;
+    if (ui.cardsSig === sig && ui.strip.childNodes.length) return;
+    ui.cardsSig = sig;
     const cards = cardsFor(v, target, rows);
     if (!cards.length) { ui.strip.replaceChildren(); ui.strip.hidden = true; return; }
     ui.strip.hidden = false;
