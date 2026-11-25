@@ -20,7 +20,7 @@ import { cn } from '@/utils/cn';
 
 export const WELCOME_TIP = 'Eques says it in your chat to each viewer who opens it. only they see it, and it is never sent';
 
-export function WelcomeEditor({ id }: { id: string }) {
+export function WelcomeEditor({ id, previewClassName }: { id: string; previewClassName?: string }) {
   const welcome = useAtomValue(profileWelcomeAtom);
   const draft = useAtomValue(profileWelcomeDraftAtom);
   const status = useAtomValue(profileWelcomeStatusAtom);
@@ -71,7 +71,7 @@ export function WelcomeEditor({ id }: { id: string }) {
           </Button>
         </div>
         <Status id={`${id}-status`} text={status || (canEdit ? '' : whyNot)} quiet />
-        <div role="group" aria-label="preview" className={cn('mt-2 border border-primaryStroke bg-background px-2 py-1.5 text-sm leading-snug', !on && 'opacity-50')}>
+        <div role="group" aria-label="preview" className={cn('mt-2 rounded-control border border-primaryStroke bg-background px-2 py-1.5 text-sm leading-snug bubble:rounded-card bubble:border-transparent', previewClassName, !on && 'opacity-50')}>
           <EquesLine message={draft.trim() || DEFAULT_WELCOME} at={at} attrs={{ id: `${id}-line`, 'data-preview': true }} />
         </div>
       </div>

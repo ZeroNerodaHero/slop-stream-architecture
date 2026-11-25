@@ -284,7 +284,7 @@ export function PinSheet({
           id="pin-sheet-handle"
           className="flex shrink-0 cursor-grab touch-none select-none justify-center pb-2 pt-3 [-webkit-touch-callout:none]"
         >
-          <span className="h-1 w-10 bg-primaryStroke" />
+          <span className="h-1 w-10 rounded-control bg-primaryStroke" />
         </div>
       </div>
     </div>,

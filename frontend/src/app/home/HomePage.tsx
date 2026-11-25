@@ -68,9 +68,10 @@ function HomePreviews({ namesKey }: { namesKey: string }) {
   }, [namesKey, hover]);
   return null;
 }
-const SECTION_TITLE = 'flex items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight';
-const LIVE_LINE = 'border-increase';
-const OFFLINE_LINE = 'border-textTertiary';
+const SECTION_TITLE =
+  "flex items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight bubble:items-center bubble:rounded-control bubble:border-b-0 bubble:bg-backgroundTertiary bubble:px-4 bubble:py-1.5 bubble:before:h-2 bubble:before:w-2 bubble:before:shrink-0 bubble:before:rounded-control bubble:before:content-['']";
+const LIVE_LINE = 'border-increase bubble:before:bg-increase';
+const OFFLINE_LINE = 'border-textTertiary bubble:before:bg-textTertiary';
 const SECTION_COUNT = 'text-textSecondary';
 const CARD = 'overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary bubble:border-transparent';
 const CARD_LINK = cn(

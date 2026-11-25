@@ -90,7 +90,7 @@ const SQUARE = 'relative block shrink-0 border transition-[border-color] duratio
 const SQUARE_OFF = 'border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue';
 const SQUARE_ON = 'border-primaryBlue';
 const HEADER_BUTTON =
-  'shrink-0 border border-transparent p-0.5 transition-colors duration-150 hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+  'shrink-0 rounded-control border border-transparent p-0.5 transition-colors duration-150 bubble:p-px hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
@@ -183,7 +183,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
           document.getElementById('friend-chat-text')?.focus();
         }}
         onKeyDown={onKey}
-        className={cn(SQUARE, selected ? SQUARE_ON : SQUARE_OFF)}
+        className={cn(SQUARE, 'rounded-control', selected ? SQUARE_ON : SQUARE_OFF)}
       >
         <Face name={dm.name} version={dm.avatar} />
         <PresenceSquare status={dm.presence} className={RING} />
@@ -204,7 +204,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
           aria-label={`close the chat with ${dm.name}`}
           onClick={() => removeDm(dm.name)}
           className={cn(
-            'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary',
+            'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary',
             'opacity-0 transition-opacity duration-150 hover:border-primaryBlue hover:text-textPrimary focus-visible:opacity-100 focus-visible:outline-none group-hover/tab:opacity-100'
           )}
         >
@@ -247,7 +247,7 @@ function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: P
           onClick={pickDm}
           className={cn(
             SQUARE,
-            'flex h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] items-center justify-center',
+            'flex h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] rounded-control items-center justify-center',
             active === null ? cn(SQUARE_ON, 'text-primaryBlue') : cn(SQUARE_OFF, 'text-textSecondary')
           )}
         >
@@ -352,7 +352,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
                   aria-label={`chat with ${f.name}`}
                   title={f.bio || f.name}
                   onClick={() => openDm({ id: '', name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence })}
-                  className={cn(SQUARE, 'flex w-full flex-col items-center gap-1.5 p-2', open.has(f.name) ? SQUARE_ON : SQUARE_OFF)}
+                  className={cn(SQUARE, 'flex w-full flex-col items-center gap-1.5 rounded-card p-2', open.has(f.name) ? SQUARE_ON : SQUARE_OFF)}
                 >
                   <span className="relative block">
                     <Face name={f.name} version={f.avatar} />
@@ -482,13 +482,13 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
         aria-label={label}
         data-with={name}
         className={cn(
-          'absolute inset-x-0 bottom-0 flex h-[80dvh] flex-col overflow-x-hidden border-t border-primaryStroke bg-backgroundSecondary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-base text-textPrimary',
+          'absolute inset-x-0 bottom-0 flex h-[80dvh] flex-col overflow-x-hidden rounded-t-panel border-t border-primaryStroke bg-backgroundSecondary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-base text-textPrimary',
           drag === null && cn('transition-transform', SHEET_SLIDE)
         )}
         style={{ ...(view ? { bottom, height } : {}), transform: up ? `translateY(${drag ?? 0}px)` : 'translateY(100%)' }}
       >
         <div aria-hidden {...grip} className={cn('flex shrink-0 justify-center pb-1 pt-2', GRIP)}>
-          <span className="h-1 w-10 bg-primaryStroke" />
+          <span className="h-1 w-10 rounded-control bg-primaryStroke" />
         </div>
         {children}
       </section>
@@ -910,7 +910,7 @@ export function FriendChat() {
                   id="friend-chat-profile"
                   person={dm}
                   live={dm.presence === 'streaming'}
-                  className={cn('min-w-0 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue', mobile && 'flex items-center gap-2.5 py-1 pr-1')}
+                  className={cn('min-w-0 rounded-control border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue', mobile && 'flex items-center gap-2.5 py-1 pr-1')}
                 >
                   {mobile && (
                     <span id="friend-chat-face" className="relative block shrink-0">

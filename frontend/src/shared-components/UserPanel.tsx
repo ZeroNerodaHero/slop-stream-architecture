@@ -223,7 +223,7 @@ export function UserPanel() {
           <div className={cn('flex flex-1 pt-1', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
             <Bone className="h-8 w-[calc(2rem+2px)]" />
           </div>
-          <div className={cn('flex shrink-0 border-t border-primaryStroke py-1.5', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
+          <div className={cn('flex shrink-0 border-t border-primaryStroke py-1.5 bubble:border-transparent', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
             <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)]" />
           </div>
         </Skeleton>
@@ -254,7 +254,7 @@ export function UserPanel() {
     <div
       className={cn(
         'flex shrink-0 items-center gap-2 border-primaryStroke',
-        mobile ? 'border-b py-2.5' : 'border-t py-1.5',
+        mobile ? 'border-b py-2.5' : 'border-t py-1.5 bubble:border-transparent',
         mobile ? 'pl-[calc(1.25rem-1px)] pr-3' : mirrored ? 'flex-row-reverse pl-3 pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)] pr-3'
       )}
     >
