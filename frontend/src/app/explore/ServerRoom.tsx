@@ -1214,7 +1214,7 @@ export function ServerPage() {
   );
   const mobileTitle = (
     <span className="flex min-w-0 items-center gap-2.5">
-      <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
+      <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 rounded-control text-sm" />
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-normal text-textSecondary">{words.title}</span>
         {voiceView.view ? (
@@ -1261,7 +1261,7 @@ export function ServerPage() {
       bleed={!noChannel}
       title={
         <span className="flex min-w-0 items-center gap-3">
-          <GroupMark name={server} color={color} icon={room.icon} className="h-8 w-8 shrink-0 text-sm" />
+          <GroupMark name={server} color={color} icon={room.icon} className="h-8 w-8 shrink-0 rounded-control text-sm" />
           <span className="truncate">
             {channel === home ? (
               <GroupName words={words} />
@@ -2182,7 +2182,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
     >
       <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-52 sm:border-b-0 sm:border-r">
         <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
-          <GroupMark name={server} color={room.color || '#5865f2'} icon={room.icon} className="h-9 w-9 text-base" />
+          <GroupMark name={server} color={room.color || '#5865f2'} icon={room.icon} className="h-9 w-9 rounded-control text-base" />
           <span className="min-w-0">
             <span className="block truncate font-semibold leading-tight">{words.title}</span>
             <span className="block text-xs text-textTertiary">{words.tag ? `#${words.tag}` : 'manage'}</span>

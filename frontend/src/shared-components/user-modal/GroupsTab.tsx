@@ -63,7 +63,7 @@ export function GroupsTab() {
         {loaded === undefined && (
           <Skeleton id="group-list-loading" className={GRID}>
             {Array.from({ length: 4 }, (_, i) => (
-              <Bone key={i} className="aspect-square" />
+              <Bone key={i} className="aspect-square rounded-card" />
             ))}
           </Skeleton>
         )}
@@ -127,7 +127,7 @@ function GroupPick({ group, server, busy, mobile }: { group: Group; server: Serv
           compact
           corner={
             primary && (
-              <span className="absolute right-2 top-2 bg-primaryBlue px-1.5 py-0.5 text-xs font-semibold text-white md:group-hover/sq:opacity-0 md:group-focus-within/sq:opacity-0">
+              <span className="absolute right-2 top-2 rounded-control bg-primaryBlue px-1.5 py-0.5 text-xs font-semibold text-white md:group-hover/sq:opacity-0 md:group-focus-within/sq:opacity-0">
                 primary
               </span>
             )

@@ -424,7 +424,7 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
             name={server.name}
             color={server.color}
             icon={server.icon}
-            className="h-8 w-8 rounded-card border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
+            className="h-8 w-8 rounded-control border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
           />
           {live > 0 && (
             <span
