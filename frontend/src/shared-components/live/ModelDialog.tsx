@@ -1,6 +1,6 @@
 import { RiAddLine, RiBox3Line, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type MouseEvent, type PointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef } from 'react';
+import { type MouseEvent, type PointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { api, type DemoModel } from '@/infra/api';
 import {
@@ -78,7 +78,8 @@ const PLACES: readonly { id: string; name: string; href: string; file: string; a
 interface CardProps {
   id: string;
   name: string;
-  detail: string;
+  author: string;
+  meta: string;
   picture: ReactNode;
   on: boolean;
   load: ModelLoad | null;
@@ -86,41 +87,67 @@ interface CardProps {
   onPick: () => void;
 }
 
-function Card({ id, name, detail, picture, on, load, disabled, onPick }: CardProps) {
+function useTruncated(text: string) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setCut(el.scrollWidth > el.clientWidth);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text]);
+  return [ref, cut] as const;
+}
+
+function Card({ id, name, author, meta, picture, on, load, disabled, onPick }: CardProps) {
+  const [authorRef, authorCut] = useTruncated(author);
   const fraction = load ? loadFraction(load) : null;
   return (
-    <button
-      id={id}
-      type="button"
-      aria-pressed={on}
-      aria-busy={load !== null}
-      disabled={disabled}
-      onClick={onPick}
-      className={cn(
-        'flex w-full min-w-0 flex-col border bg-background text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default',
-        on || load ? 'border-primaryBlue disabled:hover:border-primaryBlue' : 'border-primaryStroke disabled:hover:border-primaryStroke',
-        !load && 'disabled:opacity-40'
-      )}
-    >
-      <span className="relative block aspect-square w-full overflow-hidden bg-black">
-        {picture}
-        {load && (
-          <span id="model-card-loading" data-step={load.step} className="absolute inset-0 flex flex-col bg-black/60">
-            <span className="flex flex-1 items-center justify-center text-xl font-semibold text-white">{fraction === null ? '' : `${Math.round(fraction * 100)}%`}</span>
-            <LoadBar loaded={load.loaded} total={load.total} label={`loading ${name}`} onPicture />
-          </span>
+    <Tooltip content={authorCut ? author : null} className="max-w-xs whitespace-normal">
+      <button
+        id={id}
+        type="button"
+        aria-pressed={on}
+        aria-busy={load !== null}
+        disabled={disabled}
+        onClick={onPick}
+        className={cn(
+          'flex w-full min-w-0 flex-col border bg-background text-left transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default',
+          on || load ? 'border-primaryBlue disabled:hover:border-primaryBlue' : 'border-primaryStroke disabled:hover:border-primaryStroke',
+          !load && 'disabled:opacity-40'
         )}
-      </span>
-      <span className="block min-w-0 px-2 py-1.5">
-        <span className={cn('block truncate text-sm font-semibold', on || load ? 'text-primaryBlue' : 'text-textPrimary')}>{name}</span>
-        <span className="block truncate text-xs text-textTertiary">{(load ? loadWordsShort(load) : detail) || '\u00a0'}</span>
-      </span>
-    </button>
+      >
+        <span className="relative block aspect-square w-full overflow-hidden bg-black">
+          {picture}
+          {load && (
+            <span id="model-card-loading" data-step={load.step} className="absolute inset-0 flex flex-col bg-black/60">
+              <span className="flex flex-1 items-center justify-center text-xl font-semibold text-white">
+                {fraction === null ? '' : `${Math.round(fraction * 100)}%`}
+              </span>
+              <LoadBar loaded={load.loaded} total={load.total} label={`loading ${name}`} onPicture />
+            </span>
+          )}
+        </span>
+        <span className="block min-w-0 px-2 py-1.5">
+          <span className={cn('block truncate text-sm font-semibold', on || load ? 'text-primaryBlue' : 'text-textPrimary')}>{name}</span>
+          <span ref={authorRef} className="block truncate text-xs text-textSecondary">
+            {author || '\u00a0'}
+          </span>
+          <span className="block text-xs text-textTertiary tabular-nums">{(load ? loadWordsShort(load) : meta) || '\u00a0'}</span>
+        </span>
+      </button>
+    </Tooltip>
   );
 }
 
-const demoDetail = (model: DemoModel, kept: boolean) => [model.author, model.licence, kept ? 'downloaded' : mb(model.bytes)].filter(Boolean).join(' · ');
-const keptDetail = (model: KeptModel) => [model.author, mb(model.bytes)].filter(Boolean).join(' · ');
+const demoDetail = (model: DemoModel, kept: boolean) => ({
+  author: model.author,
+  meta: [model.licence, kept ? 'downloaded' : mb(model.bytes)].filter(Boolean).join(' · ')
+});
+const keptDetail = (model: KeptModel) => ({ author: model.author, meta: mb(model.bytes) });
 
 function NoPicture({ format }: { format: string }) {
   return (
@@ -203,7 +230,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
       onClick={onClick}
       onClose={onClose}
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(640px,calc(100vw-3rem))] overflow-y-auto md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(720px,calc(100vw-3rem))] overflow-y-auto md:rounded-panel border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >
@@ -237,7 +264,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
                   <Card
                     id={`model-demo-${model.id}`}
                     name={model.name}
-                    detail={demoDetail(model, keptDemos.get(model.id) === model.v)}
+                    {...demoDetail(model, keptDemos.get(model.id) === model.v)}
                     picture={
                       model.thumb ? (
                         <img src={api.demoModelThumbUrl(model)} alt="" draggable={false} loading="lazy" className="block h-full w-full object-cover" />
@@ -270,7 +297,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
                 <Card
                   id={`model-kept-${model.id}`}
                   name={model.name}
-                  detail={keptDetail(model)}
+                  {...keptDetail(model)}
                   picture={model.thumb ? <KeptPicture picture={model.thumb} /> : <NoPicture format={model.format} />}
                   on={on?.kind === 'kept' && on.id === model.id}
                   load={load?.choice.kind === 'kept' && load.choice.id === model.id ? load : null}
