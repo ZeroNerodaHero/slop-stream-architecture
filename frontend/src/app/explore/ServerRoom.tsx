@@ -51,8 +51,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { EmotesSection } from '@/app/explore/EmotesSection';
 import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
-import { VoiceDock } from '@/app/explore/VoiceDock';
 import { VoicePanel } from '@/app/explore/VoicePanel';
+import { VoicePip } from '@/app/explore/VoicePip';
 import { useVoiceView, VoiceRoom } from '@/app/explore/VoiceRoom';
 import {
   api,
@@ -146,7 +146,7 @@ const ABOUT_CAP = 200;
 
 const ROOM_GRID = 'grid max-md:snap-start lg:snap-start items-start gap-2 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
 const roomColumns = (membersOpen: boolean) =>
-  membersOpen ? 'lg:grid-cols-[176px_minmax(0,1fr)_224px] xl:grid-cols-[220px_minmax(0,1fr)_420px]' : 'lg:grid-cols-[176px_minmax(0,1fr)_56px] xl:grid-cols-[220px_minmax(0,1fr)_56px]';
+  membersOpen ? 'lg:grid-cols-[176px_minmax(0,1fr)_224px] xl:grid-cols-[220px_minmax(0,1fr)_224px]' : 'lg:grid-cols-[176px_minmax(0,1fr)_56px] xl:grid-cols-[220px_minmax(0,1fr)_56px]';
 const ROOM_CHAT_CONTAINER = '[container-type:inline-size]';
 const pinsWidth = (membersOpen: boolean) =>
   cn('w-[max(20rem,80cqw)] max-w-[calc(100vw-2rem)]', !membersOpen && 'lg:w-[max(20rem,calc(0.8*(100cqw_-_168px)))]');
@@ -1316,12 +1316,12 @@ export function ServerPage() {
               )}
             </div>
             {!mobile && (
-              <div className={cn('flex min-w-0 flex-col gap-2', ROSTER_HEIGHT, STACKED_SNAP)}>
-                <VoiceDock room={room} className={cn(!membersOpen && 'lg:hidden')} />
+              <div className={cn('flex min-w-0 flex-col', ROSTER_HEIGHT, STACKED_SNAP)}>
                 <Roster room={room} fill />
               </div>
             )}
           </div>
+          {!mobile && <VoicePip room={room} />}
           {mobile && (
             <PinSheet
               server={server}
