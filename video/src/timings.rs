@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::Relaxed};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{MatchedPath, Request};
@@ -8,7 +8,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const SUB_BITS: usize = 3;
@@ -16,6 +16,8 @@ const SUB: usize = 1 << SUB_BITS;
 const BUCKETS: usize = 240;
 const MAX_KEYS: usize = 200;
 const PORT: u16 = 9300;
+const KEEP_FAULTS: usize = 100;
+const MAX_NOTE: usize = 300;
 
 fn bucket(us: u64) -> usize {
     if us < SUB as u64 {
@@ -42,7 +44,99 @@ impl Dir {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct Fault {
+    at: i64,
+    code: String,
+    msg: String,
+    ms: f64,
+}
+
+#[derive(Default)]
+struct Faults {
+    err: VecDeque<Fault>,
+    e4: VecDeque<Fault>,
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+fn redact(word: &str) -> Option<&'static str> {
+    let core = word.trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\'' | '`'));
+    let core = core.trim_end_matches(['.', ':']);
+    if let Some((user, domain)) = core.split_once('@') {
+        if !user.is_empty() && domain.contains('.') {
+            return Some("<email>");
+        }
+    }
+    let host = core.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map_or(core, |(h, _)| h);
+    if host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok() {
+        return Some("<ip>");
+    }
+    let secretish = core.len() >= 24
+        && !core.starts_with('/')
+        && core.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '/' | '='))
+        && core.chars().any(|c| c.is_ascii_digit())
+        && core.chars().any(|c| c.is_ascii_alphabetic());
+    secretish.then_some("<secret>")
+}
+
+fn scrub(text: &str) -> String {
+    let mut out = String::new();
+    for word in text.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        match (redact(word), word.split_once('?')) {
+            (Some(tag), _) => out.push_str(tag),
+            (None, Some((path, _))) if word.contains("://") => {
+                out.push_str(path);
+                out.push_str("?…");
+            }
+            _ => out.push_str(word),
+        }
+        if out.len() > MAX_NOTE * 4 {
+            break;
+        }
+    }
+    if out.chars().count() > MAX_NOTE {
+        out = out.chars().take(MAX_NOTE - 1).collect::<String>();
+        out.push('…');
+    }
+    out
+}
+
+fn status_why(status: u16) -> (String, String) {
+    let reason = axum::http::StatusCode::from_u16(status).ok().and_then(|s| s.canonical_reason()).unwrap_or("");
+    (status.to_string(), reason.to_owned())
+}
+
+fn reqwest_why(res: &reqwest::Result<reqwest::Response>) -> (String, String) {
+    match res {
+        Ok(r) => status_why(r.status().as_u16()),
+        Err(e) => {
+            let code = if e.is_timeout() {
+                "timeout"
+            } else if e.is_connect() {
+                "connect"
+            } else if e.is_body() || e.is_decode() {
+                "body"
+            } else {
+                "failed"
+            };
+            let mut msg = vec![];
+            let mut cause = std::error::Error::source(e);
+            while let Some(c) = cause {
+                msg.push(c.to_string());
+                cause = c.source();
+            }
+            (code.to_owned(), if msg.is_empty() { code.to_owned() } else { msg.join(": ") })
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum Outcome {
     Ok,
     Client,
@@ -73,6 +167,7 @@ pub struct Entry {
     bytes: AtomicU64,
     open: AtomicI64,
     b: [AtomicU64; BUCKETS],
+    faults: Mutex<Faults>,
 }
 
 #[derive(Serialize)]
@@ -111,7 +206,33 @@ impl Entry {
             bytes: z(),
             open: AtomicI64::new(0),
             b: std::array::from_fn(|_| z()),
+            faults: Mutex::new(Faults::default()),
         }
+    }
+
+    pub fn add_noted(&self, took: Duration, outcome: Outcome, why: impl FnOnce() -> (String, String)) {
+        self.add(took, outcome);
+        if outcome != Outcome::Ok {
+            let (code, msg) = why();
+            self.note(took, outcome, code, &msg);
+        }
+    }
+
+    fn note(&self, took: Duration, outcome: Outcome, code: String, msg: &str) {
+        let fault = Fault { at: now_ms(), code, msg: scrub(msg), ms: (took.as_micros() as f64 / 1000.0 * 1000.0).round() / 1000.0 };
+        let mut f = self.faults.lock().unwrap_or_else(|e| e.into_inner());
+        let ring = if outcome == Outcome::Client { &mut f.e4 } else { &mut f.err };
+        if ring.len() >= KEEP_FAULTS {
+            ring.pop_front();
+        }
+        ring.push_back(fault);
+    }
+
+    fn faults(&self) -> Vec<Fault> {
+        let f = self.faults.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all: Vec<Fault> = f.err.iter().chain(f.e4.iter()).cloned().collect();
+        all.sort_by_key(|x| std::cmp::Reverse(x.at));
+        all
     }
 
     pub fn add(&self, took: Duration, outcome: Outcome) {
@@ -166,12 +287,16 @@ struct Registry {
 }
 
 static REG: LazyLock<Registry> = LazyLock::new(|| Registry {
-    started: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0),
+    started: now_ms(),
     map: RwLock::new(HashMap::new()),
 });
 
+fn line_key(kind: &str, method: &str, name: &str, dir: &str) -> String {
+    format!("{kind}\u{1f}{method}\u{1f}{name}\u{1f}{dir}")
+}
+
 pub fn line(kind: &'static str, method: &str, name: &str, dir: Dir) -> Arc<Entry> {
-    let key = format!("{kind}\u{1f}{method}\u{1f}{name}\u{1f}{}", dir.as_str());
+    let key = line_key(kind, method, name, dir.as_str());
     if let Some(e) = REG.map.read().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return e.clone();
     }
@@ -187,24 +312,28 @@ pub struct Session {
     inbound: Arc<Entry>,
     started: Instant,
     failed: AtomicBool,
+    why: Mutex<Option<String>>,
 }
 
 impl Session {
     pub fn open(proto: &'static str, name: &str) -> Session {
         let inbound = line("session", proto, name, Dir::In);
         inbound.open.fetch_add(1, Relaxed);
-        Session { inbound, started: Instant::now(), failed: AtomicBool::new(false) }
+        Session { inbound, started: Instant::now(), failed: AtomicBool::new(false), why: Mutex::new(None) }
     }
 
-    pub fn fail(&self) {
+    pub fn fail(&self, why: &str) {
         self.failed.store(true, Relaxed);
+        *self.why.lock().unwrap_or_else(|e| e.into_inner()) = Some(why.to_owned());
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         self.inbound.open.fetch_sub(1, Relaxed);
-        self.inbound.add(self.started.elapsed(), if self.failed.load(Relaxed) { Outcome::Failed } else { Outcome::Ok });
+        let outcome = if self.failed.load(Relaxed) { Outcome::Failed } else { Outcome::Ok };
+        let why = self.why.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
+        self.inbound.add_noted(self.started.elapsed(), outcome, || ("dropped".into(), why));
     }
 }
 
@@ -220,8 +349,20 @@ impl Setup {
     }
 
     pub fn done(&self, ok: bool) {
+        if ok {
+            self.settle(Outcome::Ok, "");
+        } else {
+            self.settle(Outcome::Failed, "ended before it connected");
+        }
+    }
+
+    pub fn fail(&self, why: &str) {
+        self.settle(Outcome::Failed, why);
+    }
+
+    fn settle(&self, outcome: Outcome, why: &str) {
         if !self.settled.swap(true, Relaxed) {
-            self.entry.add(self.started.elapsed(), if ok { Outcome::Ok } else { Outcome::Failed });
+            self.entry.add_noted(self.started.elapsed(), outcome, || ("failed".into(), why.to_owned()));
         }
     }
 }
@@ -240,6 +381,26 @@ pub fn delivered(out: &Entry, written: usize, one: u64) {
     if written > 0 && one > 0 {
         out.count((written as u64).div_ceil(one), written as u64);
     }
+}
+
+#[derive(Deserialize)]
+struct FaultQuery {
+    kind: String,
+    #[serde(default)]
+    method: String,
+    name: String,
+    #[serde(default)]
+    dir: String,
+}
+
+fn faults_of(q: &FaultQuery) -> Value {
+    let dir = match (q.dir.as_str(), q.kind.as_str()) {
+        ("in" | "out" | "inter", _) => q.dir.as_str(),
+        (_, "http" | "ws" | "session" | "setup") => "in",
+        _ => "inter",
+    };
+    let found = REG.map.read().unwrap_or_else(|e| e.into_inner()).get(&line_key(&q.kind, &q.method, &q.name, dir)).cloned();
+    json!({ "started": REG.started, "kept": KEEP_FAULTS, "rows": found.map(|e| e.faults()).unwrap_or_default() })
 }
 
 fn snapshot() -> Value {
@@ -275,20 +436,18 @@ pub async fn http(req: Request, next: Next) -> Response {
     let res = next.run(req).await;
     let status = res.status().as_u16();
     let kind = if status == 101 { "ws" } else { "http" };
-    line(kind, method, path.as_deref().unwrap_or("(no route)"), dir).add(started.elapsed(), outcome(status));
+    line(kind, method, path.as_deref().unwrap_or("(no route)"), dir).add_noted(started.elapsed(), outcome(status), || status_why(status));
     res
 }
 
 pub async fn call(method: &'static str, name: &str, req: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
     let started = Instant::now();
     let res = req.send().await;
-    line("api", method, name, Dir::Inter).add(
-        started.elapsed(),
-        match &res {
-            Ok(r) => outcome(r.status().as_u16()),
-            Err(_) => Outcome::Failed,
-        },
-    );
+    let out = match &res {
+        Ok(r) => outcome(r.status().as_u16()),
+        Err(_) => Outcome::Failed,
+    };
+    line("api", method, name, Dir::Inter).add_noted(started.elapsed(), out, || reqwest_why(&res));
     res
 }
 
@@ -298,7 +457,9 @@ pub fn serve() {
         return;
     }
     tokio::spawn(async move {
-        let router = Router::new().route("/timings", get(|| async { Json(snapshot()) }));
+        let router = Router::new()
+            .route("/timings", get(|| async { Json(snapshot()) }))
+            .route("/timings/errors", get(|axum::extract::Query(q): axum::extract::Query<FaultQuery>| async move { Json(faults_of(&q)) }));
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => {
                 log::info!("timings on 0.0.0.0:{port}/timings, for the agent");
@@ -332,7 +493,7 @@ mod tests {
             setup.done(true);
             setup.done(false);
             delivered(&out, 2400, packet_bytes(1188));
-            s.fail();
+            s.fail("peer gone");
             let rows = snapshot()["rows"].as_array().unwrap().clone();
             let open = rows.iter().find(|r| r["kind"] == "session" && r["name"] == "test-watch" && r["dir"] == "in").unwrap();
             assert_eq!((open["open"].as_u64(), open["n"].as_u64()), (Some(1), Some(0)));
@@ -349,5 +510,23 @@ mod tests {
         let rows = snapshot()["rows"].as_array().unwrap().clone();
         let never = rows.iter().find(|r| r["kind"] == "setup" && r["name"] == "test-never").unwrap();
         assert_eq!(never["err"], 1, "a setup that never connected is a failed one");
+    }
+
+    #[test]
+    fn a_dropped_session_and_a_failed_call_leave_a_note() {
+        drop({
+            let s = Session::open("webrtc", "test-faults");
+            s.fail("peer gone from 192.168.1.20:5000");
+            s
+        });
+        let q = |kind: &str, dir: &str| FaultQuery { kind: kind.into(), method: "webrtc".into(), name: "test-faults".into(), dir: dir.into() };
+        let rows = faults_of(&q("session", ""))["rows"].as_array().unwrap().clone();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0]["code"].as_str(), rows[0]["msg"].as_str()), (Some("dropped"), Some("peer gone from <ip>")));
+        Setup::start("webrtc", "test-faults").fail("peer failed before it connected");
+        assert_eq!(faults_of(&q("setup", "in"))["rows"][0]["msg"], "peer failed before it connected");
+        drop(Session::open("webrtc", "test-faults-clean"));
+        let clean = FaultQuery { kind: "session".into(), method: "webrtc".into(), name: "test-faults-clean".into(), dir: String::new() };
+        assert_eq!(faults_of(&clean)["rows"].as_array().unwrap().len(), 0);
     }
 }

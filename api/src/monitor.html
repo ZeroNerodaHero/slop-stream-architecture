@@ -166,11 +166,31 @@
   .dr-stats { flex: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 1px; background: var(--stroke); border-bottom: 1px solid var(--stroke); }
   .dr-stats div { background: var(--bg2); padding: 5px 10px; min-width: 0; }
   .dr-stats b { display: block; font-size: 10px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  .dr-stats b .info { margin-left: 4px; }
+  .info { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; padding: 0; border: 1px solid var(--t3); border-radius: 50%; background: none; color: var(--t3); font: 600 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: none; letter-spacing: 0; vertical-align: 1px; cursor: help; }
+  .info:hover, .info:focus-visible, .info.on { color: var(--t1); border-color: var(--blue); outline: none; }
+  .hint { position: fixed; z-index: 50; max-width: 260px; pointer-events: none; background: var(--bg); border: 1px solid var(--t3); padding: 6px 8px; font-size: 12px; line-height: 1.45; color: var(--t1); white-space: normal; }
+  .hint b { display: block; font-size: 10px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+  @supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / .1) transparent; }
+    *:hover { scrollbar-color: rgb(255 255 255 / .25) transparent; }
+    .scrolling, .scrolling:hover { scrollbar-color: rgb(255 255 255 / .4) transparent; }
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  ::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .1); border-radius: 3px; }
+  :hover::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .25); }
+  .scrolling::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / .4); }
   .dr-stats span { display: block; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dr-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 10px; align-content: start; }
   .dr-body .tile.wide { grid-column: 1 / -1; }
   .dr-body .tile canvas { flex: none; height: 110px; }
   .dr-body .tile.wide canvas { height: 180px; }
+  .flist { max-height: 260px; overflow: auto; margin-top: 4px; font-size: 12px; }
+  .frow { display: grid; grid-template-columns: max-content 52px minmax(0, 1fr) max-content; gap: 10px; align-items: baseline; padding: 3px 0; border-top: 1px solid var(--stroke); }
+  .frow .fmsg { overflow-wrap: anywhere; user-select: text; }
+  .frow .fms { text-align: right; }
   .g-ok { color: var(--up); } .g-warn { color: var(--warn); } .g-bad { color: var(--down); }
   .share { position: relative; display: inline-block; width: 40px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
   .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
@@ -512,6 +532,74 @@
       if ($q.value) { $q.value = ''; $q.dispatchEvent(new Event('input')); } else $q.blur();
     }
   });
+  const $hint = el('div', 'hint');
+  $hint.id = 'hint';
+  $hint.setAttribute('role', 'tooltip');
+  $hint.hidden = true;
+  document.body.append($hint);
+  let hintAt = null;
+  function showHint(b) {
+    if (hintAt && hintAt !== b) hintAt.classList.remove('on');
+    hintAt = b;
+    b.classList.add('on');
+    $hint.replaceChildren(el('b', null, b.dataset.k), document.createTextNode(b.dataset.tip));
+    $hint.hidden = false;
+    const a = b.getBoundingClientRect();
+    const w = $hint.offsetWidth, h = $hint.offsetHeight;
+    $hint.style.left = `${Math.max(6, Math.min(innerWidth - w - 6, a.left + a.width / 2 - 14))}px`;
+    $hint.style.top = `${a.bottom + 6 + h <= innerHeight - 6 ? a.bottom + 6 : Math.max(6, a.top - 6 - h)}px`;
+  }
+  function hideHint() {
+    if (hintAt) hintAt.classList.remove('on');
+    hintAt = null;
+    $hint.hidden = true;
+  }
+  function infoButton(k, tip) {
+    const b = el('button', 'info', 'i');
+    b.type = 'button';
+    b.dataset.k = k;
+    b.dataset.tip = tip;
+    b.setAttribute('aria-label', `about ${k}`);
+    b.setAttribute('aria-description', tip);
+    b.setAttribute('aria-describedby', 'hint');
+    return b;
+  }
+  function holdHint(root) {
+    return hintAt && root.contains(hintAt) ? { k: hintAt.dataset.k, focused: document.activeElement === hintAt } : null;
+  }
+  function keepHint(root, held) {
+    if (!held) return;
+    const b = [...root.querySelectorAll('.info')].find((x) => x.dataset.k === held.k);
+    if (!b) { hideHint(); return; }
+    if (held.focused) b.focus({ preventScroll: true });
+    showHint(b);
+  }
+  document.addEventListener('pointerover', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) showHint(b); });
+  document.addEventListener('pointerout', (e) => {
+    const b = e.target.closest && e.target.closest('.info');
+    if (b && b === hintAt && !b.contains(e.relatedTarget) && document.activeElement !== b) hideHint();
+  });
+  document.addEventListener('focusin', (e) => { const b = e.target.closest && e.target.closest('.info'); if (b) showHint(b); });
+  document.addEventListener('focusout', (e) => {
+    const b = e.target.closest && e.target.closest('.info');
+    if (b && b === hintAt && !b.matches(':hover')) hideHint();
+  });
+  addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || $hint.hidden) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    hideHint();
+  }, true);
+  addEventListener('resize', hideHint);
+  const scrollers = new Map();
+  document.addEventListener('scroll', (e) => {
+    const t = e.target === document ? document.documentElement : e.target;
+    if (!(t instanceof Element)) return;
+    if (hintAt && t.contains(hintAt)) hideHint();
+    t.classList.add('scrolling');
+    clearTimeout(scrollers.get(t));
+    scrollers.set(t, setTimeout(() => { t.classList.remove('scrolling'); scrollers.delete(t); }, 700));
+  }, true);
   document.addEventListener('keydown', (e) => {
     const v = views[sel.tab];
     if (!v || !v.open || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1734,6 +1822,36 @@
     return tm.data.rows.find((r) => r.target === target && r.key === key) || null;
   }
 
+  const faultTime = (at) => new Date(at).toLocaleString('en-US', { timeZone: CHICAGO, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+
+  function faultTile(F, summary) {
+    const t = el('div', 'tile wide');
+    const head = el('div', 'head');
+    const rows = F && Array.isArray(F.rows) ? F.rows : [];
+    head.append(el('span', 'label', 'errors'), el('span', 'value mono', `${summary}${rows.length ? ` · newest ${rows.length} kept, times in Chicago` : ''}`));
+    t.append(head);
+    if (!F) t.append(el('div', 'empty', 'loading'));
+    else if (F.error) t.append(el('div', 'note', `could not load the errors: ${F.error}`));
+    else if (!rows.length) t.append(el('div', 'empty', 'none kept: no errors since this process last started'));
+    else {
+      const list = el('div', 'flist');
+      list.setAttribute('role', 'list');
+      for (const f of rows) {
+        const code = String(f.code == null ? '' : f.code);
+        const row = el('div', 'frow');
+        row.setAttribute('role', 'listitem');
+        row.append(
+          el('span', 'mono dim', has(f.at) ? faultTime(f.at) : '—'),
+          el('span', `mono ${code.startsWith('4') ? 'note' : 'no'}`, code || '—'),
+          el('span', 'fmsg', typeof f.msg === 'string' && f.msg ? f.msg : '—'),
+          el('span', 'fms mono dim', has(f.ms) ? ms(f.ms) : '—'));
+        list.append(row);
+      }
+      t.append(list);
+    }
+    return t;
+  }
+
   function pairOf(r) {
     if (!r || r.kind !== 'session' || !tm.data) return null;
     return tm.data.rows.find((x) => x.target === r.target && x.kind === 'session' && x.method === r.method && x.name === r.name && x.src === r.src && x.dir !== r.dir) || null;
@@ -1743,7 +1861,10 @@
     const dr = v.ui.drawer;
     const keep = dr.querySelector('.dr-body');
     const scroll = keep ? keep.scrollTop : 0;
+    const keptList = dr.querySelector('.flist');
+    const listScroll = keptList ? keptList.scrollTop : 0;
     if (!v.open) {
+      if (hintAt && dr.contains(hintAt)) hideHint();
       dr.classList.remove('on');
       return;
     }
@@ -1780,38 +1901,59 @@
     const stats = el('div', 'dr-stats');
     const stat = (k, val, cls, tip) => {
       const d = el('div');
-      d.append(el('b', null, k), el('span', cls, val));
-      if (tip) d.title = tip;
+      const b = el('b', null, k);
+      if (tip) b.append(infoButton(k, tip));
+      d.append(b, el('span', cls, val));
       stats.append(d);
     };
     const S = r && r.kind === 'session';
+    const over = `over the last ${sel.range}`;
+    const noun = r ? (r.kind === 'http' ? ['request', 'requests'] : r.kind === 'ws' ? ['handshake', 'handshakes'] : ['call', 'calls']) : ['call', 'calls'];
+    const timed = r && r.kind === 'http' ? 'timed on the server, from the request arriving to its response being ready to send (a streamed body is not counted)'
+      : r && r.kind === 'ws' ? 'timed on the server, from the websocket upgrade request arriving to its 101 answer'
+      : 'timed by the service that made it, from sending the call to its answer coming back';
+    const est = 'read from a histogram, so close but not exact';
+    const pctl = (k, what) => ({
+      avg: `the average ${what}: all of them added up, divided by how many there were, ${over}.`,
+      p50: `the median ${what}: half were shorter than this, half longer, ${over}; ${est}.`,
+      p95: `95% were shorter than this; 1 in 20 took longer. ${what[0].toUpperCase() + what.slice(1)}, ${over}; ${est}.`,
+      p99: `99% were shorter than this; 1 in 100 took longer. ${what[0].toUpperCase() + what.slice(1)}, ${over}; ${est}.`,
+      max: `the single longest ${what} ${over}.`
+    })[k];
     const pair = S ? pairOf(r) : null;
     const I = S ? (r.dir === 'out' ? pair : r) : null;
     const O = S ? (r.dir === 'out' ? r : pair) : null;
     if (r && S) {
-      stat('open now', count(I ? I.open : 0));
-      stat('most open', count(I ? I.open_peak : 0));
-      stat('ended', count(I ? I.n : 0));
-      stat('dropped', count(I ? I.err : 0), I && I.err ? 'no' : null);
-      for (const k of ['mean', 'p50', 'p95', 'p99', 'max']) stat(k === 'mean' ? 'avg' : k, spent(I ? I[k] : null), null, 'how long a session lasted');
-      stat('msg/s in', rate(I ? I.msgs_rate : 0));
-      stat('msg/s out', rate(O ? O.msgs_rate : 0));
-      stat('in', Bps(I ? I.bytes_rate : 0));
-      stat('out', Bps(O ? O.bytes_rate : 0));
+      stat('open now', count(I ? I.open : 0), null, 'connections open right now, at the latest reading.');
+      stat('most open', count(I ? I.open_peak : 0), null, `the most connections open at the same time at any reading ${over}.`);
+      stat('ended', count(I ? I.n : 0), null, `connections that closed ${over}, cleanly or not.`);
+      stat('dropped', count(I ? I.err : 0), I && I.err ? 'no' : null, `connections ${over} that broke instead of closing cleanly: a read error on a websocket, the peer going away on webrtc.`);
+      for (const k of ['mean', 'p50', 'p95', 'p99', 'max']) {
+        const n = k === 'mean' ? 'avg' : k;
+        stat(n, spent(I ? I[k] : null), null, `${pctl(n, 'session length')} A session runs from connect to close; only connections that ended count.`);
+      }
+      stat('msg/s in', rate(I ? I.msgs_rate : 0), null, `messages from the client to the server per second, averaged ${over}.`);
+      stat('msg/s out', rate(O ? O.msgs_rate : 0), null, `messages from the server to the client per second, averaged ${over}.`);
+      stat('in', Bps(I ? I.bytes_rate : 0), null, `bytes from the client to the server per second, averaged ${over}.`);
+      stat('out', Bps(O ? O.bytes_rate : 0), null, `bytes from the server to the client per second, averaged ${over}.`);
     } else if (r) {
       const lim = limitsOf(r);
-      stat('count', count(r.n));
-      stat('rate', `${rate(r.rate)}/s`);
-      stat('total time', spent(r.sum_ms));
-      stat('share', share(r.share), null, 'of its kind\u2019s time');
+      const group = `${kindLabel(r.kind)} ${DIR_NAME[r.dir]}`;
+      stat('count', count(r.n), null, `how many ${noun[1]} finished ${over}.`);
+      stat('rate', `${rate(r.rate)}/s`, null, `${noun[1]} per second, averaged ${over}.`);
+      stat('total time', spent(r.sum_ms), null, `every ${noun[0]}\u2019s duration added up ${over}. Each one is ${timed}.`);
+      stat('share', share(r.share), null, `this line\u2019s part of the total time of all ${group} lines on the shown box ${over}. Big share = where the time goes.`);
       for (const k of ['mean', 'p50', 'p95', 'p99', 'max']) {
         const g = grade(r[k], lim);
-        stat(k === 'mean' ? 'avg' : k, ms(r[k]), g ? `g-${g}` : null);
+        const n = k === 'mean' ? 'avg' : k;
+        stat(n, ms(r[k]), g ? `g-${g}` : null, `${pctl(n, `${noun[0]} time`)} Green, yellow or red against this kind\u2019s latency limits.`);
       }
-      stat('errors', count(r.err), r.err ? 'no' : null);
+      stat('errors', count(r.err), r.err ? 'no' : null, r.kind === 'http' || r.kind === 'ws'
+        ? `${noun[1]} answered with a 5xx status (the server failed) ${over}. 4xx answers are not counted here.`
+        : `calls that failed ${over}: an error came back, or the call could not be made at all.`);
       if (r.kind === 'http') {
-        stat('4xx', count(r.e4), r.e4 ? 'note' : null);
-        stat('5xx', count(r.e5), r.e5 ? 'no' : null);
+        stat('4xx', count(r.e4), r.e4 ? 'note' : null, `requests answered with a 4xx status ${over}: the client asked for something wrong, like bad input, not found or not allowed. Not counted as errors.`);
+        stat('5xx', count(r.e5), r.e5 ? 'no' : null, `requests answered with a 5xx status ${over}: the server failed. These are the errors.`);
       }
     }
 
@@ -1865,10 +2007,15 @@
             : [{ name: 'errors', v: D.err, color: COLORS.red }] });
         tile({ label: `time spent per ${per(secs)}`, read: spent, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }, true);
       }
+      body.append(faultTile(D.faults, S ? `${count(I ? I.err : 0)} dropped ${over}` : `${count(r.err)} ${r.err === 1 ? 'error' : 'errors'}${r.kind === 'http' ? ` · ${count(r.e4)} 4xx` : ''} ${over}`));
     }
+    const held = holdHint(dr);
     dr.replaceChildren(v.ui.grip, head, stats, body);
     body.scrollTop = scroll;
+    const list = body.querySelector('.flist');
+    if (list) list.scrollTop = listScroll;
     dr.classList.add('on');
+    keepHint(stats, held);
   }
 
   function renderPicker(shown) {
@@ -2065,7 +2212,11 @@
 
   async function getJson(url) {
     const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`GET ${url.split('?')[0]} answered ${res.status}`);
+    if (!res.ok) {
+      let why = '';
+      try { why = (await res.json()).error || ''; } catch (e) { why = ''; }
+      throw new Error(`GET ${url.split('?')[0]} answered ${res.status}${why ? `: ${why}` : ''}`);
+    }
     const d = await res.json();
     d.received = Date.now();
     return d;
@@ -2139,10 +2290,16 @@
     if (!id) return;
     const [target, key] = id.split('\u0000');
     const get = (k) => getJson(`/api/monitor/timings/series?target=${encodeURIComponent(target)}&key=${encodeURIComponent(k)}&range=${sel.range}`);
-    const pair = pairOf(findRow(id));
+    const row = findRow(id);
+    const pair = pairOf(row);
+    const fk = row && row.kind === 'session' && row.dir === 'out' ? (pair ? pair.key : null) : key;
+    const faults = fk
+      ? getJson(`/api/monitor/timings/errors?target=${encodeURIComponent(target)}&key=${encodeURIComponent(fk)}`)
+        .then((f) => ({ rows: (Array.isArray(f.rows) ? f.rows : []).filter((x) => x && typeof x === 'object'), kept: f.kept || 100 }), (e) => ({ error: e.message }))
+      : Promise.resolve({ rows: [], kept: 100 });
     try {
-      const [d, p] = await Promise.all([get(key), pair ? get(pair.key).catch(() => null) : null]);
-      if (v.open === id) v.detail = { ...normDetail(d), id, pair: p ? normDetail(p) : null };
+      const [d, p, f] = await Promise.all([get(key), pair ? get(pair.key).catch(() => null) : null, faults]);
+      if (v.open === id) v.detail = { ...normDetail(d), id, pair: p ? normDetail(p) : null, faults: f };
     } catch (e) {
       if (v.open === id) v.detail = { id, error: `could not load the graphs: ${e.message}` };
     }

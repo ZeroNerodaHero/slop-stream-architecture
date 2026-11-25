@@ -87,7 +87,7 @@ export function PerfHud() {
     'div',
     {
       className:
-        'pointer-events-none fixed right-2 top-14 z-[70] select-none bg-black/60 px-2 py-1 font-mono text-xs tabular-nums text-textSecondary max-md:top-[calc(4.5rem+env(safe-area-inset-top))]'
+        'pointer-events-none fixed right-1.5 top-1 z-[1000] select-none text-right font-mono text-xs tabular-nums text-textSecondary [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_0_1px_rgba(0,0,0,0.9)] max-md:right-[calc(0.375rem+env(safe-area-inset-right))] max-md:top-[calc(0.25rem+env(safe-area-inset-top))]'
     },
     linesOf(snap).map(line)
   );

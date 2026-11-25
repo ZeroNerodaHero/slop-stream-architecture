@@ -1116,8 +1116,8 @@ async fn talk(
                     break;
                 }
                 _ = dead.notified() => {
-                    session.fail();
                     let why = gone_word(linked.load(Ordering::SeqCst), voice.udp_port);
+                    session.fail(&why);
                     log::info!("{tag}: peer gone: {why}");
                     refuse(socket, &why).await;
                     break;
@@ -1413,7 +1413,7 @@ async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>, linked: Arc<Ato
             linked.store(true, Ordering::SeqCst);
         }
         if matches!(state, RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) {
-            setup.done(false);
+            setup.fail(&format!("peer {state} before it connected"));
             dead.notify_one();
         }
         Box::pin(async {})

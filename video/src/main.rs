@@ -697,7 +697,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                 },
                 _ = dead.notified() => {
                     log::info!("publish {name}: peer gone");
-                    session.fail();
+                    session.fail("peer gone");
                     break;
                 }
                 _ = async { let _ = shutdown.wait_for(|s| *s).await; } => {
@@ -861,7 +861,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
                 }
                 _ = dead.notified() => {
                     log::info!("watch {name}: peer gone");
-                    session.fail();
+                    session.fail("peer gone");
                     break;
                 }
                 changed = slots.changed() => {
@@ -1008,7 +1008,7 @@ async fn new_peer(
             connected.notify_one();
         }
         if matches!(state, RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) {
-            setup.done(false);
+            setup.fail(&format!("peer {state} before it connected"));
         }
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => dead.notify_one(),
