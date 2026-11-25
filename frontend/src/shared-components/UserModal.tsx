@@ -193,8 +193,8 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
   const avatar = useAtomValue(myAvatarVersionAtom);
   const presence = useAtomValue(myPresenceAtom);
   return (
-    <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-56 sm:border-b-0 sm:border-r">
-      <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
+    <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-56 sm:border-b-0 sm:border-r bubble:border-transparent sm:bubble:m-2 sm:bubble:mr-0 sm:bubble:rounded-panel">
+      <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 bubble:border-transparent sm:flex">
         <span className="relative block shrink-0" title={name ? PRESENCE_WORD[presence] : undefined}>
           <Face name={name} version={avatar} className="h-9 w-9 text-base" />
           {name && <PresenceSquare id="modal-presence" status={presence} className="border-background" />}

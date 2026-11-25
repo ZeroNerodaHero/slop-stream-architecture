@@ -2089,7 +2089,7 @@ const MANAGE_TABS: {
 const RAIL_GROUP = 'hidden px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
 const RAIL_TAB = cn(
   'flex shrink-0 items-center gap-2.5 whitespace-nowrap px-3 py-2 text-left font-semibold leading-tight transition-colors duration-150',
-  'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
+  'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2 bubble:rounded-control bubble:border-transparent',
   'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue'
 );
 const RAIL_TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
@@ -2180,8 +2180,8 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
         PAGE_DIALOG
       )}
     >
-      <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-52 sm:border-b-0 sm:border-r">
-        <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
+      <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-52 sm:border-b-0 sm:border-r bubble:border-transparent sm:bubble:m-2 sm:bubble:mr-0 sm:bubble:rounded-panel">
+        <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 bubble:border-transparent sm:flex">
           <GroupMark name={server} color={room.color || '#5865f2'} icon={room.icon} className="h-9 w-9 rounded-control text-base" />
           <span className="min-w-0">
             <span className="block truncate font-semibold leading-tight">{words.title}</span>
@@ -2226,7 +2226,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             })}
           </div>
           {room.owner && (
-            <div className="flex shrink-0 items-center border-l border-primaryStroke p-2 sm:mt-auto sm:border-l-0 sm:border-t">
+            <div className="flex shrink-0 items-center border-l border-primaryStroke p-2 sm:mt-auto sm:border-l-0 sm:border-t bubble:border-transparent">
               <button
                 id="room-delete-ask"
                 type="button"
