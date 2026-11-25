@@ -139,7 +139,21 @@
   .card .c-line button { background: none; border: 1px solid transparent; padding: 0 2px; margin: 0 -3px; font-size: 11px; line-height: 14px; color: inherit; }
   .card .c-line button:hover { border-color: var(--t3); }
   .card .c-line button[aria-pressed="true"] { border-color: var(--blue); color: var(--t1); }
-  .tbar { flex: none; font-size: 12px; color: var(--t3); display: flex; gap: 10px; align-items: baseline; }
+  .tbar { flex: none; font-size: 12px; color: var(--t3); display: flex; gap: 10px; align-items: center; }
+  .tq { flex: 0 1 360px; min-width: 140px; font: inherit; font-size: 13px; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 3px 8px; }
+  .tq::placeholder { color: var(--t3); }
+  .tq:focus { outline: none; border-color: var(--blue); }
+  .tnotes { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fwrap { position: relative; flex: none; }
+  .fbtn { display: flex; align-items: center; justify-content: center; width: 28px; height: 26px; padding: 0; background: var(--bg); border: 1px solid var(--stroke); color: var(--t3); }
+  .fbtn:hover, .fbtn[aria-expanded="true"] { color: var(--t1); border-color: var(--t3); }
+  .fbtn.on { color: var(--blue); border-color: var(--blue); background: rgb(30 38 56); }
+  .fmenu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 6; min-width: 190px; background: var(--bg2); border: 1px solid var(--t3); padding: 2px 0; }
+  .fitem { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 10px; background: none; border: 0; font-size: 13px; color: var(--t1); text-align: left; white-space: nowrap; }
+  .fitem:hover, .fitem:focus-visible { background: var(--bg3); outline: none; }
+  .fchk { position: relative; flex: none; width: 12px; height: 12px; border: 1px solid var(--t3); }
+  .fitem[aria-checked="true"] .fchk { background: var(--blue); border-color: var(--blue); }
+  .fitem[aria-checked="true"] .fchk::after { content: ''; position: absolute; left: 3px; top: 0; width: 3px; height: 7px; border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
   .eps td { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .eps th.num, .eps td.num { text-align: right; padding-right: 10px; }
   .eps td.ep-name { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
@@ -472,6 +486,16 @@
     console.warn('drawer width', e);
   }
 
+  const HEALTH_KEY = 'stats.hideHealth';
+  const HEALTH_ROUTE = /^(health|healthz|healthcheck|health-check|health_check|livez|readyz|liveness|readiness|ping)$/i;
+  let hideHealth = false;
+  try { hideHealth = localStorage.getItem(HEALTH_KEY) === '1'; } catch (e) { console.warn('filters', e); }
+  const isHealth = (r) => HEALTH_ROUTE.test(String(r.name || '').split(/[?#\s]/)[0].split('/').filter(Boolean).pop() || '');
+  function setHideHealth(on) {
+    hideHealth = on;
+    try { if (on) localStorage.setItem(HEALTH_KEY, '1'); else localStorage.removeItem(HEALTH_KEY); } catch (e) { console.warn('filters', e); }
+  }
+
   const SORT_KEY = 'stats.sort.';
   const sorts = {};
   function sortOf(table, cols, fallback) {
@@ -587,17 +611,12 @@
     render();
     loadVisible(true);
   }
-  function searchable() {
-    return !!views[sel.tab] || (sel.tab === 'containers' && sel.cview === 'table');
-  }
   function syncSearch() {
-    $q.hidden = !searchable();
-    const want = views[sel.tab] ? views[sel.tab].q : sel.tab === 'containers' ? sel.cq : '';
+    $q.hidden = !(sel.tab === 'containers' && sel.cview === 'table');
+    const want = sel.tab === 'containers' ? sel.cq : '';
     if ($q.value !== want) $q.value = want;
   }
   $q.addEventListener('input', () => {
-    const v = views[sel.tab];
-    if (v) { v.q = $q.value; writeHash(); timingRender(v); return; }
     if (sel.tab === 'containers') { sel.cq = $q.value; writeHash(); render(); }
   });
   $q.addEventListener('keydown', (e) => {
@@ -686,10 +705,12 @@
     if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    if ($q.hidden) return;
+    const v = views[sel.tab];
+    const box = v ? v.ui && v.ui.q : $q.hidden ? null : $q;
+    if (!box) return;
     e.preventDefault();
-    $q.focus();
-    $q.select();
+    box.focus();
+    box.select();
   });
 
   function draw(c) {
@@ -1528,6 +1549,53 @@
     sec.style.cssText = 'display: flex; flex-direction: column; gap: 6px; min-height: 0;';
     const strip = el('div', 'strip');
     const info = el('div', 'tbar');
+    const q = el('input', 'tq');
+    q.type = 'search';
+    q.spellcheck = false;
+    q.autocomplete = 'off';
+    q.value = v.q;
+    q.setAttribute('aria-label', `search ${v.name} by ${v.name === 'endpoints' ? 'route' : 'name'}, service or kind; every word must match; press / to focus`);
+    q.addEventListener('input', () => { v.q = q.value; writeHash(); timingRender(v); });
+    q.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      if (q.value) { q.value = ''; q.dispatchEvent(new Event('input')); } else q.blur();
+    });
+    const notes = el('span', 'tnotes');
+    const fwrap = el('div', 'fwrap');
+    const fbtn = button('fbtn', null, () => (menu.hidden ? openMenu() : closeMenu(false)));
+    fbtn.setAttribute('aria-haspopup', 'true');
+    fbtn.setAttribute('aria-expanded', 'false');
+    const icon = sv('svg', { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': 'true' });
+    icon.append(sv('path', { d: 'M2 3h12l-4.5 5.5V13l-3 1.5V8.5z', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linejoin': 'round' }));
+    fbtn.append(icon);
+    const menu = el('div', 'fmenu');
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    const healthItem = button('fitem', null, () => { setHideHealth(!hideHealth); timingRender(v); });
+    healthItem.setAttribute('role', 'menuitemcheckbox');
+    healthItem.append(el('i', 'fchk'), el('span', null, 'Hide health checks'));
+    healthItem.title = '/health, /api/health, /healthz, /livez, /readyz, ping and the like';
+    menu.append(healthItem);
+    const openMenu = () => {
+      menu.hidden = false;
+      fbtn.setAttribute('aria-expanded', 'true');
+      healthItem.focus();
+    };
+    const closeMenu = (refocus) => {
+      if (menu.hidden) return;
+      menu.hidden = true;
+      fbtn.setAttribute('aria-expanded', 'false');
+      if (refocus) fbtn.focus();
+    };
+    menu.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(true); }
+      else if (e.key === 'Tab') closeMenu(false);
+    });
+    document.addEventListener('pointerdown', (e) => { if (!fwrap.contains(e.target)) closeMenu(false); });
+    fwrap.addEventListener('focusout', (e) => { if (e.relatedTarget && !fwrap.contains(e.relatedTarget)) closeMenu(false); });
+    fwrap.append(fbtn, menu);
+    info.append(q, notes, fwrap);
     const wrap = el('div', 'twrap grow');
     const pane = el('div', 'pane');
     pane.dataset.scroll = `${v.name}-table`;
@@ -1578,7 +1646,7 @@
     });
     wrap.append(pane, drawer);
     sec.append(strip, info, wrap);
-    v.ui = { sec, info, thead, tbody, strip, pane, drawer, grip };
+    v.ui = { sec, info, q, notes, fbtn, healthItem, thead, tbody, strip, pane, drawer, grip };
     applyDrawerWidth();
   }
 
@@ -1660,9 +1728,38 @@
     return ((tm.data && tm.data.totals) || []).filter((r) => (target ? r.target === target : r.target === null));
   }
 
-  function cardsFor(v, target, rows) {
+  function quantileOf(b, max, q) {
+    const total = b.reduce((s, [, c]) => s + c, 0);
+    if (!total) return null;
+    const rank = Math.min(total, Math.max(1, Math.ceil(q * total)));
+    let seen = 0;
+    for (const [at, c] of b) {
+      seen += c;
+      if (seen >= rank) return max > 0 ? Math.min(at, max) : at;
+    }
+    return null;
+  }
+
+  function sumRows(rows) {
     const out = new Map();
-    for (const r of totalsFor(target)) {
+    for (const r of rows) {
+      if (r.kind === 'session' || blocking(r)) continue;
+      const id = `${r.dir}|${r.kind}`;
+      if (!out.has(id)) out.set(id, { target: null, kind: r.kind, dir: r.dir, n: 0, e4: 0, e5: 0, err: 0, sum_ms: 0, rate: 0, max: null, b: new Map() });
+      const a = out.get(id);
+      a.n += r.n; a.e4 += r.e4; a.e5 += r.e5; a.err += r.err; a.sum_ms += r.sum_ms; a.rate += r.rate;
+      if (has(r.max)) a.max = Math.max(a.max || 0, r.max);
+      for (const [at, c] of r.b || []) a.b.set(at, (a.b.get(at) || 0) + c);
+    }
+    return [...out.values()].map(({ b, ...a }) => {
+      const sorted = [...b].sort((x, y) => x[0] - y[0]);
+      return { ...a, p99: quantileOf(sorted, a.max, 0.99) };
+    });
+  }
+
+  function cardsFor(v, totals, target, rows) {
+    const out = new Map();
+    for (const r of totals) {
       if (!inView(v, r.kind) || r.kind === 'session') continue;
       out.set(`${r.dir}|${r.kind}`, { id: `${r.dir}|${r.kind}`, dir: r.dir, key: r.kind, r });
     }
@@ -1770,12 +1867,12 @@
     return box;
   }
 
-  function timingCards(v, target, rows) {
+  function timingCards(v, totals, target, rows, filter) {
     const ui = v.ui;
-    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}`;
+    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}|${filter}`;
     if (ui.cardsSig === sig && ui.strip.childNodes.length) return;
     ui.cardsSig = sig;
-    const cards = cardsFor(v, target, rows);
+    const cards = cardsFor(v, totals, target, rows);
     if (!cards.length) { ui.strip.replaceChildren(); ui.strip.hidden = true; return; }
     ui.strip.hidden = false;
     const all = button('card allc', 'all', () => { v.pick = new Set(); v.errs = ''; v.open = null; writeHash(); timingRender(v); });
@@ -1802,6 +1899,16 @@
     ui.strip.scrollLeft = scroll;
   }
 
+  function timingBar(v, total) {
+    const ui = v.ui;
+    if (ui.q.value !== v.q) ui.q.value = v.q;
+    ui.q.placeholder = tm.data ? `search ${count(total)} lines over ${tm.data.range}` : 'search';
+    ui.fbtn.classList.toggle('on', hideHealth);
+    ui.fbtn.setAttribute('aria-label', hideHealth ? 'filters: health checks hidden' : 'filters');
+    ui.fbtn.title = hideHealth ? 'filters: health checks hidden' : 'filters';
+    ui.healthItem.setAttribute('aria-checked', String(hideHealth));
+  }
+
   function rowTag(r) {
     const k = cardKey(r);
     return `${kindLabel(k)}${r.kind === 'session' || r.dir !== defaultDir(r.kind) ? ` ${r.dir}` : ''}`;
@@ -1816,12 +1923,16 @@
     const multi = shown === ALL && state.targets.length > 1;
     const target = shown === ALL ? null : shown;
     const rows = ((tm.data && tm.data.rows) || []).filter((r) => inView(v, r.kind) && (!target || r.target === target));
-    timingCards(v, target, rows);
-
-    const totals = new Map(totalsFor(target).map((r) => [`${r.dir}|${r.kind}`, r]));
     const words = v.q.toLowerCase().split(/\s+/).filter(Boolean);
-    const list2 = rows.filter((r) => (!v.pick.size || v.pick.has(cardId(r))) && (!v.errs || r[v.errs] > 0)
+    const filtering = words.length > 0 || hideHealth;
+    const kept = !filtering ? rows : rows.filter((r) => !(hideHealth && isHealth(r))
       && words.every((w) => `${r.target} ${r.kind} ${rowTag(r)} ${DIR_NAME[r.dir]} ${r.method} ${r.name} ${r.src}`.toLowerCase().includes(w)));
+    const sums = filtering ? sumRows(kept) : totalsFor(target);
+    timingCards(v, sums, target, kept, filtering ? `${words.join(' ')}|${hideHealth}` : '');
+    timingBar(v, rows.length);
+
+    const totals = new Map(sums.map((r) => [`${r.dir}|${r.kind}`, r]));
+    const list2 = kept.filter((r) => (!v.pick.size || v.pick.has(cardId(r))) && (!v.errs || r[v.errs] > 0));
     for (const r of list2) {
       const k = totals.get(`${r.dir}|${r.kind}`);
       r.share = r.kind !== 'session' && k && k.sum_ms > 0 && !blocking(r) ? r.sum_ms / k.sum_ms : null;
@@ -1842,12 +1953,14 @@
     const shownRows = list2.slice(0, LIMIT);
     const notes = [];
     if (tm.data) {
-      notes.push(`${list2.length} of ${rows.length} lines over ${tm.data.range}${list2.length > LIMIT ? `, the first ${LIMIT} shown` : ''}`);
+      if (list2.length !== rows.length) notes.push(`${list2.length} of ${rows.length}`);
+      if (list2.length > LIMIT) notes.push(`the first ${LIMIT} shown`);
       if (v.errs) notes.push(`only ${v.errs === 'e5' ? '5xx' : '4xx'}`);
       for (const [box, n] of Object.entries(tm.data.dropped || {})) notes.push(`${box}: ${n} new lines dropped, the table holds 400 per box`);
     }
     if (tm.error) notes.push(`could not refresh: ${tm.error}`);
-    ui.info.textContent = notes.join(' · ');
+    ui.notes.textContent = notes.join(' · ');
+    ui.notes.title = ui.notes.textContent;
 
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.col : null;
     const head = el('tr');
