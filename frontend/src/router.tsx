@@ -7,7 +7,7 @@ import { NotFoundPage } from '@/app/NotFoundPage';
 import { dmOpenAtom } from '@/infra/atoms/dm-atoms';
 import { inspectorOpenAtom, qualityOpenAtom, timingsOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
-import { panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { panelSideAtom, perfEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
 import { AuthDialog } from '@/shared-components/AuthDialog';
 import { CropDialog } from '@/shared-components/CropDialog';
@@ -23,6 +23,7 @@ const Notifications = lazy(() => import('@/shared-components/Notifications').the
 const Inspector = lazy(() => import('@/shared-components/Inspector').then((m) => ({ default: m.Inspector })));
 const TimingsWindow = lazy(() => import('@/shared-components/debug/TimingsWindow').then((m) => ({ default: m.TimingsWindow })));
 const QualityWindow = lazy(() => import('@/shared-components/debug/QualityWindow').then((m) => ({ default: m.QualityWindow })));
+const PerfHud = lazy(() => import('@/shared-components/debug/PerfHud').then((m) => ({ default: m.PerfHud })));
 
 function FriendChatWhenUsed() {
   const open = useAtomValue(dmOpenAtom);
@@ -71,6 +72,7 @@ function QualityWhenUsed() {
 
 function Shell() {
   const side = useAtomValue(panelSideAtom);
+  const perf = useAtomValue(perfEnabledAtom);
   return (
     <div className={cn('flex min-h-screen items-start pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]', side === 'right' && 'flex-row-reverse')}>
       <UserPanel />
@@ -89,6 +91,11 @@ function Shell() {
       <InspectorWhenUsed />
       <TimingsWhenUsed />
       <QualityWhenUsed />
+      {perf && (
+        <Suspense fallback={null}>
+          <PerfHud />
+        </Suspense>
+      )}
     </div>
   );
 }
