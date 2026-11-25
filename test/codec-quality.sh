@@ -5,10 +5,13 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-$(mktemp -d)}
 SECONDS_LONG=${SECONDS_LONG:-8}
 RATES=${RATES:-"1000 1250 1500 1750 2000 2500"}
-GIF=${GIF:-$(ls "$ROOT"/random-media/gifs/*.gif | head -n 1)}
+GIFS=${GIFS:-"1595422127462 tower the-endless-anomalocaris"}
+CLIPS=${CLIPS:-}
 
-ffmpeg -y -loglevel error -f lavfi -i "testsrc2=s=1920x1080:r=30,noise=alls=10:allf=t+u" -t "$SECONDS_LONG" -pix_fmt yuv420p "$WORK/pattern.y4m"
-ffmpeg -y -loglevel error -stream_loop -1 -i "$GIF" -t "$SECONDS_LONG" -vf "scale=1920:1080:flags=bicubic,fps=30,format=yuv420p" "$WORK/gif.y4m"
+ffmpeg -y -loglevel error -f lavfi -i "testsrc2=s=1920x1080:r=30" -t "$SECONDS_LONG" -pix_fmt yuv420p "$WORK/pattern.y4m"
+for gif in $GIFS; do
+  ffmpeg -y -loglevel error -stream_loop -1 -i "$ROOT/random-media/gifs/$gif.gif" -t "$SECONDS_LONG" -vf "scale=1920:1080:flags=bicubic,fps=30,format=yuv420p" "$WORK/$gif.y4m"
+done
 
 encode() {
   src=$1 codec=$2 kbps=$3 out=$4
@@ -20,7 +23,14 @@ encode() {
 }
 
 printf 'source codec target_kbps actual_kbps psnr_db ssim\n'
-for name in pattern gif; do
+NAMES="pattern $GIFS"
+for clip in $CLIPS; do
+  name=$(basename "$clip" .y4m)
+  ffmpeg -y -loglevel error -i "$clip" -t "$SECONDS_LONG" -vf "scale=1920:1080:flags=bicubic,fps=30,format=yuv420p" "$WORK/$name.y4m"
+  NAMES="$NAMES $name"
+done
+
+for name in $NAMES; do
   for codec in vp8 vp9; do
     for kbps in $RATES; do
       out="$WORK/$name-$codec-$kbps.webm"
