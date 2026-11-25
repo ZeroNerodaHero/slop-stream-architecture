@@ -51,6 +51,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { EmotesSection } from '@/app/explore/EmotesSection';
 import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
+import { VoiceDock } from '@/app/explore/VoiceDock';
 import { VoicePanel } from '@/app/explore/VoicePanel';
 import { useVoiceView, VoiceRoom } from '@/app/explore/VoiceRoom';
 import {
@@ -144,7 +145,8 @@ const RESERVED = new Set(['before', 'search', 'by', 'around']);
 const ABOUT_CAP = 200;
 
 const ROOM_GRID = 'grid max-md:snap-start lg:snap-start items-start gap-2 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
-const roomColumns = (membersOpen: boolean) => (membersOpen ? 'lg:grid-cols-[176px_minmax(0,1fr)_224px]' : 'lg:grid-cols-[176px_minmax(0,1fr)_56px]');
+const roomColumns = (membersOpen: boolean) =>
+  membersOpen ? 'lg:grid-cols-[176px_minmax(0,1fr)_224px] xl:grid-cols-[220px_minmax(0,1fr)_420px]' : 'lg:grid-cols-[176px_minmax(0,1fr)_56px] xl:grid-cols-[220px_minmax(0,1fr)_56px]';
 const ROOM_CHAT_CONTAINER = '[container-type:inline-size]';
 const pinsWidth = (membersOpen: boolean) =>
   cn('w-[max(20rem,80cqw)] max-w-[calc(100vw-2rem)]', !membersOpen && 'lg:w-[max(20rem,calc(0.8*(100cqw_-_168px)))]');
@@ -1006,7 +1008,7 @@ export function ServerPage() {
 
   if (!room) {
     return (
-      <PageFrame wide title={server || 'group'} titleId={titleId}>
+      <PageFrame wide fluid title={server || 'group'} titleId={titleId}>
         {error ? <p className="text-textSecondary">{error === 'no such group' ? 'no such group.' : error}</p> : <RoomSkeleton gridRef={roomRef} />}
       </PageFrame>
     );
@@ -1248,6 +1250,7 @@ export function ServerPage() {
   return (
     <PageFrame
       wide
+      fluid
       titleId={titleId}
       mobileTitle={noChannel ? undefined : mobileTitle}
       mobileEnd={
@@ -1292,6 +1295,7 @@ export function ServerPage() {
             {!mobile && (
               <div className={cn('flex min-w-0 flex-col gap-3', STACKED_SNAP)}>
                 {channelList}
+                <VoicePanel room={room} onAdd={onAddVoice} addFull={voiceFull} onEdit={setEditingVoice} onOpen={openVoice} />
                 {liveList}
               </div>
             )}
@@ -1313,7 +1317,7 @@ export function ServerPage() {
             </div>
             {!mobile && (
               <div className={cn('flex min-w-0 flex-col gap-2', ROSTER_HEIGHT, STACKED_SNAP)}>
-                <VoicePanel room={room} onAdd={onAddVoice} addFull={voiceFull} onEdit={setEditingVoice} onOpen={openVoice} className={cn(!membersOpen && 'lg:hidden')} />
+                <VoiceDock room={room} className={cn(!membersOpen && 'lg:hidden')} />
                 <Roster room={room} fill />
               </div>
             )}
