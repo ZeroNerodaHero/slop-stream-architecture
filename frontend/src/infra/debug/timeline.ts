@@ -59,7 +59,7 @@ export class SessionLog {
   }
 }
 
-export function layout(t: ArrayLike<number>, session: ArrayLike<number>, sessions: readonly Session[]): Layout {
+export function layout(t: ArrayLike<number>, session: ArrayLike<number>, sessions: readonly Session[], capacity = t.length, stepMs = 1000): Layout {
   const byId = new Map(sessions.map((s) => [s.id, s]));
   const xs: number[] = [];
   const runs: Run[] = [];
@@ -85,5 +85,19 @@ export function layout(t: ArrayLike<number>, session: ArrayLike<number>, session
   const last = runs[runs.length - 1];
   const lastEnd = last ? byId.get(last.session)?.end : null;
   if (last && lastEnd != null) gaps.push({ x, name: last.name, from: lastEnd, to: null });
-  return { xs, span: Math.max(x, 1), runs, gaps };
+  const span = fullSpan(x, t.length, capacity, stepMs);
+  const shift = span - x;
+  if (shift > 0) {
+    for (let i = 0; i < xs.length; i++) xs[i] = xs[i]! + shift;
+    for (const run of runs) run.x += shift;
+    for (const gap of gaps) gap.x += shift;
+  }
+  return { xs, span, runs, gaps };
+}
+
+function fullSpan(x: number, count: number, capacity: number, stepMs: number): number {
+  if (count === 0 || count >= capacity) return Math.max(x, 1);
+  const room = Math.max(capacity - 1, 1);
+  if (count === 1 || x <= 0) return Math.max(room * stepMs, x, 1);
+  return Math.max((x * room) / (count - 1), x, 1);
 }

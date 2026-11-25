@@ -1,4 +1,5 @@
 import { record } from '@/infra/atoms/inspector-atoms';
+import { trackSocket } from '@/infra/debug/sockets';
 
 export type RelayRole = 'publish' | 'watch';
 
@@ -168,7 +169,7 @@ export function connectRelay({
   onMessage
 }: ConnectRelayOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = socket ?? new WebSocket(relayUrl(url));
+    const ws = socket ?? trackSocket(preview ? 'preview' : role === 'publish' ? 'publish' : 'video', new WebSocket(relayUrl(url)), url);
     let done = false;
     const pending: RelayReply[] = [];
 
