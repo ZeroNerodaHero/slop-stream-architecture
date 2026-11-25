@@ -3,7 +3,24 @@ import { useState } from 'react';
 
 import type { MetricGroup } from '@/infra/debug/rings';
 import type { Summary } from '@/infra/debug/stats';
-import { type Axis, hotP95, loadSections, place, pool, routeParts, saveSections, sectionAxis, type SectionState } from '@/infra/debug/strip';
+import {
+  type Axis,
+  hotP95,
+  loadSections,
+  loadSorts,
+  nextSort,
+  place,
+  pool,
+  routeParts,
+  saveSections,
+  saveSorts,
+  sectionAxis,
+  type SectionSort,
+  type SectionState,
+  type SortCol,
+  sortRows,
+  type SortState
+} from '@/infra/debug/strip';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -134,14 +151,39 @@ function Row({ group, row, axis }: { group: MetricGroup; row: MetricRow; axis: A
         <span className={cn(NUM, hotP95(s) ? 'text-caution' : 'text-textSecondary')}>
           <Ms v={s.p95} />
         </span>
-        <span className={cn(NUM, 'text-textSecondary')}>{s.n}</span>
         {group === 'api' && <span className={cn(NUM, row.errors ? 'text-decrease' : 'text-textTertiary')}>{row.errors ?? 0}</span>}
+        <span className={cn(NUM, 'text-textSecondary')}>{s.n}</span>
       </div>
     </Tooltip>
   );
 }
 
-function Ticks({ group, axis }: { group: MetricGroup; axis: Axis }) {
+const SORT_WORD: Record<SortCol, string> = { med: 'median', p95: 'p95', err: 'errors', n: 'count' };
+
+function SortButton({ group, col, sort, onSort }: { group: MetricGroup; col: SortCol; sort: SectionSort; onSort: (col: SortCol) => void }) {
+  const active = sort.col === col;
+  const next = active && sort.dir === 'desc' ? 'low to high' : 'high to low';
+  return (
+    <Tooltip content={`sort ${group} by ${SORT_WORD[col]}, ${next}`}>
+      <button
+        id={`timings-sort-${group}-${col}`}
+        type="button"
+        aria-label={`sort by ${SORT_WORD[col]}`}
+        aria-pressed={active}
+        onClick={() => onSort(col)}
+        className={cn(
+          'flex h-4 items-center justify-end gap-px justify-self-end whitespace-nowrap outline-none hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:underline',
+          active ? 'text-textSecondary' : 'text-textTertiary'
+        )}
+      >
+        {active && <span className="text-[10px] text-textTertiary">{sort.dir === 'desc' ? '↓' : '↑'}</span>}
+        {col}
+      </button>
+    </Tooltip>
+  );
+}
+
+function Ticks({ group, axis, sort, onSort }: { group: MetricGroup; axis: Axis; sort: SectionSort; onSort: (col: SortCol) => void }) {
   const last = axis.ticks.length - 1;
   return (
     <div className={cn(group === 'api' ? GRID_API : GRID, 'h-4 font-mono text-[10px] text-textTertiary')}>
@@ -154,18 +196,21 @@ function Ticks({ group, axis }: { group: MetricGroup; axis: Axis }) {
           </span>
         ))}
       </div>
-      <span className="text-right">med</span>
-      <span className="text-right">p95</span>
-      <span className="text-right">n</span>
-      {group === 'api' && <span className="text-right">err</span>}
+      <SortButton group={group} col="med" sort={sort} onSort={onSort} />
+      <SortButton group={group} col="p95" sort={sort} onSort={onSort} />
+      {group === 'api' && <SortButton group={group} col="err" sort={sort} onSort={onSort} />}
+      <SortButton group={group} col="n" sort={sort} onSort={onSort} />
     </div>
   );
 }
 
-function Section({ g, open, onToggle }: { g: MetricGroupRows; open: boolean; onToggle: () => void }) {
+function Section({ g, open, onToggle, sort, onSort }: { g: MetricGroupRows; open: boolean; onToggle: () => void; sort: SectionSort; onSort: (col: SortCol) => void }) {
   const p = pool(g.rows);
   const word = `${open ? 'collapse' : 'expand'} ${g.group}`;
-  const axis = sectionAxis(g.rows.map((r) => r.summary), 2);
+  const axis = sectionAxis(
+    g.rows.map((r) => r.summary),
+    2
+  );
   return (
     <section data-group={g.group} className="border-b border-primaryStroke last:border-b-0">
       <div className="flex h-[26px] cursor-pointer select-none items-center gap-2" onClick={onToggle}>
@@ -191,9 +236,6 @@ function Section({ g, open, onToggle }: { g: MetricGroupRows; open: boolean; onT
         <span className="text-textTertiary">{g.rows.length}</span>
         <span className="ml-auto flex shrink-0 gap-3 font-mono tabular-nums text-textTertiary">
           <span>
-            n <span className="text-textSecondary">{p.n}</span>
-          </span>
-          <span>
             med{' '}
             <span className="font-semibold text-textPrimary">
               <Ms v={p.median} />
@@ -210,12 +252,15 @@ function Section({ g, open, onToggle }: { g: MetricGroupRows; open: boolean; onT
               err <span className={p.errors ? 'text-decrease' : 'text-textSecondary'}>{p.errors}</span>
             </span>
           )}
+          <span>
+            n <span className="text-textSecondary">{p.n}</span>
+          </span>
         </span>
       </div>
       {open && (
         <div className="pb-2">
-          <Ticks group={g.group} axis={axis} />
-          {g.rows.map((r) => (
+          <Ticks group={g.group} axis={axis} sort={sort} onSort={onSort} />
+          {sortRows(g.rows, sort).map((r) => (
             <Row key={r.key} group={g.group} row={r} axis={axis} />
           ))}
         </div>
@@ -231,12 +276,18 @@ export function TimingsView({ groups }: { groups: readonly MetricGroupRows[] }) 
     setSections(next);
     saveSections(storage(), next);
   };
+  const [sorts, setSorts] = useState<SortState>(() => loadSorts(storage()));
+  const resort = (group: MetricGroup, col: SortCol) => {
+    const next = { ...sorts, [group]: nextSort(sorts[group], col) };
+    setSorts(next);
+    saveSorts(storage(), next);
+  };
   const shown = groups.filter((g) => g.rows.length > 0);
   return (
     <div id="profiler-timings" className="min-h-0 flex-1 overflow-y-auto px-3 pb-1 text-xs leading-4">
       {shown.length === 0 && <p className="py-2 text-textTertiary">nothing yet. a chat, a say, a watch or an api call shows up here when it finishes.</p>}
       {shown.map((g) => (
-        <Section key={g.group} g={g} open={sections[g.group]} onToggle={() => toggle(g.group)} />
+        <Section key={g.group} g={g} open={sections[g.group]} onToggle={() => toggle(g.group)} sort={sorts[g.group]} onSort={(col) => resort(g.group, col)} />
       ))}
     </div>
   );
