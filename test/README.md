@@ -18,6 +18,8 @@ the default suite is listed in `scripts/test.sh`: e2e, dup, chat, auth, groups, 
 
 `voice-video.js` and `voice-spike.js` are not in the default suite; `./scripts/test.sh voice-video` runs the first. `voice-spike.js` needs `video voice` running with VOICE_DEV_OPEN=1 (VOICE_URL, default ws://127.0.0.1:7881/ws) and checks two browsers hear each other.
 
+`live-modules.js` is not in the default suite and needs no server stack: it loads the go live page from a vite dev server of `frontend/` (`BASE_URL`, default http://localhost:5173), answers every api call locally, makes one panel throw (sound, then the rail's thumbnail) and checks that only that panel shows its reload panel, the rest and the preview's video stay, and `reload panel` brings it back.
+
 `simulcast.js` is not in the default suite and needs no server: it starts its own `video` (a release build, `VIDEO_BIN`) on loopback with a mock api and checks the camera's simulcast layers, joins, pausing a hidden watcher and pinning a small one (`SKIP_PAUSE=1` leaves that out), layer switches under a squeeze and the dummy. `node test/simulcast.js`; `docs/simulcast.md` has the knobs. `MODE=vp9` publishes vp9 with the vp8 copy and adds vp8-only watchers (`docs/vp9.md`).
 
 `soak.js` needs no server either: it starts `video` (`VIDEO_BIN`) and `video dummy` with `STREAMS` (4) single-layer vp8 dummies, keeps `STEADY` (3) watchers on, and churns more every `CHURN_MS` (2000, at most `MAX_CHURNERS`): previews, quick aborts, hidden/full/small toggles, and a `BLOCKED` share (0.3) whose offer has no ice candidates, so ICE never completes and video ends them as `peer gone`. it samples video's rss every `SAMPLE_MS` for `MINUTES` (20) and prints the slope after warm-up; `OUT` keeps the json, `LOG` video's output.
