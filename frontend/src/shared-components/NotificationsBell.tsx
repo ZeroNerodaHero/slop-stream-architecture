@@ -23,7 +23,7 @@ export function NotificationsBell() {
         aria-controls={open ? 'notifications-panel' : undefined}
         data-unread={unread || undefined}
         onClick={toggleNotifications}
-        className={cn(buttonClassName('secondary', 'relative p-1.5 max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
+        className={cn(buttonClassName('secondary', 'relative p-1.5 bubble:p-[7px] max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
       >
         <RiNotification3Line aria-hidden size={20} />
         {unread > 0 && (

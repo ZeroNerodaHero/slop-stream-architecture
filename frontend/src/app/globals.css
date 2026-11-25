@@ -42,6 +42,12 @@
   --r-card: 12px;
 }
 
+:root[data-shape='bubble'] :is(button, a).rounded-control[aria-label]:not(:has(> :not(svg, [aria-hidden='true'], [role='tooltip']))) > svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
 html {
   scrollbar-gutter: stable;
   scroll-padding-top: var(--title-row, 4rem);

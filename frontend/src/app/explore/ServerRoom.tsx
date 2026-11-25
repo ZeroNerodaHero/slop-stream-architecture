@@ -649,7 +649,7 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
           )}
         >
           <RiPushpinLine aria-hidden size={14} />
-          {count}
+          <span>{count}</span>
         </button>
       </Tooltip>
       {open && (

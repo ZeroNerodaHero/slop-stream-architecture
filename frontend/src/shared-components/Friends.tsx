@@ -37,7 +37,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const PEEK_MS = 200;
-const ICON_BUTTON = 'shrink-0 rounded-control border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+const ICON_BUTTON = 'shrink-0 rounded-control border border-transparent p-0.5 bubble:p-px text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
 const COLUMN = 'px-[calc(0.75rem-1px)] max-md:px-[calc(1.25rem-1px)]';
 
