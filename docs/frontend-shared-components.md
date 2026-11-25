@@ -434,9 +434,28 @@ so a yellow is as bright as a blue), which keeps every one readable under white 
 dark theme.
 
 `export function GeneratedAvatar`: A stand-in picture made from the name alone, the way discord fills in a default avatar: a
-coloured square with the first letter, the same every time for the same name and a different
-colour for a different one. Case does not count (the chat treats `Billy` and `billy` as one
-name), so neither does it here.
+64x64 pixel-art face drawn on a `<canvas>` (`image-rendering: pixelated`), the same every time
+for the same name and different for a different one. The name, trimmed and lowercased, is
+hashed (FNV-1a, the same `hash` as `colorOf`), and four 4-bit slices of the hash pick the skin,
+hair, clothes and background from 16 colours each: 65,536 combinations. Case does not count
+(the chat treats `Billy` and `billy` as one name), so neither does it here. An empty name is a
+`?` tile.
+
+`paletteFor` (not exported) maps each region char of the map to its colour for this name: `0`
+`OUTLINE`, `1` `SKIN[h & 0xf]`, `2` `HAIR[(h >> 4) & 0xf]`, `3` `WHITE`, `4` `BOW`, `5`
+`CLOTHES[(h >> 8) & 0xf]`, `6` `BG[(h >> 12) & 0xf]`.
+
+## `frontend/src/shared-components/avatar-data.ts`
+
+Generated, not written by hand: the avatar data for the default avatars (version 6). Regenerate
+it rather than editing it. No generator script is in the repo.
+
+- `AVATAR_SIZE`: 64.
+- `REGION_MAP`: the 64x64 region map, one string of 4096 chars, row by row from the top left.
+  each char names a region: `0` outline, `1` skin, `2` hair, `3` highlight, `4` bow, `5`
+  clothes, `6` background.
+- `SKIN`, `HAIR`, `CLOTHES`, `BG`: 16 hex colours each, the slots the name's hash picks from.
+- `OUTLINE`, `WHITE` (the highlight), `BOW`: the fixed colours.
 
 ## `frontend/src/shared-components/GroupColorPick.tsx`
 
