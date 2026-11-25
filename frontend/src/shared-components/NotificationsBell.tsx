@@ -7,7 +7,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 export const COUNT =
-  'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
+  'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-control border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
 
 export function NotificationsBell() {
   const open = useAtomValue(notificationsOpenAtom);

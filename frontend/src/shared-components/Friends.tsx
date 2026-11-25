@@ -222,7 +222,7 @@ function Chat({ id, person }: { id: string; person: Person }) {
       >
         <RiChat3Line aria-hidden size={16} />
         {unread > 0 && (
-          <span aria-hidden className="absolute -right-1.5 -top-1.5 bg-background px-px text-xs font-semibold leading-none tabular-nums text-primaryBlue">
+          <span aria-hidden className="absolute -right-1.5 -top-1.5 rounded-control bg-background px-px soft:min-w-3 soft:text-center bubble:min-w-3 bubble:text-center text-xs font-semibold leading-none tabular-nums text-primaryBlue">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
