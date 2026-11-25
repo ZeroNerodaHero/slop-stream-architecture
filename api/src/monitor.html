@@ -140,8 +140,17 @@
   .eps tr.ep.open td { background: rgb(30 38 56); color: var(--t1); }
   .twrap { position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .twrap > .pane { flex: 1 1 auto; }
-  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 50%; min-width: 540px; max-width: 100%; z-index: 4; display: flex; flex-direction: column; background: var(--bg2); border-left: 1px solid var(--t3); transform: translateX(100%); visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s; }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 50%; min-width: min(360px, 100%); max-width: 100%; z-index: 4; display: flex; flex-direction: column; background: var(--bg2); border-left: 1px solid rgb(64 70 84); transform: translateX(100%); visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s; }
   .drawer.on { transform: none; visibility: visible; transition: transform .18s ease; }
+  .drawer::before { content: ''; position: absolute; top: 0; bottom: 0; right: calc(100% + 1px); width: 32px; pointer-events: none; background: linear-gradient(to left, rgb(0 0 0 / .45), rgb(0 0 0 / .2) 35%, rgb(0 0 0 / 0)); }
+  .grip { position: absolute; top: 0; bottom: 0; left: -6px; width: 11px; z-index: 2; cursor: col-resize; touch-action: none; }
+  .grip::before { content: ''; position: absolute; top: 0; bottom: 0; left: 5px; width: 1px; background: transparent; }
+  .grip::after { content: ''; position: absolute; top: 50%; left: 3px; width: 3px; height: 34px; margin-top: -17px; border-left: 1px solid var(--t3); border-right: 1px solid var(--t3); background: var(--bg2); }
+  .grip:hover::before, .grip:focus-visible::before, .grip.drag::before { background: var(--blue); }
+  .grip:hover::after, .grip:focus-visible::after, .grip.drag::after { border-color: var(--blue); }
+  .grip:focus-visible { outline: none; }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing .drawer { transition: none; }
   .dr-head { flex: none; display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--stroke); }
   .dr-title { flex: 1 1 auto; min-width: 0; }
   .dr-name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; user-select: text; }
@@ -400,6 +409,16 @@
   let state = null, stateError = null, pageBuild = null;
   const charts = [];
   const tcharts = [];
+  const DRAWER_KEY = 'stats.drawerWidth';
+  const DRAWER_MIN = 360;
+  const DRAWER_MAX = 0.85;
+  let drawerPx = null, drawerTimer = null;
+  try {
+    const n = Number(localStorage.getItem(DRAWER_KEY));
+    if (Number.isFinite(n) && n > 0) drawerPx = n;
+  } catch (e) {
+    console.warn('drawer width', e);
+  }
 
   function readHash() {
     const p = new URLSearchParams(location.hash.slice(1));
@@ -536,7 +555,7 @@
       for (let d = a; d <= b; d++) {
         const py = Math.round(y(10 ** d)) + 0.5;
         g.moveTo(0, py); g.lineTo(w, py);
-        if (d < b) g.fillText(ms(10 ** d), 2, py - 2);
+        if (d < b) g.fillText((c.axis || ms)(10 ** d), 2, py - 2);
       }
     } else {
       y = (v) => h - 1.5 - (v / max) * (h - 3);
@@ -584,7 +603,7 @@
     const canvas = el('canvas');
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', label);
-    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log, dots: !!tip, dirty: true };
+    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log, dots: !!tip, dirty: true, axis: read };
     (store || charts).push(c);
     if (small) return canvas;
     const tile = el('div', 'tile');
@@ -1316,9 +1335,69 @@
     drawer.setAttribute('role', 'dialog');
     drawer.setAttribute('aria-modal', 'false');
     drawer.setAttribute('aria-label', 'line details');
+    const grip = el('div', 'grip');
+    grip.tabIndex = 0;
+    grip.setAttribute('role', 'separator');
+    grip.setAttribute('aria-orientation', 'vertical');
+    grip.setAttribute('aria-label', 'panel width');
+    grip.title = 'drag to resize, double-click for half';
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      const right = wrap.getBoundingClientRect().right;
+      document.body.classList.add('resizing');
+      grip.classList.add('drag');
+      const move = (ev) => { drawerPx = clampDrawer(right - ev.clientX); applyDrawerWidth(); redrawDrawer(); };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        document.body.classList.remove('resizing');
+        grip.classList.remove('drag');
+        saveDrawerWidth();
+        redrawDrawer();
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('dblclick', () => { drawerPx = null; applyDrawerWidth(); saveDrawerWidth(); redrawDrawer(); });
+    grip.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      drawerPx = clampDrawer(drawer.getBoundingClientRect().width + (e.key === 'ArrowLeft' ? 32 : -32));
+      applyDrawerWidth();
+      saveDrawerWidth();
+      redrawDrawer();
+    });
     wrap.append(pane, drawer);
     sec.append(strip, info, wrap);
-    v.ui = { sec, info, thead, tbody, strip, pane, drawer };
+    v.ui = { sec, info, thead, tbody, strip, pane, drawer, grip };
+    applyDrawerWidth();
+  }
+
+  function clampDrawer(px) {
+    return Math.round(Math.max(DRAWER_MIN, Math.min(Math.floor(innerWidth * DRAWER_MAX), px)));
+  }
+
+  function applyDrawerWidth() {
+    const w = drawerPx === null ? '' : `${clampDrawer(drawerPx)}px`;
+    for (const v of Object.values(views)) if (v.ui && v.ui.drawer.style.width !== w) v.ui.drawer.style.width = w;
+  }
+
+  function saveDrawerWidth() {
+    try {
+      if (drawerPx === null) localStorage.removeItem(DRAWER_KEY);
+      else localStorage.setItem(DRAWER_KEY, String(drawerPx));
+    } catch (e) {
+      console.warn('drawer width', e);
+    }
+  }
+
+  function redrawDrawer() {
+    clearTimeout(drawerTimer);
+    drawerTimer = setTimeout(() => { for (const c of tcharts) if (c.canvas.closest('.drawer')) draw(c); }, 60);
   }
 
   function openRow(v, id) {
@@ -1783,7 +1862,7 @@
         tile({ label: `time spent per ${per(secs)}`, read: spent, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }, true);
       }
     }
-    dr.replaceChildren(head, stats, body);
+    dr.replaceChildren(v.ui.grip, head, stats, body);
     body.scrollTop = scroll;
     dr.classList.add('on');
   }
@@ -2111,6 +2190,7 @@
   window.addEventListener('hashchange', () => { readHash(); render(); loadVisible(true); });
   let resizeTimer = null;
   window.addEventListener('resize', () => {
+    applyDrawerWidth();
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { for (const c of charts) draw(c); for (const c of tcharts) draw(c); }, 100);
   });
