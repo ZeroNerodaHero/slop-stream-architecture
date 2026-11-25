@@ -111,6 +111,10 @@
   .ctrs td { white-space: nowrap; }
   .ctrs tr.ctr { cursor: pointer; } .ctrs tr.ctr:hover td, .ctrs tr.ctr.on td { background: var(--bg3); }
   .ctrs td.cell canvas { display: block; width: 72px; height: 18px; margin-top: 2px; }
+  .ctrs td.net { min-width: 140px; }
+  .netbar { position: relative; display: flex; width: 100%; min-width: 140px; height: 14px; margin-top: 2px; border-radius: 2px; overflow: hidden; }
+  .netbar > i { display: block; height: 100%; opacity: .55; }
+  .netbar > span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 14px; color: #fff; }
   .strip { flex: none; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; --card-w: clamp(142px, 11vw, 190px); --card-h: 82px; }
   .grp { display: flex; flex-direction: column; gap: 4px; flex: none; }
   .grp-head { display: block; height: 15px; line-height: 15px; align-self: flex-start; background: none; border: 0; padding: 0; font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
@@ -340,6 +344,25 @@
   };
   const bytes = (v) => unit(v, 1024, ['B', 'KiB', 'MiB', 'GiB', 'TiB']);
   const bps = (v) => unit(v, 1000, ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s']);
+  const kbps = (v) => {
+    let i = 0;
+    while (v >= 1000 && i < 3) { v /= 1000; i++; }
+    return i === 0 ? `${Math.round(v)}b` : `${v >= 100 ? Math.round(v) : v.toFixed(1)}${['', 'k', 'M', 'G'][i]}`;
+  };
+  const netCell = (rx, tx) => {
+    const td = el('td', 'mono net');
+    const a = has(rx) ? rx : 0, b = has(tx) ? tx : 0, total = a + b;
+    if (!(total > 0)) { td.textContent = '—'; return td; }
+    td.append(el('div', null, bps(total)));
+    const bar = el('div', 'netbar');
+    bar.style.background = COLORS.grid;
+    const seg = (v, color) => { const i = el('i'); i.style.width = `${(v / total) * 100}%`; i.style.background = color; return i; };
+    const lbl = el('span');
+    lbl.append(el('span', null, `↓ ${kbps(a)}`), el('span', null, `↑ ${kbps(b)}`));
+    bar.append(seg(a, COLORS.green), seg(b, COLORS.red), lbl);
+    td.append(bar);
+    return td;
+  };
   const Bps = (v) => (has(v) ? `${bytes(v)}/s` : '—');
   const num = (v) => (has(v) ? String(Math.round(v * 100) / 100) : '—');
   const yn = (v) => (v === true ? el('span', 'yes', '✓') : v === false ? el('span', 'no', '✗') : el('span', 'dim', '—'));
@@ -1013,7 +1036,7 @@
       { id: 'up', label: 'up', num: true, get: (r) => (r.c.up_since && r.c.state === 'running' ? secsSince(r.c.up_since, now) : null) },
       { id: 'cpu', label: 'cpu', num: true, get: (r) => r.c.cpu_pct },
       { id: 'mem', label: 'memory', num: true, get: (r) => r.c.mem_bytes },
-      { id: 'net', label: 'net ↓ / ↑', num: true, get: (r) => (has(r.c.rx_bps) || has(r.c.tx_bps) ? (r.c.rx_bps || 0) + (r.c.tx_bps || 0) : null) },
+      { id: 'net', label: 'net', num: true, get: (r) => (has(r.c.rx_bps) || has(r.c.tx_bps) ? (r.c.rx_bps || 0) + (r.c.tx_bps || 0) : null) },
       { id: 'pids', label: 'pids', num: true, get: (r) => r.c.pids },
     ];
     const heads = ccols.map((c) => c.label);
@@ -1072,7 +1095,7 @@
         el('td', 'mono', c.up_since ? human(secsSince(c.up_since, now)) : '—'),
         cell('cpu', pct1(c.cpu_pct), cs.cpu_pct, COLORS.blue),
         cell('mem', `${bytes(c.mem_bytes)}${c.mem_limit ? ' / ' + bytes(c.mem_limit) : ''}`, cs.mem_bytes, COLORS.violet, c.mem_limit || 0),
-        el('td', 'mono', `${bps(c.rx_bps)} / ${bps(c.tx_bps)}`),
+        netCell(c.rx_bps, c.tx_bps),
         el('td', 'mono', has(c.pids) ? c.pids : '—')
       );
       const pick = () => { sel.ctr = idOf(r); render(); };
@@ -1094,7 +1117,7 @@
     right.append(
       det('cpu', { label: 'cpu (% of one core)', now, src, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
       det('mem', { label: 'memory', now, src, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
-      det('net', { label: 'network', now, src, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
+      det('net', { label: 'network', now, src, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.red }] }),
       det('disk', { label: 'disk io', now, src, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
       det('pids', { label: 'pids', now, src, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
     );
