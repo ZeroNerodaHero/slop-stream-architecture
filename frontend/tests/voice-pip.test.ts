@@ -132,6 +132,15 @@ test('bigFit keeps a wide stage in one row and stacks when tall', () => {
   assert.deepEqual(bigFit(2, 384, 200, 6), { cols: 2, rows: 1, tile: 189 });
 });
 
+test('bigFit only picks column counts that fill every row evenly', () => {
+  assert.deepEqual(bigFit(4, 760, 250, 6), { cols: 2, rows: 2, tile: 216 });
+  assert.deepEqual(bigFit(3, 500, 500, 6), { cols: 1, rows: 3, tile: 289 });
+  for (const [n, w, h] of [[2, 300, 400], [3, 760, 250], [4, 760, 420], [4, 900, 300], [4, 500, 700]] as const) {
+    const f = bigFit(n, w, h, 6);
+    assert.equal(f.cols * f.rows, n);
+  }
+});
+
 test('bigFit tiles never overflow the stage', () => {
   for (const [n, w, h] of [[1, 300, 100], [2, 600, 150], [3, 500, 500], [4, 280, 120], [4, 1200, 700]] as const) {
     const f = bigFit(n, w, h, 6);

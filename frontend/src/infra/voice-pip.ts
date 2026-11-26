@@ -85,7 +85,8 @@ export function bigFit(n: number, w: number, h: number, gap: number, aspect = PI
   if (n <= 0 || w <= 0 || h <= 0) return { cols: Math.max(1, n), rows: 1, tile: 0 };
   let best: BigFit = { cols: n, rows: 1, tile: -1 };
   for (let cols = n; cols >= 1; cols--) {
-    const rows = Math.ceil(n / cols);
+    if (n % cols !== 0) continue;
+    const rows = n / cols;
     const tile = Math.min((w - gap * (cols - 1)) / cols, ((h - gap * (rows - 1)) / rows) * aspect);
     if (tile > best.tile) best = { cols, rows, tile };
   }
