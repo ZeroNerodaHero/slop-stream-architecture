@@ -1354,7 +1354,7 @@ export async function showSpeaker(speaker: string, key: string) {
   await rooms.get(key)?.showSpeaker(speaker);
 }
 
-function fromWire(line: ChatLine): ChatLine {
+export function fromWire<T extends ChatLine>(line: T): T {
   const images = picturesOf(line);
   return {
     ...line,

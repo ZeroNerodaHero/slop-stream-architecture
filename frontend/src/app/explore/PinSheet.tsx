@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, messageOf, type PinnedLine } from '@/infra/api';
-import { serverChat } from '@/infra/atoms/chat-atoms';
+import { fromWire, serverChat } from '@/infra/atoms/chat-atoms';
 import { pinsTickAtom } from '@/infra/atoms/room-atoms';
 import { chatStyleAtom } from '@/infra/atoms/settings-atoms';
 import { RoomLines } from '@/shared-components/ChatPanel';
@@ -88,7 +88,7 @@ export function PinSheet({
     api
       .channelPins(server, channel)
       .then((r) => {
-        if (live) setGot({ for: here, pins: r.pins, error: '' });
+        if (live) setGot({ for: here, pins: r.pins.map(fromWire), error: '' });
       })
       .catch((err: unknown) => {
         if (live) setGot((was) => ({ for: here, pins: was.for === here ? was.pins : null, error: messageOf(err) }));
