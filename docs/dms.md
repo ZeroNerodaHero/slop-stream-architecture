@@ -42,6 +42,8 @@ sequenceDiagram
 
 **a video too, the room chat's** (`chat.md` "videos", a test version): one per line, an mp4 or webm of 10 mb and 30 seconds at most, put up by `POST /api/chat-videos` with its poster (a chat picture the page drew from a frame), and named on the line as `video`. the row keeps `<video>,<poster>` in `video` (migration `0012-chat-videos`); every line the api hands out (a page, a hit, the 201, the `dm` frame, the list's `last`) carries `video: { id, poster }` when it has one, a quote `video: true`. 400 `bad video`, `no such video`. `has:video` finds a thread's uploaded ones as well as its links to one.
 
+**a voice message too** (`chat.md` "voice messages"): one per line, recorded in the window (the + menu's `voice message`), put up by `POST /api/chat-audio` and named on the line as `audio`. the row keeps `<id>,<ms>` in `audio` (migration `0019-chat-audio`); every line the api hands out carries `audio: { id, duration_ms }` when it has one, a quote `audio: true`. 400 `bad voice message`, `no such voice message`, `not your voice message`.
+
 ## the table
 
 ```sql

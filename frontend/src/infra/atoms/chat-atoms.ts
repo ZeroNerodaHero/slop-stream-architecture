@@ -8,6 +8,7 @@ import { trackSocket } from '@/infra/debug/sockets';
 import { encodeEmotes, tokensAsTyped } from '@/infra/emotes';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { type Attached, Attachments, idsOf, isPictureRefusal, MAX_CHAT_IMAGES, releaseAttached, wordsOf } from '@/infra/chat-attach';
+import { audioOf, type ChatAudio } from '@/infra/chat-audio';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { relayUrl } from '@/infra/relay';
 import { acquireTopic, listenTopic, onRtFrame, onRtPhase, pressTopic, rtAsk, rtFill, rtFresh, rtHolds, rtIdentify, rtOn } from '@/infra/rt/client';
@@ -31,6 +32,7 @@ export interface ChatLine {
   image?: string | null;
   images: string[];
   video?: ChatVideo | null;
+  audio?: ChatAudio;
   channel?: string;
   reply?: ChatReply;
   mentions?: string[];
@@ -47,6 +49,7 @@ export interface ChatReply {
   avatar?: number | null;
   images?: number;
   video?: boolean;
+  audio?: boolean;
 }
 
 export const BOT_GROUP = 'bot';
@@ -260,6 +263,7 @@ export class ChatRoom {
   readonly attach: Attachments = new Attachments((text) => this.showNotice(text));
   readonly picturesAtom = this.attach.picturesAtom;
   readonly videoAtom = this.attach.videoAtom;
+  readonly voiceAtom = this.attach.voiceAtom;
   readonly readyIdsAtom = this.attach.readyIdsAtom;
   readonly sendingAtom: PrimitiveAtom<boolean> = atom(false);
   readonly noticeAtom: PrimitiveAtom<string> = atom('');
@@ -642,8 +646,9 @@ export class ChatRoom {
     const images = idsOf(pictures);
     const clip = this.attach.video();
     const video = clip?.video ?? null;
+    const audio = this.attach.voice()?.audio;
     const live = this.rt ? store.get(this.phaseAtom) === 'open' : ws !== null && ws.readyState === WebSocket.OPEN;
-    if (!live || (!text && images.length === 0 && !video)) return;
+    if (!live || (!text && images.length === 0 && !video && !audio)) return;
     if (chars(text) > MAX_CHAT_CHARS) {
       this.showNotice('too long');
       return;
@@ -662,6 +667,7 @@ export class ChatRoom {
     const words = encodeEmotes(text);
     const say: Record<string, unknown> = images.length ? { type: 'say', text: words, image: images[0], images } : { type: 'say', text: words };
     if (video) say.video = video.id;
+    if (audio) say.audio = audio.id;
     const reply = store.get(this.replyAtom);
     if (reply) say.reply = reply.id;
     const key = `pending-${++this.sent}`;
@@ -697,6 +703,7 @@ export class ChatRoom {
       image: images[0] ?? null,
       images,
       video,
+      audio,
       reply: reply ? quoteOf(reply) : undefined,
       channel: this.server ? this.channel : undefined,
       pending: 'sending'
@@ -828,7 +835,11 @@ export class ChatRoom {
       let sent = ackedKey === undefined ? -1 : this.inFlight.findIndex((p) => p.key === ackedKey);
       if (sent < 0)
         sent = this.inFlight.findIndex(
-          (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
+          (p) =>
+            p.text === said &&
+            samePictures(p.images, picturesOf(msg)) &&
+            (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null) &&
+            (p.voice?.audio?.id ?? null) === (audioOf(msg.audio)?.id ?? null)
         );
       if (sent >= 0) {
         const echoed = this.inFlight.splice(sent, 1)[0]!;
@@ -1417,7 +1428,8 @@ function quoteOf(line: ChatLine): ChatReply {
     verified: line.verified,
     avatar: line.avatar,
     images: line.images.length,
-    video: Boolean(line.video)
+    video: Boolean(line.video),
+    audio: Boolean(line.audio)
   };
 }
 

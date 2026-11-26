@@ -1,4 +1,4 @@
-import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiArrowUpLine, RiCloseLine, RiLoader4Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiArrowUpLine, RiCloseLine, RiLoader4Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
@@ -33,7 +33,9 @@ import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
+import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
 import { ChatVideoPlayer, MediaGoneNote } from '@/shared-components/ChatVideoPlayer';
+import { AttachMenu, PendingVoiceChip, VoiceBar } from '@/shared-components/ChatVoice';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { Face } from '@/shared-components/Face';
 import { IN_PILL, INPUT, INPUT_BUTTON, PILL } from '@/shared-components/input';
@@ -48,6 +50,7 @@ import { CHAT_GRIP, useChatWindowBar } from '@/shared-components/ChatSlot';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useVoiceRecorder } from '@/shared-components/useVoiceRecorder';
 import { CHIP, CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
 import { keepFocus } from '@/infra/keyboard';
 import { cn } from '@/utils/cn';
@@ -603,6 +606,7 @@ const ChatRow = memo(function ChatRow({
         <>
           <ChatImages ids={line.images} />
           {line.video && <ChatVideoPlayer video={line.video} />}
+          {line.audio && <ChatAudioPlayer audio={line.audio} />}
           <ChatEmbeds text={line.text} />
         </>
       }
@@ -633,7 +637,7 @@ const ChatRow = memo(function ChatRow({
         line.reply && (
           <ReplyQuote
             shape={shape}
-            quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0, video: line.reply.video }}
+            quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0, video: line.reply.video, audio: line.reply.audio }}
             color={replyColor}
             onJump={jumps ? () => void room.jumpToReply(line.reply!.id) : undefined}
           />
@@ -944,6 +948,7 @@ export function ChatPanel({
   const draft = useAtomValue(room.draftAtom);
   const pictures = useAtomValue(room.picturesAtom);
   const video = useAtomValue(room.videoAtom);
+  const voice = useAtomValue(room.voiceAtom);
   const sending = useAtomValue(room.sendingAtom);
   const takesVideos = server || STREAM_CHAT_VIDEO;
   const replyTo = useAtomValue(room.replyAtom);
@@ -990,6 +995,19 @@ export function ChatPanel({
   }, [room, channel]);
 
   const open = () => room.open();
+  const showNotice = useCallback((words: string) => room.showNotice(words, 5000), [room]);
+  const recorder = useVoiceRecorder(showNotice);
+  const recording = recorder.phase !== 'idle';
+
+  function pickImage() {
+    if (pictures.length >= MAX_CHAT_IMAGES) room.showNotice(`${MAX_CHAT_IMAGES} pictures at most`);
+    else fileRef.current?.click();
+  }
+
+  function pickVoice() {
+    if (!me) room.showNotice('log in to send a voice message');
+    else recorder.start();
+  }
 
   useEffect(() => {
     if (replyTo) textRef.current?.focus();
@@ -1130,6 +1148,7 @@ export function ChatPanel({
                   text={line.text}
                   images={line.images.length}
                   video={!!line.video}
+                  audio={!!line.audio}
                   onClick={() => {
                     if (elsewhere !== null) onChannel?.(elsewhere);
                     room.clearResults();
@@ -1177,7 +1196,7 @@ export function ChatPanel({
                   <span className={cn('font-semibold', !replyColor && 'text-textPrimary')} style={replyColor ? { color: replyColor } : undefined}>
                     {replyTo.from}
                   </span>
-                  <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video })}</span>
+                  <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video, audio: !!replyTo.audio })}</span>
                 </span>
                 <Tooltip content="cancel reply">
                   <button
@@ -1195,6 +1214,11 @@ export function ChatPanel({
                 </Tooltip>
               </div>
             )}
+            {voice && (
+              <div className="mb-2 flex">
+                <PendingVoiceChip voice={voice} sending={sending} idPrefix="chat" onRemove={() => room.attach.removeVoice()} onRetry={() => room.attach.retryVoice()} />
+              </div>
+            )}
             {(pictures.length > 0 || video) && (
               <div id="chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
                 {video && <PendingVideo clip={video} sending={sending} onRemove={() => room.removeVideo()} />}
@@ -1206,86 +1230,100 @@ export function ChatPanel({
             <div className={cn('relative flex items-center gap-2', PILL)}>
               {emotes.list}
               {mentions.list}
-              <button
-                type="button"
-                id="chat-picture"
-                aria-label="attach"
-                aria-disabled={pictures.length >= MAX_CHAT_IMAGES || undefined}
-                className={cn(
-                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-100 focus-visible:border-primaryBlue focus-visible:outline-none bubble:focus-visible:border-primaryBlue',
-                  IN_PILL,
-                  pictures.length >= MAX_CHAT_IMAGES ? 'cursor-default opacity-40' : 'hover:bg-backgroundTertiary hover:text-textPrimary bubble:hover:bg-backgroundTertiary'
-                )}
-                onClick={() => (pictures.length >= MAX_CHAT_IMAGES ? room.showNotice(`${MAX_CHAT_IMAGES} pictures at most`) : fileRef.current?.click())}
-              >
-                <RiAddLine size={20} aria-hidden />
-              </button>
-              <input ref={fileRef} id="chat-picture-file" type="file" accept={takesVideos ? ATTACH_ACCEPT : PICTURE_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
-              <div className="relative flex min-w-0 flex-1">
-                <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
-                <input
-                  ref={textRef}
-                  id="chat-text"
-                  value={draft}
-                  {...mentions.box}
-                  onChange={(e) => {
-                    room.setDraft(e.target.value);
-                    mentions.box.onSelect(e);
-                  }}
-                  onKeyDown={(e) => {
-                    if (mentions.box.onKeyDown(e)) return;
-                    if (e.key === 'Escape' && replyTo) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      room.setReply(null);
-                      return;
-                    }
-                    if (!isSendKey(e)) return;
-                    e.preventDefault();
-                    void room.send();
-                  }}
-                  placeholder="comment"
-                  aria-label={`comment as ${asStreamer ? name : speaker}`}
-                  autoComplete="off"
-                  className={cn(INPUT, 'h-8 min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]', IN_PILL)}
-                />
-              </div>
-              <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : 'send'}>
-                <Button
-                  id="chat-send"
-                  variant={wait > 0 ? 'danger' : 'primary'}
+              {!recording && (
+                <AttachMenu
+                  id="chat-picture"
                   className={cn(
-                    'h-8 shrink-0 py-0 text-sm tabular-nums max-md:h-11 max-md:text-[length:max(1rem,16px)]',
-                    wait > 0 ? 'px-4 max-md:min-w-11' : 'w-8 px-0 max-md:w-11'
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-100 hover:bg-backgroundTertiary hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none bubble:hover:bg-backgroundTertiary bubble:focus-visible:border-primaryBlue max-md:h-11 max-md:w-11',
+                    IN_PILL
                   )}
-                  aria-label={wait > 0 ? undefined : 'send'}
-                  disabled={!canSend}
-                  aria-busy={sending || undefined}
-                  data-wait={wait > 0 ? wait : undefined}
-                  onPointerDown={(e) => {
-                    sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
-                    keepFocus(e);
-                  }}
-                  onClick={() => {
-                    void room.send();
-                    if (sendKeepsFocus.current) textRef.current?.focus();
-                    sendKeepsFocus.current = false;
-                  }}
-                >
-                  {wait > 0 ? (
-                    <span key={shake} className="inline-block motion-safe:animate-shake">
-                      {waitWords(wait)}
-                    </span>
-                  ) : sending ? (
-                    <span className="relative flex items-center">
-                      <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
-                      <span className="sr-only">sending</span>
-                    </span>
-                  ) : (
-                    <RiArrowUpLine aria-hidden size={18} />
-                  )}
-                </Button>
-              </Tooltip>
+                  onImage={pickImage}
+                  onVoice={pickVoice}
+                />
+              )}
+              <input ref={fileRef} id="chat-picture-file" type="file" accept={takesVideos ? ATTACH_ACCEPT : PICTURE_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
+              {recording ? (
+                <div className="relative flex min-w-0 flex-1">
+                  <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
+                  <VoiceBar
+                    recorder={recorder}
+                    idPrefix="chat"
+                    sendClassName="h-8 w-8 shrink-0 px-0 py-0 text-sm max-md:h-11 max-md:w-11"
+                    onSend={(clip) => {
+                      room.attach.addVoice(clip.blob, clip.durationMs);
+                      void room.send();
+                    }}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="relative flex min-w-0 flex-1">
+                    <ChatNotice notice={notice} onDismiss={() => room.showNotice('')} />
+                    <input
+                      ref={textRef}
+                      id="chat-text"
+                      value={draft}
+                      {...mentions.box}
+                      onChange={(e) => {
+                        room.setDraft(e.target.value);
+                        mentions.box.onSelect(e);
+                      }}
+                      onKeyDown={(e) => {
+                        if (mentions.box.onKeyDown(e)) return;
+                        if (e.key === 'Escape' && replyTo) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          room.setReply(null);
+                          return;
+                        }
+                        if (!isSendKey(e)) return;
+                        e.preventDefault();
+                        void room.send();
+                      }}
+                      placeholder="comment"
+                      aria-label={`comment as ${asStreamer ? name : speaker}`}
+                      autoComplete="off"
+                      className={cn(INPUT, 'h-8 min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]', IN_PILL)}
+                    />
+                  </div>
+                  <Tooltip content={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : 'send'}>
+                    <Button
+                      id="chat-send"
+                      variant={wait > 0 ? 'danger' : 'primary'}
+                      className={cn(
+                        'h-8 shrink-0 py-0 text-sm tabular-nums max-md:h-11 max-md:text-[length:max(1rem,16px)]',
+                        wait > 0 ? 'px-4 max-md:min-w-11' : 'w-8 px-0 max-md:w-11'
+                      )}
+                      aria-label={wait > 0 ? undefined : 'send'}
+                      disabled={!canSend}
+                      aria-busy={sending || undefined}
+                      data-wait={wait > 0 ? wait : undefined}
+                      onPointerDown={(e) => {
+                        sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
+                        keepFocus(e);
+                      }}
+                      onClick={() => {
+                        void room.send();
+                        if (sendKeepsFocus.current) textRef.current?.focus();
+                        sendKeepsFocus.current = false;
+                      }}
+                    >
+                      {wait > 0 ? (
+                        <span key={shake} className="inline-block motion-safe:animate-shake">
+                          {waitWords(wait)}
+                        </span>
+                      ) : sending ? (
+                        <span className="relative flex items-center">
+                          <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
+                          <span className="sr-only">sending</span>
+                        </span>
+                      ) : (
+                        <RiArrowUpLine aria-hidden size={18} />
+                      )}
+                    </Button>
+                  </Tooltip>
+                </>
+              )}
             </div>
           </>
         )}

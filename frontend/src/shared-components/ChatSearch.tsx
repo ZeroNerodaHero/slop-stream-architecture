@@ -1,4 +1,4 @@
-import { type RemixiconComponentType, RiAttachment2, RiCalendarLine, RiCloseLine, RiFilmLine, RiHashtag, RiImageLine, RiLink, RiUserLine, RiVideoLine } from '@remixicon/react';
+import { type RemixiconComponentType, RiAttachment2, RiCalendarLine, RiCloseLine, RiFilmLine, RiHashtag, RiImageLine, RiLink, RiMicLine, RiUserLine, RiVideoLine } from '@remixicon/react';
 import {
   type ChangeEvent,
   type FormEvent,
@@ -602,11 +602,12 @@ interface SearchHitProps {
   text: string;
   images: number;
   video?: boolean;
+  audio?: boolean;
   onClick: () => void;
   attrs?: HTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | number | boolean | undefined>;
 }
 
-export function SearchHit({ id, at, before, who, text, images, video = false, onClick, attrs }: SearchHitProps) {
+export function SearchHit({ id, at, before, who, text, images, video = false, audio = false, onClick, attrs }: SearchHitProps) {
   const pictures = images === 1 ? 'a picture' : `${images} pictures`;
   return (
     <li className="relative flex items-baseline gap-2 px-3 py-1 transition-colors duration-150 focus-within:bg-backgroundTertiary hover:bg-backgroundTertiary">
@@ -634,6 +635,13 @@ export function SearchHit({ id, at, before, who, text, images, video = false, on
           <Tooltip content="a video">
             <span role="img" aria-label="a video" className="relative z-10 ml-1 inline-flex items-center align-middle text-textTertiary">
               <RiFilmLine aria-hidden size={12} />
+            </span>
+          </Tooltip>
+        )}
+        {audio && (
+          <Tooltip content="a voice message">
+            <span role="img" aria-label="a voice message" className="relative z-10 ml-1 inline-flex items-center align-middle text-textTertiary">
+              <RiMicLine aria-hidden size={12} />
             </span>
           </Tooltip>
         )}
