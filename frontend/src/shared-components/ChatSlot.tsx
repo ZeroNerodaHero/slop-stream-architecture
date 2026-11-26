@@ -150,7 +150,7 @@ function ChatWidthHandle({ side, fallback, dialog }: { side: 'left' | 'right'; f
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{ id: number; x: number; w: number; now: number; frame: number } | null>(null);
 
-  const grid = () => dialog.current?.closest<HTMLElement>('[data-chat]') ?? null;
+  const grid = () => handle.current?.closest<HTMLElement>('[data-chat]') ?? null;
 
   const paint = (w: number | null) => {
     const el = grid();
