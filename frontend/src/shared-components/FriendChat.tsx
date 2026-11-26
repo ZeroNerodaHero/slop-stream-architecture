@@ -1,4 +1,4 @@
-import { RiAddLine, RiArrowLeftSLine, RiArrowUpLine, RiCloseLine, RiLoader4Line, RiSearchLine } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiArrowUpLine, RiCloseLine, RiLoader4Line, RiPhoneFill, RiPhoneLine, RiSearchLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -46,17 +46,19 @@ import {
   sendDm,
   showDmNotice
 } from '@/infra/atoms/dm-atoms';
+import { dmCallAtom, dmCallBusyAtom, endDmCall, startDmCall } from '@/infra/atoms/dm-call-atoms';
 import { followingAtom, friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { type ChatStyle, chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { keepFocus, stuckAfterScroll, useBottomPin, useKeyboard } from '@/infra/keyboard';
+import { briefPhase } from '@/infra/dm-call';
 import { useIsMobile } from '@/infra/mobile';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { plainEmotes } from '@/infra/emotes';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingVideo, splitFiles } from '@/shared-components/ChatAttach';
-import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ChatLineShape, clock, LineActions, placeOf, quoteWords, ReplyQuote, stamp } from '@/shared-components/ChatLine';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { ChatImages } from '@/shared-components/ChatPanel';
@@ -575,8 +577,24 @@ const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmV
   );
 });
 
+function CallLine({ line }: { line: DmLine }) {
+  return (
+    <p data-id={line.id} data-call={line.call?.outcome} className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-textTertiary">
+      <RiPhoneLine aria-hidden size={12} className="shrink-0" />
+      <span className="min-w-0 truncate">{line.text}</span>
+      <Tooltip content={stamp(line.at)}>
+        <time dateTime={new Date(line.at).toISOString()} className="shrink-0 tabular-nums">
+          {clock(line.at)}
+        </time>
+      </Tooltip>
+    </p>
+  );
+}
+
 export function FriendChat() {
   const me = useAtomValue(meAtom);
+  const dmCall = useAtomValue(dmCallAtom);
+  const callBusy = useAtomValue(dmCallBusyAtom);
   const dms = useAtomValue(dmsAtom);
   const active = useAtomValue(dmActiveAtom);
   const open = useAtomValue(dmOpenAtom);
@@ -877,6 +895,7 @@ export function FriendChat() {
   const left = MAX_CHARS - [...draft.trim()].length;
   const headerButton = mobile ? cn(HEADER_BUTTON, 'flex h-11 w-11 items-center justify-center p-0') : HEADER_BUTTON;
   const headerIcon = mobile ? 20 : 16;
+  const inCall = !!name && dmCall?.peer === name && !briefPhase(dmCall.phase);
   const tabbed = Boolean(name) && !mobile;
 
   const content = (
@@ -923,6 +942,20 @@ export function FriendChat() {
                   <Who name={name} verified={dm.verified} />
                 </ProfileLink>
               </span>
+              <Tooltip content={inCall ? 'hang up' : 'call'} hideOnPress>
+                <button
+                  id="friend-chat-call"
+                  type="button"
+                  aria-label={inCall ? 'hang up' : 'call'}
+                  aria-pressed={inCall}
+                  disabled={callBusy && !inCall}
+                  data-call={inCall ? dmCall?.phase : undefined}
+                  onClick={() => (inCall ? endDmCall() : void startDmCall(name))}
+                  className={cn(headerButton, 'disabled:opacity-50', inCall ? 'text-decrease' : 'text-textTertiary hover:text-textPrimary')}
+                >
+                  {inCall ? <RiPhoneFill aria-hidden size={headerIcon} className="rotate-[135deg]" /> : <RiPhoneLine aria-hidden size={headerIcon} />}
+                </button>
+              </Tooltip>
               <Tooltip content={searching ? 'close the search' : 'search this chat'}>
                 <button
                   id="friend-chat-search-open"
@@ -1002,7 +1035,8 @@ export function FriendChat() {
                 {lines.map((line, i) => {
                   const mine = line.from === me;
                   const prev = lines[i - 1];
-                  const place = placeOf(line.at, prev?.at, prev?.from === line.from);
+                  const place = placeOf(line.at, prev?.at, prev?.from === line.from && !prev?.call);
+                  if (line.call) return <CallLine key={line.id} line={line} />;
                   return (
                     <DmRow
                       key={line.id}

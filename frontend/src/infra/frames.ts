@@ -56,6 +56,12 @@ export type GroupChange =
   | { what: 'voice_left'; who: string; uid: string; channel: string }
   | { what: 'deleted' };
 
+export type CallChange =
+  | { what: 'ringing'; id: string; server: string; channel: string; avatar: number | null; ring: number }
+  | { what: 'accepted'; id: string; server: string; channel: string }
+  | { what: 'declined' | 'missed' | 'ended'; id: string; server: string; channel: string; secs: number | null }
+  | { what: 'voice' | 'voice_left'; server: string; who: string; uid: string; channel: string };
+
 export type ServerFrame =
   | { type: 'me'; name: string | null; presence: Presence; status: PresenceChoice }
   | { type: 'presence'; name: string; presence: Presence }
@@ -75,6 +81,7 @@ export type ServerFrame =
       video?: { id: string; poster: string };
       reply?: { id: number; from?: string; text?: string; avatar?: number | null; images?: number; video?: boolean; gone?: boolean } | null;
       mentions?: string[];
+      call?: unknown;
     }
   | { type: 'dm_react'; id: number; from: string; to: string; emoji: string; on: boolean }
   | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }
@@ -95,6 +102,7 @@ export type ServerFrame =
   | { type: 'notify_removed'; name: string; id: number }
   | { type: 'chat_read'; name: string; room: string }
   | ({ type: 'group'; group: string } & GroupChange)
+  | ({ type: 'call'; caller: string; callee: string } & CallChange)
   | { type: 'error'; error: string };
 
 export type LinkPhase = 'off' | 'connecting' | 'open' | 'closed';

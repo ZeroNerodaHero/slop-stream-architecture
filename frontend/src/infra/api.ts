@@ -1,5 +1,6 @@
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
 import type { ChatVideo } from '@/infra/chat-video';
+import type { CallMark } from '@/infra/dm-call';
 import type { Emote, GroupEmote } from '@/infra/emotes';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
@@ -61,6 +62,16 @@ export interface DmLine {
   reply?: DmReply | null;
   mentions?: string[];
   reactions?: Reaction[];
+  call?: CallMark | null;
+}
+
+export interface DmCallAnswer {
+  id: string;
+  server: string;
+  channel: string;
+  state: 'ringing' | 'accepted';
+  peer: string;
+  ring: number;
 }
 
 export interface DmReply {
@@ -788,6 +799,10 @@ export const api = {
   reactDm: (name: string, id: number, emoji: string, on: boolean) =>
     request<{ id: number; reactions: unknown }>('PUT', `/api/dm/${encodeURIComponent(name)}/react`, { id, emoji, on }),
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
+  startDmCall: (name: string) => request<DmCallAnswer>('POST', `/api/dm/${encodeURIComponent(name)}/call`, undefined, { report: false }),
+  acceptDmCall: (name: string, id: string) => request<DmCallAnswer>('POST', `/api/dm/${encodeURIComponent(name)}/call/accept`, { id }, { report: false }),
+  declineDmCall: (name: string, id: string) => request<null>('POST', `/api/dm/${encodeURIComponent(name)}/call/decline`, { id }, { report: false }),
+  endDmCall: (name: string, id: string) => request<null>('POST', `/api/dm/${encodeURIComponent(name)}/call/end`, { id }, { report: false }),
   searchDm: (name: string, q: string) => request<{ lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}/search?q=${encodeURIComponent(q)}`),
   notifications: () => request<{ settings: NotifySettings; items: Notification[] }>('GET', '/api/notifications'),
   readNotifications: (id: number) => request<null>('PUT', '/api/notifications/read', { id }),

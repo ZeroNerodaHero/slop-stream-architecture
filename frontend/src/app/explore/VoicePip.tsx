@@ -1,4 +1,4 @@
-import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiPhoneLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtom, useAtomValue } from 'jotai';
 import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -8,11 +8,15 @@ import { CallControls, ControlBar, Tile, type TileOf, useCallTiles, useVoiceView
 import { type GroupRoom, isVoice } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { callRoomAtom } from '@/infra/atoms/call-room-atoms';
+import { type DmCall, dmCallAtom, dmCallRoom } from '@/infra/atoms/dm-call-atoms';
+import { openDmWith } from '@/infra/atoms/dm-atoms';
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
+import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { voiceSpeakingAtom } from '@/infra/atoms/voice-atoms';
 import { callBarSlotAtom, hideVoicePip, pipCallKey, voicePipAtAtom, voicePipCollapsedAtom, voicePipHiddenAtom } from '@/infra/atoms/voice-pip-atoms';
 import { voiceCallAtom } from '@/infra/atoms/voice-state';
+import { briefPhase, callStatus } from '@/infra/dm-call';
 import { useIsMobile } from '@/infra/mobile';
 import { cleanName } from '@/infra/names';
 import {
@@ -65,13 +69,37 @@ export function VoicePip() {
   const { pathname } = useLocation();
   const page = !!match && cleanName(match.params.server) === call.server;
   const view = useVoiceView(page ? room : null);
+  const dm = useAtomValue(dmCallAtom);
+  const me = useAtomValue(meAtom) ?? '';
+  const myAvatar = useAtomValue(myAvatarVersionAtom);
   const live = call.phase === 'joining' || call.phase === 'connected';
+  if (dm && (briefPhase(dm.phase) ? call.phase === 'idle' || call.server === dm.server : live && call.server === dm.server)) {
+    const dmRoom = dmCallRoom(dm, me, myAvatar);
+    const chat = () => openDmWith(dm.peer);
+    if (mobile) return <CallBar key={pathname} room={dmRoom} channel={dm.channel} open={chat} dm={dm} />;
+    return createPortal(<PipWindow room={dmRoom} channel={dm.channel} page={false} open={chat} dm={dm} />, document.body);
+  }
   if (!live || !room || room.name !== call.server || !(room.channels ?? []).some((c) => isVoice(c) && c.name === call.channel)) return null;
   const open = () =>
     page ? view.open(call.channel) : navigate(`/groups/${encodeURIComponent(room.name)}?voice=${encodeURIComponent(call.channel)}`);
   if (mobile) return page ? null : <CallBar key={pathname} room={room} channel={call.channel} open={open} />;
   if ((page && hidden === pipCallKey(call)) || view.view === call.channel) return null;
   return createPortal(<PipWindow room={room} channel={call.channel} page={page} open={open} />, document.body);
+}
+
+function useTick(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [on]);
+  return now;
+}
+
+function dmStatusOf(dm: DmCall, linked: boolean, now: number): { text: string; good: boolean } {
+  const text = callStatus(dm.phase, dm.peer, linked ? dm.since : null, now);
+  return { text, good: dm.phase === 'live' && linked && dm.since !== null };
 }
 
 function viewport() {
@@ -209,7 +237,7 @@ function CallTiles({
   );
 }
 
-function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: string; page: boolean; open: () => void }) {
+function PipWindow({ room, channel, page, open, dm = null }: { room: GroupRoom; channel: string; page: boolean; open: () => void; dm?: DmCall | null }) {
   const me = useAtomValue(meAtom) ?? '';
   const call = useAtomValue(voiceCallAtom);
   const [stored, setStored] = useAtom(voicePipAtAtom(me));
@@ -364,14 +392,19 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
     handle.addEventListener('lostpointercapture', end);
   };
 
+  const now = useTick(dm?.phase === 'live');
   const people = tiles.filter((t) => t.kind === 'person').length;
-  const status = call.phase === 'joining' || !call.linked ? 'connecting…' : `${people} in`;
+  const linked = call.phase === 'connected' && call.linked;
+  const dmStatus = dm ? dmStatusOf(dm, linked, now) : null;
+  const status = dmStatus ? dmStatus.text : !linked ? 'connecting…' : `${people} in`;
+  const good = dmStatus ? dmStatus.good : linked;
 
   return (
     <section
       ref={ref}
       id="voice-pip"
-      aria-label={`call: ${channel}`}
+      aria-label={`call: ${dm ? dm.peer : channel}`}
+      data-dm-call={dm ? dm.phase : undefined}
       data-collapsed={collapsed || undefined}
       style={{ right: at.right, bottom: at.bottom }}
       className={cn(
@@ -384,16 +417,16 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
         onPointerDown={press}
         className={cn('flex min-h-11 shrink-0 cursor-move touch-none select-none items-center gap-2 px-3 [-webkit-touch-callout:none]', drag && 'cursor-grabbing')}
       >
-        <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
+        {dm ? <RiPhoneLine aria-hidden size={14} className="shrink-0 text-textTertiary" /> : <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />}
         <h2 id="voice-pip-channel" className="flex min-w-0">
-          <Tooltip content={page ? `open ${channel} in the middle` : `go to ${channel} in ${room.name}`} hideOnPress>
+          <Tooltip content={dm ? `open the chat with ${dm.peer}` : page ? `open ${channel} in the middle` : `go to ${channel} in ${room.name}`} hideOnPress>
             <button id="voice-pip-go" type="button" onClick={open} className={cn(NAME_BUTTON, 'px-1.5 py-0.5')}>
-              <span className="truncate font-semibold text-textPrimary">{channel}</span>
-              {!page && <span className="truncate text-xs text-textTertiary">{room.name}</span>}
+              <span className="truncate font-semibold text-textPrimary">{dm ? dm.peer : channel}</span>
+              {!page && !dm && <span className="truncate text-xs text-textTertiary">{room.name}</span>}
             </button>
           </Tooltip>
         </h2>
-        <span id="voice-pip-status" className={cn('shrink-0 text-xs tabular-nums', status === 'connecting…' ? 'text-textTertiary' : 'font-semibold text-increase')}>
+        <span id="voice-pip-status" className={cn('shrink-0 text-xs tabular-nums', good ? 'font-semibold text-increase' : 'text-textTertiary')}>
           {status}
         </span>
         <span className="flex-1" />
@@ -463,7 +496,7 @@ function settle(panel: HTMLElement, on: boolean) {
   panel.style.transform = on ? 'translateY(0)' : 'translateY(-100%)';
 }
 
-function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; open: () => void }) {
+function CallBar({ room, channel, open, dm = null }: { room: GroupRoom; channel: string; open: () => void; dm?: DmCall | null }) {
   const call = useAtomValue(voiceCallAtom);
   const slot = useAtomValue(callBarSlotAtom);
   const tiles = useCallTiles(room, channel);
@@ -479,6 +512,11 @@ function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; op
   const [expanded, setExpanded] = useState(false);
   const people = tiles.filter((t) => t.kind === 'person').length;
   const connecting = call.phase === 'joining' || !call.linked;
+  const now = useTick(dm?.phase === 'live');
+  const dmStatus = dm ? dmStatusOf(dm, !connecting, now) : null;
+  const status = dmStatus ? dmStatus.text : connecting ? 'connecting…' : `${people} in`;
+  const good = dmStatus ? dmStatus.good : !connecting;
+  const title = dm ? dm.peer : channel;
 
   useStackedWindow(boxRef, 'voice', live);
 
@@ -628,7 +666,8 @@ function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; op
         <section
           ref={barRef}
           id="voice-bar"
-          aria-label={`call: ${channel}`}
+          aria-label={`call: ${title}`}
+          data-dm-call={dm ? dm.phase : undefined}
           {...pull}
           className="flex touch-none select-none items-center gap-2 border-b border-primaryStroke bg-backgroundSecondary px-3 py-2 text-sm bubble:border-transparent [-webkit-touch-callout:none] [html[data-keyboard]_&]:hidden"
         >
@@ -651,19 +690,19 @@ function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; op
             id="voice-bar-go"
             type="button"
             data-pull=""
-            aria-label={`go to ${channel} in ${room.name}`}
+            aria-label={dm ? `open the chat with ${dm.peer}` : `go to ${channel} in ${room.name}`}
             onClick={(e) => {
               if (tapped(e)) open();
             }}
             className={cn(NAME_BUTTON, 'min-h-11 min-w-0 flex-1 items-center border-primaryStroke bg-background px-2')}
           >
-            <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
+            {dm ? <RiPhoneLine aria-hidden size={14} className="shrink-0 text-textTertiary" /> : <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />}
             <span className="flex min-w-0 flex-col">
-              <span className="truncate font-semibold text-textPrimary">{channel}</span>
-              <span className="truncate text-xs text-textTertiary">{room.name}</span>
+              <span className="truncate font-semibold text-textPrimary">{title}</span>
+              {!dm && <span className="truncate text-xs text-textTertiary">{room.name}</span>}
             </span>
-            <span id="voice-bar-status" className={cn('ml-auto shrink-0 text-xs tabular-nums', connecting ? 'text-textTertiary' : 'font-semibold text-increase')}>
-              {connecting ? 'connecting…' : `${people} in`}
+            <span id="voice-bar-status" className={cn('ml-auto shrink-0 text-xs tabular-nums', good ? 'font-semibold text-increase' : 'text-textTertiary')}>
+              {status}
             </span>
           </button>
           <CallControls at="voice-bar" />
@@ -677,7 +716,7 @@ function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; op
               ref={panelRef}
               id="voice-sheet"
               role="region"
-              aria-label={`call: ${channel}`}
+              aria-label={`call: ${title}`}
               onKeyDown={(e) => {
                 if (e.key !== 'Escape') return;
                 go(false);
