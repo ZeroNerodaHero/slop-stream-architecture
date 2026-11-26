@@ -675,7 +675,7 @@ export function LivePage() {
       <div
         id="live-mobile"
         data-keyboard={typing || keyboard}
-        className="group/phone fixed inset-x-0 top-[var(--vvt,0px)] flex h-[var(--vvh,100dvh)] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+        className="group/phone fixed inset-x-0 [--sticky-top:0px] top-[calc(var(--vvt,0px)+var(--banner-h,0px))] flex h-[calc(var(--vvh,100dvh)-var(--banner-h,0px))] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
         <PageFrame
           title="go live"
@@ -793,7 +793,7 @@ export function LivePage() {
         data-layout={layout}
         data-editing={editing || undefined}
         data-preset={preset ?? 'custom'}
-        className="flex h-[calc(100dvh-var(--page-top,100px)-0.75rem)] min-h-0 gap-2 bubble:h-[calc(100dvh-var(--page-top,100px)-0.5rem)]"
+        className="flex h-[calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-0.75rem)] min-h-0 gap-2 bubble:h-[calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-0.5rem)]"
       >
         {a ? (
           <div id="live-stage" className="flex min-h-0 min-w-0 flex-1 gap-2">
