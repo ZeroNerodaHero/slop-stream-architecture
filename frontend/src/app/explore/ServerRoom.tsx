@@ -973,6 +973,12 @@ export function ServerPage() {
     setPinSheet(false);
   }
 
+  const [pinView, setPinView] = useState(voiceView.view);
+  if (pinView !== voiceView.view) {
+    setPinView(voiceView.view);
+    setPinSheet(false);
+  }
+
   useEffect(() => {
     const names = previewKey ? previewKey.split(',') : [];
     setHomePreviews(names);
@@ -1266,7 +1272,9 @@ export function ServerPage() {
       mobileEnd={
         noChannel ? undefined : (
           <>
-            <PinSheetButton count={room.pins?.[channel]?.length ?? 0} open={pinSheet} onClick={() => setPinSheet((open) => !open)} />
+            {!voiceView.view && (
+              <PinSheetButton count={room.pins?.[channel]?.length ?? 0} open={pinSheet} onClick={() => setPinSheet((open) => !open)} />
+            )}
             {drawerOpener}
           </>
         )
@@ -1331,7 +1339,7 @@ export function ServerPage() {
               </div>
             )}
           </div>
-          {mobile && (
+          {mobile && !voiceView.view && (
             <PinSheet
               server={server}
               channel={channel}
