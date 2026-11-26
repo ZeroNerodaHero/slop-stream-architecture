@@ -116,6 +116,7 @@ import { GroupModHost, lineModItems, useCardMod } from '@/shared-components/Grou
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
 import { BAR_BUTTON, when } from '@/shared-components/ChatLine';
 import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
+import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
@@ -718,6 +719,11 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
                       {pin.video && (
                         <div data-pin-video={pin.id} className="relative z-10">
                           <ChatVideoPlayer video={pin.video} small />
+                        </div>
+                      )}
+                      {pin.audio && (
+                        <div data-pin-audio={pin.id} className="relative z-10">
+                          <ChatAudioPlayer audio={pin.audio} small />
                         </div>
                       )}
                     </div>

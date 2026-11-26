@@ -1,4 +1,5 @@
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
+import type { ChatAudio } from '@/infra/chat-audio';
 import type { ChatVideo } from '@/infra/chat-video';
 import type { Emote, GroupEmote } from '@/infra/emotes';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
@@ -58,6 +59,7 @@ export interface DmLine {
   at: number;
   images: string[];
   video?: ChatVideo | null;
+  audio?: ChatAudio;
   reply?: DmReply | null;
   mentions?: string[];
   reactions?: Reaction[];
@@ -70,6 +72,7 @@ export interface DmReply {
   avatar?: number | null;
   images?: number;
   video?: boolean;
+  audio?: boolean;
   gone?: boolean;
 }
 
@@ -533,6 +536,33 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   return answerOf<T>(method, path, res, options);
 }
 
+function uploadWithProgress<T>(path: string, body: Blob, onProgress: ((sent: number) => void) | undefined, tooBig: string, failed: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    if (body.type) xhr.setRequestHeader('content-type', body.type);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data: unknown = null;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = null;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data as T);
+        return;
+      }
+      const said = data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : '';
+      reject(new ApiError(said || (xhr.status === 413 ? tooBig : `http ${xhr.status}`), xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError(failed, 0));
+    xhr.send(body);
+  });
+}
+
 async function answerOf<T>(method: string, path: string, response: Promise<Response>, options: RequestOptions = {}): Promise<T> {
   const res = await response;
   const text = await res.text();
@@ -749,41 +779,21 @@ export const api = {
     request<Mention[]>('GET', `/api/mentions?ctx=${encodeURIComponent(ctx)}&q=${encodeURIComponent(q)}&limit=${limit}`, undefined, { signal }),
   uploadChatImage: (picture: Blob) => request<{ id: string }>('POST', '/api/chat-images', picture),
   uploadChatVideo: (video: Blob, onProgress?: (sent: number) => void) =>
-    new Promise<{ id: string; poster: string; duration_ms: number }>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/chat-videos');
-      if (video.type) xhr.setRequestHeader('content-type', video.type);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && e.total > 0) onProgress?.(e.loaded / e.total);
-      };
-      xhr.onload = () => {
-        let data: unknown = null;
-        try {
-          data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
-        } catch {
-          data = null;
-        }
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(data as { id: string; poster: string; duration_ms: number });
-          return;
-        }
-        const said = data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : '';
-        reject(new ApiError(said || (xhr.status === 413 ? 'video too big. 10 mb at most' : `http ${xhr.status}`), xhr.status));
-      };
-      xhr.onerror = () => reject(new ApiError('could not send the video', 0));
-      xhr.send(video);
-    }),
+    uploadWithProgress<{ id: string; poster: string; duration_ms: number }>('/api/chat-videos', video, onProgress, 'video too big. 10 mb at most', 'could not send the video'),
+  uploadChatAudio: (audio: Blob, onProgress?: (sent: number) => void) =>
+    uploadWithProgress<{ id: string; duration_ms: number }>('/api/chat-audio', audio, onProgress, 'voice message too big. 2 mb at most', 'could not send the voice message'),
   people: () => request<Person[]>('GET', '/api/people'),
   recent: () => request<Recent[]>('GET', '/api/recent'),
   dms: () => request<DmThread[]>('GET', '/api/dms'),
   dmThread: (name: string, before?: number) =>
     request<{ name: string; friends: boolean; lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}${before === undefined ? '' : `?before=${before}`}`),
-  sendDm: (name: string, text: string, images: string[] = [], reply: number | null = null, video: string | null = null) =>
+  sendDm: (name: string, text: string, images: string[] = [], reply: number | null = null, video: string | null = null, audio: string | null = null) =>
     request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, {
       text,
       images,
       ...(reply === null ? {} : { reply }),
-      ...(video === null ? {} : { video })
+      ...(video === null ? {} : { video }),
+      ...(audio === null ? {} : { audio })
     }),
   reactDm: (name: string, id: number, emoji: string, on: boolean) =>
     request<{ id: number; reactions: unknown }>('PUT', `/api/dm/${encodeURIComponent(name)}/react`, { id, emoji, on }),

@@ -1,6 +1,7 @@
 import { atom, type Atom, type PrimitiveAtom } from 'jotai';
 
 import { api, messageOf } from '@/infra/api';
+import { type ChatAudio, MAX_AUDIO_BYTES } from '@/infra/chat-audio';
 import { type ChatVideo, readVideo } from '@/infra/chat-video';
 import { compressChatImage } from '@/infra/picture';
 import { store } from '@/infra/store';
@@ -39,9 +40,21 @@ export interface PendingClip {
   progress: number;
 }
 
+export interface PendingVoice {
+  key: string;
+  blob: Blob;
+  durationMs: number;
+  previewUrl: string;
+  status: AttachStatus;
+  audio?: ChatAudio;
+  error?: string;
+  progress: number;
+}
+
 export interface Attached {
   pictures: PendingPicture[];
   video: PendingClip | null;
+  voice?: PendingVoice | null;
 }
 
 export async function uploadVideo(file: File, onProgress: (sent: number) => void): Promise<ChatVideo> {
@@ -50,14 +63,23 @@ export async function uploadVideo(file: File, onProgress: (sent: number) => void
   return { id: saved.id, poster: saved.poster };
 }
 
-export function releaseAttached({ pictures, video }: Attached) {
+export async function uploadVoice(blob: Blob, onProgress: (sent: number) => void): Promise<ChatAudio> {
+  if (blob.size === 0) throw new Error('nothing was recorded');
+  if (blob.size > MAX_AUDIO_BYTES) throw new Error('voice message too big. 2 mb at most');
+  const saved = await api.uploadChatAudio(blob, onProgress);
+  return { id: saved.id, duration_ms: saved.duration_ms };
+}
+
+export function releaseAttached({ pictures, video, voice }: Attached) {
   for (const picture of pictures) URL.revokeObjectURL(picture.previewUrl);
   if (video) URL.revokeObjectURL(video.previewUrl);
+  if (voice) URL.revokeObjectURL(voice.previewUrl);
 }
 
 export class Attachments {
   readonly picturesAtom: PrimitiveAtom<PendingPicture[]> = atom<PendingPicture[]>([]);
   readonly videoAtom: PrimitiveAtom<PendingClip | null> = atom<PendingClip | null>(null);
+  readonly voiceAtom: PrimitiveAtom<PendingVoice | null> = atom<PendingVoice | null>(null);
   readonly readyIdsAtom: Atom<string[]>;
   readonly anyAtom: Atom<boolean>;
 
@@ -68,8 +90,9 @@ export class Attachments {
     this.notice = notice;
     const pictures = this.picturesAtom;
     const video = this.videoAtom;
+    const voice = this.voiceAtom;
     this.readyIdsAtom = atom((get) => idsOf(get(pictures)));
-    this.anyAtom = atom((get) => get(pictures).length > 0 || get(video) !== null);
+    this.anyAtom = atom((get) => get(pictures).length > 0 || get(video) !== null || get(voice) !== null);
   }
 
   pictures(): PendingPicture[] {
@@ -80,8 +103,12 @@ export class Attachments {
     return store.get(this.videoAtom);
   }
 
+  voice(): PendingVoice | null {
+    return store.get(this.voiceAtom);
+  }
+
   any(): boolean {
-    return this.pictures().length > 0 || this.video() !== null;
+    return this.pictures().length > 0 || this.video() !== null || this.voice() !== null;
   }
 
   addPictures(files: File[]) {
@@ -123,9 +150,31 @@ export class Attachments {
     store.set(this.videoAtom, null);
   }
 
+  addVoice(blob: Blob, durationMs: number) {
+    this.removeVoice();
+    const voice: PendingVoice = { key: crypto.randomUUID(), blob, durationMs, previewUrl: URL.createObjectURL(blob), status: 'uploading', progress: 0 };
+    store.set(this.voiceAtom, voice);
+    this.startVoice(voice.key);
+  }
+
+  retryVoice() {
+    const voice = this.voice();
+    if (!voice || voice.status !== 'error') return;
+    this.patchVoice(voice.key, { status: 'uploading', error: undefined, progress: 0 });
+    this.startVoice(voice.key);
+  }
+
+  removeVoice() {
+    const voice = this.voice();
+    if (!voice) return;
+    URL.revokeObjectURL(voice.previewUrl);
+    this.uploads.delete(voice.key);
+    store.set(this.voiceAtom, null);
+  }
+
   async settle() {
     for (;;) {
-      const waits = [...this.pictures().map((p) => p.key), this.video()?.key]
+      const waits = [...this.pictures().map((p) => p.key), this.video()?.key, this.voice()?.key]
         .map((key) => (key ? this.uploads.get(key) : undefined))
         .filter((p): p is Promise<void> => p !== undefined);
       if (waits.length === 0) return;
@@ -138,13 +187,16 @@ export class Attachments {
     if (bad) return bad.error ?? 'that picture did not go up';
     const clip = this.video();
     if (clip?.status === 'error') return clip.error ?? 'that video did not go up';
+    const voice = this.voice();
+    if (voice?.status === 'error') return voice.error ?? 'that voice message did not go up';
     return null;
   }
 
   take(): Attached {
-    const taken = { pictures: this.pictures(), video: this.video() };
+    const taken = { pictures: this.pictures(), video: this.video(), voice: this.voice() };
     store.set(this.picturesAtom, []);
     store.set(this.videoAtom, null);
+    store.set(this.voiceAtom, null);
     return taken;
   }
 
@@ -153,6 +205,7 @@ export class Attachments {
     const left = this.pictures().filter((p) => !keys.has(p.key));
     if (left.length !== this.pictures().length) store.set(this.picturesAtom, left);
     if (taken.video && this.video()?.key === taken.video.key) store.set(this.videoAtom, null);
+    if (taken.voice && this.voice()?.key === taken.voice.key) store.set(this.voiceAtom, null);
     releaseAttached(taken);
   }
 
@@ -162,6 +215,8 @@ export class Attachments {
     else for (const picture of lost.pictures) URL.revokeObjectURL(picture.previewUrl);
     if (lost.video && !this.video()) store.set(this.videoAtom, lost.video);
     else if (lost.video) URL.revokeObjectURL(lost.video.previewUrl);
+    if (lost.voice && !this.voice()) store.set(this.voiceAtom, lost.voice);
+    else if (lost.voice) URL.revokeObjectURL(lost.voice.previewUrl);
   }
 
   markPictures(error: string) {
@@ -204,6 +259,26 @@ export class Attachments {
         if (this.uploads.get(key) === run) this.uploads.delete(key);
       });
     this.uploads.set(key, run);
+  }
+
+  private startVoice(key: string) {
+    const voice = this.voice();
+    if (!voice || voice.key !== key) return;
+    const run: Promise<void> = uploadVoice(voice.blob, (progress) => this.patchVoice(key, { progress }))
+      .then(
+        (audio) => this.patchVoice(key, { status: 'ready', audio, progress: 1, error: undefined }),
+        (err: unknown) => this.patchVoice(key, { status: 'error', error: messageOf(err) })
+      )
+      .finally(() => {
+        if (this.uploads.get(key) === run) this.uploads.delete(key);
+      });
+    this.uploads.set(key, run);
+  }
+
+  private patchVoice(key: string, patch: Partial<PendingVoice>) {
+    const voice = this.voice();
+    if (!voice || voice.key !== key) return;
+    store.set(this.voiceAtom, { ...voice, ...patch });
   }
 
   private patchPicture(key: string, patch: Partial<PendingPicture>) {
