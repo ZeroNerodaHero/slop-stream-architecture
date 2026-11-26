@@ -169,7 +169,7 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(
     id: i64,
     text: &str,
     images: &[String],
-    video: Option<&crate::chat::Video>,
+    (video, audio): (Option<&crate::chat::Video>, Option<&crate::chat::Audio>),
     at_ms: i64,
     from_id: &str,
     reply: Option<&serde_json::Value>,
@@ -190,6 +190,9 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(
     }
     if let Some(video) = video {
         fields.push(("video", video.stored()));
+    }
+    if let Some(audio) = audio {
+        fields.push(("audio", audio.stored()));
     }
     if let Some(reply) = reply {
         fields.push(("reply", reply.to_string()));

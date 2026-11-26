@@ -251,6 +251,8 @@ pub(crate) struct Line {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) video: Option<Video>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) audio: Option<Audio>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reply: Option<Reply>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) mentions: Vec<String>,
@@ -284,6 +286,25 @@ impl Video {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct Audio {
+    pub(crate) id: String,
+    pub(crate) duration_ms: u64,
+}
+
+impl Audio {
+    pub(crate) fn parse(raw: Option<&str>) -> Option<Audio> {
+        let (id, ms) = raw?.split_once(',')?;
+        let id = Uuid::parse_str(id.trim()).ok()?;
+        let duration_ms = ms.trim().parse::<u64>().ok()?;
+        Some(Audio { id: id.to_string(), duration_ms })
+    }
+
+    pub(crate) fn stored(&self) -> String {
+        format!("{},{}", self.id, self.duration_ms)
+    }
+}
+
 const REPLY_QUOTE_CHARS: usize = 120;
 pub(crate) const NO_SUCH_LINE: &str = "no such line";
 
@@ -302,6 +323,8 @@ pub(crate) struct Reply {
     pub(crate) images: usize,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) video: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) audio: bool,
 }
 
 impl Reply {
@@ -315,6 +338,7 @@ impl Reply {
             avatar: line.avatar,
             images: line.images.len(),
             video: line.video.is_some(),
+            audio: line.audio.is_some(),
         }
     }
 }
@@ -331,6 +355,8 @@ enum In {
         images: Vec<String>,
         #[serde(default)]
         video: Option<String>,
+        #[serde(default)]
+        audio: Option<String>,
         #[serde(default)]
         channel: Option<String>,
         #[serde(default)]
@@ -826,12 +852,12 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => continue,
                 };
-                let (text, image, images, video, reply) = match serde_json::from_str::<In>(&text) {
+                let (text, image, images, video, audio, reply) = match serde_json::from_str::<In>(&text) {
                     Ok(In::Say { .. }) if reader => {
                         let _ = send(&mut socket, &Out::Error { error: READING_ONLY }).await;
                         continue;
                     }
-                    Ok(In::Say { text, image, images, video, reply, .. }) => (text, image, images, video, reply),
+                    Ok(In::Say { text, image, images, video, audio, reply, .. }) => (text, image, images, video, audio, reply),
                     Ok(In::React { id, .. }) if reader => {
                         let _ = send(&mut socket, &Out::ReactRefused { error: reactions::LOG_IN, react: &id, wait: None }).await;
                         continue;
@@ -845,7 +871,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     }
                     _ => continue,
                 };
-                let (text, images, video) = match parse_say(text, image, images, video) {
+                let (text, images, video, audio) = match parse_say(text, image, images, video, audio) {
                     Ok(Some(say)) => say,
                     Ok(None) => continue,
                     Err(why) => {
@@ -879,7 +905,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     }
                 }
                 let Some(w) = who.as_ref() else { continue };
-                if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images, video.as_deref(), reply.as_deref()).await {
+                if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images, (video.as_deref(), audio.as_deref()), reply.as_deref()).await {
                     let _ = send(&mut socket, &why.frame()).await;
                     continue;
                 }
@@ -1012,19 +1038,55 @@ impl Limiter {
 }
 
 #[allow(clippy::type_complexity)]
-pub(crate) fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Option<String>) -> Result<Option<(String, Vec<String>, Option<String>)>, &'static str> {
+pub(crate) fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Option<String>, audio: Option<String>) -> Result<Option<(String, Vec<String>, Option<String>, Option<String>)>, &'static str> {
     let text = clean_text(&text);
     let images = picture_ids(image, images)?;
     let video = video_id(video)?;
+    let audio = audio_id(audio)?;
     let chars = crate::emotes::shown_chars(&text);
-    if chars == 0 && images.is_empty() && video.is_none() {
+    if chars == 0 && images.is_empty() && video.is_none() && audio.is_none() {
         return Ok(None);
     }
     if chars > MAX_TEXT_CHARS || text.chars().count() > crate::emotes::max_raw_chars(MAX_TEXT_CHARS) {
         return Err("too long");
     }
-    Ok(Some((text, images, video)))
+    Ok(Some((text, images, video, audio)))
 }
+
+pub(crate) fn audio_id(audio: Option<String>) -> Result<Option<String>, &'static str> {
+    match audio.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(raw) => Uuid::parse_str(raw).map(|id| Some(id.to_string())).map_err(|_| BAD_AUDIO),
+    }
+}
+
+pub(crate) async fn audio_of(db: &sqlx::PgPool, id: Option<&str>, who: Option<Uuid>) -> Result<Option<Audio>, AudioRefusal> {
+    let Some(id) = id else { return Ok(None) };
+    match crate::media::check(db, crate::media::Kind::Audio, id, who).await? {
+        Ok(()) => {}
+        Err(crate::media::Refusal::Missing) => return Err(AudioRefusal::Words(NO_SUCH_AUDIO)),
+        Err(crate::media::Refusal::NotYours) => return Err(AudioRefusal::Words(NOT_YOUR_AUDIO)),
+    }
+    match crate::chat_audio::duration_of(db, id).await? {
+        Some(duration_ms) => Ok(Some(Audio { id: id.to_owned(), duration_ms })),
+        None => Err(AudioRefusal::Words(NO_SUCH_AUDIO)),
+    }
+}
+
+pub(crate) enum AudioRefusal {
+    Words(&'static str),
+    Db(sqlx::Error),
+}
+
+impl From<sqlx::Error> for AudioRefusal {
+    fn from(e: sqlx::Error) -> Self {
+        AudioRefusal::Db(e)
+    }
+}
+
+pub(crate) const BAD_AUDIO: &str = "bad voice message";
+pub(crate) const NO_SUCH_AUDIO: &str = "no such voice message";
+pub(crate) const NOT_YOUR_AUDIO: &str = "not your voice message";
 
 pub(crate) fn video_id(video: Option<String>) -> Result<Option<String>, &'static str> {
     match video.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
@@ -1060,12 +1122,15 @@ fn stream_video_refusal(server: Option<&str>, video: Option<&str>, on: bool) -> 
     (server.is_none() && video.is_some() && !on).then_some(NO_STREAM_VIDEO)
 }
 
-pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, images: &[String], video: Option<&Video>) -> Result<(), sqlx::Error> {
+pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, images: &[String], video: Option<&Video>, audio: Option<&Audio>) -> Result<(), sqlx::Error> {
     use crate::media::{mark_posted, Kind};
     let mut pictures: Vec<&str> = images.iter().map(String::as_str).collect();
     if let Some(video) = video {
         pictures.push(&video.poster);
         mark_posted(db, Kind::Video, &[&video.id], place).await?;
+    }
+    if let Some(audio) = audio {
+        mark_posted(db, Kind::Audio, &[&audio.id], place).await?;
     }
     mark_posted(db, Kind::Image, &pictures, place).await
 }
@@ -1104,7 +1169,7 @@ const CHANNEL_COOLDOWN: &str = "channel cooldown";
 type Standing = (bool, bool, Option<i64>, i32, i32);
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<&str>) -> Result<Option<String>, Refused> {
+pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], (video, audio): (Option<&str>, Option<&str>), reply: Option<&str>) -> Result<Option<String>, Refused> {
     let mut cooldowns: Vec<(String, i64, &'static str)> = Vec::new();
     if let Some(server) = server {
         let Some(id) = w.user_id else { return Err("join the server first".into()) };
@@ -1155,6 +1220,14 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
     let uploader = w.user_id.filter(|_| w.verified);
     pictures_exist(&s.db, room, images, uploader).await?;
     let video = video_of(&s.db, room, video, uploader).await?;
+    let audio = match audio_of(&s.db, audio, uploader).await {
+        Ok(audio) => audio,
+        Err(AudioRefusal::Words(words)) => return Err(words.into()),
+        Err(AudioRefusal::Db(e)) => {
+            log::warn!("{room}: audio: {e}");
+            return Err("chat is busy, try again".into());
+        }
+    };
     pictures_allowed(&s.db, room, server, images, video.as_ref()).await?;
     let settled = crate::emotes::settle(&s.db, w.user_id.filter(|_| w.verified), text).await;
     let text = settled.as_str();
@@ -1189,8 +1262,8 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
             return Err("chat is down, try again".into());
         }
     }
-    if !images.is_empty() || video.is_some() {
-        if let Err(e) = mark_posted(&s.db, &crate::media::Place::room(room, server), images, video.as_ref()).await {
+    if !images.is_empty() || video.is_some() || audio.is_some() {
+        if let Err(e) = mark_posted(&s.db, &crate::media::Place::room(room, server), images, video.as_ref(), audio.as_ref()).await {
             log::warn!("{room}: posted: {e}");
             return Err("chat is busy, try again".into());
         }
@@ -1221,6 +1294,10 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
     if let Some(vid) = &vid {
         fields.push(("vid", vid.as_str()));
     }
+    let aud = audio.as_ref().map(Audio::stored);
+    if let Some(aud) = &aud {
+        fields.push(("aud", aud.as_str()));
+    }
     let quoted = reply.as_ref().and_then(|r| serde_json::to_string(r).ok());
     if let Some(quoted) = &quoted {
         fields.push(("r", quoted.as_str()));
@@ -1246,7 +1323,7 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
     let named = if w.verified { mentions.clone() } else { Vec::new() };
     if s.persist {
         if let Some(id) = &id {
-            remember(s, room, id, w, text, images, vid.as_deref(), reply, mentions);
+            remember(s, room, id, w, text, images, (vid.as_deref(), aud.as_deref()), reply, mentions);
         }
     }
     if let Some(actor) = w.user_id {
@@ -1631,12 +1708,12 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
                     }
-                    Ok(In::Say { text, image, images, video, channel, reply }) => {
+                    Ok(In::Say { text, image, images, video, audio, channel, reply }) => {
                         let Some(channel) = channel.map(|c| c.trim().to_lowercase()).filter(|c| joined.iter().any(|j| j.as_ref() == c)) else {
                             let _ = send(&mut socket, &Out::Error { error: "say which channel" }).await;
                             continue;
                         };
-                        let (text, images, video) = match parse_say(text, image, images, video) {
+                        let (text, images, video, audio) = match parse_say(text, image, images, video, audio) {
                             Ok(Some(say)) => say,
                             Ok(None) => continue,
                             Err(why) => {
@@ -1671,7 +1748,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                         let Some(w) = who.as_ref() else { continue };
                         let room = format!("{server}/{channel}");
-                        if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images, video.as_deref(), reply.as_deref()).await {
+                        if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images, (video.as_deref(), audio.as_deref()), reply.as_deref()).await {
                             let _ = send(&mut socket, &why.frame()).await;
                             continue;
                         }
@@ -1686,7 +1763,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
 }
 
 #[allow(clippy::too_many_arguments)]
-fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<Reply>, mentions: Vec<String>) {
+fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], (video, audio): (Option<&str>, Option<&str>), reply: Option<Reply>, mentions: Vec<String>) {
     let db = s.db.clone();
     let room = room.to_owned();
     let id = id.to_owned();
@@ -1695,13 +1772,14 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
     let text = text.to_owned();
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
     let video = video.map(str::to_owned);
+    let audio = audio.map(str::to_owned);
     let streamer = w.streamer;
     let verified = w.verified;
     let groups = w.groups.clone();
     tokio::spawn(async move {
         let inserted = tokio::time::timeout(
             Duration::from_secs(2),
-            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), video.as_deref(), streamer, verified, &groups, reply.as_ref(), &mentions),
+            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), (video.as_deref(), audio.as_deref()), streamer, verified, &groups, reply.as_ref(), &mentions),
         )
         .await;
         match inserted {
@@ -1894,6 +1972,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     };
     let image = images.first().cloned();
     let video = Video::parse(entry.get::<String>("vid").as_deref());
+    let audio = Audio::parse(entry.get::<String>("aud").as_deref());
     let reply: Option<Reply> = entry.get::<String>("r").and_then(|r| serde_json::from_str(&r).ok());
     let mentions = crate::mentions::from_field(entry.get::<String>("m"));
     Some(Line {
@@ -1910,6 +1989,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         image,
         images,
         video,
+        audio,
         reply,
         mentions,
         reactions: Vec::new(),
@@ -2011,6 +2091,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             video: None,
+            audio: None,
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
@@ -2044,6 +2125,7 @@ mod tests {
             image: Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()),
             images: vec!["6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()],
             video: None,
+            audio: None,
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
@@ -2208,15 +2290,54 @@ mod tests {
 
     #[test]
     fn a_say_is_cleaned_before_it_costs() {
-        assert_eq!(parse_say("  hi  ".into(), None, Vec::new(), None), Ok(Some(("hi".into(), Vec::new(), None))));
-        assert_eq!(parse_say("   ".into(), None, Vec::new(), None), Ok(None));
-        assert_eq!(parse_say("   ".into(), None, Vec::new(), Some(" ".into())), Ok(None), "an empty video is none");
-        assert_eq!(parse_say("x".repeat(MAX_TEXT_CHARS + 1), None, Vec::new(), None), Err("too long"));
-        assert_eq!(parse_say(String::new(), Some("not-an-id".into()), Vec::new(), None), Err("bad picture"));
-        assert_eq!(parse_say(String::new(), None, Vec::new(), Some("not-an-id".into())), Err("bad video"));
+        assert_eq!(parse_say("  hi  ".into(), None, Vec::new(), None, None), Ok(Some(("hi".into(), Vec::new(), None, None))));
+        assert_eq!(parse_say("   ".into(), None, Vec::new(), None, None), Ok(None));
+        assert_eq!(parse_say("   ".into(), None, Vec::new(), Some(" ".into()), None), Ok(None), "an empty video is none");
+        assert_eq!(parse_say("x".repeat(MAX_TEXT_CHARS + 1), None, Vec::new(), None, None), Err("too long"));
+        assert_eq!(parse_say(String::new(), Some("not-an-id".into()), Vec::new(), None, None), Err("bad picture"));
+        assert_eq!(parse_say(String::new(), None, Vec::new(), Some("not-an-id".into()), None), Err("bad video"));
         let id = "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e";
-        assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new(), None), Ok(Some((String::new(), vec![id.into()], None))));
-        assert_eq!(parse_say(String::new(), None, Vec::new(), Some(id.to_uppercase())), Ok(Some((String::new(), Vec::new(), Some(id.into())))));
+        assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new(), None, None), Ok(Some((String::new(), vec![id.into()], None, None))));
+        assert_eq!(parse_say(String::new(), None, Vec::new(), Some(id.to_uppercase()), None), Ok(Some((String::new(), Vec::new(), Some(id.into()), None))));
+    }
+
+    #[test]
+    fn a_voice_message_alone_is_a_line() {
+        let id = "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e";
+        assert_eq!(parse_say(String::new(), None, Vec::new(), None, Some(id.to_uppercase())), Ok(Some((String::new(), Vec::new(), None, Some(id.into())))));
+        assert_eq!(parse_say("  ".into(), None, Vec::new(), None, Some(" ".into())), Ok(None), "an empty voice message is none");
+        assert_eq!(parse_say(String::new(), None, Vec::new(), None, Some("nope".into())), Err(BAD_AUDIO));
+        let frame: In = serde_json::from_str(&format!(r#"{{"type":"say","text":"","audio":"{id}"}}"#)).unwrap();
+        assert!(matches!(frame, In::Say { audio: Some(ref a), .. } if a == id));
+        let frame: In = serde_json::from_str(r#"{"type":"say","text":"hi"}"#).unwrap();
+        assert!(matches!(frame, In::Say { audio: None, .. }), "an older page's say has no audio");
+    }
+
+    #[test]
+    fn a_voice_message_is_kept_as_its_id_and_its_length() {
+        let a = Audio { id: "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into(), duration_ms: 4_250 };
+        assert_eq!(a.stored(), "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e,4250");
+        assert_eq!(Audio::parse(Some(&a.stored())), Some(a.clone()));
+        assert_eq!(Audio::parse(Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e")), None, "no length, no voice message");
+        assert_eq!(Audio::parse(Some("x,1")), None);
+        assert_eq!(Audio::parse(Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e,-1")), None);
+        assert_eq!(Audio::parse(None), None);
+        let json = serde_json::to_value(&a).unwrap();
+        assert_eq!(json, serde_json::json!({ "id": "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e", "duration_ms": 4250 }));
+        let line: Line = serde_json::from_value(serde_json::json!({
+            "id": "1-0", "from": "al", "text": "", "streamer": false, "verified": true, "groups": [],
+            "avatar": null, "oauth_verified": false, "at": 0, "audio": json
+        }))
+        .unwrap();
+        assert_eq!(line.audio.as_ref(), Some(&a));
+        assert!(Reply::of(&line).audio, "a quote says it answers a voice message");
+        let kept: Line = serde_json::from_value(serde_json::json!({
+            "id": "1-0", "from": "al", "text": "hi", "streamer": false, "verified": true, "groups": [],
+            "avatar": null, "oauth_verified": false, "at": 0
+        }))
+        .unwrap();
+        assert_eq!(kept.audio, None, "a line kept before voice messages reads as none");
+        assert!(!serde_json::to_string(&kept).unwrap().contains("audio"));
     }
 
     #[test]
@@ -2553,6 +2674,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             video: None,
+            audio: None,
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
@@ -2589,6 +2711,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             video: None,
+            audio: None,
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
@@ -2660,6 +2783,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             video: None,
+            audio: None,
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),

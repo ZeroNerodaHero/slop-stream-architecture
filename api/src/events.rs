@@ -200,6 +200,8 @@ enum Out {
         #[serde(skip_serializing_if = "Option::is_none")]
         video: Option<crate::chat::Video>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        audio: Option<crate::chat::Audio>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         reply: Option<Value>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         mentions: Vec<String>,
@@ -802,10 +804,11 @@ impl Gateway {
                 let from_id: Option<String> = entry.get("from_id").filter(|id: &String| !id.is_empty());
                 let images = crate::chat::split_pictures(entry.get("images"));
                 let video = crate::chat::Video::parse(entry.get::<String>("video").as_deref());
+                let audio = crate::chat::Audio::parse(entry.get::<String>("audio").as_deref());
                 let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
                 let mentions = crate::mentions::from_field(entry.get("mentions"));
                 let call: Option<Value> = entry.get::<String>("call").and_then(|c| serde_json::from_str(&c).ok());
-                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, reply, mentions, call }).await;
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, audio, reply, mentions, call }).await;
             }
             "dm_react" => {
                 let (Some(from), Some(id), Some(emoji)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("emoji")) else { return };

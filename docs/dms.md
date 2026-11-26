@@ -42,6 +42,8 @@ sequenceDiagram
 
 **a video too, the room chat's** (`chat.md` "videos", a test version): one per line, an mp4 or webm of 10 mb and 30 seconds at most, put up by `POST /api/chat-videos` with its poster (a chat picture the page drew from a frame), and named on the line as `video`. the row keeps `<video>,<poster>` in `video` (migration `0012-chat-videos`); every line the api hands out (a page, a hit, the 201, the `dm` frame, the list's `last`) carries `video: { id, poster }` when it has one, a quote `video: true`. 400 `bad video`, `no such video`. `has:video` finds a thread's uploaded ones as well as its links to one.
 
+**a voice message too** (`chat.md` "voice messages"): one per line, recorded in the window (the + menu's `voice message`), put up by `POST /api/chat-audio` and named on the line as `audio`. the row keeps `<id>,<ms>` in `audio` (migration `0019-chat-audio`); every line the api hands out carries `audio: { id, duration_ms }` when it has one, a quote `audio: true`. 400 `bad voice message`, `no such voice message`, `not your voice message`.
+
 ## the table
 
 ```sql
@@ -130,7 +132,7 @@ two friends can talk from their thread. a call is the group voice stack with a p
 | POST | `/api/dm/:name/call/decline` | `{ id }` → 204. the callee, while ringing |
 | POST | `/api/dm/:name/call/end` | `{ id }` → 204. either of the two, ringing or on. nothing on is 204 too |
 
-**the end** (`dm_calls::finish`): the hash is taken once, one line goes into the thread from the caller (`missed call`, or `call ended (m:ss)`, `h:mm:ss` past the hour) as a real `dms` row with `call` (jsonb, migration `0019-dm-calls`: `{ outcome: missed|declined|ended, secs }`), published as a `dm` frame with `call`, then the `call` frame, then both are dropped from the room. what ends a call: either side's end or decline; no answer in 30s (a timer, and the voice sweep for a timer lost to a restart); the voice server saying one of them left the room (`/api/voice/left`), once they are still out 8s later (a reconnect is back in time); the sweep finding one of them out of an answered call twice, 15s apart (a crash, a lost beat).
+**the end** (`dm_calls::finish`): the hash is taken once, one line goes into the thread from the caller (`missed call`, or `call ended (m:ss)`, `h:mm:ss` past the hour) as a real `dms` row with `call` (jsonb, migration `0020-dm-calls`: `{ outcome: missed|declined|ended, secs }`), published as a `dm` frame with `call`, then the `call` frame, then both are dropped from the room. what ends a call: either side's end or decline; no answer in 30s (a timer, and the voice sweep for a timer lost to a restart); the voice server saying one of them left the room (`/api/voice/left`), once they are still out 8s later (a reconnect is back in time); the sweep finding one of them out of an answered call twice, 15s apart (a crash, a lost beat).
 
 | fact on `events` | the gateway | the frame |
 |---|---|---|

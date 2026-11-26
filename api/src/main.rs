@@ -5,6 +5,7 @@ mod architecture;
 mod auth;
 mod cf_purge;
 mod chat;
+mod chat_audio;
 mod chat_images;
 mod chat_videos;
 mod debug;
@@ -836,6 +837,7 @@ fn router(state: AppState) -> Router {
         .merge(mentions::routes())
         .merge(chat_images::routes())
         .merge(chat_videos::routes())
+        .merge(chat_audio::routes())
         .merge(emotes::routes())
         .merge(models::routes())
         .merge(notify::routes())

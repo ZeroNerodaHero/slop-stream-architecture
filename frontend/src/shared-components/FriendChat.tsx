@@ -60,7 +60,9 @@ import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingVideo, splitFiles } from '@/shared-components/ChatAttach';
 import { ChatLineShape, clock, LineActions, placeOf, quoteWords, ReplyQuote, stamp } from '@/shared-components/ChatLine';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
+import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
+import { AttachMenu, PendingVoiceChip, VoiceBar } from '@/shared-components/ChatVoice';
 import { ChatImages } from '@/shared-components/ChatPanel';
 import { SearchField, SearchFilters, SearchHit, SearchResults, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
@@ -78,6 +80,7 @@ import { ProfileLink, profilePath, useShowProfile } from '@/shared-components/Pr
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { IN_PILL, INPUT, INPUT_BUTTON, PILL } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useVoiceRecorder } from '@/shared-components/useVoiceRecorder';
 import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 
@@ -292,7 +295,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
             {friends.map((f) => {
               const tab = dms.find((d) => d.name === f.name);
               const last = threads[f.name]?.lines.at(-1) ?? tab?.last;
-              const said = last && (plainEmotes(last.text) || (last.images.length > 0 ? 'a picture' : last.video ? 'a video' : ''));
+              const said = last && (plainEmotes(last.text) || (last.images.length > 0 ? 'a picture' : last.video ? 'a video' : last.audio ? 'a voice message' : ''));
               return (
                 <li key={f.name} className="border-b border-primaryStroke">
                   <button
@@ -548,6 +551,7 @@ const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmV
         <>
           <ChatImages ids={line.images} />
           {line.video && <ChatVideoPlayer video={line.video} />}
+          {line.audio && <ChatAudioPlayer audio={line.audio} />}
           <ChatEmbeds text={line.text} />
         </>
       }
@@ -563,6 +567,7 @@ const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmV
               avatar: line.reply.avatar ?? null,
               images: line.reply.images ?? 0,
               video: line.reply.video,
+              audio: line.reply.audio,
               gone: line.reply.gone
             }}
             onJump={() => void onJump(line.reply!.id)}
@@ -646,6 +651,9 @@ export function FriendChat() {
   const attach = dmAttach(name ?? '');
   const pictures = useAtomValue(attach.picturesAtom);
   const video = useAtomValue(attach.videoAtom);
+  const voice = useAtomValue(attach.voiceAtom);
+  const recorder = useVoiceRecorder(showDmNotice);
+  const recording = recorder.phase !== 'idle';
   const sending = sendingFor !== null && sendingFor === name;
   const replyTo = (name && replies[name]) || null;
   const latest = useRef({ drafts, replies });
@@ -834,9 +842,9 @@ export function FriendChat() {
     }
     const text = latest.current.drafts[forThread] ?? '';
     const reply = latest.current.replies[forThread] ?? null;
-    const taken = { pictures: into.pictures(), video: into.video() };
+    const taken = { pictures: into.pictures(), video: into.video(), voice: into.voice() };
     sentJump.current = forThread;
-    const failed = await sendDm(forThread, text, idsOf(taken.pictures), reply?.id ?? null, taken.video?.video?.id ?? null);
+    const failed = await sendDm(forThread, text, idsOf(taken.pictures), reply?.id ?? null, taken.video?.video?.id ?? null, taken.voice?.audio?.id ?? null);
     setSendingFor(null);
     if (failed) {
       sentJump.current = null;
@@ -1078,6 +1086,7 @@ export function FriendChat() {
                       text={line.text}
                       images={line.images.length}
                       video={!!line.video}
+                      audio={!!line.audio}
                       onClick={() => {
                         clearDmResults();
                         void openDmLine(name, line.id);
@@ -1098,7 +1107,7 @@ export function FriendChat() {
                 <div id="friend-chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
                   <span className="min-w-0 flex-1 truncate text-textSecondary">
                     replying to <span className="font-semibold text-textPrimary">{replyTo.from === me ? 'yourself' : replyTo.from}</span>
-                    <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video })}</span>
+                    <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video, audio: !!replyTo.audio })}</span>
                   </span>
                   <Tooltip content="cancel reply">
                     <button
@@ -1116,6 +1125,11 @@ export function FriendChat() {
                   </Tooltip>
                 </div>
               )}
+              {voice && (
+                <div className="mb-2 flex">
+                  <PendingVoiceChip voice={voice} sending={sending} idPrefix="friend-chat" onRemove={() => attach.removeVoice()} onRetry={() => attach.retryVoice()} />
+                </div>
+              )}
               {(pictures.length > 0 || video) && (
                 <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
                   {video && <PendingVideo clip={video} sending={sending} idPrefix="friend-chat" size="h-16 w-16" onRemove={() => attach.removeVideo()} />}
@@ -1128,21 +1142,19 @@ export function FriendChat() {
                 <label htmlFor="friend-chat-text" className="sr-only">
                   message {name}
                 </label>
-                <button
-                  type="button"
-                  id="friend-chat-picture"
-                  aria-label="attach"
-                  aria-disabled={pictures.length >= MAX_CHAT_IMAGES || undefined}
-                  className={cn(
-                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-100 focus-visible:border-primaryBlue focus-visible:outline-none bubble:focus-visible:border-primaryBlue',
-                    IN_PILL,
-                    mobile && 'h-11 w-11',
-                    pictures.length >= MAX_CHAT_IMAGES ? 'cursor-default opacity-40' : 'hover:bg-backgroundTertiary hover:text-textPrimary bubble:hover:bg-backgroundTertiary'
-                  )}
-                  onClick={() => (pictures.length >= MAX_CHAT_IMAGES ? showDmNotice(`${MAX_CHAT_IMAGES} pictures at most`) : fileRef.current?.click())}
-                >
-                  <RiAddLine size={18} aria-hidden />
-                </button>
+                {!recording && (
+                  <AttachMenu
+                    id="friend-chat-picture"
+                    iconSize={18}
+                    className={cn(
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary transition-colors duration-100 hover:bg-backgroundTertiary hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none bubble:hover:bg-backgroundTertiary bubble:focus-visible:border-primaryBlue',
+                      IN_PILL,
+                      mobile && 'h-11 w-11'
+                    )}
+                    onImage={() => (pictures.length >= MAX_CHAT_IMAGES ? showDmNotice(`${MAX_CHAT_IMAGES} pictures at most`) : fileRef.current?.click())}
+                    onVoice={recorder.start}
+                  />
+                )}
                 <input
                   ref={fileRef}
                   id="friend-chat-picture-file"
@@ -1152,52 +1164,67 @@ export function FriendChat() {
                   className="hidden"
                   onChange={(e) => pickFiles(e.target.files)}
                 />
-                {emotes.list}
-                {mentions.list}
-                <input
-                  ref={input}
-                  id="friend-chat-text"
-                  value={draft}
-                  {...mentions.box}
-                  onChange={(e) => {
-                    setDraft(e.target.value);
-                    mentions.box.onSelect(e);
-                  }}
-                  onKeyDown={(e) => {
-                    if (mentions.box.onKeyDown(e)) return;
-                    if (e.key === 'Escape') {
-                      e.stopPropagation();
-                      if (replyTo) setReply(null);
-                      else hideDms();
-                    }
-                  }}
-                  placeholder="message"
-                  aria-label={`message ${name}`}
-                  maxLength={MAX_CHARS + 50}
-                  autoComplete="off"
-                  className={cn(INPUT, IN_PILL, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-8 text-sm')}
-                />
-                <Tooltip content="send">
-                  <Button
-                    id="friend-chat-send"
-                    type="submit"
-                    aria-label="send"
-                    onPointerDown={keepFocus}
-                    variant="primary"
-                    className={cn(INPUT_BUTTON, 'shrink-0 px-0 py-0', mobile ? 'h-11 w-11' : 'h-8 w-8 text-sm')}
-                    disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending}
-                    aria-busy={sending || undefined}
-                  >
-                    {sending ? (
-                      <span className="relative flex items-center">
-                        <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
-                        <span className="sr-only">sending</span>
-                      </span>
-                    ) : (
-                      <RiArrowUpLine aria-hidden size={18} />
-                    )}
-                  </Button>
-                </Tooltip>
+                {recording ? (
+                  <VoiceBar
+                    recorder={recorder}
+                    idPrefix="friend-chat"
+                    sendClassName={cn(INPUT_BUTTON, 'shrink-0 px-0 py-0', mobile ? 'h-11 w-11' : 'h-8 w-8 text-sm')}
+                    onSend={(clip) => {
+                      if (!name) return;
+                      dmAttach(name).addVoice(clip.blob, clip.durationMs);
+                      void send();
+                    }}
+                  />
+                ) : (
+                  <>
+                  {emotes.list}
+                  {mentions.list}
+                  <input
+                    ref={input}
+                    id="friend-chat-text"
+                    value={draft}
+                    {...mentions.box}
+                    onChange={(e) => {
+                      setDraft(e.target.value);
+                      mentions.box.onSelect(e);
+                    }}
+                    onKeyDown={(e) => {
+                      if (mentions.box.onKeyDown(e)) return;
+                      if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        if (replyTo) setReply(null);
+                        else hideDms();
+                      }
+                    }}
+                    placeholder="message"
+                    aria-label={`message ${name}`}
+                    maxLength={MAX_CHARS + 50}
+                    autoComplete="off"
+                    className={cn(INPUT, IN_PILL, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-8 text-sm')}
+                  />
+                  <Tooltip content="send">
+                    <Button
+                      id="friend-chat-send"
+                      type="submit"
+                      aria-label="send"
+                      onPointerDown={keepFocus}
+                      variant="primary"
+                      className={cn(INPUT_BUTTON, 'shrink-0 px-0 py-0', mobile ? 'h-11 w-11' : 'h-8 w-8 text-sm')}
+                      disabled={(!draft.trim() && pictures.length === 0 && !video && !voice) || left < 0 || sending}
+                      aria-busy={sending || undefined}
+                    >
+                      {sending ? (
+                        <span className="relative flex items-center">
+                          <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
+                          <span className="sr-only">sending</span>
+                        </span>
+                      ) : (
+                        <RiArrowUpLine aria-hidden size={18} />
+                      )}
+                    </Button>
+                  </Tooltip>
+                  </>
+                )}
               </div>
               <div className={cn('flex items-center justify-between gap-2 text-xs', (notice || left < 50) && 'mt-1')}>
                 <span id="friend-chat-notice" className={cn('text-decrease', notice && 'min-h-[1em]')} aria-live="polite">

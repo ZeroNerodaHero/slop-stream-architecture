@@ -88,12 +88,12 @@ fn is_upload(method: &Method, path: &str) -> bool {
                 | "/api/groups/{group}/icon"
                 | "/api/groups/{group}/banner"
         );
-    let post_file = method == Method::POST && matches!(path, "/api/chat-images" | "/api/groups/{group}/emotes");
+    let post_file = method == Method::POST && matches!(path, "/api/chat-images" | "/api/chat-audio" | "/api/groups/{group}/emotes");
     put_file || post_file
 }
 
 fn is_moderation(method: &Method, path: &str) -> bool {
-    if method == Method::DELETE && matches!(path, "/api/chat-images/{id}" | "/api/chat-videos/{id}") {
+    if method == Method::DELETE && matches!(path, "/api/chat-images/{id}" | "/api/chat-videos/{id}" | "/api/chat-audio/{id}") {
         return true;
     }
     if path.starts_with("/api/jannies") {
@@ -391,6 +391,9 @@ mod tests {
         assert_eq!(api_rule(&get, "/api/chat-images/{id}"), READ);
         assert_eq!(api_rule(&del, "/api/chat-videos/{id}"), MODERATE);
         assert_eq!(api_rule(&del, "/api/chat-images/{id}"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/chat-audio"), UPLOAD);
+        assert_eq!(api_rule(&get, "/api/chat-audio/{id}"), READ);
+        assert_eq!(api_rule(&del, "/api/chat-audio/{id}"), MODERATE);
         assert!(VIDEO_UPLOAD.max < UPLOAD.max && VIDEO_UPLOAD.window_secs >= UPLOAD.window_secs, "videos are counted tighter than pictures");
         assert_eq!(api_rule(&post, "/api/groups/{group}/emotes"), UPLOAD);
         assert_eq!(api_rule(&Method::PATCH, "/api/groups/{group}/emotes/{id}"), MODERATE);

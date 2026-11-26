@@ -221,6 +221,8 @@ enum In {
         #[serde(default)]
         video: Option<String>,
         #[serde(default)]
+        audio: Option<String>,
+        #[serde(default)]
         reply: Option<String>,
     },
     React {
@@ -717,8 +719,8 @@ impl Conn {
                     self.apply(socket, sub).await?;
                 }
             }
-            Ok(In::Say { rid, topic, text, image, images, video, reply }) => {
-                let answer = self.say(&topic, text, image, images, video, reply).await;
+            Ok(In::Say { rid, topic, text, image, images, video, audio, reply }) => {
+                let answer = self.say(&topic, text, image, images, (video, audio), reply).await;
                 self.answer(socket, &rid, answer).await?;
             }
             Ok(In::React { rid, topic, id, emoji, on }) => {
@@ -952,11 +954,11 @@ impl Conn {
         text: String,
         image: Option<String>,
         images: Vec<String>,
-        video: Option<String>,
+        (video, audio): (Option<String>, Option<String>),
         reply: Option<String>,
     ) -> Result<Option<String>, (&'static str, Option<u64>)> {
         let r = self.joined_room(topic)?;
-        let (text, images, video) = match chat::parse_say(text, image, images, video) {
+        let (text, images, video, audio) = match chat::parse_say(text, image, images, video, audio) {
             Ok(Some(say)) => say,
             Ok(None) => return Err(("say something", None)),
             Err(why) => return Err((why, None)),
@@ -966,7 +968,7 @@ impl Conn {
         if let Err(wait) = self.s.limiter.take(&sp.speaker, &r.room) {
             return Err((chat::SLOW_DOWN, Some((wait.as_secs_f64() * 1000.0).ceil() as u64)));
         }
-        chat::accept(&self.s, &r.room, r.server.as_deref(), &sp.who, &text, &images, video.as_deref(), reply.as_deref()).await.map_err(|why| why.parts())
+        chat::accept(&self.s, &r.room, r.server.as_deref(), &sp.who, &text, &images, (video.as_deref(), audio.as_deref()), reply.as_deref()).await.map_err(|why| why.parts())
     }
 
     async fn react(&mut self, topic: &str, id: &str, emoji: &str, on: bool) -> Result<(), (&'static str, Option<u64>)> {

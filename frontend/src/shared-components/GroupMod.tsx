@@ -489,7 +489,7 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
 }
 
 function LogLine({ line }: { line: MemberLine }) {
-  const words = plainEmotes(line.text) || quoteWords({ text: '', images: line.images?.length ?? 0, video: !!line.video });
+  const words = plainEmotes(line.text) || quoteWords({ text: '', images: line.images?.length ?? 0, video: !!line.video, audio: !!line.audio });
   return (
     <li data-id={line.id} data-channel={line.channel} className="flex flex-col gap-0.5 border-b border-primaryStroke/60 px-4 py-2 text-sm">
       <span className="flex items-center gap-2 text-xs text-textTertiary">
@@ -502,7 +502,7 @@ function LogLine({ line }: { line: MemberLine }) {
         <span data-reply-quote className="flex min-w-0 items-center gap-1 border-l-2 border-primaryStroke pl-1.5 text-xs leading-4">
           <Face name={line.reply.from} version={line.reply.avatar ?? null} className="h-4 w-4 shrink-0 text-[9px]" />
           <span className="shrink-0 font-semibold text-textPrimary">{line.reply.from}</span>
-          <span className="min-w-0 truncate text-textSecondary">{quoteWords({ text: line.reply.text, images: line.reply.images ?? 0, video: line.reply.video })}</span>
+          <span className="min-w-0 truncate text-textSecondary">{quoteWords({ text: line.reply.text, images: line.reply.images ?? 0, video: line.reply.video, audio: line.reply.audio })}</span>
         </span>
       )}
       <span className="whitespace-pre-wrap break-words">{words}</span>

@@ -6,6 +6,7 @@ import { keepDmWindow, keptDmWindow } from '@/infra/atoms/chat-layout-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import type { Presence } from '@/infra/atoms/presence-atoms';
 import { Attachments, wordsOf } from '@/infra/chat-attach';
+import { audioOf, type ChatAudio } from '@/infra/chat-audio';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { callMarkOf } from '@/infra/dm-call';
 import { encodeEmotes } from '@/infra/emotes';
@@ -191,6 +192,7 @@ function lineOf(line: Omit<DmLine, 'images' | 'call'> & { images?: unknown; call
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
   const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
   const video = videoOf(line.video);
+  const audio = audioOf(line.audio);
   const mentions = Array.isArray(line.mentions) ? line.mentions.filter((m): m is string => typeof m === 'string') : [];
   const call = callMarkOf(line.call);
   const base = {
@@ -201,6 +203,7 @@ function lineOf(line: Omit<DmLine, 'images' | 'call'> & { images?: unknown; call
     images,
     reply,
     ...(video ? { video } : {}),
+    ...(audio ? { audio } : {}),
     ...(mentions.length > 0 ? { mentions } : {}),
     ...(call ? { call } : {})
   };
@@ -256,11 +259,18 @@ function append(name: string, line: DmLine) {
   setThread(name, (prev) => ({ lines: merge(prev?.lines ?? [], [line]), loaded: prev?.loaded ?? false, start: prev?.start ?? false }));
 }
 
-export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null, video: string | null = null): Promise<string | null> {
+export async function sendDm(
+  name: string,
+  raw: string,
+  images: string[] = [],
+  reply: number | null = null,
+  video: string | null = null,
+  audio: string | null = null
+): Promise<string | null> {
   const text = raw.trim();
-  if (!text && images.length === 0 && !video) return 'nothing to say';
+  if (!text && images.length === 0 && !video && !audio) return 'nothing to say';
   try {
-    const line = await api.sendDm(name, encodeEmotes(text), images, reply, video);
+    const line = await api.sendDm(name, encodeEmotes(text), images, reply, video, audio);
     append(name, lineOf(line));
     return null;
   } catch (err) {
@@ -382,7 +392,7 @@ function retarget(fromId: string, peer: string) {
   if (results?.name === old) store.set(dmResultsAtom, { ...results, name: peer });
 }
 
-function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[]; video?: ChatVideo; mentions?: string[]; call?: unknown }) {
+function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[]; video?: ChatVideo; audio?: ChatAudio; mentions?: string[]; call?: unknown }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
   const peer = frame.from === me ? frame.to : frame.from;

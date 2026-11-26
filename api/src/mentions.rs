@@ -667,8 +667,8 @@ mod tests {
 
         let room = n("room");
         let mentions = resolve(&pool, &format!("hey @{} and @{}", n("a"), n("u"))).await;
-        crate::history::store(&pool, &room, "1729000000000-0", &n("c"), Some(me), &text, None, None, false, true, &[], None, &mentions).await.unwrap();
-        crate::history::store(&pool, &room, "1729000000001-0", &n("c"), Some(me), "plain", None, None, false, true, &[], None, &[]).await.unwrap();
+        crate::history::store(&pool, &room, "1729000000000-0", &n("c"), Some(me), &text, None, (None, None), false, true, &[], None, &mentions).await.unwrap();
+        crate::history::store(&pool, &room, "1729000000001-0", &n("c"), Some(me), "plain", None, (None, None), false, true, &[], None, &[]).await.unwrap();
         let kept: Vec<String> = sqlx::query_scalar("SELECT mentions FROM chat_lines WHERE room = $1 AND id = '1729000000000-0'").bind(&room).fetch_one(&pool).await.unwrap();
         assert_eq!(kept, vec![n("a")]);
         let lines = crate::history::by_account(&pool, std::slice::from_ref(&room), me, None, 10).await.unwrap();

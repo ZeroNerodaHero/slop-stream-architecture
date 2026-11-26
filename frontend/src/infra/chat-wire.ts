@@ -1,3 +1,4 @@
+import { audioOf } from './chat-audio.ts';
 import { videoOf } from './chat-video.ts';
 import { reactionsOf } from '../shared-components/reaction-list.ts';
 
@@ -15,6 +16,7 @@ export interface WireLine {
   image?: string | null;
   images?: unknown;
   video?: unknown;
+  audio?: unknown;
   reply?: unknown;
   reactions?: unknown;
 }
@@ -28,6 +30,7 @@ export function fromWire<T extends WireLine>(line: T): T {
     image: images[0] ?? null,
     images,
     video: videoOf(line.video),
+    audio: audioOf(line.audio),
     reply: line.reply && typeof line.reply === 'object' && typeof (line.reply as { id?: unknown }).id === 'string' ? line.reply : undefined,
     reactions: reactionsOf(line.reactions)
   };
