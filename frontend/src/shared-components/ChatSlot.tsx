@@ -5,6 +5,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -110,16 +111,180 @@ const OPEN_COLUMNS = {
   left: { fixed: 'beside:grid-cols-[360px_minmax(0,1fr)]', fluid: 'beside:grid-cols-[340px_minmax(0,1fr)]' }
 } as const;
 
-export function chatLayoutClass(side: ChatSide, open: boolean, fluid = false): string {
+const SIZED_COLUMNS = {
+  right: { fixed: 'beside:grid-cols-[minmax(0,1fr)_var(--chat-w,360px)]', fluid: 'beside:grid-cols-[minmax(0,1fr)_var(--chat-w,340px)]' },
+  left: { fixed: 'beside:grid-cols-[var(--chat-w,360px)_minmax(0,1fr)]', fluid: 'beside:grid-cols-[var(--chat-w,340px)_minmax(0,1fr)]' }
+} as const;
+
+const CHAT_W_KEY = 'watch.chatWidth';
+const CHAT_W_MIN = 280;
+const CHAT_W_STEP = 16;
+
+const chatWidthMax = () => Math.max(CHAT_W_MIN, Math.min(document.documentElement.clientWidth / 2, 640));
+const fitChatWidth = (w: number) => Math.round(clamp(w, CHAT_W_MIN, chatWidthMax()));
+
+function storedChatWidth(): number | null {
+  try {
+    const v = Number(localStorage.getItem(CHAT_W_KEY));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeChatWidth(w: number | null) {
+  try {
+    if (w === null) localStorage.removeItem(CHAT_W_KEY);
+    else localStorage.setItem(CHAT_W_KEY, String(w));
+  } catch {
+    return;
+  }
+}
+
+function ChatWidthHandle({ side, fallback, dialog }: { side: 'left' | 'right'; fallback: number; dialog: RefObject<HTMLDialogElement | null> }) {
+  const handle = useRef<HTMLDivElement | null>(null);
+  const [stored] = useState(storedChatWidth);
+  const pref = useRef<number | null>(stored);
+  const [width, setWidth] = useState(() => (stored === null ? fallback : fitChatWidth(stored)));
+  const [max, setMax] = useState(chatWidthMax);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ id: number; x: number; w: number; now: number; frame: number } | null>(null);
+
+  const grid = () => dialog.current?.closest<HTMLElement>('[data-chat]') ?? null;
+
+  const paint = (w: number | null) => {
+    const el = grid();
+    if (el) {
+      if (w === null) el.style.removeProperty('--chat-w');
+      else el.style.setProperty('--chat-w', `${w}px`);
+    }
+    handle.current?.setAttribute('aria-valuenow', String(w ?? fallback));
+  };
+
+  useLayoutEffect(() => {
+    const fit = () => {
+      setMax(chatWidthMax());
+      const w = pref.current === null ? null : fitChatWidth(pref.current);
+      paint(w);
+      setWidth(w ?? fallback);
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    const el = grid();
+    return () => {
+      window.removeEventListener('resize', fit);
+      el?.style.removeProperty('--chat-w');
+    };
+  }, [fallback]);
+
+  const commit = (w: number | null) => {
+    pref.current = w;
+    storeChatWidth(w);
+    paint(w);
+    setWidth(w ?? fallback);
+  };
+
+  const finish = () => {
+    const d = drag.current;
+    if (!d) return;
+    drag.current = null;
+    cancelAnimationFrame(d.frame);
+    document.body.style.removeProperty('user-select');
+    document.body.style.removeProperty('cursor');
+    grid()?.style.removeProperty('transition');
+    setDragging(false);
+    commit(d.now);
+  };
+
+  const wider = side === 'right' ? 'ArrowLeft' : 'ArrowRight';
+  const narrower = side === 'right' ? 'ArrowRight' : 'ArrowLeft';
+
+  return (
+    <Tooltip content={dragging ? null : 'drag to resize'} hideOnPress>
+      <div
+        ref={handle}
+        id="chat-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="resize chat"
+        aria-valuenow={width}
+        aria-valuemin={CHAT_W_MIN}
+        aria-valuemax={Math.round(max)}
+        tabIndex={0}
+        onPointerDown={(e) => {
+          if (e.button !== 0 || drag.current) return;
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const w = dialog.current?.getBoundingClientRect().width || width;
+          drag.current = { id: e.pointerId, x: e.clientX, w, now: Math.round(w), frame: 0 };
+          document.body.style.userSelect = 'none';
+          document.body.style.cursor = 'col-resize';
+          grid()?.style.setProperty('transition', 'none');
+          setDragging(true);
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!d || e.pointerId !== d.id) return;
+          const dx = e.clientX - d.x;
+          d.now = fitChatWidth(side === 'right' ? d.w - dx : d.w + dx);
+          if (d.frame) return;
+          d.frame = requestAnimationFrame(() => {
+            d.frame = 0;
+            if (drag.current === d) paint(d.now);
+          });
+        }}
+        onPointerUp={finish}
+        onPointerCancel={finish}
+        onLostPointerCapture={finish}
+        onDoubleClick={() => commit(null)}
+        onKeyDown={(e) => {
+          let w: number | null = null;
+          if (e.key === wider) w = width + CHAT_W_STEP;
+          else if (e.key === narrower) w = width - CHAT_W_STEP;
+          else if (e.key === 'Home') w = CHAT_W_MIN;
+          else if (e.key === 'End') w = max;
+          if (w === null) return;
+          e.preventDefault();
+          commit(fitChatWidth(w));
+        }}
+        className={cn(
+          'group/resize absolute inset-y-0 hidden w-1.5 cursor-col-resize touch-none outline-none beside:block',
+          side === 'right' ? '-left-[3px]' : '-right-[3px]'
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            'absolute inset-y-0 left-0.5 w-0.5 bg-primaryBlue transition-opacity duration-150',
+            dragging ? 'opacity-100' : 'opacity-0 group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100'
+          )}
+        />
+      </div>
+    </Tooltip>
+  );
+}
+
+export function chatLayoutClass(side: ChatSide, open: boolean, fluid = false, resizable = false): string {
   if (side !== 'left' && side !== 'right') return '';
   return cn(
     'beside:grid beside:grid-rows-[auto_1fr] beside:items-start beside:transition-[grid-template-columns,column-gap] beside:duration-300 beside:ease-out motion-reduce:beside:transition-none',
     open ? (fluid ? 'beside:gap-x-3 bubble:beside:gap-x-1' : 'beside:gap-x-6 bubble:beside:gap-x-2') : 'beside:gap-x-0',
-    open ? OPEN_COLUMNS[side][fluid ? 'fluid' : 'fixed'] : side === 'right' ? 'beside:grid-cols-[minmax(0,1fr)_0px]' : 'beside:grid-cols-[0px_minmax(0,1fr)]'
+    open ? (resizable ? SIZED_COLUMNS : OPEN_COLUMNS)[side][fluid ? 'fluid' : 'fixed'] : side === 'right' ? 'beside:grid-cols-[minmax(0,1fr)_0px]' : 'beside:grid-cols-[0px_minmax(0,1fr)]'
   );
 }
 
-export function ChatSlot({ tabbed = false, fluid = false, children }: { tabbed?: boolean; fluid?: boolean; children: ReactNode }) {
+export function ChatSlot({
+  tabbed = false,
+  fluid = false,
+  resizable = false,
+  children
+}: {
+  tabbed?: boolean;
+  fluid?: boolean;
+  resizable?: boolean;
+  children: ReactNode;
+}) {
+  const mobile = useIsMobile();
   const side = useChatSide();
   const open = useAtomValue(chatModalOpenAtom) || (tabbed && side !== 'modal');
   const ref = useRef<HTMLDialogElement | null>(null);
@@ -393,8 +558,9 @@ export function ChatSlot({ tabbed = false, fluid = false, children }: { tabbed?:
             : cn(
                 tabbed ? 'h-full' : 'h-[min(50vh,560px)]',
                 fluid
-                  ? 'w-full beside:absolute beside:top-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[340px]'
-                  : 'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[360px]',
+                  ? 'w-full beside:absolute beside:top-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-2.5rem))]'
+                  : 'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))]',
+                resizable ? (fluid ? 'beside:w-[var(--chat-w,340px)]' : 'beside:w-[var(--chat-w,360px)]') : fluid ? 'beside:w-[340px]' : 'beside:w-[360px]',
                 'transition-transform duration-300 ease-out motion-reduce:transition-none',
                 side === 'right' && 'beside:right-0',
                 side === 'left' && 'beside:left-0',
@@ -405,6 +571,7 @@ export function ChatSlot({ tabbed = false, fluid = false, children }: { tabbed?:
       >
         <ChatWindowContext.Provider value={bar}>{children}</ChatWindowContext.Provider>
       </div>
+      {resizable && !mobile && !tabbed && tall && (side === 'left' || side === 'right') && <ChatWidthHandle side={side} fallback={fluid ? 340 : 360} dialog={ref} />}
       {modal &&
         CORNERS.map((c) => (
           <div
