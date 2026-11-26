@@ -204,7 +204,7 @@ export function PinSheet({
   return createPortal(
     <div
       data-sheet-open={open || undefined}
-      className={cn('fixed inset-x-0 bottom-0 top-[var(--title-row,4rem)] z-20 overflow-hidden', !shown && 'invisible', !open && 'pointer-events-none')}
+      className={cn('fixed inset-x-0 bottom-0 top-[calc(var(--title-row,4rem)+var(--banner-h,0px))] z-20 overflow-hidden', !shown && 'invisible', !open && 'pointer-events-none')}
     >
       <div
         aria-hidden

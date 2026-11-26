@@ -281,7 +281,7 @@ export function WatchPage() {
   const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? phoneTabs : watchTabs;
   const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
   const videoCap = chatTab
-    ? deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]'
+    ? deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_var(--banner-h,0px)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]'
     : theater && 'mx-auto';
   const fitStyle = fitWidth !== null ? { maxWidth: fitWidth } : undefined;
 
@@ -522,7 +522,7 @@ export function WatchPage() {
     return (
       <div
         data-keyboard={typing || keyboard}
-        className="group/phone fixed inset-x-0 top-[var(--vvt,0px)] flex h-[var(--vvh,100dvh)] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+        className="group/phone fixed inset-x-0 [--sticky-top:0px] top-[calc(var(--vvt,0px)+var(--banner-h,0px))] flex h-[calc(var(--vvh,100dvh)-var(--banner-h,0px))] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
         <PageFrame
           title={title}
