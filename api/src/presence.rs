@@ -162,7 +162,7 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], video: Option<&crate::chat::Video>, at_ms: i64, from_id: &str, reply: Option<&serde_json::Value>, mentions: &[String]) {
+pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], (video, audio): (Option<&crate::chat::Video>, Option<&crate::chat::Audio>), at_ms: i64, from_id: &str, reply: Option<&serde_json::Value>, mentions: &[String]) {
     let mut fields = vec![
         ("type", "dm".to_owned()),
         ("name", to.to_owned()),
@@ -177,6 +177,9 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str
     }
     if let Some(video) = video {
         fields.push(("video", video.stored()));
+    }
+    if let Some(audio) = audio {
+        fields.push(("audio", audio.stored()));
     }
     if let Some(reply) = reply {
         fields.push(("reply", reply.to_string()));

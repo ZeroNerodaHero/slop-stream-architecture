@@ -281,6 +281,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             video: None,
+            audio: None,
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),

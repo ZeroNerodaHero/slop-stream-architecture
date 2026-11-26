@@ -30,7 +30,7 @@ function PinRow({ line, canPin, onJump, onUnpin }: { line: PinnedLine; canPin: b
   const color = tint ? undefined : line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
   const someone = line.verified || line.streamer;
   const pictures = line.images ?? [];
-  const words = line.text || (line.video ? 'video' : pictures.length > 0 ? (pictures.length === 1 ? 'picture' : `${pictures.length} pictures`) : '');
+  const words = line.text || (line.video ? 'video' : line.audio ? 'voice message' : pictures.length > 0 ? (pictures.length === 1 ? 'picture' : `${pictures.length} pictures`) : '');
   return (
     <li data-id={line.id} className="relative flex items-start gap-3 p-3 focus-within:bg-backgroundSecondary active:bg-backgroundSecondary">
       <Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />

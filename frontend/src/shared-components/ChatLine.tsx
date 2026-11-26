@@ -1,20 +1,18 @@
 import { RiEmotionLine, RiMoreFill, RiReplyLine } from '@remixicon/react';
 import {
   type HTMLAttributes,
-  type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState
 } from 'react';
-import { createPortal } from 'react-dom';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
 import { plainEmotes } from '@/infra/emotes';
 import { Face } from '@/shared-components/Face';
+import { MenuButton, type MenuItem } from '@/shared-components/MenuButton';
 import type { Reaction } from '@/shared-components/reaction-list';
 import { ReactionPicker } from '@/shared-components/Reactions';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -227,121 +225,13 @@ function BarButton({ label, onClick, disabled, id, children }: { label: string; 
   );
 }
 
-export interface LineMenuItem {
-  key: string;
-  label: string;
-  onPick: () => void;
-  danger?: boolean;
-  divider?: boolean;
-}
+export type LineMenuItem = MenuItem;
 
 function MoreMenu({ items }: { items: LineMenuItem[] }) {
-  const [open, setOpen] = useState(false);
-  const button = useRef<HTMLButtonElement | null>(null);
-  const menu = useRef<HTMLUListElement | null>(null);
-  const [host, setHost] = useState<HTMLElement | null>(null);
-
-  useLayoutEffect(() => {
-    const el = menu.current;
-    if (!open || !el) return;
-    const place = () => {
-      const a = button.current?.getBoundingClientRect();
-      if (!a) return;
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      el.style.left = `${Math.max(4, Math.min(a.right - w, document.documentElement.clientWidth - w - 4))}px`;
-      el.style.top = `${a.bottom + h <= document.documentElement.clientHeight - 4 ? a.bottom : Math.max(4, a.top - h)}px`;
-    };
-    place();
-    el.querySelector<HTMLButtonElement>('button')?.focus();
-    window.addEventListener('scroll', place, true);
-    window.addEventListener('resize', place);
-    const outside = (e: PointerEvent) => {
-      if (e.target instanceof Node && (menu.current?.contains(e.target) || button.current?.contains(e.target))) return;
-      setOpen(false);
-    };
-    document.addEventListener('pointerdown', outside, true);
-    return () => {
-      window.removeEventListener('scroll', place, true);
-      window.removeEventListener('resize', place);
-      document.removeEventListener('pointerdown', outside, true);
-    };
-  }, [open]);
-
-  function walk(e: KeyboardEvent<HTMLUListElement>) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-      button.current?.focus();
-      return;
-    }
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    e.preventDefault();
-    const rows = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
-    const i = rows.indexOf(document.activeElement as HTMLButtonElement);
-    rows[(i + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]?.focus();
-  }
-
-  if (items.length === 0) return null;
   return (
-    <>
-      <Tooltip content={open ? null : 'more'}>
-        <button
-          ref={button}
-          type="button"
-          aria-label="more"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          data-line-action="more"
-          onClick={() => {
-            setHost(button.current?.closest<HTMLElement>('dialog:modal') ?? document.body);
-            setOpen((was) => !was);
-          }}
-          className={BAR_BUTTON}
-        >
-          <RiMoreFill aria-hidden size={16} />
-        </button>
-      </Tooltip>
-      {open &&
-        host &&
-        createPortal(
-          <ul
-            ref={menu}
-            role="menu"
-            aria-label="more"
-            data-line-menu
-            onKeyDown={walk}
-            onBlur={(e) => {
-              const to = e.relatedTarget;
-              if (to instanceof Node && (menu.current?.contains(to) || button.current === to)) return;
-              setOpen(false);
-            }}
-            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
-          >
-            {items.map((item) => (
-              <li key={item.key} role="none" className={item.divider ? 'mt-1 border-t border-primaryStroke pt-1' : undefined}>
-                <button
-                  role="menuitem"
-                  type="button"
-                  data-pick={item.key}
-                  className={cn(
-                    'flex w-full items-center px-3 py-1 text-left hover:bg-primaryStroke/20 focus-visible:bg-primaryStroke/20 focus-visible:outline-none max-md:min-h-11',
-                    item.danger ? 'text-decrease' : 'text-textPrimary'
-                  )}
-                  onClick={() => {
-                    setOpen(false);
-                    item.onPick();
-                  }}
-                >
-                  {item.label}
-                </button>
-              </li>
-            ))}
-          </ul>,
-          host
-        )}
-    </>
+    <MenuButton label="more" items={items} className={BAR_BUTTON} buttonAttrs={{ 'data-line-action': 'more' }} menuAttrs={{ 'data-line-menu': true }}>
+      <RiMoreFill aria-hidden size={16} />
+    </MenuButton>
   );
 }
 
@@ -396,12 +286,14 @@ export interface Quoted {
   avatar: number | null;
   images: number;
   video?: boolean;
+  audio?: boolean;
   gone?: boolean;
 }
 
-export function quoteWords(q: Pick<Quoted, 'text' | 'images' | 'video'>): string {
+export function quoteWords(q: Pick<Quoted, 'text' | 'images' | 'video' | 'audio'>): string {
   if (q.text) return plainEmotes(q.text).replace(/\s+/g, ' ');
   if (q.video && q.images === 0) return 'a video';
+  if (q.audio && q.images === 0) return 'a voice message';
   if (q.images > 1) return `${q.images} pictures`;
   if (q.images === 1) return 'a picture';
   return '';

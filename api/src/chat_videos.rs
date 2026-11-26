@@ -243,7 +243,7 @@ fn poster_flags(poster_present: bool, nsfw: bool, graphic: bool) -> (bool, bool)
     (!poster_present || nsfw, !poster_present || graphic)
 }
 
-fn range_of(asked: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
+pub(crate) fn range_of(asked: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
     let Some(spec) = asked.and_then(|a| a.trim().strip_prefix("bytes=")) else { return Ok(None) };
     if spec.contains(',') || len == 0 {
         return Ok(None);
@@ -288,7 +288,7 @@ struct Ready {
 }
 
 #[derive(Debug, PartialEq)]
-enum Failed {
+pub(crate) enum Failed {
     Refused(&'static str),
     Broken(String),
 }
@@ -297,21 +297,21 @@ const TOO_LONG: &str = "video too long. 30 seconds at most";
 const UNKNOWN_LENGTH: &str = "could not tell how long that video is";
 const UNREADABLE: &str = "could not read that video";
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
-const COPY_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const COPY_TIMEOUT: Duration = Duration::from_secs(30);
 const ENCODE_TIMEOUT: Duration = Duration::from_secs(120);
 const POSTER_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_PROBE_OUTPUT: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_PROBE_OUTPUT: u64 = 16 * 1024 * 1024;
 const MAX_POSTER_BYTES: usize = 256 * 1024;
 
-fn bin(var: &str, name: &str) -> String {
+pub(crate) fn bin(var: &str, name: &str) -> String {
     std::env::var(var).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| name.to_owned())
 }
 
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(PathBuf);
 
 impl Scratch {
-    fn new() -> std::io::Result<Scratch> {
+    pub(crate) fn new() -> std::io::Result<Scratch> {
         let dir = std::env::temp_dir().join(format!("chat-video-{}", Uuid::from_u128(rand::random())));
         std::fs::create_dir(&dir)?;
         #[cfg(unix)]
@@ -322,7 +322,7 @@ impl Scratch {
         Ok(Scratch(dir))
     }
 
-    fn file(&self, name: &str) -> PathBuf {
+    pub(crate) fn file(&self, name: &str) -> PathBuf {
         self.0.join(name)
     }
 }
@@ -422,7 +422,7 @@ fn packets_end_ms(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Op
     Ok(last_packet_ms(&String::from_utf8_lossy(&raw)))
 }
 
-fn last_packet_ms(csv: &str) -> Option<u64> {
+pub(crate) fn last_packet_ms(csv: &str) -> Option<u64> {
     csv.lines()
         .filter_map(|line| {
             let mut fields = line.split(',');
@@ -436,7 +436,7 @@ fn last_packet_ms(csv: &str) -> Option<u64> {
         .map(|end| (end * 1000.0).round() as u64)
 }
 
-fn seconds_ms(raw: &str) -> Option<u64> {
+pub(crate) fn seconds_ms(raw: &str) -> Option<u64> {
     raw.trim().parse::<f64>().ok().filter(|s| s.is_finite() && *s > 0.0).map(|s| (s * 1000.0).round() as u64)
 }
 
@@ -525,7 +525,7 @@ fn strip(cmd: &mut Command) {
 }
 
 #[derive(Debug)]
-enum RunError {
+pub(crate) enum RunError {
     Spawn(std::io::Error),
     TimedOut,
     Exit(String),
@@ -541,7 +541,7 @@ impl std::fmt::Display for RunError {
     }
 }
 
-fn refused_or_broken(why: RunError, words: &'static str) -> Failed {
+pub(crate) fn refused_or_broken(why: RunError, words: &'static str) -> Failed {
     match why {
         RunError::Exit(said) => {
             log::info!("chat video: {said}");
@@ -551,7 +551,7 @@ fn refused_or_broken(why: RunError, words: &'static str) -> Failed {
     }
 }
 
-fn read_capped(path: &FsPath, cap: u64) -> Result<Vec<u8>, Failed> {
+pub(crate) fn read_capped(path: &FsPath, cap: u64) -> Result<Vec<u8>, Failed> {
     let file = std::fs::File::open(path).map_err(|e| Failed::Broken(format!("read {}: {e}", path.display())))?;
     let mut raw = Vec::new();
     file.take(cap + 1).read_to_end(&mut raw).map_err(|e| Failed::Broken(format!("read {}: {e}", path.display())))?;
@@ -561,7 +561,7 @@ fn read_capped(path: &FsPath, cap: u64) -> Result<Vec<u8>, Failed> {
     Ok(raw)
 }
 
-fn run(cmd: &mut Command, stdout: Option<&FsPath>, timeout: Duration) -> Result<(), RunError> {
+pub(crate) fn run(cmd: &mut Command, stdout: Option<&FsPath>, timeout: Duration) -> Result<(), RunError> {
     let dir = stdout.and_then(FsPath::parent).map(FsPath::to_path_buf).unwrap_or_else(std::env::temp_dir);
     let err_path = dir.join(format!("stderr-{}", Uuid::from_u128(rand::random())));
     let err_file = std::fs::File::create(&err_path).map_err(RunError::Spawn)?;
@@ -645,7 +645,7 @@ fn probe(b: &[u8]) -> Result<Probe, &'static str> {
     Err(WRONG_TYPE)
 }
 
-fn boxes(mut b: &[u8]) -> Vec<([u8; 4], &[u8])> {
+pub(crate) fn boxes(mut b: &[u8]) -> Vec<([u8; 4], &[u8])> {
     let mut out = Vec::new();
     while b.len() >= 8 {
         let mut size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64;
@@ -671,15 +671,15 @@ fn boxes(mut b: &[u8]) -> Vec<([u8; 4], &[u8])> {
     out
 }
 
-fn child<'a>(b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
+pub(crate) fn child<'a>(b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
     boxes(b).into_iter().find(|(k, _)| k == kind).map(|(_, inside)| inside)
 }
 
-fn be32(b: &[u8], at: usize) -> Option<u32> {
+pub(crate) fn be32(b: &[u8], at: usize) -> Option<u32> {
     b.get(at..at + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
-fn be64(b: &[u8], at: usize) -> Option<u64> {
+pub(crate) fn be64(b: &[u8], at: usize) -> Option<u64> {
     b.get(at..at + 8).map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
 }
 
@@ -739,7 +739,7 @@ fn vint(b: &[u8], id: bool) -> Option<(Option<u64>, usize)> {
     Some((if all_ones { None } else { Some(value) }, len))
 }
 
-fn elements(mut b: &[u8]) -> Vec<(u64, &[u8])> {
+pub(crate) fn elements(mut b: &[u8]) -> Vec<(u64, &[u8])> {
     let mut out = Vec::new();
     while !b.is_empty() {
         let Some((Some(id), id_len)) = vint(b, true) else { break };
@@ -760,19 +760,19 @@ fn elements(mut b: &[u8]) -> Vec<(u64, &[u8])> {
     out
 }
 
-const EBML: u64 = 0x1A45DFA3;
-const DOC_TYPE: u64 = 0x4282;
-const SEGMENT: u64 = 0x18538067;
-const INFO: u64 = 0x1549A966;
-const TIMECODE_SCALE: u64 = 0x2AD7B1;
-const DURATION: u64 = 0x4489;
-const TRACKS: u64 = 0x1654AE6B;
-const TRACK_ENTRY: u64 = 0xAE;
-const TRACK_TYPE: u64 = 0x83;
-const CODEC_ID: u64 = 0x86;
-const CLUSTER: u64 = 0x1F43B675;
+pub(crate) const EBML: u64 = 0x1A45DFA3;
+pub(crate) const DOC_TYPE: u64 = 0x4282;
+pub(crate) const SEGMENT: u64 = 0x18538067;
+pub(crate) const INFO: u64 = 0x1549A966;
+pub(crate) const TIMECODE_SCALE: u64 = 0x2AD7B1;
+pub(crate) const DURATION: u64 = 0x4489;
+pub(crate) const TRACKS: u64 = 0x1654AE6B;
+pub(crate) const TRACK_ENTRY: u64 = 0xAE;
+pub(crate) const TRACK_TYPE: u64 = 0x83;
+pub(crate) const CODEC_ID: u64 = 0x86;
+pub(crate) const CLUSTER: u64 = 0x1F43B675;
 
-fn uint(b: &[u8]) -> u64 {
+pub(crate) fn uint(b: &[u8]) -> u64 {
     b.iter().take(8).fold(0, |n, &byte| (n << 8) | byte as u64)
 }
 
