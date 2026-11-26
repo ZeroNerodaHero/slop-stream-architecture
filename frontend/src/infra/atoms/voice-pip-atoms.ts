@@ -7,6 +7,8 @@ import { raiseWindow } from '@/infra/window-stack';
 
 export const pipCallKey = (call: Pick<VoiceCall, 'server' | 'channel'>) => `${call.server}\n${call.channel}`;
 
+export const callBarSlotAtom = atom<HTMLElement | null>(null);
+
 export const voicePipHiddenAtom = atom<string | null>(null);
 
 export const voicePipCollapsedAtom = atomWithStorage<boolean>('voice.pipCollapsed', false, undefined, { getOnInit: true });

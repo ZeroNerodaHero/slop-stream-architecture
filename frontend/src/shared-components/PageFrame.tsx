@@ -2,7 +2,9 @@ import { RiArrowLeftSLine, RiHome5Line } from '@remixicon/react';
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
+import { callBarSlotAtom } from '@/infra/atoms/voice-pip-atoms';
 import { useIsMobile } from '@/infra/mobile';
+import { store } from '@/infra/store';
 import { buttonClassName } from '@/shared-components/Button';
 import { NotificationsBell } from '@/shared-components/NotificationsBell';
 import { DrawerOpener } from '@/shared-components/UserPanel';
@@ -109,6 +111,19 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
   return on ? part : null;
 }
 
+function CallBarSlot({ className }: { className?: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    store.set(callBarSlotAtom, el);
+    return () => {
+      if (store.get(callBarSlotAtom) === el) store.set(callBarSlotAtom, null);
+    };
+  }, []);
+  return <div ref={ref} id="call-bar-slot" className={className} />;
+}
+
 export function PageFrame({
   title,
   titleId,
@@ -154,42 +169,48 @@ export function PageFrame({
     const homeByEnd = Boolean(title) && mobileEnd !== undefined;
     return (
       <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width, fill && 'flex h-full min-h-0 w-full flex-col')}>
-        <header
-          ref={headerRef}
-          className={cn(
-            'sticky top-0 z-30 flex min-h-[calc(4rem+env(safe-area-inset-top))] items-center gap-1 border-b border-primaryStroke bg-background pb-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))]',
-            bleed ? 'px-4' : titled && 'mb-4'
-          )}
-        >
-          <DrawerOpener />
-          {mobileStart}
-          {title && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
-          {mobileSub !== undefined ? (
-            <div className="ml-1 min-w-0 flex-1">
-              <h1 id={titleId} className="truncate text-base font-medium leading-tight">
+        <div
+          ref={(el) => {
+            headerRef.current = el;
+          }}
+          className={cn('sticky top-0 z-30 shrink-0', !bleed && titled && 'mb-4')}>
+          <header
+            className={cn(
+              'flex min-h-[calc(4rem+env(safe-area-inset-top))] items-center gap-1 border-b border-primaryStroke bg-background pb-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))]',
+              bleed && 'px-4'
+            )}
+          >
+            <DrawerOpener />
+            {mobileStart}
+            {title && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
+            {mobileSub !== undefined ? (
+              <div className="ml-1 min-w-0 flex-1">
+                <h1 id={titleId} className="truncate text-base font-medium leading-tight">
+                  {named}
+                </h1>
+                <p className="truncate text-xs leading-4 text-textSecondary">{mobileSub}</p>
+              </div>
+            ) : headed ? (
+              <h1 id={titleId} className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
                 {named}
               </h1>
-              <p className="truncate text-xs leading-4 text-textSecondary">{mobileSub}</p>
-            </div>
-          ) : headed ? (
-            <h1 id={titleId} className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
-              {named}
-            </h1>
-          ) : (
-            <p aria-hidden className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
-              {part}
-            </p>
-          )}
-          {aside && <div className="shrink-0">{aside}</div>}
-          {mobileEnd !== undefined ? (
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              {homeByEnd && <MobileHomeLink caret />}
-              {mobileEnd}
-            </div>
-          ) : (
-            <TopActions bell={false} home={homeByGoLive} />
-          )}
-        </header>
+            ) : (
+              <p aria-hidden className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
+                {part}
+              </p>
+            )}
+            {aside && <div className="shrink-0">{aside}</div>}
+            {mobileEnd !== undefined ? (
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                {homeByEnd && <MobileHomeLink caret />}
+                {mobileEnd}
+              </div>
+            ) : (
+              <TopActions bell={false} home={homeByGoLive} />
+            )}
+          </header>
+          <CallBarSlot className={bleed ? undefined : '-mx-4'} />
+        </div>
         {children}
       </main>
     );
