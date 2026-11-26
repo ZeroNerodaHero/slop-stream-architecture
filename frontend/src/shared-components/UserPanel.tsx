@@ -224,7 +224,7 @@ export function UserPanel() {
             <Bone className="h-8 w-[calc(2rem+2px)]" />
           </div>
           <div className={cn('flex shrink-0 border-t border-primaryStroke py-1.5 bubble:border-transparent', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
-            <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)]" />
+            <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)] rounded-avatar" />
           </div>
         </Skeleton>
       </aside>
