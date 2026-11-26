@@ -7,10 +7,10 @@ import { Tooltip } from '@/shared-components/Tooltip';
 
 type Install = { at: 'idle' } | { at: 'downloading'; text: string } | { at: 'failed' };
 
-const ACTION = 'h-6 shrink-0 py-0 max-md:min-h-0';
+const ACTION = 'h-5 shrink-0 py-0 leading-none max-md:min-h-0';
 
 const DISMISS =
-  'flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-transparent text-background/80 hover:border-background/60 hover:text-background focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-background';
+  'flex h-5 w-5 shrink-0 items-center justify-center rounded-control border border-transparent text-background/80 hover:border-background/60 hover:text-background focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-background';
 
 function holdSpace(el: HTMLDivElement | null) {
   const root = document.documentElement;
@@ -60,7 +60,7 @@ export function UpdateBanner() {
     <div
       id="update-banner"
       ref={holdSpace}
-      className="sticky top-0 z-40 grid min-h-8 w-full grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 bg-primaryBlue pb-1 pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.75rem+env(safe-area-inset-right))] pt-[calc(0.25rem+env(safe-area-inset-top))] font-sans text-sm text-background"
+      className="sticky top-0 z-40 grid min-h-7 w-full grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 bg-primaryBlue pb-1 pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.75rem+env(safe-area-inset-right))] pt-[calc(0.25rem+env(safe-area-inset-top))] font-sans text-sm text-background"
     >
       <span aria-hidden />
       <p role="status" className="min-w-0 truncate text-center font-medium">
