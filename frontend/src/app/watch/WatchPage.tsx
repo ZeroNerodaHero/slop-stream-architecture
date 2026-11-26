@@ -598,7 +598,7 @@ export function WatchPage() {
       wide
       fluid
     >
-      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen, theater)}>
+      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen, theater, !mobile)}>
         <div ref={fitCell} className={cn('min-w-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-1')}>
           {player}
           {deskStatus}
@@ -668,7 +668,7 @@ export function WatchPage() {
             inert={chatTab && deskTab !== 'chat' ? true : undefined}
             className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
           >
-            <ChatSlot tabbed={chatTab} fluid={theater}>
+            <ChatSlot tabbed={chatTab} fluid={theater} resizable>
               <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
             </ChatSlot>
           </div>
