@@ -107,7 +107,7 @@ fn grant_key(grant: &str) -> String {
     format!("voicegrant:{grant}")
 }
 
-fn voiceof_key(user: Uuid) -> String {
+pub(crate) fn voiceof_key(user: Uuid) -> String {
     format!("voiceof:{user}")
 }
 
@@ -157,6 +157,10 @@ fn voice_on(secret: Option<&str>) -> Result<&str, ApiError> {
     secret.ok_or_else(|| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "voice is off"))
 }
 
+pub(crate) fn voice_ready() -> Result<(), ApiError> {
+    voice_on(secret()).map(|_| ())
+}
+
 fn inside(headers: &HeaderMap, secret: Option<&str>) -> Result<(), ApiError> {
     if headers.contains_key("x-forwarded-for") {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such route"));
@@ -200,6 +204,37 @@ async fn may_talk(s: &AppState, user: Uuid, server: &str, channel: &str) -> Resu
     Ok(limit)
 }
 
+enum Gate {
+    Group(i32),
+    Dm,
+}
+
+async fn gate(s: &AppState, user: Uuid, server: &str, channel: &str) -> Result<(String, String, Gate), ApiError> {
+    if let Some(room) = crate::dm_calls::room_named(server) {
+        crate::dm_calls::may_talk(s, user, &room, channel).await?;
+        return Ok((room, crate::dm_calls::CHANNEL.to_owned(), Gate::Dm));
+    }
+    let (server, channel) = channel_names(server, channel)?;
+    let limit = may_talk(s, user, &server, &channel).await?;
+    Ok((server, channel, Gate::Group(limit)))
+}
+
+async fn tell_room(s: &AppState, server: &str, what: &str, data: Value) {
+    if crate::dm_calls::is_room(server) {
+        crate::dm_calls::tell(s, server, what, data).await;
+    } else {
+        tell(s, server, what, data).await;
+    }
+}
+
+async fn dm_full(s: &AppState, server: &str, channel: &str, user: Uuid) -> Result<(), ApiError> {
+    let fields: HashMap<String, String> = redis::cmd("HGETALL").arg(voice_key(server)).query_async(&mut s.redis.clone()).await?;
+    if others_in(&fields, channel, user) >= crate::dm_calls::SEATS {
+        return Err(ApiError::new(StatusCode::CONFLICT, "call full"));
+    }
+    Ok(())
+}
+
 fn room_for(user_limit: i32) -> usize {
     match usize::try_from(user_limit) {
         Ok(n) if n > 0 => n,
@@ -230,8 +265,7 @@ async fn join(
 ) -> ApiResult {
     let who = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     let tab = tab_of(body?.map(|Json(b)| b).unwrap_or_default().tab)?;
-    let (server, channel) = channel_names(&group, &channel)?;
-    let limit = may_talk(&s, who.id, &server, &channel).await?;
+    let (server, channel, gate) = gate(&s, who.id, &group, &channel).await?;
     let mut redis = s.redis.clone();
     let here = format!("{server}/{channel}");
     let now: Option<String> = redis::cmd("GET").arg(voiceof_key(who.id)).query_async(&mut redis).await?;
@@ -240,10 +274,15 @@ async fn join(
             return Err(ApiError::new(StatusCode::CONFLICT, "already in voice"));
         }
     }
-    if !allows(&s, who.id, &server, CHANNELS).await? {
-        let fields: HashMap<String, String> = redis::cmd("HGETALL").arg(voice_key(&server)).query_async(&mut redis).await?;
-        if others_in(&fields, &channel, who.id) >= room_for(limit) {
-            return Err(ApiError::new(StatusCode::CONFLICT, "channel full"));
+    match gate {
+        Gate::Dm => dm_full(&s, &server, &channel, who.id).await?,
+        Gate::Group(limit) => {
+            if !allows(&s, who.id, &server, CHANNELS).await? {
+                let fields: HashMap<String, String> = redis::cmd("HGETALL").arg(voice_key(&server)).query_async(&mut redis).await?;
+                if others_in(&fields, &channel, who.id) >= room_for(limit) {
+                    return Err(ApiError::new(StatusCode::CONFLICT, "channel full"));
+                }
+            }
         }
     }
     voice_on(secret())?;
@@ -282,8 +321,13 @@ async fn redeem(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
     }
     let kept: Option<String> = redis::cmd("GETDEL").arg(grant_key(&body.grant)).query_async(&mut s.redis.clone()).await?;
     let grant: Grant = kept.and_then(|k| serde_json::from_str(&k).ok()).ok_or_else(bad_grant)?;
-    may_talk(&s, grant.user_id, &grant.server, &grant.channel).await?;
-    let muted = is_muted(&s, &grant.server, grant.user_id).await?;
+    let muted = match gate(&s, grant.user_id, &grant.server, &grant.channel).await? {
+        (server, channel, Gate::Dm) => {
+            dm_full(&s, &server, &channel, grant.user_id).await?;
+            false
+        }
+        (_, _, Gate::Group(_)) => is_muted(&s, &grant.server, grant.user_id).await?,
+    };
     let mut out = json!(grant);
     out["muted"] = json!(muted);
     Ok(Json(out))
@@ -472,7 +516,7 @@ async fn leave(s: &AppState, server: &str, user: Uuid, older_than: Option<i64>) 
         .arg(format!("{server}/{channel}"))
         .query_async(&mut redis)
         .await?;
-    tell(s, server, "voice_left", json!({ "who": name, "uid": user, "channel": channel })).await;
+    tell_room(s, server, "voice_left", json!({ "who": name, "uid": user, "channel": channel })).await;
     Ok(true)
 }
 
@@ -505,9 +549,17 @@ struct AttachedBody {
 async fn attached(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<AttachedBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
-    let (server, channel) = channel_names(&body.server, &body.channel)?;
     let user = body.user_id;
-    may_talk(&s, user, &server, &channel).await?;
+    let (server, channel, gate) = match gate(&s, user, &body.server, &body.channel).await {
+        Ok(gated) => gated,
+        Err(e) => {
+            if let Some(room) = crate::dm_calls::room_named(&body.server) {
+                tell_voice(&s, Order::Disconnect, user, &room, None).await;
+            }
+            return Err(e);
+        }
+    };
+    let dm = matches!(gate, Gate::Dm);
     let name: String = sqlx::query_scalar("SELECT name FROM streamers WHERE id = $1")
         .bind(user)
         .fetch_optional(&s.db)
@@ -521,12 +573,16 @@ async fn attached(State(s): State<AppState>, headers: HeaderMap, body: Result<Js
     if was.is_none_or(|w| !w.starts_with(&format!("{server}/"))) {
         leave(&s, &server, user, None).await?;
     }
-    let session: i64 = sqlx::query_scalar("INSERT INTO voice_sessions (server, channel, user_id) VALUES ($1, $2, $3) RETURNING id")
-        .bind(&server)
-        .bind(&channel)
-        .bind(user)
-        .fetch_one(&s.db)
-        .await?;
+    let session: i64 = if dm {
+        0
+    } else {
+        sqlx::query_scalar("INSERT INTO voice_sessions (server, channel, user_id) VALUES ($1, $2, $3) RETURNING id")
+            .bind(&server)
+            .bind(&channel)
+            .bind(user)
+            .fetch_one(&s.db)
+            .await?
+    };
     let now = now_ms();
     let seated = Seated { name: name.clone(), channel: channel.clone(), seat: body.seat, since: now, beat: now, session };
     let () = redis::pipe()
@@ -546,8 +602,8 @@ async fn attached(State(s): State<AppState>, headers: HeaderMap, body: Result<Js
         .ignore()
         .query_async(&mut redis)
         .await?;
-    let muted = is_muted(&s, &server, user).await.unwrap_or(false);
-    tell(&s, &server, "voice", json!({ "who": name, "uid": user, "channel": channel, "muted": muted })).await;
+    let muted = !dm && is_muted(&s, &server, user).await.unwrap_or(false);
+    tell_room(&s, &server, "voice", json!({ "who": name, "uid": user, "channel": channel, "muted": muted })).await;
     Ok(Json(json!({ "session": session })))
 }
 
@@ -562,6 +618,9 @@ async fn left(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<P
     let Json(body) = body?;
     let server = body.server.trim().to_lowercase();
     let left = leave(&s, &server, body.user_id, None).await?;
+    if crate::dm_calls::is_room(&server) {
+        crate::dm_calls::left_room(s.clone(), server, body.user_id);
+    }
     Ok(Json(json!({ "left": left })))
 }
 
@@ -613,6 +672,11 @@ pub(crate) async fn sweep(s: AppState) {
             Ok(0) => {}
             Ok(n) => log::info!("voice sweep: {n} gone without a word"),
             Err(e) => log::warn!("voice sweep: {}", e.message()),
+        }
+        match crate::dm_calls::sweep_once(&s).await {
+            Ok(0) => {}
+            Ok(n) => log::info!("voice sweep: {n} dm call(s) over"),
+            Err(e) => log::warn!("voice sweep: dm calls: {}", e.message()),
         }
     }
 }
