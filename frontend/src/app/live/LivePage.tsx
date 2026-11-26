@@ -78,7 +78,6 @@ import {
   resetGrid,
   saveMine,
   setGrid,
-  setLivePanel,
   setRail,
   showInGrid,
   stopEditing,
@@ -104,7 +103,7 @@ import { PRESET_ICONS, PresetsModule } from '@/shared-components/live/modules/Pr
 import { RigModule } from '@/shared-components/live/modules/Rigging';
 import { SoundModule } from '@/shared-components/live/modules/Sound';
 import { SourcesModule } from '@/shared-components/live/modules/Sources';
-import { StartStop, StudioModule } from '@/shared-components/live/modules/Studio';
+import { StartStop, StudioFold, StudioModule } from '@/shared-components/live/modules/Studio';
 import { ThumbnailModule } from '@/shared-components/live/modules/Thumbnail';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -168,6 +167,23 @@ function useWidthOf(on: boolean) {
   return [ref, width] as const;
 }
 
+function useHudBeside(on: boolean) {
+  useLayoutEffect(() => {
+    const rail = document.getElementById('live-rail');
+    if (!on || !rail) return;
+    const root = document.documentElement;
+    const place = () => root.style.setProperty('--perf-hud-right', `${Math.max(6, root.clientWidth - rail.getBoundingClientRect().left + 6)}px`);
+    place();
+    const watcher = new ResizeObserver(place);
+    watcher.observe(rail);
+    watcher.observe(root);
+    return () => {
+      watcher.disconnect();
+      root.style.removeProperty('--perf-hud-right');
+    };
+  }, [on]);
+}
+
 function usePresetKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -228,16 +244,13 @@ const RAIL_PX = 244;
 const STRIP_PX = 40;
 const CHAT_PX = 340;
 const GAP_PX = 8;
-const CENTER_MIN = 720;
-const CENTER_ALONE_MIN = 480;
-const BAR_H = '2.375rem';
 const UNDER_MIN = '12rem';
 const GAP = '0.5rem';
 
-function reserveFor(below: boolean, belowOpen: boolean, rowH: string, under: boolean, underOpen: boolean): string {
+function reserveFor(below: boolean, rowH: string, under: boolean): string {
   const parts: string[] = [];
-  if (below) parts.push(belowOpen ? rowH : BAR_H, GAP);
-  if (under) parts.push(underOpen ? UNDER_MIN : BAR_H, GAP);
+  if (below) parts.push(rowH, GAP);
+  if (under) parts.push(UNDER_MIN, GAP);
   return parts.length ? parts.join(' + ') : '0px';
 }
 
@@ -270,7 +283,7 @@ function EditBar({ hidden, onAdd }: { hidden: ModuleId[]; onAdd: (id: ModuleId) 
       <Button id="live-edit-reset" size="sm" className="h-7 shrink-0 px-2.5 py-0 text-xs" onClick={resetGrid}>
         reset
       </Button>
-      <Tooltip content="keep this grid and these folds as yours">
+      <Tooltip content="keep this grid and these modules as yours">
         <Button id="live-edit-save" size="sm" className="h-7 shrink-0 px-2.5 py-0 text-xs" onClick={saveMine}>
           save as preset
         </Button>
@@ -288,7 +301,6 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [draft, setDraft] = useState<Cell | null>(null);
-  const [note, setNote] = useState('');
   const cellOf = (id: TileId) => (drag?.id === id && draft ? draft : grid[id]);
   const bad = drag !== null && draft !== null && !fits(grid, shown, drag.id, draft);
 
@@ -301,13 +313,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   };
 
   const commit = (id: TileId, cell: Cell) => {
-    if (!fits(grid, shown, id, cell)) {
-      setNote(`no room there for the ${DOCK_WORDS[id]}: it went back`);
-      return false;
-    }
-    setNote('');
-    setGrid({ ...grid, [id]: cell } as Grid);
-    return true;
+    if (fits(grid, shown, id, cell)) setGrid({ ...grid, [id]: cell } as Grid);
   };
 
   const down = (e: PointerEvent) => {
@@ -369,10 +375,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       {editing && (
-        <EditBar
-          hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))}
-          onAdd={(id) => !showInGrid(id) && setNote(`no room for the ${DOCK_WORDS[id]}: make a panel smaller first`)}
-        />
+        <EditBar hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))} onAdd={showInGrid} />
       )}
       <div
         ref={gridRef}
@@ -439,9 +442,6 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
           );
         })}
       </div>
-      <p id="live-grid-note" aria-live="polite" className={cn('text-xs text-caution', !note && 'sr-only')}>
-        {note}
-      </p>
     </div>
   );
 }
@@ -451,7 +451,9 @@ function Rail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
     <Collapsible
       id="live-rail"
       title="studio"
+      what="rail"
       sideways
+      aside={<StudioFold />}
       open={open}
       onToggle={onToggle}
       className="w-[15.25rem] shrink-0"
@@ -496,13 +498,13 @@ export function LivePage() {
   const mobile = useIsMobile();
   usePinnedPage(mobile);
   usePresetKeys();
+  useHudBeside(!mobile);
   const keyboard = useKeyboard().keyboard;
   const typing = useTypingIn('chat-text') && mobile;
   const strip = keyboardStrip(typing);
   const [tab, setTab] = useState<PhoneTab>(keptTab);
   const [picking, setPicking] = useState(false);
   const [drawer, setDrawer] = useState(false);
-  const [peek, setPeek] = useState(false);
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const park = useRef<HTMLDivElement | null>(null);
   const hosts = useHosts();
@@ -639,23 +641,15 @@ export function LivePage() {
     (a && a.right.length > 0 ? columnPx + GAP_PX : 0) -
     CHAT_PX -
     GAP_PX;
-  const crowded = a !== null && a.left.length + a.right.length + a.below.length > 0;
-  const squeezed = a !== null && a.side.length > 0 && deskWidth > 0 && besideChat < (crowded ? CENTER_MIN : CENTER_ALONE_MIN);
-  const sideOpen = squeezed ? peek && panels.chat : panels.chat;
-  const centerPx = besideChat + CHAT_PX - (a && a.side.length > 0 ? (sideOpen ? CHAT_PX : STRIP_PX) : -GAP_PX);
+  const centerPx = besideChat + (a && a.side.length > 0 ? 0 : CHAT_PX + GAP_PX);
   const cellPx = a && a.below.length > 0 ? (centerPx - (a.below.length - 1) * GAP_PX) / a.below.length : 0;
   const rowH = cellPx >= WIDE_CELL ? ROW_LOW : ROW_TALL;
-  const toggleSide = (open: boolean) => {
-    setPeek(open);
-    if (open !== panels.chat) setLivePanel('chat', open);
-  };
 
   const body = (id: ModuleId, place: Place): ReactNode => {
     if (id === 'sources') return <SourcesModule place={place} onModel={openModel} />;
     if (id === 'face') return <FaceModule place={place} onModel={openModel} />;
     if (id === 'rig') return <RigModule place={place} />;
     if (id === 'sound') return <SoundModule place={place} />;
-    if (place === 'side') return <ChatModule place={place} open={sideOpen} onToggle={squeezed ? toggleSide : undefined} />;
     return <ChatModule place={place} className={place === 'phone' ? cn('h-full min-h-0 flex-1', CHAT_MOBILE) : undefined} />;
   };
 
@@ -788,8 +782,7 @@ export function LivePage() {
 
   const gridShown = TILE_IDS.filter((t) => t === 'preview' || (!panels.hidden.includes(t) && !skip.includes(t)));
   const placeOf = (id: ModuleId): Place | null => (layout === 5 ? (gridShown.includes(id) ? 'tile' : null) : placeIn(a!, id));
-  const belowOpen = a ? a.below.some((id) => panels[id]) : false;
-  const reserve = a ? reserveFor(a.below.length > 0, belowOpen, rowH, a.under.length > 0, panels.chat) : '0px';
+  const reserve = a ? reserveFor(a.below.length > 0, rowH, a.under.length > 0) : '0px';
   const column = 'flex w-[16.5rem] shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain min-[1600px]:w-[17.5rem]';
 
   return (
@@ -797,7 +790,6 @@ export function LivePage() {
       <div
         ref={deskRef}
         id="live-desk"
-        data-squeezed={squeezed || undefined}
         data-layout={layout}
         data-editing={editing || undefined}
         data-preset={preset ?? 'custom'}
@@ -820,7 +812,7 @@ export function LivePage() {
                   ids={a.below}
                   id="live-below"
                   className="grid shrink-0 items-start gap-2"
-                  style={{ gridTemplateColumns: `repeat(${a.below.length}, minmax(0, 1fr))`, height: belowOpen ? rowH : undefined }}
+                  style={{ gridTemplateColumns: `repeat(${a.below.length}, minmax(0, 1fr))`, height: rowH }}
                 />
               )}
               {a.under.length > 0 && <Slot hosts={hosts} ids={a.under} id="live-under" className="flex min-h-0 flex-1 flex-col" />}
@@ -831,10 +823,7 @@ export function LivePage() {
                 hosts={hosts}
                 ids={a.side}
                 id="live-side"
-                className={cn(
-                  'flex min-h-0 shrink-0 flex-col motion-safe:transition-[width] motion-safe:duration-150 motion-reduce:transition-none',
-                  sideOpen ? 'w-[340px]' : 'w-10'
-                )}
+                className="flex min-h-0 w-[340px] shrink-0 flex-col"
               />
             )}
           </div>

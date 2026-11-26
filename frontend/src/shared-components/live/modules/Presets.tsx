@@ -1,9 +1,10 @@
 import { RiAddLine, RiChat3Line, RiCloseLine, RiEqualizerLine, type RemixiconComponentType, RiShieldLine, RiStackLine, RiStarLine, RiVidiconLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
-import { applyPreset, forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, PRESET_WORDS, saveMine } from '@/infra/live-dock';
+import { applyPreset, forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, PRESET_WORDS, saveMine, setRail, setRailFold } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
+import { RailSection, useRailFold } from '@/shared-components/live/RailSection';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -20,6 +21,29 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
   const current = useAtomValue(livePresetAtom);
   const mine = useAtomValue(liveMineAtom);
   const ids: PresetId[] = mine ? [...HOTKEY_PRESETS, 'mine'] : [...HOTKEY_PRESETS];
+  const open = useRailFold('presets');
+  if (strip && !open) {
+    const Icon = PRESET_ICONS[current ?? 'full'];
+    const words = `open the presets, now ${current ? PRESET_WORDS[current].name : 'custom'}`;
+    return (
+      <div className="flex flex-col items-center border-b border-primaryStroke py-2">
+        <Tooltip content={words}>
+          <button
+            id="live-presets-mini"
+            type="button"
+            aria-label={words}
+            onClick={() => {
+              setRailFold('presets', true);
+              setRail(true);
+            }}
+            className={cn(FOLD_BUTTON, current && 'border-primaryBlue text-primaryBlue')}
+          >
+            <Icon aria-hidden size={16} />
+          </button>
+        </Tooltip>
+      </div>
+    );
+  }
   if (strip)
     return (
       <div role="group" aria-label="presets" className="flex flex-col items-center gap-1.5 border-b border-primaryStroke py-2">
@@ -45,10 +69,7 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
       </div>
     );
   return (
-    <section id="live-presets" aria-labelledby="live-presets-title" className="flex flex-col gap-1 px-3 py-2.5">
-      <h2 id="live-presets-title" className="flex h-6 items-center text-xs font-semibold uppercase tracking-wider text-textTertiary">
-        presets
-      </h2>
+    <RailSection section="presets" id="live-presets" title="presets" className="px-3 py-2.5" bodyClassName="flex flex-col gap-1 pt-1">
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
         {ids.map((id, i) => {
           const Icon = PRESET_ICONS[id];
@@ -100,12 +121,12 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
           );
         })}
       </ul>
-      <Tooltip content="keep this layout and these folds as yours">
+      <Tooltip content="keep this layout and these modules as yours">
         <Button id="live-preset-save" size="sm" variant="outline" className="mt-1 h-7 gap-1 self-start px-2.5 py-0 text-xs max-md:min-h-0" onClick={saveMine}>
           <RiAddLine aria-hidden size={14} />
           save current
         </Button>
       </Tooltip>
-    </section>
+    </RailSection>
   );
 }

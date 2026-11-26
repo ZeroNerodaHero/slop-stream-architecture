@@ -14,6 +14,7 @@ const SIDE_BUTTON =
 interface CollapsibleProps {
   id: string;
   title: string;
+  what?: string;
   open: boolean;
   onToggle: () => void;
   aside?: ReactNode;
@@ -24,9 +25,9 @@ interface CollapsibleProps {
   children: ReactNode;
 }
 
-export function Collapsible({ id, title, open, onToggle, aside, footer, className, sideways = false, strip, children }: CollapsibleProps) {
+export function Collapsible({ id, title, what = title, open, onToggle, aside, footer, className, sideways = false, strip, children }: CollapsibleProps) {
   if (sideways) {
-    const words = open ? `fold the ${title}` : `open the ${title}`;
+    const words = open ? `fold the ${what}` : `open the ${what}`;
     const toggle = (
       <Tooltip content={words} at={open ? undefined : 'left'}>
         <button id={`${id}-toggle`} type="button" aria-label={words} aria-expanded={open} aria-controls={`${id}-body`} onClick={onToggle} className={SIDE_BUTTON}>

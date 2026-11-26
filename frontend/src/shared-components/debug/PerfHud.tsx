@@ -147,7 +147,7 @@ function spark(history: PerfHistory, [series, className, caption]: Graph) {
 }
 
 const HUD =
-  'pointer-events-none fixed right-1.5 top-1 z-[1000] select-none text-right font-mono text-xs tabular-nums text-textSecondary [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_0_1px_rgba(0,0,0,0.9)] max-md:right-[calc(0.375rem+env(safe-area-inset-right))] max-md:top-[calc(0.25rem+env(safe-area-inset-top))]';
+  'pointer-events-none fixed right-[var(--perf-hud-right,0.375rem)] top-1 z-[1000] select-none text-right font-mono text-xs tabular-nums text-textSecondary [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_0_1px_rgba(0,0,0,0.9)] max-md:right-[calc(0.375rem+env(safe-area-inset-right))] max-md:top-[calc(0.25rem+env(safe-area-inset-top))]';
 
 export function PerfHud({ mode = 'on' }: { mode?: PerfMode }) {
   const [snap, setSnap] = useState<PerfSnapshot | null>(null);
