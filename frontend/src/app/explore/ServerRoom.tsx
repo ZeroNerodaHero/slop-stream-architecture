@@ -74,7 +74,7 @@ import {
   VOICE_CHANNEL_CAP
 } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
-import { type ChatLine, reconnectChat, serverChat } from '@/infra/atoms/chat-atoms';
+import { type ChatLine, loadChannelPins, reconnectChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { loadMyEmotes } from '@/infra/emotes';
 import { PRESENCE_WORD, presenceOfAtom, presencesAtom } from '@/infra/atoms/presence-atoms';
@@ -605,11 +605,10 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
   useEffect(() => {
     if (!open) return;
     let live = true;
-    api
-      .channelPins(server, channel)
-      .then((r) => {
+    loadChannelPins(server, channel)
+      .then((pins) => {
         if (!live) return;
-        setList(r.pins);
+        setList(pins);
         setError('');
       })
       .catch((err: unknown) => {

@@ -1,7 +1,7 @@
 import { atom, type Atom, type PrimitiveAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import { api, type GroupBadge, type Owner } from '@/infra/api';
+import { api, type GroupBadge, type Owner, type PinnedLine } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { trackSocket } from '@/infra/debug/sockets';
@@ -15,6 +15,7 @@ import { rtPerfAnswer, rtPerfBegin, rtPerfMark, rtPerfSay } from '@/infra/rt/per
 import type { Release } from '@/infra/rt/refs';
 import { channelOf, chatTopicOf, type RtFrame, type Subbed } from '@/infra/rt/wire';
 import { store } from '@/infra/store';
+import { fromWire, picturesOf } from '@/infra/chat-wire';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
 export interface ChatLine {
@@ -1354,26 +1355,11 @@ export async function showSpeaker(speaker: string, key: string) {
   await rooms.get(key)?.showSpeaker(speaker);
 }
 
-export function fromWire<T extends ChatLine>(line: T): T {
-  const images = picturesOf(line);
-  return {
-    ...line,
-    groups: Array.isArray(line.groups) ? line.groups : [],
-    avatar: typeof line.avatar === 'number' ? line.avatar : null,
-    image: images[0] ?? null,
-    images,
-    video: videoOf(line.video),
-    reply: line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'string' ? line.reply : undefined,
-    reactions: reactionsOf(line.reactions)
-  };
-}
+export { fromWire } from '@/infra/chat-wire';
 
-function picturesOf(line: { image?: string | null; images?: unknown }): string[] {
-  if (Array.isArray(line.images)) {
-    const ids = line.images.filter((id): id is string => typeof id === 'string' && id.length > 0);
-    if (ids.length > 0) return ids;
-  }
-  return typeof line.image === 'string' && line.image ? [line.image] : [];
+export async function loadChannelPins(server: string, channel: string): Promise<PinnedLine[]> {
+  const { pins } = await api.channelPins(server, channel);
+  return pins.map(fromWire);
 }
 
 function samePictures(sent: string[], back: string[]): boolean {

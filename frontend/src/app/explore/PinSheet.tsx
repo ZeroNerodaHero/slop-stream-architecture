@@ -3,8 +3,8 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { api, messageOf, type PinnedLine } from '@/infra/api';
-import { fromWire, serverChat } from '@/infra/atoms/chat-atoms';
+import { messageOf, type PinnedLine } from '@/infra/api';
+import { loadChannelPins, serverChat } from '@/infra/atoms/chat-atoms';
 import { pinsTickAtom } from '@/infra/atoms/room-atoms';
 import { chatStyleAtom } from '@/infra/atoms/settings-atoms';
 import { RoomLines } from '@/shared-components/ChatPanel';
@@ -85,10 +85,9 @@ export function PinSheet({
   useEffect(() => {
     if (!open) return;
     let live = true;
-    api
-      .channelPins(server, channel)
-      .then((r) => {
-        if (live) setGot({ for: here, pins: r.pins.map(fromWire), error: '' });
+    loadChannelPins(server, channel)
+      .then((pins) => {
+        if (live) setGot({ for: here, pins, error: '' });
       })
       .catch((err: unknown) => {
         if (live) setGot((was) => ({ for: here, pins: was.for === here ? was.pins : null, error: messageOf(err) }));
