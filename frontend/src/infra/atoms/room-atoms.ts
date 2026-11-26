@@ -50,12 +50,15 @@ export function pageFor(rowPx: number, height: number = window.innerHeight): num
 
 let open = '';
 let attempt = 0;
+let chatHold: (() => void) | null = null;
 
 export function enterRoom(server: string): void {
   if (open === server) return;
   if (open) unwatchPresence(groupTopic(open));
   open = server;
   attempt++;
+  chatHold?.();
+  chatHold = serverChat(server).join();
   store.set(roomAtom, null);
   store.set(roomErrorAtom, '');
   store.set(roomGoneAtom, false);
@@ -83,6 +86,8 @@ export function leaveRoom(): void {
   unwatchPresence(groupTopic(open));
   open = '';
   attempt++;
+  chatHold?.();
+  chatHold = null;
   store.set(roomAtom, null);
   store.set(roomErrorAtom, '');
   store.set(roomGoneAtom, false);
@@ -300,8 +305,7 @@ async function reloadRoster(): Promise<void> {
     const now = store.get(roomAtom);
     if (mine !== attempt || ask !== rosterAsk || !now || now.name !== server) return;
     store.set(roomAtom, { ...now, roster: page.members, roster_next: page.next });
-  } catch {
-  }
+  } catch {}
 }
 
 function withinLoaded(room: GroupRoom, roster: GroupMember[], member: GroupMember): boolean {

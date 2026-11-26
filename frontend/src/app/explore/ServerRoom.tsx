@@ -855,10 +855,10 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
     <Skeleton id="group-loading" label="loading the group">
       <div className={cn('relative mb-16', TOP_VIEW)}>
         <div className="relative h-36 overflow-hidden rounded-panel border border-primaryStroke">
-          <Bone className="absolute inset-0" />
+          <Bone className="absolute inset-0 rounded-none" />
         </div>
         <div className="absolute -bottom-12 left-4 h-24 w-24 overflow-hidden rounded-avatar border-4 border-background">
-          <Bone className="h-full" />
+          <Bone className="h-full rounded-none" />
         </div>
       </div>
       <div className="mb-7 flex flex-col gap-2 pl-4">

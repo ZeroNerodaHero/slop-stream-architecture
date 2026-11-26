@@ -118,7 +118,7 @@ function MyStats() {
           !error && (
             <Skeleton id="stats-loading" className={TILES}>
               {Array.from({ length: 7 }, (_, i) => (
-                <Bone key={i} className="h-16" />
+                <Bone key={i} className="h-16 rounded-card" />
               ))}
             </Skeleton>
           )
