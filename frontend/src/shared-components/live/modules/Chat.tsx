@@ -1,4 +1,3 @@
-import { RiArrowLeftSLine } from '@remixicon/react';
 import { atom, useAtomValue } from 'jotai';
 import { useState } from 'react';
 
@@ -6,13 +5,11 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, chatRoomFor } from '@/infra/atoms/chat-atoms';
 import { profileForAtom, profileWelcomeAtom } from '@/infra/atoms/profile-atoms';
 import { chatRoomAtom, ownerAtom } from '@/infra/atoms/publish-atoms';
-import { livePanelsAtom, liveLockedAtom, type Place, setLivePanel, unreadAfter, unreadWords } from '@/infra/live-dock';
+import { type Place, unreadAfter, unreadWords } from '@/infra/live-dock';
 import { ChatModActions } from '@/shared-components/ChatMod';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { ChatSlot } from '@/shared-components/ChatSlot';
 import { DockPanel } from '@/shared-components/live/Dock';
-import { Tooltip } from '@/shared-components/Tooltip';
-import { ChatIcon } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
 
 const noLinesAtom = atom<ChatLine[]>([]);
@@ -72,42 +69,9 @@ export function ChatWindow() {
   );
 }
 
-interface ChatModuleProps {
-  place: Place;
-  className?: string;
-  open?: boolean;
-  onToggle?: (open: boolean) => void;
-}
-
-export function ChatModule({ place, className = 'h-full min-h-0 flex-1', open: shown, onToggle }: ChatModuleProps) {
-  const kept = useAtomValue(livePanelsAtom).chat;
-  const open = shown ?? kept;
-  const locked = useAtomValue(liveLockedAtom);
-  const room = useAtomValue(chatRoomAtom);
-  const unread = useUnread(room, place !== 'phone' && !open);
-  const strip = (
-    <Tooltip content="open the chat" at="left">
-      <button
-        id="live-chat-strip"
-        type="button"
-        aria-label={unread > 0 ? `open the chat, ${unread} unread` : 'open the chat'}
-        aria-expanded={false}
-        aria-controls="live-chat-body"
-        disabled={locked}
-        onClick={() => (onToggle ? onToggle(true) : setLivePanel('chat', true))}
-        className="flex h-full w-full flex-col items-center gap-2 py-2 text-textSecondary transition-colors duration-150 hover:text-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none"
-      >
-        <RiArrowLeftSLine aria-hidden size={16} />
-        <ChatIcon />
-        <Unread count={unread} id="live-chat-unread" />
-        <span aria-hidden className="text-xs font-semibold uppercase tracking-wider [writing-mode:vertical-rl]">
-          chat
-        </span>
-      </button>
-    </Tooltip>
-  );
+export function ChatModule({ place, className = 'h-full min-h-0 flex-1' }: { place: Place; className?: string }) {
   return (
-    <DockPanel tab="chat" place={place} open={shown} onToggle={onToggle} aside={!open && place !== 'side' ? <Unread id="live-chat-unread" count={unread} /> : undefined} strip={strip}>
+    <DockPanel tab="chat" place={place}>
       <ChatBody className={className} />
     </DockPanel>
   );

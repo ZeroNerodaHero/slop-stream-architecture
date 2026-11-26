@@ -1107,11 +1107,11 @@ a smaller box when it takes focus. Add width extras with cn(INPUT, 'min-w-0 flex
 
 ## `frontend/src/shared-components/live/Collapsible.tsx`
 
-`export function Collapsible`: A panel of the go live page that folds to its header: the sources, the sound.
-The body is there or not (no height to animate, the lists vary), the way every panel in the
-app shows and hides. Which are open is kept per browser (publish-atoms' `livePanelsAtom`).
-A footer does not fold with it: what sits there (start, stop) must not go with a click on
-the header.
+`export function Collapsible`: The go live page's right rail, which collapses sideways to a 40px strip of icons.
+Its sections (studio, layout, presets, thumbnail) each fold to their header row through
+`live/RailSection.tsx` (`RailSection`, `RailFold`), kept per browser in `settings.liveRailFolds`
+(`liveRailFoldsAtom` in `infra/live-dock.ts`). The modules (sources, face, rigging, sound, chat)
+do not fold: a preset or edit mode shows or hides them. Start stays out of the studio fold.
 
 `export const ICON_BUTTON`: A small icon-only button in a panel's header or row: a square that gets the blue stroke on hover.
 

@@ -12,33 +12,39 @@ export type TileId = ModuleId | 'preview';
 export const TILE_IDS: readonly TileId[] = ['preview', ...MODULE_IDS];
 
 export interface LivePanels {
-  sources: boolean;
-  face: boolean;
-  rig: boolean;
-  sound: boolean;
-  chat: boolean;
-  thumbnail: boolean;
   hidden: ModuleId[];
 }
 
-export type FoldKey = Exclude<keyof LivePanels, 'hidden'>;
-export const PANEL_KEYS: readonly FoldKey[] = [...DOCK_PANELS, 'chat', 'thumbnail'];
-
-export const DOCK_WORDS: Record<TileId | 'thumbnail', string> = {
+export const DOCK_WORDS: Record<TileId, string> = {
   preview: 'preview',
   sources: 'sources',
   face: 'face',
   rig: 'rigging',
   sound: 'sound',
-  chat: 'chat',
-  thumbnail: 'thumbnail'
+  chat: 'chat'
 };
 
 export function readPanels(raw: unknown): LivePanels {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const open = {} as LivePanels;
-  for (const key of PANEL_KEYS) open[key] = p[key] !== false;
-  open.hidden = Array.isArray(p.hidden) ? MODULE_IDS.filter((id) => (p.hidden as unknown[]).includes(id)) : [];
+  return { hidden: Array.isArray(p.hidden) ? MODULE_IDS.filter((id) => (p.hidden as unknown[]).includes(id)) : [] };
+}
+
+export const RAIL_SECTIONS = ['studio', 'layout', 'presets', 'thumbnail'] as const;
+export type RailSection = (typeof RAIL_SECTIONS)[number];
+export type RailFolds = Record<RailSection, boolean>;
+
+export const RAIL_WORDS: Record<RailSection, string> = {
+  studio: 'studio',
+  layout: 'layout',
+  presets: 'presets',
+  thumbnail: 'thumbnail'
+};
+
+export function readRailFolds(raw: unknown, legacy: unknown = null): RailFolds {
+  const f = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const old = legacy && typeof legacy === 'object' ? (legacy as Record<string, unknown>) : {};
+  const open = {} as RailFolds;
+  for (const id of RAIL_SECTIONS) open[id] = typeof f[id] === 'boolean' ? (f[id] as boolean) : !(id === 'thumbnail' && old.thumbnail === false);
   return open;
 }
 
@@ -205,14 +211,12 @@ export interface Preset {
   panels: LivePanels;
 }
 
-const ALL_OPEN: LivePanels = { sources: true, face: true, rig: true, sound: true, chat: true, thumbnail: true, hidden: [] };
-
 export const PRESETS: Record<Exclude<PresetId, 'mine'>, Preset> = {
-  full: { layout: 1, panels: ALL_OPEN },
-  camera: { layout: 1, panels: { ...ALL_OPEN, sources: false, sound: false } },
-  sources: { layout: 1, panels: { ...ALL_OPEN, face: false, rig: false } },
-  chat: { layout: 4, panels: { ...ALL_OPEN, hidden: ['sources', 'face', 'rig', 'sound'] } },
-  safe: { layout: 1, panels: { ...ALL_OPEN, hidden: ['sources', 'face', 'rig', 'sound'] } }
+  full: { layout: 1, panels: { hidden: [] } },
+  camera: { layout: 1, panels: { hidden: ['sources', 'sound'] } },
+  sources: { layout: 1, panels: { hidden: ['face', 'rig'] } },
+  chat: { layout: 4, panels: { hidden: ['sources', 'face', 'rig', 'sound'] } },
+  safe: { layout: 1, panels: { hidden: ['sources', 'face', 'rig', 'sound'] } }
 };
 
 export const PRESET_WORDS: Record<PresetId, { name: string; what: string }> = {
@@ -232,7 +236,7 @@ export function readPreset(raw: unknown): Preset | null {
 }
 
 export function samePanels(a: LivePanels, b: LivePanels): boolean {
-  return PANEL_KEYS.every((k) => k === 'thumbnail' || a[k] === b[k]) && a.hidden.length === b.hidden.length && a.hidden.every((id) => b.hidden.includes(id));
+  return a.hidden.length === b.hidden.length && a.hidden.every((id) => b.hidden.includes(id));
 }
 
 export function presetOf(layout: LayoutId, panels: LivePanels, mine: Preset | null): PresetId | null {
@@ -291,6 +295,7 @@ const storedLayoutAtom = atomWithStorage<unknown>('settings.liveLayout', 1, unde
 const storedGridAtom = atomWithStorage<unknown>('settings.liveGrid', null, undefined, json);
 const storedMineAtom = atomWithStorage<unknown>('settings.livePresetMine', null, undefined, json);
 const storedRailAtom = atomWithStorage<unknown>('settings.liveRail', null, undefined, json);
+const storedRailFoldsAtom = atomWithStorage<unknown>('settings.liveRailFolds', null, undefined, json);
 
 export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
 export const liveLayoutAtom = atom<LayoutId>((get) => readLayout(get(storedLayoutAtom)));
@@ -299,16 +304,21 @@ export const liveMineAtom = atom<Preset | null>((get) => readPreset(get(storedMi
 export const livePresetAtom = atom<PresetId | null>((get) => presetOf(get(liveLayoutAtom), get(livePanelsAtom), get(liveMineAtom)));
 export const liveLockedAtom = atom((get) => get(livePresetAtom) === 'safe');
 export const liveRailAtom = atom<RailState>((get) => readRail(get(storedRailAtom)));
+export const liveRailFoldsAtom = atom<RailFolds>((get) => readRailFolds(get(storedRailFoldsAtom), get(storedPanelsAtom)));
 export const liveEditingAtom = atom(false);
 
-export function setLivePanel(name: FoldKey, open: boolean) {
-  store.set(storedPanelsAtom, { ...store.get(livePanelsAtom), [name]: open });
+function setPanels(panels: LivePanels) {
+  if (store.get(storedRailFoldsAtom) === null) store.set(storedRailFoldsAtom, store.get(liveRailFoldsAtom));
+  store.set(storedPanelsAtom, panels);
+}
+
+export function setRailFold(section: RailSection, open: boolean) {
+  store.set(storedRailFoldsAtom, { ...store.get(liveRailFoldsAtom), [section]: open });
 }
 
 export function setHidden(id: ModuleId, hidden: boolean) {
-  const panels = store.get(livePanelsAtom);
-  const rest = panels.hidden.filter((h) => h !== id);
-  store.set(storedPanelsAtom, { ...panels, [id]: true, hidden: hidden ? [...rest, id] : rest });
+  const rest = store.get(livePanelsAtom).hidden.filter((h) => h !== id);
+  setPanels({ hidden: hidden ? [...rest, id] : rest });
 }
 
 export function setLayout(layout: LayoutId) {
@@ -328,7 +338,7 @@ export function applyPreset(id: PresetId) {
   if (!p) return;
   store.set(liveEditingAtom, false);
   store.set(storedLayoutAtom, p.layout);
-  store.set(storedPanelsAtom, { ...p.panels, thumbnail: store.get(livePanelsAtom).thumbnail });
+  setPanels({ hidden: [...p.panels.hidden] });
 }
 
 export function saveMine() {
@@ -343,7 +353,7 @@ export function startEditing(from: LayoutId) {
   if (from !== 5) {
     const panels = store.get(livePanelsAtom);
     store.set(storedGridAtom, LAYOUT_GRIDS[from]);
-    store.set(storedPanelsAtom, panels);
+    setPanels(panels);
   }
   store.set(storedLayoutAtom, 5);
   store.set(liveEditingAtom, true);
@@ -355,7 +365,7 @@ export function stopEditing() {
 
 export function resetGrid() {
   store.set(storedGridAtom, DEFAULT_GRID);
-  store.set(storedPanelsAtom, { ...store.get(livePanelsAtom), hidden: [] });
+  setPanels({ hidden: [] });
 }
 
 export function showInGrid(id: ModuleId): boolean {

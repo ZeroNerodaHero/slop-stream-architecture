@@ -3,6 +3,7 @@ import { useAtomValue } from 'jotai';
 import { LAYOUT_IDS, LAYOUT_WORDS, type LayoutId, liveEditingAtom, liveLayoutAtom, liveLockedAtom, setLayout, startEditing, stopEditing } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
+import { RailSection } from '@/shared-components/live/RailSection';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -79,9 +80,13 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
     );
   }
   return (
-    <section id="live-layouts" aria-labelledby="live-layouts-title" className="flex flex-col gap-2 border-b border-primaryStroke px-3 py-2.5">
-      <h2 className="flex h-6 items-center justify-between text-xs font-semibold uppercase tracking-wider text-textTertiary">
-        <span id="live-layouts-title">layout</span>
+    <RailSection
+      section="layout"
+      id="live-layouts"
+      title="layout"
+      className="border-b border-primaryStroke px-3 py-2.5"
+      bodyClassName="pt-2"
+      aside={
         <Tooltip content={locked ? LOCKED : editing ? 'you are editing' : 'edit this layout on a grid'}>
           <Button
             id="live-layout-edit"
@@ -94,7 +99,8 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
             edit
           </Button>
         </Tooltip>
-      </h2>
+      }
+    >
       <div role="group" aria-label="layout" className="grid grid-cols-5 gap-1.5">
         {LAYOUT_IDS.map((id) => {
           const on = id === layout;
@@ -119,6 +125,6 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
           );
         })}
       </div>
-    </section>
+    </RailSection>
   );
 }

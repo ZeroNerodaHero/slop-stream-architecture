@@ -23,20 +23,37 @@ import {
   readPanels,
   readPreset,
   readRail,
+  readRailFolds,
   TILE_IDS,
   typingInto,
   unreadAfter,
   unreadWords
 } from '../src/infra/live-dock.ts';
 
-const ALL = { sources: true, face: true, rig: true, sound: true, chat: true, thumbnail: true, hidden: [] };
+const ALL = { hidden: [] };
 
-test('every panel is open and shown until it is folded or closed', () => {
+test('every module is shown until it is closed, and old fold flags are dropped', () => {
   assert.deepEqual(readPanels(null), ALL);
   assert.deepEqual(readPanels('junk'), ALL);
-  assert.deepEqual(readPanels({ rig: false, chat: false, dock: false }), { ...ALL, rig: false, chat: false });
-  assert.deepEqual(readPanels({ hidden: ['rig', 'nope', 'chat', 3] }), { ...ALL, hidden: ['rig', 'chat'] });
+  assert.deepEqual(readPanels({ rig: false, chat: false, thumbnail: false, dock: false }), ALL);
+  assert.deepEqual(readPanels({ sources: false, hidden: ['rig', 'nope', 'chat', 3] }), { hidden: ['rig', 'chat'] });
   assert.deepEqual(readPanels({ hidden: 'rig' }), ALL);
+});
+
+test('every rail section is open until folded, and an old thumbnail fold carries over once', () => {
+  const OPEN = { studio: true, layout: true, presets: true, thumbnail: true };
+  assert.deepEqual(readRailFolds(null), OPEN);
+  assert.deepEqual(readRailFolds('junk', 'junk'), OPEN);
+  assert.deepEqual(readRailFolds({ studio: false, presets: false, layout: 'no', extra: false }), { ...OPEN, studio: false, presets: false });
+  assert.deepEqual(readRailFolds(null, { thumbnail: false, rig: false }), { ...OPEN, thumbnail: false });
+  assert.deepEqual(readRailFolds({ thumbnail: true }, { thumbnail: false }), OPEN);
+});
+
+test('presets pick modules by showing and hiding them, never by folding', () => {
+  for (const p of Object.values(PRESETS)) assert.deepEqual(Object.keys(p.panels), ['hidden']);
+  assert.deepEqual(PRESETS.camera.panels.hidden, ['sources', 'sound']);
+  assert.deepEqual(PRESETS.sources.panels.hidden, ['face', 'rig']);
+  assert.deepEqual(PRESETS.full.panels.hidden, []);
 });
 
 test('a kept layout that is not one of the five falls back to obs left', () => {
@@ -89,15 +106,16 @@ test('a module put back finds a free cell, or none when the grid is full', () =>
   assert.ok(cell && fits(roomy, shown, 'rig', cell) && cell.x + cell.w <= GRID_COLS && cell.y + cell.h <= GRID_ROWS);
 });
 
-test('a preset is found again from the layout and the folds, whatever the thumbnail does', () => {
+test('a preset is found again from the layout and the shown modules', () => {
   assert.equal(presetOf(1, ALL, null), 'full');
-  assert.equal(presetOf(1, { ...ALL, thumbnail: false }, null), 'full');
   assert.equal(presetOf(2, ALL, null), null);
+  assert.equal(presetOf(1, { hidden: ['sound', 'sources'] }, null), 'camera');
+  assert.equal(presetOf(1, { hidden: ['rig', 'face'] }, null), 'sources');
   assert.equal(presetOf(PRESETS.safe.layout, PRESETS.safe.panels, null), 'safe');
-  assert.equal(presetOf(PRESETS.chat.layout, { ...PRESETS.chat.panels, hidden: ['sound', 'rig', 'face', 'sources'] }, null), 'chat');
-  assert.equal(presetOf(3, { ...ALL, rig: false }, { layout: 3, panels: { ...ALL, rig: false } }), 'mine');
+  assert.equal(presetOf(PRESETS.chat.layout, { hidden: ['sound', 'rig', 'face', 'sources'] }, null), 'chat');
+  assert.equal(presetOf(3, { hidden: ['rig'] }, { layout: 3, panels: { hidden: ['rig'] } }), 'mine');
   assert.equal(readPreset({ layout: 7, panels: {} }), null);
-  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false } }), { layout: 4, panels: { ...ALL, chat: false } });
+  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { layout: 4, panels: ALL });
 });
 
 test('only the keys 1 to 5 pick a preset', () => {

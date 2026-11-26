@@ -24,6 +24,7 @@ import { SCREEN_SLOTS } from '@/infra/relay';
 import { Button } from '@/shared-components/Button';
 import { ExternalLink } from '@/shared-components/ExternalLink';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
+import { RailFold, RailSection, useRailFold } from '@/shared-components/live/RailSection';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
@@ -151,28 +152,58 @@ function CopyButton({ id }: { id: string }) {
   );
 }
 
-export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; prefix?: string }) {
+const START_CLASS = 'flex flex-col gap-1.5 [&>button:first-child]:h-10 [&>button:first-child]:rounded-control [&>button:first-child]:py-0';
+
+function WatchLink({ prefix }: { prefix: string }) {
   const watchUrl = useAtomValue(watchUrlAtom);
+  if (!watchUrl) return null;
+  return (
+    <p id={prefix ? undefined : 'link'} className="truncate text-xs">
+      <ExternalLink id={prefix ? undefined : 'watchurl'} href={watchUrl}>
+        {watchUrl}
+      </ExternalLink>
+    </p>
+  );
+}
+
+export function StudioFold() {
+  return <RailFold section="studio" id="live-controls-toggle" controls="live-controls-body" />;
+}
+
+export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; prefix?: string }) {
+  const open = useRailFold('studio');
   if (strip)
     return (
-      <div id="live-controls" className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke pb-2">
+      <div id="live-controls" data-open={open} className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke pb-2">
         <RoundStart />
-        <CopyLink />
+        {open && <CopyLink />}
         <LiveStatus prefix="" quiet />
       </div>
     );
+  if (prefix)
+    return (
+      <section id={`${prefix}-controls`} aria-label="studio" className="relative flex flex-col gap-2 border-b border-primaryStroke px-3 pb-3 pt-1">
+        <StartStop prefix={prefix} className={START_CLASS} />
+        <LiveStatus prefix={prefix} />
+        <CopyButton id={`${prefix}-copy`} />
+        <WatchLink prefix={prefix} />
+      </section>
+    );
   return (
-    <section id={prefix ? `${prefix}-controls` : 'live-controls'} aria-label="studio" className="relative flex flex-col gap-2 border-b border-primaryStroke px-3 pb-3 pt-1">
-      <StartStop prefix={prefix} className="flex flex-col gap-1.5 [&>button:first-child]:h-10 [&>button:first-child]:rounded-control [&>button:first-child]:py-0" />
-      <LiveStatus prefix={prefix} />
-      <CopyButton id={prefix ? `${prefix}-copy` : 'copy'} />
-      {watchUrl && (
-        <p id={prefix ? undefined : 'link'} className="truncate text-xs">
-          <ExternalLink id={prefix ? undefined : 'watchurl'} href={watchUrl}>
-            {watchUrl}
-          </ExternalLink>
-        </p>
-      )}
-    </section>
+    <RailSection
+      section="studio"
+      id="live-controls"
+      className="relative border-b border-primaryStroke px-3 pb-3 pt-1"
+      bodyClassName="flex flex-col gap-2 pt-2"
+      top={
+        <div className="flex flex-col gap-2">
+          <StartStop className={START_CLASS} />
+          <LiveStatus prefix="" quiet={!open} />
+        </div>
+      }
+    >
+      <CopyButton id="copy" />
+      <WatchLink prefix="" />
+    </RailSection>
   );
 }
