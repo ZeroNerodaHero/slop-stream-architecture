@@ -385,7 +385,7 @@ export function WatchPage() {
             layers={layers}
             streamFor={slotStreamAtom}
             imageUrl={(asset) => api.assetUrl(name, asset)}
-            avatar={{ name, version: avatar, streamAtom: remoteStreamAtom }}
+            avatar={{ name, version: avatar, streamAtom: remoteStreamAtom, pulse: true }}
             main={{
               id: 'video',
               streamAtom: remoteStreamAtom,

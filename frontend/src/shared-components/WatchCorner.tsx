@@ -97,7 +97,7 @@ export function WatchCorner() {
         slot: primary,
         streamFor: slotStreamAtom,
         imageUrl: (asset) => api.assetUrl(name, asset),
-        avatar: { name, version: avatar, streamAtom: remoteStreamAtom },
+        avatar: { name, version: avatar, streamAtom: remoteStreamAtom, pulse: true },
         onPick: pickSlot
       }}
       badge={canHear && <StreamStatsButton id="pip-stats" role="watch" stats={stats} className={CORNER_BADGE} playback={{ muted, level: volume }} />}
