@@ -6,12 +6,15 @@ import rnnoiseSimdWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise_simd.wa
 import rnnoiseWorkletUrl from '@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url';
 
 import { api, messageOf, statusOf } from '@/infra/api';
+import { meAtom } from '@/infra/atoms/auth-atoms';
 import { trackSocket } from '@/infra/debug/sockets';
 import { socketUrl } from '@/infra/frames';
 import { FLOOR_DB, type Level, levelAnalyser, levelOf } from '@/infra/mic-level';
 import { store } from '@/infra/store';
 import gateWorkletUrl from '@/infra/voice-gate-worklet.js?url';
 import { trimOffer } from '@/infra/voice-offer';
+
+import '@/infra/atoms/call-room-atoms';
 
 import { HEARD_DEFAULT, heardLevelOf, IDLE, type VoiceCall, voiceCallAtom, voiceHeardAtom, voiceUidsAtom } from './voice-state';
 import { sayVoiceState, startVideo, stopVideo, switchVoiceCamera, takeVideoAnswer, type VideoKind, videoSeats } from './voice-video';
@@ -385,6 +388,13 @@ function amplify(call: Live, audio: HTMLAudioElement, h: Heard): void {
 store.sub(voiceSeatsAtom, applyHeard);
 store.sub(voiceUidsAtom, applyHeard);
 store.sub(voiceHeardAtom, applyHeard);
+
+let signedAs = store.get(meAtom);
+store.sub(meAtom, () => {
+  const now = store.get(meAtom);
+  if (typeof signedAs === 'string' && now !== signedAs && store.get(voiceCallAtom).phase !== 'idle') leaveVoice();
+  signedAs = now;
+});
 
 export interface StatsEntry {
   id: string;

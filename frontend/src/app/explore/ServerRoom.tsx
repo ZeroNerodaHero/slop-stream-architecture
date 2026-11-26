@@ -53,7 +53,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EmotesSection } from '@/app/explore/EmotesSection';
 import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
 import { VoicePanel } from '@/app/explore/VoicePanel';
-import { VoicePip } from '@/app/explore/VoicePip';
 import { useVoiceView, VoiceRoom } from '@/app/explore/VoiceRoom';
 import {
   api,
@@ -100,7 +99,6 @@ import {
   timeoutsTickAtom
 } from '@/infra/atoms/room-atoms';
 import { roomMembersOpenAtom } from '@/infra/atoms/settings-atoms';
-import { leaveVoice } from '@/infra/atoms/voice-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
@@ -952,10 +950,7 @@ export function ServerPage() {
   useEffect(() => {
     if (!ok || me === undefined) return;
     enterRoom(server);
-    return () => {
-      leaveRoom();
-      leaveVoice();
-    };
+    return () => leaveRoom();
   }, [ok, server, me]);
 
   useLayoutEffect(() => {
@@ -1337,7 +1332,6 @@ export function ServerPage() {
               </div>
             )}
           </div>
-          {!mobile && <VoicePip room={room} />}
           {mobile && (
             <PinSheet
               server={server}

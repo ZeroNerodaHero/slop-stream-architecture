@@ -2,34 +2,46 @@ import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiVolumeUpLine } from '@
 import { useAtom, useAtomValue } from 'jotai';
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useMatch, useNavigate } from 'react-router-dom';
 
-import { ControlBar, Tile, type TileOf, useCallTiles, useVoiceView } from '@/app/explore/VoiceRoom';
+import { CallControls, ControlBar, Tile, type TileOf, useCallTiles, useVoiceView } from '@/app/explore/VoiceRoom';
 import { type GroupRoom, isVoice } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { callRoomAtom } from '@/infra/atoms/call-room-atoms';
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { voiceSpeakingAtom } from '@/infra/atoms/voice-atoms';
 import { hideVoicePip, pipCallKey, voicePipAtAtom, voicePipCollapsedAtom, voicePipHiddenAtom } from '@/infra/atoms/voice-pip-atoms';
 import { voiceCallAtom } from '@/infra/atoms/voice-state';
 import { useIsMobile } from '@/infra/mobile';
+import { cleanName } from '@/infra/names';
 import { clampPip, nextBig, type PipAt, type PipCandidate, parsePipAt, smallRows } from '@/infra/voice-pip';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 
 const EDGE = 24;
+const NAME_BUTTON =
+  'flex min-w-0 items-baseline gap-1.5 rounded-control border border-transparent text-left hover:border-primaryStroke hover:bg-backgroundTertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue';
 const HEAD_BUTTON =
   'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-background text-textSecondary hover:border-secondaryStroke hover:bg-backgroundTertiary hover:text-textPrimary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue';
 
-export function VoicePip({ room }: { room: GroupRoom }) {
+export function VoicePip() {
   const call = useAtomValue(voiceCallAtom);
+  const room = useAtomValue(callRoomAtom);
   const hidden = useAtomValue(voicePipHiddenAtom);
   const mobile = useIsMobile();
-  const view = useVoiceView(room);
+  const navigate = useNavigate();
+  const match = useMatch('/groups/:server/*');
+  const page = !!match && cleanName(match.params.server) === call.server;
+  const view = useVoiceView(page ? room : null);
   const live = call.phase === 'joining' || call.phase === 'connected';
-  const here = live && call.server === room.name && (room.channels ?? []).some((c) => isVoice(c) && c.name === call.channel);
-  if (mobile || !here || hidden === pipCallKey(call) || view.view === call.channel) return null;
-  return createPortal(<PipWindow room={room} channel={call.channel} />, document.body);
+  if (!live || !room || room.name !== call.server || !(room.channels ?? []).some((c) => isVoice(c) && c.name === call.channel)) return null;
+  const open = () =>
+    page ? view.open(call.channel) : navigate(`/groups/${encodeURIComponent(room.name)}?voice=${encodeURIComponent(call.channel)}`);
+  if (mobile) return page ? null : createPortal(<CallBar room={room} channel={call.channel} open={open} />, document.body);
+  if ((page && hidden === pipCallKey(call)) || view.view === call.channel) return null;
+  return createPortal(<PipWindow room={room} channel={call.channel} page={page} open={open} />, document.body);
 }
 
 function viewport() {
@@ -80,7 +92,7 @@ function bigOf(call: string, tiles: TileOf[], speaking: ReadonlySet<string>): st
   return m.big;
 }
 
-function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
+function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: string; page: boolean; open: () => void }) {
   const me = useAtomValue(meAtom) ?? '';
   const call = useAtomValue(voiceCallAtom);
   const [stored, setStored] = useAtom(voicePipAtAtom(me));
@@ -88,7 +100,6 @@ function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
   const side = useAtomValue(panelSideAtom);
   const sidebarOpen = useAtomValue(friendsOpenAtom);
   const speaking = useAtomValue(voiceSpeakingAtom);
-  const view = useVoiceView(room);
   const tiles = useCallTiles(room, channel);
   const big = bigOf(pipCallKey(call), tiles, speaking);
   const ref = useRef<HTMLElement | null>(null);
@@ -170,7 +181,6 @@ function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
   const people = tiles.filter((t) => t.kind === 'person').length;
   const bigTiles = big.flatMap((k) => tiles.filter((t) => t.key === k));
   const { shown, more } = smallRows(tiles.filter((t) => !big.includes(t.key)));
-  const openMiddle = () => view.open(channel);
   const tile = (t: TileOf, kind: 'pip' | 'mini') => (
     <Tile
       key={t.key}
@@ -180,7 +190,7 @@ function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
       talking={t.kind === 'person' && speaking.has(t.name)}
       focused={false}
       label={`open ${channel} in the middle`}
-      onClick={openMiddle}
+      onClick={open}
     />
   );
   const status = call.phase === 'joining' || !call.linked ? 'connecting…' : `${people} in`;
@@ -200,8 +210,13 @@ function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
         className={cn('flex min-h-11 shrink-0 cursor-move touch-none select-none items-center gap-2 px-3 [-webkit-touch-callout:none]', drag && 'cursor-grabbing')}
       >
         <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
-        <h2 id="voice-pip-channel" className="min-w-0 truncate font-semibold text-textPrimary">
-          {channel}
+        <h2 id="voice-pip-channel" className="flex min-w-0">
+          <Tooltip content={page ? `open ${channel} in the middle` : `go to ${channel} in ${room.name}`} hideOnPress>
+            <button id="voice-pip-go" type="button" onClick={open} className={cn(NAME_BUTTON, 'px-1.5 py-0.5')}>
+              <span className="truncate font-semibold text-textPrimary">{channel}</span>
+              {!page && <span className="truncate text-xs text-textTertiary">{room.name}</span>}
+            </button>
+          </Tooltip>
         </h2>
         <span id="voice-pip-status" className={cn('shrink-0 text-xs tabular-nums', status === 'connecting…' ? 'text-textTertiary' : 'font-semibold text-increase')}>
           {status}
@@ -210,9 +225,11 @@ function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
         <HeadButton id="voice-pip-collapse" label={collapsed ? 'expand' : 'collapse'} onClick={() => setCollapsed(!collapsed)}>
           {collapsed ? <RiArrowUpSLine aria-hidden size={16} /> : <RiArrowDownSLine aria-hidden size={16} />}
         </HeadButton>
-        <HeadButton id="voice-pip-close" label="hide call window" onClick={hideVoicePip}>
-          <RiCloseLine aria-hidden size={16} />
-        </HeadButton>
+        {page && (
+          <HeadButton id="voice-pip-close" label="hide call window" onClick={hideVoicePip}>
+            <RiCloseLine aria-hidden size={16} />
+          </HeadButton>
+        )}
       </header>
       {!collapsed && (
         <div id="voice-pip-tiles" className="flex flex-col gap-1.5 px-2 pb-2">
@@ -222,12 +239,48 @@ function PipWindow({ room, channel }: { room: GroupRoom; channel: string }) {
           {shown.length + more.length > 0 && (
             <div id="voice-pip-small" className="grid grid-cols-4 gap-1.5">
               {shown.map((t) => tile(t, 'mini'))}
-              {more.length > 0 && <More tiles={more} onClick={openMiddle} />}
+              {more.length > 0 && <More tiles={more} onClick={open} />}
             </div>
           )}
         </div>
       )}
       <ControlBar mobile={false} pip />
+    </section>
+  );
+}
+
+function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; open: () => void }) {
+  const call = useAtomValue(voiceCallAtom);
+  const ref = useRef<HTMLElement | null>(null);
+  const people = useCallTiles(room, channel).filter((t) => t.kind === 'person').length;
+  const connecting = call.phase === 'joining' || !call.linked;
+
+  useStackedWindow(ref, 'voice');
+
+  return (
+    <section
+      ref={ref}
+      id="voice-bar"
+      aria-label={`call: ${channel}`}
+      className="fixed inset-x-0 bottom-0 flex items-center gap-2 rounded-t-panel border-t border-primaryStroke bg-backgroundSecondary px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 text-sm bubble:border-transparent [html[data-keyboard]_&]:hidden"
+    >
+      <button
+        id="voice-bar-go"
+        type="button"
+        aria-label={`go to ${channel} in ${room.name}`}
+        onClick={open}
+        className={cn(NAME_BUTTON, 'min-h-11 flex-1 items-center border-primaryStroke bg-background px-2')}
+      >
+        <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate font-semibold text-textPrimary">{channel}</span>
+          <span className="truncate text-xs text-textTertiary">{room.name}</span>
+        </span>
+        <span id="voice-bar-status" className={cn('ml-auto shrink-0 text-xs tabular-nums', connecting ? 'text-textTertiary' : 'font-semibold text-increase')}>
+          {connecting ? 'connecting…' : `${people} in`}
+        </span>
+      </button>
+      <CallControls at="voice-bar" />
     </section>
   );
 }

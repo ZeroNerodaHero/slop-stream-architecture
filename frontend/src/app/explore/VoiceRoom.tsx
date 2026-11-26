@@ -447,6 +447,24 @@ export function ControlBar({ mobile, pip = false }: { mobile: boolean; pip?: boo
   );
 }
 
+export function CallControls({ at }: { at: string }) {
+  const muted = useAtomValue(voiceMutedAtom);
+  const deaf = useAtomValue(voiceDeafAtom);
+  return (
+    <div id={`${at}-controls`} role="toolbar" aria-label="call" className="flex shrink-0 items-center gap-1.5">
+      <Control id={`${at}-mic`} label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
+        {muted ? <RiMicOffLine aria-hidden size={18} /> : <RiMicLine aria-hidden size={18} />}
+      </Control>
+      <Control id={`${at}-deafen`} label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
+        <RiHeadphoneLine aria-hidden size={18} />
+      </Control>
+      <Control id={`${at}-leave`} label="leave voice" danger onClick={leaveVoice}>
+        <RiPhoneFill aria-hidden size={18} className="rotate-[135deg]" />
+      </Control>
+    </div>
+  );
+}
+
 function Control({
   id,
   label,
