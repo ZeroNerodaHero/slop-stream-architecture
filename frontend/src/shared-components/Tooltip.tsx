@@ -1,4 +1,4 @@
-import { type ReactNode, useLayoutEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { cn } from '@/utils/cn';
@@ -16,6 +16,7 @@ interface TooltipProps {
   at?: TooltipAt;
   id?: string;
   className?: string;
+  hideOnPress?: boolean;
   children: ReactNode;
 }
 
@@ -42,13 +43,40 @@ function hostOf(wrapper: HTMLElement): HTMLElement {
   return wrapper.closest<HTMLElement>('dialog:modal') ?? document.body;
 }
 
-export function Tooltip({ content, at = 'top', id, className, children }: TooltipProps) {
+export function Tooltip({ content, at = 'top', id, className, hideOnPress = false, children }: TooltipProps) {
   const wrapper = useRef<HTMLSpanElement | null>(null);
   const tip = useRef<HTMLSpanElement | null>(null);
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
   const [host, setHost] = useState<HTMLElement | null>(null);
-  const shown = (hover || focus) && !!content;
+  const press = useRef<'idle' | 'down' | 'after'>('idle');
+  const [pressed, setPressed] = useState<'idle' | 'down' | 'after'>('idle');
+  const shown = (hover || focus) && pressed === 'idle' && !!content;
+
+  useEffect(() => {
+    press.current = pressed;
+    if (pressed === 'idle') return;
+    const release = () => {
+      press.current = 'after';
+      setPressed('after');
+    };
+    const away = (e: PointerEvent) => {
+      if (e.target instanceof Node && wrapper.current?.contains(e.target)) return;
+      press.current = 'idle';
+      setPressed('idle');
+    };
+    if (pressed === 'down') {
+      window.addEventListener('pointerup', release, true);
+      window.addEventListener('pointercancel', release, true);
+    } else {
+      window.addEventListener('pointermove', away, true);
+    }
+    return () => {
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      window.removeEventListener('pointermove', away, true);
+    };
+  }, [pressed]);
 
   useLayoutEffect(() => {
     const el = tip.current;
@@ -96,10 +124,20 @@ export function Tooltip({ content, at = 'top', id, className, children }: Toolti
         ref={wrapper}
         className="contents"
         onPointerEnter={(e) => {
-          if (e.pointerType === 'touch') return;
+          if (e.pointerType === 'touch' || press.current !== 'idle') return;
           setHost(hostOf(e.currentTarget));
           setHover(true);
         }}
+        onPointerDown={
+          hideOnPress
+            ? () => {
+                press.current = 'down';
+                setPressed('down');
+                setHover(false);
+                setFocus(false);
+              }
+            : undefined
+        }
         onPointerLeave={() => setHover(false)}
         onFocus={(e) => {
           setHost(hostOf(e.currentTarget));

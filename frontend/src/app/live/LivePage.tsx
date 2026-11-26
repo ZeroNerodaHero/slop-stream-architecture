@@ -407,7 +407,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
                 >
                   {editing && (
                     <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-primaryStroke pl-1 pr-1 text-xs font-semibold uppercase tracking-wider text-textSecondary">
-                      <Tooltip content="drag to move. arrows move it, shift and arrows size it">
+                      <Tooltip content="drag to move. arrows move it, shift and arrows size it" hideOnPress>
                         <button
                           id="live-preview-grip"
                           type="button"
@@ -430,7 +430,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
                 <Slot hosts={hosts} ids={[id]} className="flex min-h-0 flex-1 flex-col" />
               )}
               {editing && (
-                <Tooltip content="drag to size">
+                <Tooltip content="drag to size" hideOnPress>
                   <span
                     data-size={id}
                     aria-hidden
