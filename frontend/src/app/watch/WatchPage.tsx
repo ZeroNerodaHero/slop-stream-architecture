@@ -326,7 +326,7 @@ export function WatchPage() {
             className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary bubble:border-transparent max-md:rounded-none max-md:border-t-0', videoCap)}
             style={mobile ? strip.style : fitStyle}
           >
-            {backdrop ?? <Bone className="absolute inset-0" />}
+            {backdrop ?? <Bone className="absolute inset-0 rounded-none" />}
             {playerChip}
             {!mobile && !chatTab && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
@@ -399,7 +399,7 @@ export function WatchPage() {
             onPick={pickSlot}
           />
           {(phase === 'connecting' || phase === 'connected') &&
-            (backdrop ? <span className="pointer-events-none absolute inset-px">{backdrop}</span> : <Bone className="pointer-events-none absolute inset-px" />)}
+            (backdrop ? <span className="pointer-events-none absolute inset-px">{backdrop}</span> : <Bone className="pointer-events-none absolute inset-px rounded-panel max-md:rounded-none" />)}
           {playerChip}
           {needsTap && (
             <Button

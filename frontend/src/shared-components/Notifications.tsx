@@ -377,7 +377,7 @@ function NotificationsList() {
         <Skeleton id="notifications-loading" className="py-1">
           {Array.from({ length: ROWS_GUESS }, (_, i) => (
             <div key={i} className="flex items-start gap-3 px-3 py-2">
-              <Bone className="mt-0.5 h-9 w-9 shrink-0" />
+              <Bone className="mt-0.5 h-9 w-9 shrink-0 rounded-avatar" />
               <div className="flex flex-1 flex-col gap-1.5 py-0.5">
                 <Bone className="h-3.5 w-2/3" />
                 <Bone className="h-3 w-1/4" />

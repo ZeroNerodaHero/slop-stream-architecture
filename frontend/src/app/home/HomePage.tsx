@@ -372,7 +372,7 @@ function People() {
         <Skeleton id="people-loading" className={PEOPLE_GRID}>
           {Array.from({ length: PEOPLE_GUESS }, (_, i) => (
             <div key={i} className={cn(CARD, 'flex items-center gap-3 p-3')}>
-              <Bone className="h-12 w-12 shrink-0" />
+              <Bone className="h-12 w-12 shrink-0 rounded-avatar" />
               <div className="flex flex-1 flex-col gap-1.5">
                 <Bone className="h-4 w-1/2" />
                 <Bone className="h-3 w-1/3" />
@@ -527,7 +527,7 @@ function RecentlyOffline({ liveKey }: { liveKey: string | null }) {
         <Skeleton id="recent-loading" className={RECENT_GRID}>
           {Array.from({ length: skeletonCount }, (_, i) => (
             <div key={i} className={cn(CARD_LINK, 'flex items-center gap-2 p-2.5')}>
-              <Bone className="h-10 w-10 shrink-0" />
+              <Bone className="h-10 w-10 shrink-0 rounded-avatar" />
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <Bone className="h-6 w-20 max-w-full" />
                 <Bone className="h-4 w-28 max-w-full" />
@@ -621,11 +621,11 @@ function StreamsSkeleton() {
     <Skeleton id="loading" className={FEATURED_GRID}>
       {Array.from({ length: FEATURED }, (_, i) => (
         <div key={i} className={CARD}>
-          <div className="relative aspect-video border-b border-primaryStroke">
-            <Bone className="absolute inset-0" />
+          <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bubble:m-1.5 bubble:mb-0 bubble:rounded-card bubble:border-b-0">
+            <Bone className="absolute inset-0 rounded-none" />
           </div>
           <div className="flex items-start gap-3 p-4">
-            <Bone className="h-11 w-11 shrink-0" />
+            <Bone className="h-11 w-11 shrink-0 rounded-avatar" />
             <div className="flex flex-1 flex-col gap-2 py-1">
               <Bone className="h-5 w-1/2" />
               <Bone className="h-4 w-5/6" />

@@ -19,7 +19,7 @@ export function FollowingSkeleton({ side, open }: { side: PanelSide; open: boole
     <Skeleton id="friends-loading" className="flex flex-col gap-2">
       {Array.from({ length: FACES_GUESS }, (_, i) => (
         <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
-          <Bone className={cn('h-[calc(2rem+2px)] shrink-0 max-md:h-11', FACE_COLUMN_W)} />
+          <Bone className={cn('h-[calc(2rem+2px)] shrink-0 rounded-avatar max-md:h-11', FACE_COLUMN_W)} />
           {open && <Bone className="h-3.5 w-24" />}
         </div>
       ))}

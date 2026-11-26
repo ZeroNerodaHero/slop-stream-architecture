@@ -498,7 +498,7 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
         if (shape === 'blocks') {
           return (
             <div key={i} className="my-1 flex gap-2.5">
-              <Bone className="h-8 w-8 shrink-0" />
+              <Bone className="h-8 w-8 shrink-0 rounded-avatar" />
               <div className="flex min-w-0 flex-1 flex-col gap-2 py-0.5">
                 <Bone className={cn('h-3.5', name)} />
                 <Bone className={cn('h-3.5', words)} />
@@ -507,11 +507,12 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
           );
         }
         if (shape === 'bubbles') {
+          const mine = i % 3 === 2;
           return (
-            <div key={i} className="flex gap-2.5">
-              <Bone className="h-3 w-8 shrink-0 self-center" />
-              <div className={cn('flex min-w-0 flex-1', i % 3 === 2 ? 'justify-end' : 'justify-start')}>
-                <Bone className={cn('h-8', words)} />
+            <div key={i} className="flex gap-2">
+              <span className="flex w-8 shrink-0 justify-end pt-[5px]">{i % 2 === 0 && <Bone className="h-2.5 w-7" />}</span>
+              <div className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
+                <Bone className={cn('h-7 max-w-[85%] rounded-bubble', words, mine && 'bg-primaryBlue/10')} />
               </div>
             </div>
           );

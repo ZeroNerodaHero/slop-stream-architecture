@@ -276,7 +276,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
           <Skeleton id="friend-chat-pick-loading" className="flex flex-col">
             {Array.from({ length: 4 }, (_, i) => (
               <div key={i} className="flex items-center gap-3 px-3 py-2.5">
-                <Bone className="h-10 w-10" />
+                <Bone className="h-10 w-10 rounded-avatar" />
                 <div className="flex flex-1 flex-col gap-1.5">
                   <Bone className="h-3.5 w-24" />
                   <Bone className="h-3 w-40" />
@@ -336,7 +336,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
         <Skeleton id="friend-chat-pick-loading" className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-2">
           {Array.from({ length: 4 }, (_, i) => (
             <div key={i} className="flex flex-col items-center gap-1.5 p-2">
-              <Bone className="h-10 w-10" />
+              <Bone className="h-10 w-10 rounded-avatar" />
               <Bone className="h-3 w-12" />
             </div>
           ))}

@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react';
 
 import { cn } from '@/utils/cn';
 
-export const BONE = 'animate-pulse bg-backgroundTertiary motion-reduce:animate-none';
+export const BONE = 'animate-pulse rounded-control bg-backgroundTertiary motion-reduce:animate-none';
 
 export function Bone({ className }: { className?: string }) {
   return <span aria-hidden className={cn('block', BONE, className)} />;
