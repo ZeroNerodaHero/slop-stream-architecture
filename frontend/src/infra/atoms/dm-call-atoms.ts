@@ -205,46 +205,20 @@ store.sub(meAtom, () => {
   setCall(null);
 });
 
-let tone: { ctx: AudioContext; timer: ReturnType<typeof setInterval> } | null = null;
-const TONE_EVERY_MS = 3000;
-const TONE_HZ = [440, 480];
-
-function beep(ctx: AudioContext) {
-  const t = ctx.currentTime;
-  const gain = ctx.createGain();
-  gain.connect(ctx.destination);
-  gain.gain.setValueAtTime(0, t);
-  for (const [on, off] of [
-    [0, 0.4],
-    [0.6, 1]
-  ] as const) {
-    gain.gain.setValueAtTime(0, t + on);
-    gain.gain.linearRampToValueAtTime(0.12, t + on + 0.02);
-    gain.gain.setValueAtTime(0.12, t + off - 0.03);
-    gain.gain.linearRampToValueAtTime(0, t + off);
-  }
-  for (const hz of TONE_HZ) {
-    const osc = ctx.createOscillator();
-    osc.frequency.value = hz;
-    osc.connect(gain);
-    osc.start(t);
-    osc.stop(t + 1.05);
-    osc.onended = () => osc.disconnect();
-  }
-  setTimeout(() => gain.disconnect(), 1200);
-}
+let tone: ReturnType<typeof setInterval> | null = null;
+const TONE_EVERY_MS = 2000;
 
 function startTone() {
-  if (tone || typeof AudioContext === 'undefined') return;
-  const ctx = new AudioContext();
-  void ctx.resume().catch(() => undefined);
-  beep(ctx);
-  tone = { ctx, timer: setInterval(() => beep(ctx), TONE_EVERY_MS) };
+  if (tone) return;
+  const ring = () => {
+    if (store.get(dmRingAtom)) void import('@/infra/sounds').then((sounds) => sounds.playSound('notification'));
+  };
+  tone = setInterval(ring, TONE_EVERY_MS);
+  ring();
 }
 
 function stopTone() {
   if (!tone) return;
-  clearInterval(tone.timer);
-  void tone.ctx.close().catch(() => undefined);
+  clearInterval(tone);
   tone = null;
 }
