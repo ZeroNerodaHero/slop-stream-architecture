@@ -1,13 +1,5 @@
 import { RiEmotionLine, RiMoreFill, RiReplyLine } from '@remixicon/react';
-import {
-  type HTMLAttributes,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState
-} from 'react';
+import { type HTMLAttributes, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
 import { plainEmotes } from '@/infra/emotes';
