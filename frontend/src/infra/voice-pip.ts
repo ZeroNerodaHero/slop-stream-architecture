@@ -4,9 +4,12 @@ export interface PipCandidate {
   video: boolean;
   activeAt: number;
   self: boolean;
+  screen?: boolean;
 }
 
 export const PIP_BIG = 2;
+export const PIP_BIG_PEOPLE = 4;
+export const PIP_BIG_SCREENS = 2;
 export const PIP_COLUMNS = 4;
 export const PIP_ROWS = 2;
 
@@ -42,6 +45,11 @@ export function nextBig(prev: readonly string[], all: readonly PipCandidate[], m
   return held.map((c) => c.key);
 }
 
+export function nextStage(prev: readonly string[], all: readonly PipCandidate[]): string[] {
+  const screens = all.filter((c) => c.screen);
+  return screens.length > 0 ? nextBig(prev, screens, PIP_BIG_SCREENS) : nextBig(prev, all, PIP_BIG_PEOPLE);
+}
+
 export function smallRows<T>(rest: readonly T[], columns = PIP_COLUMNS, rows = PIP_ROWS): { shown: T[]; more: T[] } {
   const slots = Math.max(1, columns * rows);
   if (rest.length <= slots) return { shown: [...rest], more: [] };
@@ -63,4 +71,57 @@ export function parsePipAt(v: unknown): PipAt | null {
   const { right, bottom } = v as Partial<PipAt>;
   if (typeof right !== 'number' || typeof bottom !== 'number' || !Number.isFinite(right) || !Number.isFinite(bottom)) return null;
   return { right, bottom };
+}
+
+export const PIP_ASPECT = 16 / 9;
+
+export interface BigFit {
+  cols: number;
+  rows: number;
+  tile: number;
+}
+
+export function bigFit(n: number, w: number, h: number, gap: number, aspect = PIP_ASPECT): BigFit {
+  if (n <= 0 || w <= 0 || h <= 0) return { cols: Math.max(1, n), rows: 1, tile: 0 };
+  let best: BigFit = { cols: n, rows: 1, tile: -1 };
+  for (let cols = n; cols >= 1; cols--) {
+    if (n % cols !== 0) continue;
+    const rows = n / cols;
+    const tile = Math.min((w - gap * (cols - 1)) / cols, ((h - gap * (rows - 1)) / rows) * aspect);
+    if (tile > best.tile) best = { cols, rows, tile };
+  }
+  return { ...best, tile: Math.max(0, Math.floor(best.tile)) };
+}
+
+export const PIP_MINI_MIN = 72;
+
+export function stripFit(w: number, gap: number, min = PIP_MINI_MIN): number {
+  return Math.max(1, Math.floor((w + gap) / (min + gap)));
+}
+
+export interface PipSize {
+  w: number;
+  h: number;
+}
+
+export const PIP_SIZE: PipSize = { w: 400, h: 300 };
+export const PIP_MIN: PipSize = { w: 280, h: 200 };
+export const PIP_MAX: PipSize = { w: 1280, h: 960 };
+
+export function clampPipSize(size: PipSize, view: { w: number; h: number }, at: PipAt = { right: 0, bottom: 0 }): PipSize {
+  const fit = (v: number, lo: number, hi: number) => {
+    const top = Math.max(0, hi);
+    return Math.round(Math.min(top, Math.max(Math.min(lo, top), v)));
+  };
+  return {
+    w: fit(size.w, PIP_MIN.w, Math.min(PIP_MAX.w, view.w - at.right)),
+    h: fit(size.h, PIP_MIN.h, Math.min(PIP_MAX.h, view.h - at.bottom))
+  };
+}
+
+export function parsePipSize(v: unknown): PipSize | null {
+  if (!v || typeof v !== 'object') return null;
+  const { w, h } = v as Partial<PipSize>;
+  if (typeof w !== 'number' || typeof h !== 'number' || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  return { w, h };
 }

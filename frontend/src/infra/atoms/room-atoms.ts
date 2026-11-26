@@ -4,7 +4,7 @@ import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { paletteAtom } from '@/infra/atoms/settings-atoms';
 import { type ChatLine, findServerChat, serverChat, warmServerChat } from '@/infra/atoms/chat-atoms';
-import { voiceCallAtom, voiceUidsAtom } from '@/infra/atoms/voice-state';
+import { voiceCallAtom } from '@/infra/atoms/voice-state';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
@@ -320,6 +320,28 @@ function withoutVoice(voice: Record<string, VoiceMember[]>, out: (p: VoiceMember
   return next;
 }
 
+export function withVoiceChange(room: GroupRoom, change: GroupChange): GroupRoom | null {
+  switch (change.what) {
+    case 'voice': {
+      const voice = withoutVoice(room.voice ?? {}, (p) => p.uid === change.uid);
+      const came: VoiceMember = { name: change.who, uid: change.uid, since: Date.now(), muted: change.muted };
+      const kept = (room.voice?.[change.channel] ?? []).find((p) => p.uid === change.uid);
+      if ((room.channels ?? []).some((c) => c.name === change.channel)) voice[change.channel] = [...(voice[change.channel] ?? []), kept ?? came];
+      return { ...room, voice };
+    }
+    case 'voice_left':
+      return room.voice ? { ...room, voice: withoutVoice(room.voice, (p) => p.uid === change.uid) } : null;
+    case 'voice_mute': {
+      if (!room.voice) return null;
+      const voice: Record<string, VoiceMember[]> = {};
+      for (const [channel, people] of Object.entries(room.voice)) voice[channel] = people.map((p) => (p.uid === change.uid ? { ...p, muted: change.muted } : p));
+      return { ...room, voice };
+    }
+    default:
+      return null;
+  }
+}
+
 function withHolder(holders: GroupRoom['holders'], who: string, keeps: (id: string) => boolean, add?: string): GroupRoom['holders'] {
   if (!holders) return holders;
   const next: Record<string, string[]> = {};
@@ -484,22 +506,11 @@ function apply(change: GroupChange): void {
     case 'ended':
       if (room.live?.includes(change.who)) store.set(roomAtom, { ...room, live: room.live.filter((n) => n !== change.who) });
       return;
-    case 'voice': {
-      const voice = withoutVoice(room.voice ?? {}, (p) => p.uid === change.uid);
-      const came: VoiceMember = { name: change.who, uid: change.uid, since: Date.now(), muted: change.muted };
-      const kept = (room.voice?.[change.channel] ?? []).find((p) => p.uid === change.uid);
-      if ((room.channels ?? []).some((c) => c.name === change.channel)) voice[change.channel] = [...(voice[change.channel] ?? []), kept ?? came];
-      store.set(roomAtom, { ...room, voice });
-      return;
-    }
+    case 'voice':
     case 'voice_left':
-      if (room.voice) store.set(roomAtom, { ...room, voice: withoutVoice(room.voice, (p) => p.uid === change.uid) });
-      return;
     case 'voice_mute': {
-      if (!room.voice) return;
-      const voice: Record<string, VoiceMember[]> = {};
-      for (const [channel, people] of Object.entries(room.voice)) voice[channel] = people.map((p) => (p.uid === change.uid ? { ...p, muted: change.muted } : p));
-      store.set(roomAtom, { ...room, voice });
+      const next = withVoiceChange(room, change);
+      if (next) store.set(roomAtom, next);
       return;
     }
     case 'deleted':
@@ -516,13 +527,6 @@ store.sub(roomAtom, () => {
   for (const name of heldMembers) if (!names.has(name)) releasePresence(name);
   for (const name of names) if (!heldMembers.has(name)) holdPresence(name);
   heldMembers = names;
-});
-
-store.sub(roomAtom, () => {
-  const people = Object.values(store.get(roomAtom)?.voice ?? {}).flat();
-  const was = store.get(voiceUidsAtom);
-  if (people.length === was.size && people.every((p) => was.get(p.name) === p.uid)) return;
-  store.set(voiceUidsAtom, new Map(people.map((p) => [p.name, p.uid])));
 });
 
 onEvents((event) => {

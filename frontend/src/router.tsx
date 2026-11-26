@@ -12,6 +12,7 @@ import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
 import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
 import { panelSideAtom, perfModeAtom } from '@/infra/atoms/settings-atoms';
 import { userModalOpenAtom } from '@/infra/atoms/user-modal-atoms';
+import { voiceCallAtom } from '@/infra/atoms/voice-state';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
 import { UpdateBanner } from '@/shared-components/UpdateBanner';
@@ -28,6 +29,7 @@ const PerfHud = lazy(() => import('@/shared-components/debug/PerfHud').then((m) 
 const UserModal = lazy(() => import('@/shared-components/UserModal').then((m) => ({ default: m.UserModal })));
 const AuthDialog = lazy(() => import('@/shared-components/AuthDialog').then((m) => ({ default: m.AuthDialog })));
 const ProfilePopup = lazy(() => import('@/shared-components/ProfilePopup').then((m) => ({ default: m.ProfilePopup })));
+const VoicePip = lazy(() => import('@/app/explore/VoicePip').then((m) => ({ default: m.VoicePip })));
 const CropDialog = lazy(() => import('@/shared-components/CropDialog').then((m) => ({ default: m.CropDialog })));
 
 function FriendChatWhenUsed() {
@@ -111,6 +113,15 @@ function CropDialogWhenUsed() {
   );
 }
 
+function VoicePipWhenUsed() {
+  const call = useAtomValue(voiceCallAtom);
+  return (
+    <WhenUsed on={call.phase !== 'idle'}>
+      <VoicePip />
+    </WhenUsed>
+  );
+}
+
 function Shell() {
   const side = useAtomValue(panelSideAtom);
   const perf = useAtomValue(perfModeAtom);
@@ -129,6 +140,7 @@ function Shell() {
       <AuthDialogWhenUsed />
       <ProfilePopupWhenUsed />
       <CropDialogWhenUsed />
+      <VoicePipWhenUsed />
       <InspectorWhenUsed />
       <TimingsWhenUsed />
       <QualityWhenUsed />
