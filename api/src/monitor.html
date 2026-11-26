@@ -133,8 +133,15 @@
   .card { flex: none; width: var(--card-w); height: var(--card-h); display: grid; grid-template-rows: 16px 24px 16px 16px; align-content: center; background: var(--bg3); border: 1px solid var(--stroke); padding: 0 6px; text-align: left; min-width: 0; cursor: pointer; }
   .card:hover { border-color: var(--t3); }
   .card[aria-pressed="true"] { border-color: var(--blue); background: rgb(30 38 56); }
-  .card.allc { width: 44px; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--t2); }
+  .card.allc { width: 44px; height: calc(var(--card-h) - 20px); display: flex; align-items: center; justify-content: center; padding: 0; color: var(--t2); }
   .card.allc[aria-pressed="true"] { color: var(--t1); }
+  .kfold { display: block; width: 44px; height: 16px; padding: 0; background: var(--bg3); border: 1px solid var(--stroke); color: var(--t3); font-size: 10px; line-height: 14px; text-align: center; }
+  .kfold:hover, .kfold:focus-visible { color: var(--t1); border-color: var(--t3); outline: none; }
+  .strip.folded { flex-wrap: nowrap; align-items: center; }
+  .strip.folded .grp-head { display: none; }
+  .strip.folded .card.allc { height: 22px; }
+  .ksum { min-width: 0; font-size: 12px; color: var(--t2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ksum .dim { color: var(--t3); }
   .card > div { display: flex; align-items: baseline; gap: 0 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
   .card .c-head { justify-content: space-between; gap: 6px; }
   .card .c-head .dim { flex: none; font-size: 11px; }
@@ -545,6 +552,14 @@
   function setHideHealth(on) {
     hideHealth = on;
     try { if (on) localStorage.setItem(HEALTH_KEY, '1'); else localStorage.removeItem(HEALTH_KEY); } catch (e) { console.warn('filters', e); }
+  }
+
+  const KINDS_KEY = 'stats.kinds.collapsed';
+  let kindsFolded = false;
+  try { kindsFolded = localStorage.getItem(KINDS_KEY) === '1'; } catch (e) { console.warn('kinds', e); }
+  function setKindsFolded(on) {
+    kindsFolded = on;
+    try { if (on) localStorage.setItem(KINDS_KEY, '1'); else localStorage.removeItem(KINDS_KEY); } catch (e) { console.warn('kinds', e); }
   }
 
   const SORT_KEY = 'stats.sort.';
@@ -2101,7 +2116,7 @@
 
   function timingCards(v, totals, target, rows, filter) {
     const ui = v.ui;
-    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}|${filter}`;
+    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}|${filter}|${kindsFolded}`;
     if (ui.cardsSig === sig && ui.strip.childNodes.length) return;
     ui.cardsSig = sig;
     const cards = cardsFor(v, totals, target, rows);
@@ -2110,9 +2125,33 @@
     const all = button('card allc', 'all', () => { v.pick = new Set(); v.errs = ''; v.open = null; writeHash(); timingRender(v); });
     all.setAttribute('aria-pressed', String(!v.pick.size && !v.errs));
     all.title = 'every kind and direction';
+    const fold = button('kfold', kindsFolded ? '▾' : '▴', () => {
+      setKindsFolded(!kindsFolded);
+      timingRender(v);
+      const again = ui.strip.querySelector('.kfold');
+      if (again) again.focus({ preventScroll: true });
+    });
+    fold.setAttribute('aria-expanded', String(!kindsFolded));
+    fold.setAttribute('aria-label', kindsFolded ? 'show the kind cards' : 'hide the kind cards');
+    fold.title = kindsFolded ? 'show the kind cards' : 'hide the kind cards';
     const first = el('div', 'grp');
-    first.append(el('span', 'grp-head', '\u00a0'), all);
+    first.append(el('span', 'grp-head', '\u00a0'), all, fold);
     const parts = [first];
+    ui.strip.classList.toggle('folded', kindsFolded);
+    if (kindsFolded) {
+      const picked = cards.filter((c) => v.pick.has(c.id));
+      const sum = el('div', 'ksum');
+      const errWord = v.errs === 'e5' ? '5xx' : v.errs === 'e4' ? '4xx' : '';
+      if (!picked.length) sum.append(el('span', 'dim', 'showing '), document.createTextNode(`all ${cards.length} kinds`));
+      else {
+        sum.append(el('span', 'dim', 'showing '), document.createTextNode(picked.map((c) => `${kindLabel(c.key)} ${DIR_NAME[c.dir]}`).join(', ')));
+        if (errWord) sum.append(el('span', 'dim', ' · only '), document.createTextNode(errWord));
+      }
+      sum.title = sum.textContent;
+      parts.push(sum);
+      ui.strip.replaceChildren(...parts);
+      return;
+    }
     for (const [dir, label] of DIRS) {
       const mine = cards.filter((c) => c.dir === dir);
       if (!mine.length) continue;
