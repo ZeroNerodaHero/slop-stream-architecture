@@ -46,6 +46,7 @@ pub(crate) async fn no_store_by_default(mut res: Response) -> Response {
 pub(crate) enum Kind {
     Image,
     Video,
+    Audio,
 }
 
 impl Kind {
@@ -53,6 +54,7 @@ impl Kind {
         match self {
             Kind::Image => "chat_images",
             Kind::Video => "chat_videos",
+            Kind::Audio => "chat_audio",
         }
     }
 
@@ -60,6 +62,7 @@ impl Kind {
         match self {
             Kind::Image => "image",
             Kind::Video => "video",
+            Kind::Audio => "audio",
         }
     }
 
@@ -67,6 +70,7 @@ impl Kind {
         match self {
             Kind::Image => "chat-images",
             Kind::Video => "chat-videos",
+            Kind::Audio => "chat-audio",
         }
     }
 }
@@ -174,7 +178,14 @@ pub(crate) async fn missing(db: &PgPool, kind: Kind, id: Uuid) -> ApiError {
     if removed {
         ApiError::new(StatusCode::GONE, "removed")
     } else {
-        ApiError::new(StatusCode::NOT_FOUND, if kind == Kind::Image { "no such picture" } else { "no such video" })
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            match kind {
+                Kind::Image => "no such picture",
+                Kind::Video => "no such video",
+                Kind::Audio => "no such voice message",
+            },
+        )
     }
 }
 
@@ -290,6 +301,10 @@ mod tests {
             purge_paths(Kind::Video, id),
             vec![format!("/api/chat-videos/{id}"), format!("/api/chat-videos/{id}?show=1")]
         );
+        assert_eq!(
+            purge_paths(Kind::Audio, id),
+            vec![format!("/api/chat-audio/{id}"), format!("/api/chat-audio/{id}?show=1")]
+        );
     }
 
     #[test]
@@ -328,6 +343,7 @@ mod tests {
                  INSERT INTO chat_videos (id, mime, bytes, duration_ms, poster, created_by)
                  SELECT gen_random_uuid(), 'video/mp4', 1, 1000, p.id, $1 FROM p RETURNING id"
             }
+            Kind::Audio => "INSERT INTO chat_audio (id, mime, bytes, duration_ms, created_by) VALUES (gen_random_uuid(), 'audio/webm', 1, 1000, $1) RETURNING id",
         };
         sqlx::query_scalar(sql).bind(by).fetch_one(pool).await.expect("an upload")
     }
@@ -341,7 +357,7 @@ mod tests {
         let run = std::process::id();
         let alice = row(&pool, &format!("alice-m{run}"), Some("h")).await;
         let bob = row(&pool, &format!("bob-m{run}"), Some("h")).await;
-        for kind in [Kind::Image, Kind::Video] {
+        for kind in [Kind::Image, Kind::Video, Kind::Audio] {
             let id = upload(&pool, kind, alice).await;
             let sid = id.to_string();
             assert_eq!(check(&pool, kind, &sid, Some(alice)).await.unwrap(), Ok(()));
@@ -380,7 +396,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        for kind in [Kind::Image, Kind::Video] {
+        for kind in [Kind::Image, Kind::Video, Kind::Audio] {
             let id = upload(&pool, kind, alice).await;
             assert_eq!(access(&pool, kind, id, Some(alice)).await.unwrap(), Some(Access::Private));
             assert_eq!(access(&pool, kind, id, Some(bob)).await.unwrap(), Some(Access::Refused));
