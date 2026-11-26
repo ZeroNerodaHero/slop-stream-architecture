@@ -9,6 +9,7 @@ import { installMobileKeyboard } from '@/infra/keyboard';
 import { installPrefetch, loadFirstPage, warmOverlays } from '@/infra/prefetch';
 import { queryClient } from '@/infra/query-client';
 import { installReporting, report } from '@/infra/report';
+import { installSounds } from '@/infra/sound-triggers';
 import { router } from '@/router';
 
 import '@/infra/atoms/home-atoms';
@@ -30,6 +31,8 @@ startEvents();
 installPrefetch();
 
 installMobileKeyboard();
+
+installSounds();
 
 document.addEventListener('dragstart', (e) => {
   if (e.target instanceof HTMLImageElement) e.preventDefault();
