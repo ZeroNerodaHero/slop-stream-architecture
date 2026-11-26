@@ -1312,13 +1312,19 @@ async fn add_line(peer: &RTCPeerConnection, idle: Arc<TrackLocalStaticRTP>) -> a
     Ok(())
 }
 
+fn heard<'a>(sitter: Option<&'a Sitter>, mine: Option<&str>) -> Option<&'a Sitter> {
+    sitter.filter(|s| mine.is_none() || s.uid.as_deref() != mine)
+}
+
 async fn rebind(tag: &str, lines: &mut [Option<Line>], seats: &[Option<Sitter>], own: usize) {
+    let mine = seats.get(own).and_then(Option::as_ref).and_then(|s| s.uid.as_deref());
     for (seat, sitter) in seats.iter().enumerate() {
         if seat == own {
             continue;
         }
         let Some(Some(line)) = lines.get_mut(line_of(seat, own)) else { continue };
-        let want = sitter.as_ref().map(|s| s.id);
+        let sitter = heard(sitter.as_ref(), mine);
+        let want = sitter.map(|s| s.id);
         if line.bound == want {
             continue;
         }
@@ -1722,6 +1728,18 @@ mod tests {
         assert_eq!(seats.free(9), Some(9));
         assert_eq!(seats.take(17), Some(9));
         assert_eq!(seats.take(18), None);
+    }
+
+    #[test]
+    fn no_one_hears_their_own_accounts_other_seats() {
+        let other_device = sitter("al", Some("u1"));
+        let someone = sitter("bo", Some("u2"));
+        let guest = sitter("al", None);
+        assert!(heard(Some(&other_device), Some("u1")).is_none());
+        assert_eq!(heard(Some(&someone), Some("u1")).map(|s| s.user.as_str()), Some("bo"));
+        assert_eq!(heard(Some(&guest), Some("u1")).map(|s| s.user.as_str()), Some("al"));
+        assert_eq!(heard(Some(&other_device), None).map(|s| s.user.as_str()), Some("al"));
+        assert!(heard(None, Some("u1")).is_none());
     }
 
     #[test]
