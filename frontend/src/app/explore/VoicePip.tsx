@@ -15,12 +15,38 @@ import { hideVoicePip, pipCallKey, voicePipAtAtom, voicePipCollapsedAtom, voiceP
 import { voiceCallAtom } from '@/infra/atoms/voice-state';
 import { useIsMobile } from '@/infra/mobile';
 import { cleanName } from '@/infra/names';
-import { clampPip, nextBig, type PipAt, type PipCandidate, parsePipAt, smallRows } from '@/infra/voice-pip';
+import {
+  bigFit,
+  clampPip,
+  clampPipSize,
+  nextStage,
+  PIP_COLUMNS,
+  PIP_SIZE,
+  type PipAt,
+  type PipCandidate,
+  type PipSize,
+  parsePipAt,
+  parsePipSize,
+  smallRows,
+  stripFit
+} from '@/infra/voice-pip';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 
 const EDGE = 24;
+const GAP = 6;
+const HANDLES = [
+  {
+    id: 'corner',
+    sx: true,
+    sy: true,
+    tip: true,
+    className: '-left-px -top-px h-4 w-4 cursor-nwse-resize rounded-tl-panel border-l-2 border-t-2 border-primaryBlue opacity-0 transition-opacity duration-150 group-hover/pip:opacity-100 group-data-[resizing]/pip:opacity-100'
+  },
+  { id: 'left', sx: true, sy: false, tip: false, className: '-left-px bottom-0 top-4 w-1.5 cursor-ew-resize' },
+  { id: 'top', sx: false, sy: true, tip: false, className: '-top-px left-4 right-0 h-1.5 cursor-ns-resize' }
+] as const;
 const NAME_BUTTON =
   'flex min-w-0 items-baseline gap-1.5 rounded-control border border-transparent text-left hover:border-primaryStroke hover:bg-backgroundTertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue';
 const HEAD_BUTTON =
@@ -85,10 +111,11 @@ function bigOf(call: string, tiles: TileOf[], speaking: ReadonlySet<string>): st
       speaking: t.kind === 'person' && speaking.has(t.name),
       video: !!t.stream,
       activeAt: Math.max(voice, t.stream ? own : 0),
-      self: t.self
+      self: t.self,
+      screen: t.kind === 'screen'
     };
   });
-  m.big = nextBig(m.big, candidates);
+  m.big = nextStage(m.big, candidates);
   return m.big;
 }
 
@@ -103,10 +130,19 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
   const tiles = useCallTiles(room, channel);
   const big = bigOf(pipCallKey(call), tiles, speaking);
   const ref = useRef<HTMLElement | null>(null);
+  const tilesRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const stop = useRef<(() => void) | null>(null);
+  const sizing = useRef<PipSize | null>(null);
+  const measure = useRef<() => void>(() => undefined);
   const [drag, setDrag] = useState<PipAt | null>(null);
   const [space, setSpace] = useState(viewport);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const [fit, setFit] = useState(PIP_COLUMNS);
+  const [expanded, setExpanded] = useState(false);
+  const box = clampPipSize(parsePipSize(stored) ?? PIP_SIZE, space);
+  const bigTiles = big.flatMap((k) => tiles.filter((t) => t.key === k));
+  const staged = bigTiles.length;
 
   useStackedWindow(ref, 'voice');
 
@@ -128,13 +164,41 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
 
   useLayoutEffect(() => {
     const el = ref.current;
+    if (!el || sizing.current) return;
+    el.style.setProperty('--pip-w', `${box.w}px`);
+    el.style.setProperty('--pip-h', `${box.h}px`);
+  }, [box.w, box.h]);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
     if (!el) return;
-    const measure = () => setSize((was) => (was.w === el.offsetWidth && was.h === el.offsetHeight ? was : { w: el.offsetWidth, h: el.offsetHeight }));
-    measure();
-    const watcher = new ResizeObserver(measure);
+    measure.current = () => {
+      if (sizing.current) return;
+      setSize((was) => (was.w === el.offsetWidth && was.h === el.offsetHeight ? was : { w: el.offsetWidth, h: el.offsetHeight }));
+    };
+    measure.current();
+    const watcher = new ResizeObserver(() => measure.current());
     watcher.observe(el);
     return () => watcher.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    const strip = tilesRef.current;
+    if (!stage || !strip) return;
+    const place = () => {
+      const f = bigFit(staged, stage.clientWidth, stage.clientHeight, GAP);
+      stage.style.setProperty('--pip-cols', `${f.cols}`);
+      stage.style.setProperty('--pip-tile', `${f.tile}px`);
+      const pad = getComputedStyle(strip);
+      setFit(stripFit(strip.clientWidth - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight), GAP));
+    };
+    place();
+    const watcher = new ResizeObserver(place);
+    watcher.observe(stage);
+    watcher.observe(strip);
+    return () => watcher.disconnect();
+  }, [staged, collapsed]);
 
   useEffect(() => () => stop.current?.(), []);
 
@@ -163,7 +227,8 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
     const end = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       stop.current?.();
-      if (last) setStored(last);
+      const kept = parsePipSize(stored);
+      if (last) setStored(kept ? { ...last, ...kept } : last);
       setDrag(null);
     };
     stop.current = () => {
@@ -177,10 +242,67 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
     window.addEventListener('pointercancel', end);
   };
 
+  const resize = (e: ReactPointerEvent<HTMLElement>, sx: boolean, sy: boolean) => {
+    const el = ref.current;
+    if (e.button !== 0 || stop.current || !el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const start = box;
+    const anchor = at;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const pointerId = e.pointerId;
+    const root = document.documentElement;
+    const select = root.style.getPropertyValue('user-select');
+    let next = start;
+    let frame = 0;
+    sizing.current = start;
+    root.style.setProperty('user-select', 'none');
+    el.toggleAttribute('data-resizing', true);
+    const paint = () => {
+      frame = 0;
+      el.style.setProperty('--pip-w', `${next.w}px`);
+      el.style.setProperty('--pip-h', `${next.h}px`);
+    };
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      next = clampPipSize({ w: sx ? start.w - (ev.clientX - x0) : start.w, h: sy ? start.h - (ev.clientY - y0) : start.h }, viewport(), anchor);
+      sizing.current = next;
+      if (!frame) frame = window.requestAnimationFrame(paint);
+    };
+    const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      stop.current?.();
+      paint();
+      if (next.w !== start.w || next.h !== start.h) setStored({ ...anchor, ...next });
+      measure.current();
+    };
+    stop.current = () => {
+      stop.current = null;
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = 0;
+      sizing.current = null;
+      if (select) root.style.setProperty('user-select', select);
+      else root.style.removeProperty('user-select');
+      el.toggleAttribute('data-resizing', false);
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      handle.removeEventListener('lostpointercapture', end);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('lostpointercapture', end);
+  };
+
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
   const people = tiles.filter((t) => t.kind === 'person').length;
-  const bigTiles = big.flatMap((k) => tiles.filter((t) => t.key === k));
-  const { shown, more } = smallRows(tiles.filter((t) => !big.includes(t.key)));
+  const rest = tiles.filter((t) => !big.includes(t.key));
+  const { shown, more } = expanded ? { shown: rest, more: [] } : smallRows(rest, fit, 1);
   const tile = (t: TileOf, kind: 'pip' | 'mini') => (
     <Tile
       key={t.key}
@@ -202,7 +324,10 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
       aria-label={`call: ${channel}`}
       data-collapsed={collapsed || undefined}
       style={{ right: at.right, bottom: at.bottom }}
-      className="fixed flex w-[400px] max-w-[calc(100vw-16px)] flex-col rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm"
+      className={cn(
+        'group/pip fixed flex w-[var(--pip-w)] flex-col rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm',
+        collapsed ? 'h-auto' : 'h-[var(--pip-h)]'
+      )}
     >
       <header
         id="voice-pip-head"
@@ -232,19 +357,47 @@ function PipWindow({ room, channel, page, open }: { room: GroupRoom; channel: st
         )}
       </header>
       {!collapsed && (
-        <div id="voice-pip-tiles" className="flex flex-col gap-1.5 px-2 pb-2">
-          <div id="voice-pip-big" className={cn('grid gap-1.5', bigTiles.length > 1 ? 'grid-cols-2' : 'grid-cols-1')}>
+        <div ref={tilesRef} id="voice-pip-tiles" className="flex min-h-0 flex-1 flex-col gap-1.5 px-2 pb-2">
+          <div
+            ref={stageRef}
+            id="voice-pip-big"
+            className="grid min-h-0 flex-1 grid-cols-[repeat(var(--pip-cols),var(--pip-tile))] content-center justify-center gap-1.5 overflow-hidden"
+          >
             {bigTiles.map((t) => tile(t, 'pip'))}
           </div>
-          {shown.length + more.length > 0 && (
-            <div id="voice-pip-small" className="grid grid-cols-4 gap-1.5">
+          {rest.length > 0 && (
+            <div
+              id="voice-pip-small"
+              style={{ gridTemplateColumns: `repeat(${fit}, minmax(0, 1fr))` }}
+              className={cn('grid shrink-0 gap-1.5', expanded && 'max-h-[calc(var(--pip-h)/2)] overflow-y-auto')}
+            >
               {shown.map((t) => tile(t, 'mini'))}
-              {more.length > 0 && <More tiles={more} onClick={open} />}
+              {more.length > 0 && <More tiles={more} open={false} onClick={() => setExpanded(true)} />}
+              {expanded && rest.length > fit && <More tiles={[]} open onClick={() => setExpanded(false)} />}
             </div>
           )}
         </div>
       )}
       <ControlBar mobile={false} pip />
+      {HANDLES.map((h) => {
+        if (collapsed && !h.sx) return null;
+        const handle = (
+          <div
+            key={h.id}
+            id={`voice-pip-resize-${h.id}`}
+            aria-hidden
+            onPointerDown={(e) => resize(e, h.sx, h.sy && !collapsed)}
+            className={cn('absolute touch-none select-none', h.className)}
+          />
+        );
+        return h.tip ? (
+          <Tooltip key={h.id} content="drag to resize" hideOnPress>
+            {handle}
+          </Tooltip>
+        ) : (
+          handle
+        );
+      })}
     </section>
   );
 }
@@ -285,19 +438,21 @@ function CallBar({ room, channel, open }: { room: GroupRoom; channel: string; op
   );
 }
 
-function More({ tiles, onClick }: { tiles: TileOf[]; onClick: () => void }) {
+function More({ tiles, open, onClick }: { tiles: TileOf[]; open: boolean; onClick: () => void }) {
   const names = tiles.map((t) => (t.kind === 'screen' ? `${t.name}'s screen` : t.name));
-  const label = `${tiles.length} more: ${names.join(', ')}`;
+  const label = open ? 'show fewer' : `${tiles.length} more: ${names.join(', ')}`;
   return (
     <Tooltip content={label}>
       <button
-        id="voice-pip-more"
+        id={open ? 'voice-pip-less' : 'voice-pip-more'}
         type="button"
         aria-label={label}
+        aria-expanded={open}
+        aria-controls="voice-pip-small"
         onClick={onClick}
-        className="flex aspect-video items-center justify-center rounded-card border border-primaryStroke bg-backgroundTertiary text-sm font-semibold tabular-nums text-textSecondary hover:border-secondaryStroke hover:text-textPrimary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue bubble:border-transparent bubble:hover:border-secondaryStroke"
+        className="flex aspect-video items-center justify-center rounded-card border border-primaryStroke bg-backgroundTertiary text-xs font-semibold tabular-nums text-textSecondary hover:border-secondaryStroke hover:text-textPrimary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue bubble:border-transparent bubble:hover:border-secondaryStroke"
       >
-        +{tiles.length}
+        {open ? <RiArrowUpSLine aria-hidden size={16} /> : `+${tiles.length} more`}
       </button>
     </Tooltip>
   );
