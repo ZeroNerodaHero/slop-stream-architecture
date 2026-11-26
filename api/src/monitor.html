@@ -133,8 +133,15 @@
   .card { flex: none; width: var(--card-w); height: var(--card-h); display: grid; grid-template-rows: 16px 24px 16px 16px; align-content: center; background: var(--bg3); border: 1px solid var(--stroke); padding: 0 6px; text-align: left; min-width: 0; cursor: pointer; }
   .card:hover { border-color: var(--t3); }
   .card[aria-pressed="true"] { border-color: var(--blue); background: rgb(30 38 56); }
-  .card.allc { width: 44px; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--t2); }
+  .card.allc { width: 44px; height: calc(var(--card-h) - 20px); display: flex; align-items: center; justify-content: center; padding: 0; color: var(--t2); }
   .card.allc[aria-pressed="true"] { color: var(--t1); }
+  .kfold { display: block; width: 44px; height: 16px; padding: 0; background: var(--bg3); border: 1px solid var(--stroke); color: var(--t3); font-size: 10px; line-height: 14px; text-align: center; }
+  .kfold:hover, .kfold:focus-visible { color: var(--t1); border-color: var(--t3); outline: none; }
+  .strip.folded { flex-wrap: nowrap; align-items: center; }
+  .strip.folded .grp-head { display: none; }
+  .strip.folded .card.allc { height: 22px; }
+  .ksum { min-width: 0; font-size: 12px; color: var(--t2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ksum .dim { color: var(--t3); }
   .card > div { display: flex; align-items: baseline; gap: 0 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
   .card .c-head { justify-content: space-between; gap: 6px; }
   .card .c-head .dim { flex: none; font-size: 11px; }
@@ -166,8 +173,8 @@
   .eps th.num, .eps td.num { text-align: right; padding-right: 10px; }
   .eps td.ep-name { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
   .eps .ktag { display: inline-block; min-width: 76px; margin-right: 6px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 12px; }
-  .eps th button, .ctrs th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
-  .eps th button:hover, .eps th[aria-sort] button, .ctrs th button:hover, .ctrs th[aria-sort] button { color: var(--t1); }
+  .eps th button, .ctrs th button, .fgrp th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
+  .eps th button:hover, .eps th[aria-sort] button, .ctrs th button:hover, .ctrs th[aria-sort] button, .fgrp th button:hover, .fgrp th[aria-sort] button { color: var(--t1); }
   .eps tr.ep { cursor: pointer; } .eps tr.ep:hover td, .eps tr.ep.open td { background: var(--bg3); }
   .eps tr.ep.open td { background: rgb(30 38 56); color: var(--t1); }
   .twrap { position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -219,6 +226,22 @@
   .frow { display: grid; grid-template-columns: max-content 52px minmax(0, 1fr) max-content; gap: 10px; align-items: baseline; padding: 3px 0; border-top: 1px solid var(--stroke); }
   .frow .fmsg { overflow-wrap: anywhere; user-select: text; }
   .frow .fms { text-align: right; }
+  .fbar { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 12px; color: var(--t3); }
+  .seg.sm button { padding: 1px 8px; font-size: 11px; }
+  .fgrp { font-size: 12px; }
+  .fgrp th { position: sticky; top: 0; z-index: 1; background: var(--bg3); padding-top: 2px; }
+  .fgrp th.num, .fgrp td.num { text-align: right; padding-left: 10px; }
+  .fgrp td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .fgrp td.fmsg { white-space: normal; overflow-wrap: anywhere; user-select: text; width: 100%; }
+  .fgrp tr.fg { cursor: pointer; }
+  .fgrp tr.fg:hover td, .fgrp tr.fg[aria-expanded="true"] td { background: var(--bg2); }
+  .fgrp tr.fg:focus-visible { outline: 1px solid var(--blue); outline-offset: -1px; }
+  .fgrp tr.fg td:first-child::before { content: '▸'; display: inline-block; width: 12px; color: var(--t3); }
+  .fgrp tr.fg[aria-expanded="true"] td:first-child::before { content: '▾'; }
+  .fgrp tr.fsec td { padding-top: 8px; font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
+  .fgrp tr.focc > td { padding: 0 0 4px 12px; border-top: 0; background: var(--bg2); white-space: normal; }
+  .fgrp .focc .frow { grid-template-columns: max-content max-content minmax(0, 1fr); border-top: 1px dashed var(--stroke); padding: 2px 0; }
+  .fx { display: inline-block; min-width: 26px; padding: 0 5px; border: 1px solid var(--stroke); border-radius: 8px; font-size: 11px; line-height: 15px; text-align: center; color: var(--t1); background: var(--bg); }
   .g-ok { color: var(--up); } .g-warn { color: var(--warn); } .g-bad { color: var(--down); }
   .share { position: relative; display: inline-block; width: 40px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
   .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
@@ -531,6 +554,14 @@
     try { if (on) localStorage.setItem(HEALTH_KEY, '1'); else localStorage.removeItem(HEALTH_KEY); } catch (e) { console.warn('filters', e); }
   }
 
+  const KINDS_KEY = 'stats.kinds.collapsed';
+  let kindsFolded = false;
+  try { kindsFolded = localStorage.getItem(KINDS_KEY) === '1'; } catch (e) { console.warn('kinds', e); }
+  function setKindsFolded(on) {
+    kindsFolded = on;
+    try { if (on) localStorage.setItem(KINDS_KEY, '1'); else localStorage.removeItem(KINDS_KEY); } catch (e) { console.warn('kinds', e); }
+  }
+
   const SORT_KEY = 'stats.sort.';
   const sorts = {};
   function sortOf(table, cols, fallback) {
@@ -691,11 +722,12 @@
     return b;
   }
   function holdHint(root) {
-    return hintAt && root.contains(hintAt) ? { k: hintAt.dataset.k, focused: document.activeElement === hintAt } : null;
+    return hintAt && root.contains(hintAt) ? { k: hintAt.dataset.k, tip: hintAt.dataset.tip, focused: document.activeElement === hintAt } : null;
   }
   function keepHint(root, held) {
     if (!held) return;
-    const b = [...root.querySelectorAll('.tipped')].find((x) => x.dataset.k === held.k);
+    const all = [...root.querySelectorAll('.tipped')];
+    const b = all.find((x) => x.dataset.k === held.k && x.dataset.tip === held.tip) || all.find((x) => x.dataset.k === held.k);
     if (!b) { hideHint(); return; }
     if (held.focused) b.focus({ preventScroll: true });
     showHint(b);
@@ -2084,7 +2116,7 @@
 
   function timingCards(v, totals, target, rows, filter) {
     const ui = v.ui;
-    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}|${filter}`;
+    const sig = `${tm.data ? tm.data.received : 0}|${target}|${[...v.pick].sort().join(',')}|${v.errs}|${filter}|${kindsFolded}`;
     if (ui.cardsSig === sig && ui.strip.childNodes.length) return;
     ui.cardsSig = sig;
     const cards = cardsFor(v, totals, target, rows);
@@ -2093,9 +2125,33 @@
     const all = button('card allc', 'all', () => { v.pick = new Set(); v.errs = ''; v.open = null; writeHash(); timingRender(v); });
     all.setAttribute('aria-pressed', String(!v.pick.size && !v.errs));
     all.title = 'every kind and direction';
+    const fold = button('kfold', kindsFolded ? '▾' : '▴', () => {
+      setKindsFolded(!kindsFolded);
+      timingRender(v);
+      const again = ui.strip.querySelector('.kfold');
+      if (again) again.focus({ preventScroll: true });
+    });
+    fold.setAttribute('aria-expanded', String(!kindsFolded));
+    fold.setAttribute('aria-label', kindsFolded ? 'show the kind cards' : 'hide the kind cards');
+    fold.title = kindsFolded ? 'show the kind cards' : 'hide the kind cards';
     const first = el('div', 'grp');
-    first.append(el('span', 'grp-head', '\u00a0'), all);
+    first.append(el('span', 'grp-head', '\u00a0'), all, fold);
     const parts = [first];
+    ui.strip.classList.toggle('folded', kindsFolded);
+    if (kindsFolded) {
+      const picked = cards.filter((c) => v.pick.has(c.id));
+      const sum = el('div', 'ksum');
+      const errWord = v.errs === 'e5' ? '5xx' : v.errs === 'e4' ? '4xx' : '';
+      if (!picked.length) sum.append(el('span', 'dim', 'showing '), document.createTextNode(`all ${cards.length} kinds`));
+      else {
+        sum.append(el('span', 'dim', 'showing '), document.createTextNode(picked.map((c) => `${kindLabel(c.key)} ${DIR_NAME[c.dir]}`).join(', ')));
+        if (errWord) sum.append(el('span', 'dim', ' · only '), document.createTextNode(errWord));
+      }
+      sum.title = sum.textContent;
+      parts.push(sum);
+      ui.strip.replaceChildren(...parts);
+      return;
+    }
     for (const [dir, label] of DIRS) {
       const mine = cards.filter((c) => c.dir === dir);
       if (!mine.length) continue;
@@ -2268,7 +2324,127 @@
 
   const faultTime = (at) => new Date(at).toLocaleString('en-US', { timeZone: CHICAGO, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
 
-  function faultTile(F, summary) {
+  const ERRVIEW_KEY = 'stats.errors.view';
+  let errView = 'grouped';
+  try { if (localStorage.getItem(ERRVIEW_KEY) === 'all') errView = 'all'; } catch (e) { console.warn('errors view', e); }
+  function setErrView(next) {
+    errView = next;
+    try { localStorage.setItem(ERRVIEW_KEY, next); } catch (e) { console.warn('errors view', e); }
+  }
+  const errOpen = new Set();
+  const normMsg = (m) => String(m || '')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>')
+    .replace(/\b0x[0-9a-f]+\b/gi, '<hex>')
+    .replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b/gi, '<hex>')
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ns|µs|us|ms|s|secs?|seconds?|mins?|minutes?|h|hours?)\b/gi, '<dur>')
+    .replace(/\d+(?:\.\d+)?/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+  function faultGroups(rows) {
+    const by = new Map();
+    for (const f of rows) {
+      const code = String(f.code == null ? '' : f.code);
+      const msg = typeof f.msg === 'string' ? f.msg : '';
+      const key = `${code}\u0000${normMsg(msg)}`;
+      let g = by.get(key);
+      if (!g) { g = { key, code, msgs: new Set(), occ: [], n: 0, first: null, last: null }; by.set(key, g); }
+      g.n += 1;
+      g.msgs.add(msg);
+      g.occ.push(f);
+      if (has(f.at)) { g.first = g.first === null ? f.at : Math.min(g.first, f.at); g.last = g.last === null ? f.at : Math.max(g.last, f.at); }
+    }
+    return [...by.values()].map((g) => {
+      const lat = g.occ.map((f) => f.ms).filter(has).sort((a, b) => a - b);
+      const newest = g.occ.reduce((a, f) => (has(f.at) && (!has(a.at) || f.at > a.at) ? f : a), g.occ[0]);
+      return { ...g, label: g.msgs.size === 1 ? [...g.msgs][0] : normMsg(newest.msg), min: lat.length ? lat[0] : null, max: lat.length ? lat[lat.length - 1] : null, p50: lat.length ? lat[Math.floor((lat.length - 1) / 2)] : null, four: g.code.startsWith('4') };
+    });
+  }
+  const ERR_COLS = [
+    { id: 'msg', label: 'message', get: (g) => g.label },
+    { id: 'code', label: 'status', get: (g) => g.code },
+    { id: 'n', label: 'count', num: true, get: (g) => g.n },
+    { id: 'last', label: 'last seen', num: true, get: (g) => g.last },
+    { id: 'first', label: 'first seen', num: true, get: (g) => g.first },
+    { id: 'lat', label: 'latency', num: true, get: (g) => g.p50 },
+  ];
+  const chicagoDay = (at) => new Date(at).toLocaleDateString('en-US', { timeZone: CHICAGO });
+  const shortTime = (at) => (chicagoDay(at) === chicagoDay(Date.now())
+    ? new Date(at).toLocaleTimeString('en-US', { timeZone: CHICAGO, hour: 'numeric', minute: '2-digit', second: '2-digit' })
+    : new Date(at).toLocaleString('en-US', { timeZone: CHICAGO, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
+  const seenCell = (at) => {
+    const td = el('td', 'num mono dim', has(at) ? shortTime(at) : '—');
+    if (has(at)) td.title = faultTime(at);
+    return td;
+  };
+  const latRange = (g) => (!has(g.min) ? '—' : g.min === g.max ? ms(g.min) : `${ms(g.min)}–${ms(g.max)}`);
+
+  function faultGroupTable(rows, line, redraw) {
+    const groups = faultGroups(rows);
+    const sort = sortOf('errors', ERR_COLS, { col: 'n', dir: -1 });
+    const col = ERR_COLS.find((c) => c.id === sort.col);
+    const tie = (a, b) => b.n - a.n || (b.last || 0) - (a.last || 0) || a.key.localeCompare(b.key);
+    const table = el('table', 'fgrp');
+    const thead = el('thead');
+    const htr = sortHead('errors', ERR_COLS, sort, redraw);
+    [...htr.children].forEach((th, i) => { if (ERR_COLS[i].num) th.classList.add('num'); });
+    thead.append(htr);
+    const tbody = el('tbody');
+    const section = (list, name) => {
+      if (!list.length) return;
+      if (name) {
+        const tr = el('tr', 'fsec');
+        const td = el('td', null, `${name} · ${list.length} ${list.length === 1 ? 'kind' : 'kinds'} · ${count(list.reduce((a, g) => a + g.n, 0))}`);
+        td.colSpan = ERR_COLS.length;
+        tr.append(td);
+        tbody.append(tr);
+      }
+      for (const g of sortRows(list, col, sort.dir, () => false, tie)) {
+        const id = `${line}\u0001${g.key}`;
+        const open = errOpen.has(id);
+        const tr = el('tr', 'fg');
+        tr.tabIndex = 0;
+        tr.setAttribute('aria-expanded', String(open));
+        const msg = el('td', 'fmsg', g.label || '—');
+        if (g.msgs.size > 1) msg.title = `${g.msgs.size} different messages, numbers, ids and durations set aside`;
+        const short = g.label.length > 60 ? `${g.label.slice(0, 59)}…` : g.label;
+        const badge = tipped('', `${g.n} of the ${rows.length} kept on this line are ${g.code || 'this'}${short ? `, ${short}` : ''}`);
+        badge.dataset.k = `×${g.n}`;
+        badge.classList.add('fx');
+        badge.textContent = `×${count(g.n)}`;
+        const n = el('td', 'num');
+        n.append(badge);
+        const lat = el('td', 'num mono dim', latRange(g));
+        lat.title = `p50 ${ms(g.p50)} · min ${ms(g.min)} · max ${ms(g.max)}`;
+        tr.append(msg, el('td', `mono ${g.four ? 'note' : 'no'}`, g.code || '—'), n,
+          seenCell(g.last), seenCell(g.first), lat);
+        const toggle = () => { if (open) errOpen.delete(id); else errOpen.add(id); redraw(); };
+        tr.addEventListener('click', (e) => { if (!window.getSelection().toString()) toggle(); else e.preventDefault(); });
+        tr.addEventListener('keydown', (e) => { if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } });
+        tbody.append(tr);
+        if (!open) continue;
+        const otr = el('tr', 'focc');
+        const otd = el('td');
+        otd.colSpan = ERR_COLS.length;
+        for (const f of [...g.occ].sort((a, b) => (b.at || 0) - (a.at || 0))) {
+          const row = el('div', 'frow');
+          row.append(el('span', 'mono dim', has(f.at) ? faultTime(f.at) : '—'), el('span', 'fms mono', has(f.ms) ? ms(f.ms) : '—'), el('span', 'fmsg dim', g.msgs.size > 1 && f.msg ? f.msg : ''));
+          otd.append(row);
+        }
+        otr.append(otd);
+        tbody.append(otr);
+      }
+    };
+    const errs = groups.filter((g) => !g.four), fours = groups.filter((g) => g.four);
+    section(errs, fours.length && errs.length ? 'errors' : '');
+    section(fours, '4xx');
+    table.append(thead, tbody);
+    const kinds = (list) => `${list.length} ${list.length === 1 ? 'kind' : 'kinds'}`;
+    const n = (list) => list.reduce((a, g) => a + g.n, 0);
+    const sum = [errs.length ? `${kinds(errs)} · ${count(n(errs))} ${n(errs) === 1 ? 'error' : 'errors'}` : '', fours.length ? `${kinds(fours)} · ${count(n(fours))} 4xx` : ''].filter(Boolean).join(' · ');
+    return { table, sum };
+  }
+
+  function faultTile(F, summary, line, redraw) {
     const t = el('div', 'tile wide');
     const head = el('div', 'head');
     const rows = F && Array.isArray(F.rows) ? F.rows : [];
@@ -2277,7 +2453,17 @@
     if (!F) t.append(el('div', 'empty', 'loading'));
     else if (F.error) t.append(el('div', 'note', `could not load the errors: ${F.error}`));
     else if (!rows.length) t.append(el('div', 'empty', 'none kept: no errors since this process last started'));
-    else {
+    else if (errView === 'grouped') {
+      const { table, sum } = faultGroupTable(rows, line, redraw);
+      const bar = el('div', 'fbar');
+      bar.append(errSwitch(redraw), el('span', null, sum));
+      const list = el('div', 'flist');
+      list.append(table);
+      t.append(bar, list);
+    } else {
+      const bar = el('div', 'fbar');
+      bar.append(errSwitch(redraw), el('span', null, `${count(rows.length)} kept, newest first`));
+      t.append(bar);
       const list = el('div', 'flist');
       list.setAttribute('role', 'list');
       for (const f of rows) {
@@ -2294,6 +2480,19 @@
       t.append(list);
     }
     return t;
+  }
+
+  function errSwitch(redraw) {
+    const seg = el('div', 'seg sm');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'error history view');
+    for (const [id, label, tip] of [['grouped', 'Grouped', 'one row per status and message, numbers, ids and durations set aside'], ['all', 'All', 'every error kept, newest first']]) {
+      const b = button(null, label, () => { if (errView !== id) { setErrView(id); redraw(); } });
+      b.setAttribute('aria-pressed', String(errView === id));
+      b.title = tip;
+      seg.append(b);
+    }
+    return seg;
   }
 
   function pairOf(r) {
@@ -2451,7 +2650,7 @@
             : [{ name: 'errors', v: D.err, color: COLORS.red }] });
         tile({ label: `time spent per ${per(secs)}`, read: spent, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }, true);
       }
-      body.append(faultTile(D.faults, S ? `${count(I ? I.err : 0)} dropped ${over}` : `${count(r.err)} ${r.err === 1 ? 'error' : 'errors'}${r.kind === 'http' ? ` · ${count(r.e4)} 4xx` : ''} ${over}`));
+      body.append(faultTile(D.faults, S ? `${count(I ? I.err : 0)} dropped ${over}` : `${count(r.err)} ${r.err === 1 ? 'error' : 'errors'}${r.kind === 'http' ? ` · ${count(r.e4)} 4xx` : ''} ${over}`, v.open, () => timingRender(v)));
     }
     const held = holdHint(dr);
     dr.replaceChildren(v.ui.grip, head, stats, body);
@@ -2459,7 +2658,7 @@
     const list = body.querySelector('.flist');
     if (list) list.scrollTop = listScroll;
     dr.classList.add('on');
-    keepHint(stats, held);
+    keepHint(dr, held);
   }
 
   const SITE_COUNTS = [
