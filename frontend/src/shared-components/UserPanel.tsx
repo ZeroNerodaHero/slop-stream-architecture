@@ -29,7 +29,7 @@ import { cn } from '@/utils/cn';
 const COLLAPSED = 'w-14';
 const EXPANDED = 'w-[min(300px,calc(100vw-12rem))]';
 const COLUMN =
-  'sticky top-0 h-screen w-14 shrink-0 self-start bubble:top-2 bubble:mt-2 bubble:h-[calc(100vh-1rem)] bubble:data-[side=left]:ml-2 bubble:data-[side=right]:mr-2';
+  'sticky top-[var(--banner-h,0px)] h-[calc(100vh-var(--banner-h,0px))] w-14 shrink-0 self-start bubble:top-[calc(var(--banner-h,0px)+0.5rem)] bubble:mt-2 bubble:h-[calc(100vh-var(--banner-h,0px)-1rem)] bubble:data-[side=left]:ml-2 bubble:data-[side=right]:mr-2';
 const panelClass = (side: 'left' | 'right') =>
   cn(
     'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base bubble:rounded-panel bubble:border-transparent bubble:bg-backgroundSecondary',

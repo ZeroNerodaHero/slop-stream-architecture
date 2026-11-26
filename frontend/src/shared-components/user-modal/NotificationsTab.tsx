@@ -15,6 +15,7 @@ import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
 import { Button } from '@/shared-components/Button';
 import { CHECKBOX, FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { SoundsSection } from '@/shared-components/user-modal/SoundsSection';
 import { cn } from '@/utils/cn';
 
 const KINDS: readonly { kind: NotificationKind; label: string; icon: ReactNode }[] = [
@@ -104,6 +105,7 @@ export function NotificationsTab() {
         </ul>
         <Status id="notify-settings-note" text={note} quiet />
       </fieldset>
+      <SoundsSection />
     </div>
   );
 }
