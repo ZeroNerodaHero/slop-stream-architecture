@@ -205,6 +205,8 @@ enum Out {
         reply: Option<Value>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         mentions: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        call: Option<Value>,
     },
     #[serde(rename = "dm_react")]
     DmReact { id: i64, from: String, to: String, emoji: String, on: bool },
@@ -238,6 +240,13 @@ enum Out {
     ChatRead { name: String, room: String },
     Group {
         group: String,
+        what: String,
+        #[serde(flatten)]
+        data: serde_json::Map<String, Value>,
+    },
+    Call {
+        caller: String,
+        callee: String,
         what: String,
         #[serde(flatten)]
         data: serde_json::Map<String, Value>,
@@ -798,7 +807,8 @@ impl Gateway {
                 let audio = crate::chat::Audio::parse(entry.get::<String>("audio").as_deref());
                 let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
                 let mentions = crate::mentions::from_field(entry.get("mentions"));
-                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, audio, reply, mentions }).await;
+                let call: Option<Value> = entry.get::<String>("call").and_then(|c| serde_json::from_str(&c).ok());
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, audio, reply, mentions, call }).await;
             }
             "dm_react" => {
                 let (Some(from), Some(id), Some(emoji)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("emoji")) else { return };
@@ -867,6 +877,16 @@ impl Gateway {
                 if after {
                     self.regate(&name, None).await;
                 }
+            }
+            "call" => {
+                let (Some(caller), Some(what)): (Option<String>, Option<String>) = (entry.get("caller"), entry.get("what")) else { return };
+                let Some(data) = entry.get::<String>("data").and_then(|data| match serde_json::from_str::<Value>(&data) {
+                    Ok(Value::Object(map)) => Some(map),
+                    _ => None,
+                }) else {
+                    return;
+                };
+                self.tell(&[&caller, &name], Out::Call { caller: caller.clone(), callee: name.clone(), what, data }).await;
             }
             other => log::debug!("events: unknown entry type {other}"),
         }

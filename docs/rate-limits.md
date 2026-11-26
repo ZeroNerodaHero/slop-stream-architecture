@@ -74,6 +74,7 @@ load, per action), not a measurement.
 | ✅ | `PUT /api/dm/{name}/read` | DM read marker | none | **120** | account | 1 min | medium |
 | ✅ | `PUT /api/dm/{name}/react` | React to a DM line | 120 / account | **120** | account | 1 min | medium (a click each) |
 | ✅ | `GET /api/dm/{name}/search` | Search a DM thread | none | **60** (search tier) | account | 1 min | low |
+| ✅ | `POST /api/dm/{name}/call` (and `/accept`, `/decline`, `/end`) | DM voice call | 10 rings / account | **120** (write tier) | account | 1 min | low (a click each) |
 | ✅ | `POST /api/groups/{group}/emotes` | Upload a group emote | 30 / account | same (Retry-After) **+ 60** (upload) | account | 1 h | rare (owner, emotes power) |
 | ✅ | `PATCH`, `DELETE /api/groups/{group}/emotes/{id}` | Rename, delete a group emote | none | **120** (moderate) | account | 10 min | rare |
 | ✅ | `POST /api/chat-images` | Upload a chat image | 30 / account | same (Retry-After) **+ 60** (upload) | account | 10 min; 1 h | low (per pasted image) |

@@ -3,6 +3,7 @@ import { atom } from 'jotai';
 import { api, type GroupRoom } from '@/infra/api';
 import { MEMBER_ROW_PX, pageFor, roomAtom, withVoiceChange } from '@/infra/atoms/room-atoms';
 import { voiceCallAtom, voiceUidsAtom } from '@/infra/atoms/voice-state';
+import { isDmRoom } from '@/infra/dm-call';
 import { holdPresence, onEvents, releasePresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { store } from '@/infra/store';
@@ -14,7 +15,7 @@ let asked = 0;
 
 function callServer(): string {
   const call = store.get(voiceCallAtom);
-  return call.phase === 'joining' || call.phase === 'connected' ? call.server : '';
+  return (call.phase === 'joining' || call.phase === 'connected') && !isDmRoom(call.server) ? call.server : '';
 }
 
 function onPage(server: string): boolean {

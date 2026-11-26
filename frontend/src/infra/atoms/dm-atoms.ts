@@ -8,6 +8,7 @@ import type { Presence } from '@/infra/atoms/presence-atoms';
 import { Attachments, wordsOf } from '@/infra/chat-attach';
 import { audioOf, type ChatAudio } from '@/infra/chat-audio';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
+import { callMarkOf } from '@/infra/dm-call';
 import { encodeEmotes } from '@/infra/emotes';
 import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
@@ -92,6 +93,10 @@ export function openDm(person: Person) {
   store.set(dmOpenAtom, true);
   void loadThread(person.name);
   markRead(person.name);
+}
+
+export function openDmWith(name: string) {
+  openDm(find(name) ?? personFor(name));
 }
 
 export function selectDm(name: string) {
@@ -183,13 +188,25 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
   store.set(dmThreadsAtom, { ...threads, [name]: next(threads[name]) });
 }
 
-function lineOf(line: Omit<DmLine, 'images'> & { images?: unknown }): DmLine {
+function lineOf(line: Omit<DmLine, 'images' | 'call'> & { images?: unknown; call?: unknown }): DmLine {
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
   const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
   const video = videoOf(line.video);
   const audio = audioOf(line.audio);
   const mentions = Array.isArray(line.mentions) ? line.mentions.filter((m): m is string => typeof m === 'string') : [];
-  const base = { id: line.id, from: line.from, text: line.text, at: line.at, images, reply, ...(video ? { video } : {}), ...(audio ? { audio } : {}), ...(mentions.length > 0 ? { mentions } : {}) };
+  const call = callMarkOf(line.call);
+  const base = {
+    id: line.id,
+    from: line.from,
+    text: line.text,
+    at: line.at,
+    images,
+    reply,
+    ...(video ? { video } : {}),
+    ...(audio ? { audio } : {}),
+    ...(mentions.length > 0 ? { mentions } : {}),
+    ...(call ? { call } : {})
+  };
   return 'reactions' in line ? { ...base, reactions: reactionsOf(line.reactions) } : base;
 }
 
@@ -375,7 +392,7 @@ function retarget(fromId: string, peer: string) {
   if (results?.name === old) store.set(dmResultsAtom, { ...results, name: peer });
 }
 
-function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[]; video?: ChatVideo; audio?: ChatAudio; mentions?: string[] }) {
+function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[]; video?: ChatVideo; audio?: ChatAudio; mentions?: string[]; call?: unknown }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
   const peer = frame.from === me ? frame.to : frame.from;

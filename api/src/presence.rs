@@ -162,7 +162,20 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], (video, audio): (Option<&crate::chat::Video>, Option<&crate::chat::Audio>), at_ms: i64, from_id: &str, reply: Option<&serde_json::Value>, mentions: &[String]) {
+pub(crate) async fn publish_dm<C: AsyncCommands>(
+    r: &mut C,
+    from: &str,
+    to: &str,
+    id: i64,
+    text: &str,
+    images: &[String],
+    (video, audio): (Option<&crate::chat::Video>, Option<&crate::chat::Audio>),
+    at_ms: i64,
+    from_id: &str,
+    reply: Option<&serde_json::Value>,
+    mentions: &[String],
+    call: Option<&serde_json::Value>,
+) {
     let mut fields = vec![
         ("type", "dm".to_owned()),
         ("name", to.to_owned()),
@@ -187,7 +200,14 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str
     if !mentions.is_empty() {
         fields.push(("mentions", mentions.join(",")));
     }
+    if let Some(call) = call {
+        fields.push(("call", call.to_string()));
+    }
     publish(r, &fields).await;
+}
+
+pub(crate) async fn publish_call<C: AsyncCommands>(r: &mut C, caller: &str, callee: &str, what: &str, data: &serde_json::Value) {
+    publish(r, &[("type", "call".into()), ("name", callee.into()), ("caller", caller.into()), ("what", what.into()), ("data", data.to_string())]).await;
 }
 
 pub(crate) async fn publish_dm_react<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, emoji: &str, on: bool) {

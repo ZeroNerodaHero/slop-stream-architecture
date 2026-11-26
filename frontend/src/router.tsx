@@ -7,6 +7,7 @@ import { NotFoundPage } from '@/app/NotFoundPage';
 import { authDialogAtom } from '@/infra/atoms/auth-atoms';
 import { cropRequestAtom } from '@/infra/atoms/crop-atoms';
 import { dmOpenAtom } from '@/infra/atoms/dm-atoms';
+import { dmCallAtom, dmRingAtom } from '@/infra/atoms/dm-call-atoms';
 import { inspectorOpenAtom, qualityOpenAtom, timingsOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
 import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
@@ -30,6 +31,7 @@ const UserModal = lazy(() => import('@/shared-components/UserModal').then((m) =>
 const AuthDialog = lazy(() => import('@/shared-components/AuthDialog').then((m) => ({ default: m.AuthDialog })));
 const ProfilePopup = lazy(() => import('@/shared-components/ProfilePopup').then((m) => ({ default: m.ProfilePopup })));
 const VoicePip = lazy(() => import('@/app/explore/VoicePip').then((m) => ({ default: m.VoicePip })));
+const CallRing = lazy(() => import('@/shared-components/CallRing').then((m) => ({ default: m.CallRing })));
 const CropDialog = lazy(() => import('@/shared-components/CropDialog').then((m) => ({ default: m.CropDialog })));
 
 function FriendChatWhenUsed() {
@@ -115,9 +117,19 @@ function CropDialogWhenUsed() {
 
 function VoicePipWhenUsed() {
   const call = useAtomValue(voiceCallAtom);
+  const dm = useAtomValue(dmCallAtom);
   return (
-    <WhenUsed on={call.phase !== 'idle'}>
+    <WhenUsed on={call.phase !== 'idle' || dm !== null}>
       <VoicePip />
+    </WhenUsed>
+  );
+}
+
+function CallRingWhenUsed() {
+  const ring = useAtomValue(dmRingAtom);
+  return (
+    <WhenUsed on={ring !== null}>
+      <CallRing />
     </WhenUsed>
   );
 }
@@ -148,6 +160,7 @@ function Shell() {
         <ProfilePopupWhenUsed />
         <CropDialogWhenUsed />
         <VoicePipWhenUsed />
+        <CallRingWhenUsed />
         <InspectorWhenUsed />
         <TimingsWhenUsed />
         <QualityWhenUsed />

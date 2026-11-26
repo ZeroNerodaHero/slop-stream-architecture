@@ -9,6 +9,7 @@ mod chat_audio;
 mod chat_images;
 mod chat_videos;
 mod debug;
+mod dm_calls;
 mod dms;
 mod emotes;
 mod events;
@@ -832,6 +833,7 @@ fn router(state: AppState) -> Router {
         .merge(pins::routes())
         .merge(follows::routes())
         .merge(dms::routes())
+        .merge(dm_calls::routes())
         .merge(mentions::routes())
         .merge(chat_images::routes())
         .merge(chat_videos::routes())

@@ -22,13 +22,13 @@ const THREADS: i64 = 100;
 const RATE_PER_MINUTE: i64 = 60;
 const RATE_WINDOW_SECS: i64 = 60;
 
-const NOT_FRIENDS: &str = "not friends. a chat is with someone you follow who follows you back";
+pub(crate) const NOT_FRIENDS: &str = "not friends. a chat is with someone you follow who follows you back";
 
 fn not_logged_in() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "not logged in")
 }
 
-async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiError> {
+pub(crate) async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiError> {
     let name = auth::renamed_to(db, &name).await?.unwrap_or(name);
     if name == me.name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
@@ -41,20 +41,63 @@ async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiErr
     Ok(Account { id, name })
 }
 
-type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value, Option<String>, Option<String>, Vec<String>, Option<String>, Option<String>);
+struct LineRow {
+    id: i64,
+    from: String,
+    text: String,
+    at: i64,
+    image: Option<String>,
+    reply_to: Option<i64>,
+    quote_from: Option<String>,
+    quote_text: Option<String>,
+    quote_avatar: Option<i64>,
+    quote_image: Option<String>,
+    reactions: Value,
+    video: Option<String>,
+    quote_video: Option<String>,
+    mentions: Vec<String>,
+    audio: Option<String>,
+    quote_audio: Option<String>,
+    call: Option<Value>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LineRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        Ok(LineRow {
+            id: row.try_get(0)?,
+            from: row.try_get(1)?,
+            text: row.try_get(2)?,
+            at: row.try_get(3)?,
+            image: row.try_get(4)?,
+            reply_to: row.try_get(5)?,
+            quote_from: row.try_get(6)?,
+            quote_text: row.try_get(7)?,
+            quote_avatar: row.try_get(8)?,
+            quote_image: row.try_get(9)?,
+            reactions: row.try_get(10)?,
+            video: row.try_get(11)?,
+            quote_video: row.try_get(12)?,
+            mentions: row.try_get(13)?,
+            audio: row.try_get(14)?,
+            quote_audio: row.try_get(15)?,
+            call: row.try_get(16)?,
+        })
+    }
+}
 
 const LINE_SELECT: &str = concat!(
     "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image,
                 d.reply_to, qf.name, left(q.text, 120), (EXTRACT(EPOCH FROM qf.avatar_at))::bigint, q.image, ",
     reactions::dm_reactions_sql!(),
-    ", d.video, q.video, d.mentions, d.audio, q.audio
+    ", d.video, q.video, d.mentions, d.audio, q.audio, d.call
          FROM dms d JOIN streamers f ON f.id = d.from_id
          LEFT JOIN dms q ON q.id = d.reply_to
              AND LEAST(q.from_id, q.to_id) = LEAST(d.from_id, d.to_id) AND GREATEST(q.from_id, q.to_id) = GREATEST(d.from_id, d.to_id)
          LEFT JOIN streamers qf ON qf.id = q.from_id"
 );
 
-fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video, mentions, audio, quote_audio): &LineRow) -> Value {
+fn line_json(LineRow { id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video, mentions, audio, quote_audio, call }: &LineRow) -> Value {
     let reply = reply_to.map(|reply_to| match quote_from {
         Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone(), quote_video.clone(), quote_audio.clone())),
         None => json!({ "id": reply_to, "gone": true }),
@@ -68,6 +111,9 @@ fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote
     }
     if !mentions.is_empty() {
         line["mentions"] = json!(mentions);
+    }
+    if let Some(call) = call {
+        line["call"] = call.clone();
     }
     line
 }
@@ -291,7 +337,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     mark_read(&s.db, me.id, other.id, id).await?;
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
-    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, (video.as_ref(), audio.as_ref()), at, &me.id.to_string(), reply.as_ref(), &mentions).await;
+    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, (video.as_ref(), audio.as_ref()), at, &me.id.to_string(), reply.as_ref(), &mentions, None).await;
     log::info!(
         "{}: dm to {} ({} chars, {} pictures{}{})",
         me.name,
@@ -330,6 +376,23 @@ async fn insert(db: &PgPool, from: Uuid, to: Uuid, text: &str, image: Option<&st
     .bind(audio.map(Audio::stored))
     .fetch_one(db)
     .await
+}
+
+pub(crate) async fn call_line(s: &AppState, caller: &Account, callee: &Account, text: &str, call: &Value) -> Result<(), ApiError> {
+    let (id, at): (i64, i64) = sqlx::query_as(
+        "INSERT INTO dms (from_id, to_id, text, call) VALUES ($1, $2, $3, $4)
+         RETURNING id, (EXTRACT(EPOCH FROM sent_at) * 1000)::bigint",
+    )
+    .bind(caller.id)
+    .bind(callee.id)
+    .bind(text)
+    .bind(call)
+    .fetch_one(&s.db)
+    .await?;
+    mark_read(&s.db, caller.id, callee.id, id).await?;
+    let mut r = s.redis.clone();
+    presence::publish_dm(&mut r, &caller.name, &callee.name, id, text, &[], (None, None), at, &caller.id.to_string(), None, &[], Some(call)).await;
+    Ok(())
 }
 
 #[derive(Deserialize)]
