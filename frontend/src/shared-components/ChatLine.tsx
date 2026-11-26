@@ -1,13 +1,5 @@
 import { RiEmotionLine, RiMoreFill, RiReplyLine } from '@remixicon/react';
-import {
-  type HTMLAttributes,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState
-} from 'react';
+import { type HTMLAttributes, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
 import { plainEmotes } from '@/infra/emotes';
@@ -59,15 +51,15 @@ function GutterClock({ at, shown, className }: { at: number; shown: boolean; cla
   return (
     <Stamp at={at}>
       <span
-      aria-hidden
-      className={cn(
-        GUTTER,
-        'text-right text-[10px] leading-none tabular-nums text-textTertiary transition-opacity duration-150',
-        !shown && 'opacity-0 group-hover/line:opacity-100',
-        className
-      )}
-    >
-      {clock(at)}
+        aria-hidden
+        className={cn(
+          GUTTER,
+          'text-right text-[10px] leading-none tabular-nums text-textTertiary transition-opacity duration-150',
+          !shown && 'opacity-0 group-hover/line:opacity-100',
+          className
+        )}
+      >
+        {clock(at)}
       </span>
     </Stamp>
   );
@@ -334,7 +326,10 @@ export function ReplyQuote({ shape, quote, onJump, color }: { shape: ChatStyle; 
   }
   return (
     <span data-reply-quote className="flex min-w-0 items-stretch text-xs leading-4">
-      <span aria-hidden className={cn('ml-4 mt-2 shrink-0 border-l-2 border-t-2 border-primaryStroke soft:rounded-tl-[6px] bubble:rounded-tl-[8px]', shape === 'blocks' ? 'w-6' : 'w-5')} />
+      <span
+        aria-hidden
+        className={cn('ml-4 mt-2 shrink-0 border-l-2 border-t-2 border-primaryStroke soft:rounded-tl-[6px] bubble:rounded-tl-[8px]', shape === 'blocks' ? 'w-6' : 'w-5')}
+      />
       <span className="ml-1 flex min-w-0 pb-0.5">{inner}</span>
     </span>
   );
@@ -445,7 +440,7 @@ export function ChatLineShape({
       )
     );
   }
-  const named = crowd && !mine && first;
+  const named = crowd && first;
   const bubble = (
     <span
       data-bubble
@@ -455,7 +450,11 @@ export function ChatLineShape({
         mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
       )}
     >
-      {named ? <span className="flex min-w-0 items-baseline text-sm leading-4">{who}</span> : <span className="sr-only">{mine ? 'you' : name}: </span>}
+      {named ? (
+        <span className={cn('flex min-w-0 items-baseline text-sm leading-4', mine && 'justify-end')}>{who}</span>
+      ) : (
+        <span className="sr-only">{mine ? 'you' : name}: </span>
+      )}
       {quote}
       {words}
       {pictures}
