@@ -173,10 +173,10 @@ export function PageFrame({
           ref={(el) => {
             headerRef.current = el;
           }}
-          className={cn('sticky top-0 z-30 shrink-0', !bleed && titled && 'mb-4')}>
+          className={cn('sticky top-[var(--sticky-top,var(--banner-h,0px))] z-30 shrink-0', !bleed && titled && 'mb-4')}>
           <header
             className={cn(
-              'flex min-h-[calc(4rem+env(safe-area-inset-top))] items-center gap-1 border-b border-primaryStroke bg-background pb-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))]',
+              'flex min-h-[calc(4rem+var(--safe-top,0px))] items-center gap-1 border-b border-primaryStroke bg-background pb-2.5 pt-[calc(0.625rem+var(--safe-top,0px))]',
               bleed && 'px-4'
             )}
           >
@@ -219,7 +219,7 @@ export function PageFrame({
   if (person) {
     return (
       <main ref={mainRef} className={cn('mx-auto px-5 pb-10 bubble:px-2 [--page-top:calc(var(--title-row,3.5rem)+0.5rem)]', width)}>
-        <header ref={headerRef} className={cn('sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2', BUBBLE_HEADER)}>
+        <header ref={headerRef} className={cn('sticky top-[var(--banner-h,0px)] z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2', BUBBLE_HEADER)}>
           <HomeLink square />
           {mobileStart}
           <div className="min-w-0 flex-1">
@@ -242,7 +242,7 @@ export function PageFrame({
       <header
         ref={headerRef}
         className={cn(
-          'sticky top-0 z-30 flex items-center gap-4 bg-background py-3',
+          'sticky top-[var(--banner-h,0px)] z-30 flex items-center gap-4 bg-background py-3',
           titled ? cn('mb-6 min-h-16 flex-wrap border-b border-primaryStroke', BUBBLE_HEADER) : 'h-16 -mb-16'
         )}
       >

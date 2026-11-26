@@ -6,6 +6,8 @@
 
 :root {
   color-scheme: dark;
+  --banner-h: 0px;
+  --safe-top: env(safe-area-inset-top);
   --background: 15 17 21;
   --background-secondary: 24 27 34;
   --background-tertiary: 32 36 46;
@@ -51,7 +53,7 @@
 
 html {
   scrollbar-gutter: stable;
-  scroll-padding-top: var(--title-row, 4rem);
+  scroll-padding-top: calc(var(--title-row, 4rem) + var(--banner-h, 0px));
 }
 
 @media (min-width: 768px) {

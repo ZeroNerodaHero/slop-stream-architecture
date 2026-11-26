@@ -1,6 +1,7 @@
 import { useAtomValue } from 'jotai';
 import { type CSSProperties, type ReactNode, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 
 import { api } from '@/infra/api';
 import { BOT_GROUP } from '@/infra/atoms/chat-atoms';
@@ -8,7 +9,8 @@ import { homeStreamsAtom } from '@/infra/atoms/home-atoms';
 import { loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
-import type { PanelSide } from '@/infra/atoms/settings-atoms';
+import { roleColorsAtom, roomAtom, rolesOf } from '@/infra/atoms/room-atoms';
+import { type PanelSide, paletteAtom } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { Face } from '@/shared-components/Face';
@@ -19,6 +21,7 @@ import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { StreamStill } from '@/shared-components/StreamStill';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { ViewerCount } from '@/shared-components/ViewerCount';
+import { ensureContrast, fromHex, hex, isHex } from '@/infra/theme';
 import { cn } from '@/utils/cn';
 
 const CARD_W = 260;
@@ -36,10 +39,33 @@ interface PersonCardProps {
   hold: PeekHold;
 }
 
+interface HeldRole {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+function useGroupRoles(name: string): { roles: HeldRole[]; tint?: string } | null {
+  const { pathname } = useLocation();
+  const room = useAtomValue(roomAtom);
+  const { server, colors } = useAtomValue(roleColorsAtom);
+  const card = useAtomValue(paletteAtom).backgroundSecondary;
+  const slug = /^\/groups\/([^/]+)/.exec(pathname)?.[1];
+  if (!room || !slug || decodeURIComponent(slug) !== room.name) return null;
+  const roles = rolesOf(room, name).map((role) => ({
+    id: role.id,
+    name: role.name,
+    color: isHex(role.color) ? hex(ensureContrast(fromHex(role.color), card, 4.5)) : undefined
+  }));
+  if (roles.length === 0) return null;
+  return { roles, tint: server === room.name ? colors.get(name) : undefined };
+}
+
 export function PersonCard({ id, person, at, side, actions, below, follow, hold }: PersonCardProps) {
   const { setCard } = hold;
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
   const covered = useAtomValue(profilePopupAtom) !== null;
+  const held = useGroupRoles(person.name);
   useEffect(() => {
     void loadPeek(person.name);
   }, [person.name]);
@@ -105,6 +131,8 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
         role={pressable || below ? 'dialog' : 'tooltip'}
         aria-label={pressable || below ? person.name : undefined}
         data-presence={presence}
+        data-tint={held?.tint}
+        style={held?.tint ? { backgroundImage: `linear-gradient(${held.tint}1f, ${held.tint}1f)` } : undefined}
         className="flex flex-col gap-2.5 rounded-panel border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
       >
         <span className="flex items-center gap-2.5">
@@ -133,6 +161,24 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
           </span>
           {follow && <FollowButton id={`${id ?? `peek-${person.name}`}-follow`} name={person.name} icon />}
         </span>
+        {held && (
+          <span id={id ? `${id}-roles` : undefined} data-roles className="flex flex-wrap items-center gap-1 text-xs leading-4">
+            <span className="text-textSecondary">role:</span>
+            {held.roles.map((role) => (
+              <span
+                key={role.id}
+                data-role={role.name}
+                style={role.color ? { color: role.color } : undefined}
+                className={cn(
+                  'inline-flex max-w-full items-center truncate rounded-control border border-primaryStroke bg-backgroundSecondary px-1.5 font-semibold',
+                  !role.color && 'text-textSecondary'
+                )}
+              >
+                {role.name}
+              </span>
+            ))}
+          </span>
+        )}
         {presence === 'streaming' ? (
           <StreamStill name={person.name} className="w-full rounded-card" />
         ) : (

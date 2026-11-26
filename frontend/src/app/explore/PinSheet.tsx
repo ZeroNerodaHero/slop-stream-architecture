@@ -5,11 +5,15 @@ import { createPortal } from 'react-dom';
 
 import { messageOf, type PinnedLine } from '@/infra/api';
 import { loadChannelPins, serverChat } from '@/infra/atoms/chat-atoms';
-import { pinsTickAtom } from '@/infra/atoms/room-atoms';
-import { chatStyleAtom } from '@/infra/atoms/settings-atoms';
-import { RoomLines } from '@/shared-components/ChatPanel';
+import { pinsTickAtom, roleColorsAtom } from '@/infra/atoms/room-atoms';
+import { Badge } from '@/shared-components/Badge';
+import { pictureSrc } from '@/shared-components/ChatPanel';
+import { clock } from '@/shared-components/ChatLine';
+import { Face } from '@/shared-components/Face';
+import { LiveMark } from '@/shared-components/LiveMark';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { COUNT } from '@/shared-components/NotificationsBell';
+import { OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -17,7 +21,85 @@ const LOCK_PX = 10;
 const DIM = 0.6;
 const SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 
-const ACTION = 'flex h-11 w-11 items-center justify-center text-textSecondary focus-visible:text-primaryBlue focus-visible:outline-none';
+const ACTION =
+  "relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-control border before:absolute before:-inset-x-[3px] before:-inset-y-2.5 before:content-[''] focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue";
+
+function PinRow({ line, canPin, onJump, onUnpin }: { line: PinnedLine; canPin: boolean; onJump: () => void; onUnpin: () => void }) {
+  const { server, colors } = useAtomValue(roleColorsAtom);
+  const tint = line.verified && server !== null ? colors.get(line.from) : undefined;
+  const color = tint ? undefined : line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
+  const someone = line.verified || line.streamer;
+  const pictures = line.images ?? [];
+  const words = line.text || (line.video ? 'video' : pictures.length > 0 ? (pictures.length === 1 ? 'picture' : `${pictures.length} pictures`) : '');
+  return (
+    <li data-id={line.id} className="relative flex items-start gap-3 p-3 focus-within:bg-backgroundSecondary active:bg-backgroundSecondary">
+      <Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <button
+          type="button"
+          data-pin-open={line.id}
+          aria-label={`jump to message from ${line.from}${line.text ? `: ${line.text}` : ''}`}
+          onClick={onJump}
+          className="flex min-w-0 flex-col gap-0.5 text-left after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
+        >
+          <span className="flex min-w-0 items-center gap-1 leading-5">
+            <span className={cn('truncate font-semibold', color)} style={tint ? { color: tint } : undefined}>
+              {line.from}
+            </span>
+            {someone && line.oauth_verified && <OAuthMark size={14} className="shrink-0" />}
+            {line.groups.map((group) => (
+              <Badge key={group.name} group={group} size="xs" className="shrink-0" />
+            ))}
+            {line.streamer && <LiveMark aria-hidden size="xs" className="shrink-0" />}
+            <time dateTime={new Date(line.at).toISOString()} className="shrink-0 text-xs tabular-nums text-textTertiary">
+              {clock(line.at)}
+            </time>
+          </span>
+          {words && <span className={cn('truncate', line.text ? 'text-textSecondary' : 'text-textTertiary')}>{words}</span>}
+        </button>
+        {pictures.length > 0 && (
+          <span data-pin-pictures={line.id} aria-hidden className="mt-1 flex gap-1">
+            {pictures.map((id) => (
+              <img key={id} src={pictureSrc(id)} alt="" draggable={false} loading="lazy" className="h-8 w-8 shrink-0 rounded-card bg-backgroundTertiary object-cover" />
+            ))}
+          </span>
+        )}
+      </div>
+      <div className="flex shrink-0 gap-1.5 self-center">
+        {canPin && (
+          <Tooltip content="unpin">
+            <button
+              type="button"
+              data-pin-unpin={line.id}
+              aria-label="unpin"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnpin();
+              }}
+              className={cn(ACTION, 'border-primaryStroke text-textSecondary hover:text-decrease')}
+            >
+              <RiUnpinLine aria-hidden size={14} />
+            </button>
+          </Tooltip>
+        )}
+        <Tooltip content="jump to message">
+          <button
+            type="button"
+            data-pin-jump={line.id}
+            aria-label="jump to message"
+            onClick={(e) => {
+              e.stopPropagation();
+              onJump();
+            }}
+            className={cn(ACTION, 'border-primaryBlue text-primaryBlue')}
+          >
+            <RiArrowRightUpLine aria-hidden size={14} />
+          </button>
+        </Tooltip>
+      </div>
+    </li>
+  );
+}
 
 export function PinSheetButton({ count, open, onClick }: { count: number; open: boolean; onClick: () => void }) {
   return (
@@ -68,7 +150,6 @@ export function PinSheet({
   const list = got.for === here ? got.pins : null;
   const error = got.for === here ? got.error : '';
   const tick = useAtomValue(pinsTickAtom);
-  const shape = useAtomValue(chatStyleAtom);
   const panel = useRef<HTMLDivElement | null>(null);
   const lines = useRef<HTMLDivElement | null>(null);
   const grab = useRef<HTMLDivElement | null>(null);
@@ -204,7 +285,11 @@ export function PinSheet({
   return createPortal(
     <div
       data-sheet-open={open || undefined}
-      className={cn('fixed inset-x-0 bottom-0 top-[var(--title-row,4rem)] z-20 overflow-hidden', !shown && 'invisible', !open && 'pointer-events-none')}
+      className={cn(
+        'fixed inset-x-0 bottom-0 top-[calc(var(--title-row,4rem)+var(--banner-h,0px))] z-20 overflow-hidden',
+        !shown && 'invisible',
+        !open && 'pointer-events-none'
+      )}
     >
       <div
         aria-hidden
@@ -226,54 +311,33 @@ export function PinSheet({
         )}
         style={{ transform: open ? `translateY(${drag ?? 0}px)` : 'translateY(-100%)' }}
       >
-        <div
-          ref={lines}
-          id="pin-sheet-lines"
-          data-style={shape}
-          className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain scroll-pt-3 px-2 pb-1 pt-3 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
-        >
+        <div ref={lines} id="pin-sheet-lines" className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain text-sm leading-snug">
           {error ? (
-            <p id="pin-sheet-error" className="py-1 text-decrease">
+            <p id="pin-sheet-error" className="p-3 text-decrease">
               {error}
             </p>
           ) : list === null ? (
-            <p className="py-1 text-textTertiary">loading…</p>
+            <p className="p-3 text-textTertiary">loading…</p>
           ) : list.length === 0 ? (
-            <p id="pin-sheet-empty" className="py-1 text-textTertiary">
+            <p id="pin-sheet-empty" className="p-3 text-textTertiary">
               nothing pinned yet
             </p>
           ) : (
             shown && (
-              <RoomLines
-                name={server}
-                room={room}
-                lines={list}
-                lineSide={(line) => (
-                  <>
-                    <Tooltip content="jump to message">
-                      <button
-                        type="button"
-                        data-pin-open={line.id}
-                        aria-label="jump to message"
-                        onClick={() => {
-                          onOpenChange(false);
-                          void room.jumpToReply(line.id, channel);
-                        }}
-                        className={cn(ACTION, 'hover:text-primaryBlue')}
-                      >
-                        <RiArrowRightUpLine aria-hidden size={18} />
-                      </button>
-                    </Tooltip>
-                    {canPin && (
-                      <Tooltip content="unpin">
-                        <button type="button" data-pin-unpin={line.id} aria-label="unpin" onClick={() => onUnpin(line.id)} className={cn(ACTION, 'border-t border-primaryStroke hover:text-decrease')}>
-                          <RiUnpinLine aria-hidden size={18} />
-                        </button>
-                      </Tooltip>
-                    )}
-                  </>
-                )}
-              />
+              <ul id="pin-sheet-list" className="flex flex-col divide-y divide-primaryStroke border-b border-primaryStroke">
+                {list.map((line) => (
+                  <PinRow
+                    key={line.id}
+                    line={line}
+                    canPin={canPin}
+                    onJump={() => {
+                      onOpenChange(false);
+                      void room.jumpToReply(line.id, channel);
+                    }}
+                    onUnpin={() => onUnpin(line.id)}
+                  />
+                ))}
+              </ul>
             )
           )}
         </div>

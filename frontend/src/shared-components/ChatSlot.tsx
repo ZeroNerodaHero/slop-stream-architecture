@@ -543,8 +543,8 @@ export function ChatSlot({
                   : 'mt-0 h-0 overflow-hidden opacity-0',
               tall
                 ? fluid
-                  ? 'beside:mt-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:opacity-100'
-                  : 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:max-h-[720px] beside:opacity-100'
+                  ? 'beside:mt-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-2.5rem))] beside:opacity-100'
+                  : 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-2.5rem))] beside:max-h-[720px] beside:opacity-100'
                 : 'beside:mt-0 beside:h-0 beside:max-h-0 beside:opacity-0',
               clip && 'overflow-hidden'
             )
@@ -558,8 +558,8 @@ export function ChatSlot({
             : cn(
                 tabbed ? 'h-full' : 'h-[min(50vh,560px)]',
                 fluid
-                  ? 'w-full beside:absolute beside:top-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-2.5rem))]'
-                  : 'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))]',
+                  ? 'w-full beside:absolute beside:top-0 beside:h-[max(420px,calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-2.5rem))]'
+                  : 'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-2.5rem))]',
                 resizable ? (fluid ? 'beside:w-[var(--chat-w,340px)]' : 'beside:w-[var(--chat-w,360px)]') : fluid ? 'beside:w-[340px]' : 'beside:w-[360px]',
                 'transition-transform duration-300 ease-out motion-reduce:transition-none',
                 side === 'right' && 'beside:right-0',
