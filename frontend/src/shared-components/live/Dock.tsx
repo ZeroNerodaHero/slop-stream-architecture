@@ -63,7 +63,7 @@ export function DockPanel({ tab, place, count, aside, children }: DockPanelProps
     >
       <h2 className={HEAD}>
         {editing && (
-          <Tooltip content="drag to move. arrows move it, shift and arrows size it">
+          <Tooltip content="drag to move. arrows move it, shift and arrows size it" hideOnPress>
             <button
               id={`${id}-grip`}
               type="button"
