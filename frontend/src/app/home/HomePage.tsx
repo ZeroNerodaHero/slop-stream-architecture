@@ -270,7 +270,7 @@ function Card({
 function Part({ id, title, line, heading, aside, children }: { id: string; title: string; line: string; heading: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-title`} data-title={title}>
-      <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4 max-md:static">
+      <h2 className="sticky top-[var(--banner-h,0px)] z-30 flex h-16 w-fit items-center gap-4 max-md:static">
         <span id={`${id}-title`} className={cn(SECTION_TITLE, line)}>
           {heading}
         </span>

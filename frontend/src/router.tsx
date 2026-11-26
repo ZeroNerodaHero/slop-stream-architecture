@@ -126,31 +126,38 @@ function Shell() {
   const side = useAtomValue(panelSideAtom);
   const perf = useAtomValue(perfModeAtom);
   return (
-    <div className={cn('flex min-h-screen items-start pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]', side === 'right' && 'flex-row-reverse')}>
-      <UserPanel />
-      <div className="relative min-w-0 flex-1">
-        <Suspense fallback={null}>
-          <Outlet />
-        </Suspense>
-      </div>
-      <MiniPlayer />
-      <FriendChatWhenUsed />
-      <NotificationsWhenUsed />
-      <UserModalWhenUsed />
-      <AuthDialogWhenUsed />
-      <ProfilePopupWhenUsed />
-      <CropDialogWhenUsed />
-      <VoicePipWhenUsed />
-      <InspectorWhenUsed />
-      <TimingsWhenUsed />
-      <QualityWhenUsed />
-      {perf !== 'off' && (
-        <Suspense fallback={null}>
-          <PerfHud mode={perf} />
-        </Suspense>
-      )}
+    <>
       <UpdateBanner />
-    </div>
+      <div
+        className={cn(
+          'flex min-h-[calc(100vh-var(--banner-h,0px))] items-start pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]',
+          side === 'right' && 'flex-row-reverse'
+        )}
+      >
+        <UserPanel />
+        <div className="relative min-w-0 flex-1">
+          <Suspense fallback={null}>
+            <Outlet />
+          </Suspense>
+        </div>
+        <MiniPlayer />
+        <FriendChatWhenUsed />
+        <NotificationsWhenUsed />
+        <UserModalWhenUsed />
+        <AuthDialogWhenUsed />
+        <ProfilePopupWhenUsed />
+        <CropDialogWhenUsed />
+        <VoicePipWhenUsed />
+        <InspectorWhenUsed />
+        <TimingsWhenUsed />
+        <QualityWhenUsed />
+        {perf !== 'off' && (
+          <Suspense fallback={null}>
+            <PerfHud mode={perf} />
+          </Suspense>
+        )}
+      </div>
+    </>
   );
 }
 
