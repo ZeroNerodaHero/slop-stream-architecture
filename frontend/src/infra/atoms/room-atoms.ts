@@ -1,6 +1,6 @@
 import { atom } from 'jotai';
 
-import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
+import { api, type Channel, type GroupMember, type GroupRole, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { paletteAtom } from '@/infra/atoms/settings-atoms';
 import { type ChatLine, findServerChat, serverChat, warmServerChat } from '@/infra/atoms/chat-atoms';
@@ -31,6 +31,11 @@ export const roleColorsAtom = atom((get) => {
   }
   return { server: room.name, colors };
 });
+
+export function rolesOf(room: GroupRoom, name: string): GroupRole[] {
+  const held = room.holders ? null : (room.roster ?? []).find((m) => m.name === name);
+  return room.roles.filter((role) => (room.holders ? (room.holders[role.id] ?? []).includes(name) : !!held?.roles.some((r) => r.id === role.id)));
+}
 
 export const rosterMoreAtom = atom<'idle' | 'busy' | 'failed'>('idle');
 
