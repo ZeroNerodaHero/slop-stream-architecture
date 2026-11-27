@@ -1,0 +1,25 @@
+logLevel: info
+api: yes
+apiAddress: 127.0.0.1:9997
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
+rtmp: yes
+rtmpAddress: 127.0.0.1:1935
+rtmpEncryption: optional
+rtmpsAddress: 127.0.0.1:1936
+rtmpServerKey: ./tls.key
+rtmpServerCert: ./tls.crt
+hls: no
+srt: no
+moq: no
+webrtc: yes
+webrtcAddress: 127.0.0.1:8889
+webrtcLocalUDPAddress: ${ICE_IP}:8189
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: [${ICE_IP}]
+paths:
+  live:
+    runOnAvailable: ${FFMPEG} -hide_banner -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/live -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 160k -ar 48000 -ac 2 -f flv rtmps://127.0.0.1:1936/sink
+    runOnAvailableRestart: yes
+  sink:
