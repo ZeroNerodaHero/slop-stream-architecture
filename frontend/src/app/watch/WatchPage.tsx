@@ -665,7 +665,7 @@ export function WatchPage() {
               </div>
             </div>
             {deskTab !== 'chat' && (
-              <div id={`panel-${deskTab}`} role="tabpanel" aria-labelledby={`tab-${deskTab}`} className="pt-4">
+              <div id={`panel-${deskTab}`} role="tabpanel" aria-labelledby={`tab-${deskTab}`} className={cn('pt-4', theater && 'bubble:pt-px')}>
                 {deskTab === 'about' ? (
                   <>
                     {offlineWords}
