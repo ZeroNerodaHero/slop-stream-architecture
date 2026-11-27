@@ -503,7 +503,7 @@ export function WatchPage() {
           id="about-edit"
           size="sm"
           aria-label="edit about"
-          className="-mb-px self-stretch px-2 py-0 max-md:min-h-0 max-md:bubble:mb-0"
+          className="-mb-px self-stretch px-2 py-0"
           onClick={() => {
             open();
             setAboutEditing(true);
@@ -561,25 +561,23 @@ export function WatchPage() {
                 {tabs.map((t) => {
                   const on = t === shown;
                   return (
-                    <Fragment key={t}>
-                      <button
-                        id={`tab-${t}`}
-                        type="button"
-                        role="tab"
-                        aria-selected={on}
-                        aria-controls={`panel-${t}`}
-                        tabIndex={on ? 0 : -1}
-                        onClick={() => openTab(t)}
-                        className={cn(
-                          '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 bubble:mb-0 bubble:min-h-10 bubble:rounded-control bubble:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
-                          t === 'chat' && 'ml-auto',
-                          on ? 'border-primaryBlue text-textPrimary bubble:bg-backgroundTertiary' : 'border-transparent text-textSecondary'
-                        )}
-                      >
-                        {t}
-                      </button>
-                      {t === 'about' && editAbout(() => openTab('about'), on)}
-                    </Fragment>
+                    <button
+                      key={t}
+                      id={`tab-${t}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      aria-controls={`panel-${t}`}
+                      tabIndex={on ? 0 : -1}
+                      onClick={() => openTab(t)}
+                      className={cn(
+                        '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 bubble:mb-0 bubble:min-h-10 bubble:rounded-control bubble:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
+                        t === 'chat' && 'ml-auto',
+                        on ? 'border-primaryBlue text-textPrimary bubble:bg-backgroundTertiary' : 'border-transparent text-textSecondary'
+                      )}
+                    >
+                      {t}
+                    </button>
                   );
                 })}
               </div>
@@ -594,7 +592,8 @@ export function WatchPage() {
                     className={cn(
                       'absolute inset-0',
                       shown !== t && 'invisible',
-                      t === 'chat' ? 'flex flex-col' : 'overflow-y-auto overscroll-contain px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4'
+                      t === 'chat' ? 'flex flex-col' : 'overflow-y-auto overscroll-contain px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4',
+                      t === 'about' && mine && 'pb-[calc(4.5rem+env(safe-area-inset-bottom))]'
                     )}
                   >
                     {(opened.has(t) || shown === t) && content(t)}
@@ -604,6 +603,23 @@ export function WatchPage() {
             </div>
           )}
         </PageFrame>
+        {mine && shown === 'about' && !aboutEditing && !typing && !keyboard && (
+          <Tooltip content="edit about">
+            <Button
+              id="about-edit"
+              size="sm"
+              aria-label="edit about"
+              className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))] z-30 h-11 gap-1.5 rounded-control border-secondaryStroke bg-backgroundTertiary px-4 py-0 text-textPrimary"
+              onClick={() => {
+                openTab('about');
+                setAboutEditing(true);
+              }}
+            >
+              <RiPencilLine size={16} aria-hidden />
+              edit
+            </Button>
+          </Tooltip>
+        )}
         <KbdDebug typing={typing} />
       </div>
     );
@@ -647,6 +663,7 @@ export function WatchPage() {
                   const on = t === deskTab;
                   return (
                     <Fragment key={t}>
+                      {t === 'about' && editAbout(() => setTab('about'), on)}
                       <button
                         id={`tab-${t}`}
                         type="button"
@@ -659,7 +676,6 @@ export function WatchPage() {
                       >
                         {t}
                       </button>
-                      {t === 'about' && editAbout(() => setTab('about'), on)}
                     </Fragment>
                   );
                 })}
