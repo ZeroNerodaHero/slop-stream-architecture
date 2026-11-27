@@ -1,4 +1,6 @@
-import { createElement, type ReactNode, useEffect, useState } from 'react';
+import { useAtom } from 'jotai';
+import { atomWithStorage } from 'jotai/utils';
+import { createElement, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { watchStatsAtom } from '@/infra/atoms/watch-atoms';
 import {
@@ -14,6 +16,9 @@ import {
 } from '@/infra/debug/perf-hud';
 import type { PerfMode } from '@/infra/debug-flag';
 import { store } from '@/infra/store';
+import { clampPip, parsePipAt } from '@/infra/voice-pip';
+import { GRIP } from '@/shared-components/debug/useDialogBox';
+import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
 
 function browserDeps(): PerfDeps {
@@ -146,12 +151,114 @@ function spark(history: PerfHistory, [series, className, caption]: Graph) {
   );
 }
 
-const HUD =
-  'pointer-events-none fixed right-[var(--perf-hud-right,0.375rem)] top-1 z-[1000] select-none text-right font-mono text-xs tabular-nums text-textSecondary [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_0_1px_rgba(0,0,0,0.9)] max-md:right-[calc(0.375rem+env(safe-area-inset-right))] max-md:top-[calc(0.25rem+env(safe-area-inset-top))]';
+const HUD = cn(
+  'pointer-events-none fixed right-[var(--perf-hud-right,0.375rem)] top-1 w-max cursor-grab select-none text-right font-mono text-xs tabular-nums text-textSecondary [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_0_1px_rgba(0,0,0,0.9)] active:cursor-grabbing max-md:right-[calc(0.375rem+env(safe-area-inset-right))] max-md:top-[calc(0.25rem+env(safe-area-inset-top))] [&>div]:pointer-events-auto [&>div]:ml-auto [&>div]:w-max',
+  GRIP
+);
+
+const PERF_HUD_AT_KEY = 'settings.perfHudAt';
+const hudAtAtom = atomWithStorage<unknown>(PERF_HUD_AT_KEY, null, undefined, { getOnInit: true });
+
+interface HudAt {
+  right: number;
+  top: number;
+}
+
+type Size = { w: number; h: number };
+
+const room = (): Size => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
+
+function parseHudAt(v: unknown): HudAt | null {
+  if (!v || typeof v !== 'object') return null;
+  const at = parsePipAt({ right: (v as Partial<HudAt>).right, bottom: (v as Partial<HudAt>).top });
+  return at && { right: at.right, top: at.bottom };
+}
+
+function clampHud(at: HudAt, view: Size, size: Size): HudAt {
+  const fit = clampPip({ right: at.right, bottom: at.top }, view, size);
+  return { right: fit.right, top: fit.bottom };
+}
+
+function useHudPlace() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const stop = useRef<(() => void) | null>(null);
+  const [stored, setStored] = useAtom(hudAtAtom);
+  const [drag, setDrag] = useState<HudAt | null>(null);
+  const [space, setSpace] = useState(room);
+  const [size, setSize] = useState<Size>({ w: 0, h: 0 });
+
+  useStackedWindow(ref, 'perf');
+
+  useEffect(() => {
+    const fit = () =>
+      setSpace((was) => {
+        const now = room();
+        return now.w === was.w && now.h === was.h ? was : now;
+      });
+    fit();
+    const watcher = new ResizeObserver(fit);
+    watcher.observe(document.documentElement);
+    window.addEventListener('resize', fit);
+    return () => {
+      watcher.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setSize((was) => (was.w === el.offsetWidth && was.h === el.offsetHeight ? was : { w: el.offsetWidth, h: el.offsetHeight }));
+    measure();
+    const watcher = new ResizeObserver(measure);
+    watcher.observe(el);
+    return () => watcher.disconnect();
+  }, []);
+
+  useEffect(() => () => stop.current?.(), []);
+
+  const kept = drag ?? parseHudAt(stored);
+  const at = kept && clampHud(kept, space, size);
+
+  const press = (e: ReactPointerEvent) => {
+    const el = ref.current;
+    if (e.button !== 0 || stop.current || !el) return;
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    const start: HudAt = { right: room().w - rect.right, top: rect.top };
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const pointerId = e.pointerId;
+    let last: HudAt | null = null;
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      last = clampHud({ right: start.right - (ev.clientX - x0), top: start.top + (ev.clientY - y0) }, room(), { w: el.offsetWidth, h: el.offsetHeight });
+      setDrag(last);
+    };
+    const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      stop.current?.();
+      if (last) setStored(last);
+      setDrag(null);
+    };
+    stop.current = () => {
+      stop.current = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  };
+
+  return { id: 'perf-hud', ref, className: HUD, style: at ? { right: at.right, top: at.top } : undefined, onPointerDown: press };
+}
 
 export function PerfHud({ mode = 'on' }: { mode?: PerfMode }) {
   const [snap, setSnap] = useState<PerfSnapshot | null>(null);
   const [history] = useState(() => new PerfHistory());
+  const hud = useHudPlace();
 
   useEffect(() => {
     const sampler = new PerfSampler(browserDeps());
@@ -163,12 +270,12 @@ export function PerfHud({ mode = 'on' }: { mode?: PerfMode }) {
   }, [history]);
 
   const lines = linesOf(snap);
-  if (mode !== 'extended') return createElement('div', { className: HUD }, lines.map(line));
+  if (mode !== 'extended') return createElement('div', hud, lines.map(line));
 
   const graphs = graphsOf(snap, lines);
   return createElement(
     'div',
-    { className: HUD },
+    hud,
     lines.map((parts, i) =>
       createElement(
         'div',

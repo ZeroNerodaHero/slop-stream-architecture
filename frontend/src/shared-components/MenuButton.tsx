@@ -125,7 +125,7 @@ export function MenuButton({
               setOpen(false);
             }}
             className={cn(
-              'fixed left-0 top-0 z-[60] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm',
+              'fixed left-0 top-0 z-[70] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary text-sm',
               boxed ? 'gap-1 p-1' : 'py-1'
             )}
           >

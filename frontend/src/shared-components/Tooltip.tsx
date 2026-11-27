@@ -9,7 +9,7 @@ const GAP = 8;
 const EDGE = 4;
 const OPPOSITE: Record<TooltipAt, TooltipAt> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
 export const TIP_CARD = 'overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary px-2 py-1 text-xs font-semibold text-textPrimary';
-const TIP = `pointer-events-none fixed left-0 top-0 z-[60] whitespace-nowrap ${TIP_CARD}`;
+const TIP = `pointer-events-none fixed left-0 top-0 z-[70] whitespace-nowrap ${TIP_CARD}`;
 
 interface TooltipProps {
   content: ReactNode;

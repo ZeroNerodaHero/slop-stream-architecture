@@ -98,7 +98,7 @@ export function PersonCard({ id, person, at, side, actions, below, follow, hold 
       onPointerLeave={hold.leave}
       onKeyDown={hold.keyDown}
       onBlur={hold.blur}
-      className="pointer-events-auto fixed z-[60]"
+      className="pointer-events-auto fixed z-[70]"
     >
       {pressable && (
         <div
