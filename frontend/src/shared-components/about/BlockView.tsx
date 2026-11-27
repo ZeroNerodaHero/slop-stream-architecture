@@ -16,7 +16,7 @@ import { FROM, HtmlView } from './HtmlView';
 
 export type PageMeta = Omit<AboutPage, 'blocks' | 'changed'>;
 
-export const NEUTRAL = 'linear-gradient(90deg, #0d1530, #1b2a55 55%, #2d2140)';
+const NEUTRAL = 'linear-gradient(90deg, #0d1530, #1b2a55 55%, #2d2140)';
 const DAY = 24 * 60 * 60 * 1000;
 
 export function accentBg(accent: string): string {

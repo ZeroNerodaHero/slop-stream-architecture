@@ -2,11 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  BLOCK_KINDS,
   ITEMS_MAX,
-  SPAN_MAX,
-  SPAN_MIN,
-  TEMPLATES,
   blankBlock,
   blockWord,
   cleanLink,
@@ -18,7 +14,6 @@ import {
   moved,
   newId,
   spanOptions,
-  templateBlocks,
   weekdaysOf,
   wireBlock
 } from '../src/infra/about-blocks.ts';
@@ -70,20 +65,6 @@ test('wire blocks drop html and bad links', () => {
   assert.equal(w.link, 'https://discord.gg/wolf');
   assert.equal(w.items.length, ITEMS_MAX);
   assert.equal(w.items[0]?.href, '');
-});
-
-test('templates are valid pages', () => {
-  for (const t of TEMPLATES) {
-    const blocks = templateBlocks(t.key, 'wolf');
-    assert.equal(new Set(blocks.map((b) => b.id)).size, blocks.length);
-    for (const b of blocks) {
-      assert.ok(BLOCK_KINDS.includes(b.kind));
-      assert.ok(b.span >= SPAN_MIN && b.span <= SPAN_MAX);
-      assert.match(b.id, /^[a-z0-9-]{1,16}$/);
-    }
-  }
-  assert.deepEqual(templateBlocks('blank', 'wolf'), []);
-  assert.equal(templateBlocks('banner', 'wolf')[0]?.title, 'WOLF');
 });
 
 test('ids fit the server rule', () => {

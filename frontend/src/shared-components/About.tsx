@@ -1,13 +1,12 @@
 import { RiPencilLine } from '@remixicon/react';
 import { useEffect, useState } from 'react';
 
-import { type AboutPage, type Template, isBlank, templateBlocks, wireBlock } from '@/infra/about-blocks';
+import { type AboutPage, isBlank } from '@/infra/about-blocks';
 import { api } from '@/infra/api';
 import { Button } from '@/shared-components/Button';
 import { useNarrow } from '@/shared-components/about/AboutGrid';
 import { AboutEditor } from '@/shared-components/about/AboutEditor';
 import { PageView } from '@/shared-components/about/PageView';
-import { TemplatePicker } from '@/shared-components/about/Templates';
 
 interface AboutProps {
   name: string;
@@ -40,12 +39,10 @@ export function About({ name, edit = false, id }: AboutProps) {
     };
   }, [name, tries]);
 
-  const openEditor = async (key?: Template['key']) => {
+  const openEditor = async () => {
     setStatus('');
     try {
-      let next = await api.aboutDraft(name);
-      if (key && next.blocks.length === 0) next = await api.saveAboutDraft(name, templateBlocks(key, name).map(wireBlock));
-      setDraft(next);
+      setDraft(await api.aboutDraft(name));
     } catch (err: unknown) {
       setStatus(err instanceof Error ? err.message : 'could not open the editor');
     }
@@ -105,8 +102,7 @@ export function About({ name, edit = false, id }: AboutProps) {
     }
     return (
       <div ref={setFrame} id={box} data-empty className="flex flex-col gap-3">
-        <p className="text-sm text-textSecondary">nothing on your about yet. start from one of these:</p>
-        <TemplatePicker onPick={(key) => void openEditor(key)} />
+        <p className="text-sm text-textSecondary">nothing on your about yet.</p>
         <div className="flex flex-wrap items-center gap-3">
           <Button id="about-edit" size="sm" className="gap-1.5" onClick={() => void openEditor()}>
             <RiPencilLine size={16} aria-hidden />
