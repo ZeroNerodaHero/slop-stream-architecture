@@ -1251,7 +1251,7 @@ export function ChatPanel({
                     idPrefix="chat"
                     sendClassName="h-8 w-8 shrink-0 px-0 py-0 text-sm max-md:h-11 max-md:w-11"
                     onSend={(clip) => {
-                      room.attach.addVoice(clip.blob, clip.durationMs);
+                      room.attach.addVoice(clip.blob, clip.durationMs, clip.peaks);
                       void room.send();
                     }}
                   />

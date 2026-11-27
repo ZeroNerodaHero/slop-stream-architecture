@@ -290,18 +290,83 @@ impl Video {
 pub(crate) struct Audio {
     pub(crate) id: String,
     pub(crate) duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) peaks: Option<Peaks>,
 }
 
 impl Audio {
     pub(crate) fn parse(raw: Option<&str>) -> Option<Audio> {
-        let (id, ms) = raw?.split_once(',')?;
-        let id = Uuid::parse_str(id.trim()).ok()?;
-        let duration_ms = ms.trim().parse::<u64>().ok()?;
-        Some(Audio { id: id.to_string(), duration_ms })
+        let mut parts = raw?.split(',');
+        let id = Uuid::parse_str(parts.next()?.trim()).ok()?;
+        let duration_ms = parts.next()?.trim().parse::<u64>().ok()?;
+        let peaks = parts.next().and_then(Peaks::parse);
+        Some(Audio { id: id.to_string(), duration_ms, peaks })
     }
 
     pub(crate) fn stored(&self) -> String {
-        format!("{},{}", self.id, self.duration_ms)
+        match &self.peaks {
+            Some(peaks) => format!("{},{},{}", self.id, self.duration_ms, peaks.stored()),
+            None => format!("{},{}", self.id, self.duration_ms),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Peaks(Vec<u8>);
+
+impl Peaks {
+    pub(crate) const MAX: usize = 64;
+    const TOP: u8 = 100;
+
+    pub(crate) fn of(levels: &[f64]) -> Option<Peaks> {
+        if levels.is_empty() || levels.len() > Self::MAX {
+            return None;
+        }
+        levels
+            .iter()
+            .map(|&v| (v.is_finite() && (0.0..=1.0).contains(&v)).then(|| (v * f64::from(Self::TOP)).round() as u8))
+            .collect::<Option<Vec<u8>>>()
+            .map(Peaks)
+    }
+
+    pub(crate) fn of_kept(kept: &[i16]) -> Option<Peaks> {
+        if kept.is_empty() || kept.len() > Self::MAX {
+            return None;
+        }
+        kept.iter().map(|&v| u8::try_from(v).ok().filter(|&v| v <= Self::TOP)).collect::<Option<Vec<u8>>>().map(Peaks)
+    }
+
+    pub(crate) fn kept(&self) -> Vec<i16> {
+        self.0.iter().map(|&v| i16::from(v)).collect()
+    }
+
+    fn parse(raw: &str) -> Option<Peaks> {
+        let raw = raw.trim();
+        if raw.is_empty() || raw.len() % 2 != 0 || raw.len() > Self::MAX * 2 || !raw.is_ascii() {
+            return None;
+        }
+        (0..raw.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&raw[i..i + 2], 16).ok().filter(|&v| v <= Self::TOP))
+            .collect::<Option<Vec<u8>>>()
+            .map(Peaks)
+    }
+
+    fn stored(&self) -> String {
+        self.0.iter().map(|v| format!("{v:02x}")).collect()
+    }
+}
+
+impl Serialize for Peaks {
+    fn serialize<S: serde::Serializer>(&self, out: S) -> Result<S::Ok, S::Error> {
+        out.collect_seq(self.0.iter().map(|&v| f64::from(v) / f64::from(Self::TOP)))
+    }
+}
+
+impl<'de> Deserialize<'de> for Peaks {
+    fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Peaks, D::Error> {
+        let levels = Vec::<f64>::deserialize(input)?;
+        Peaks::of(&levels).ok_or_else(|| serde::de::Error::custom("bad peaks"))
     }
 }
 
@@ -1067,8 +1132,8 @@ pub(crate) async fn audio_of(db: &sqlx::PgPool, id: Option<&str>, who: Option<Uu
         Err(crate::media::Refusal::Missing) => return Err(AudioRefusal::Words(NO_SUCH_AUDIO)),
         Err(crate::media::Refusal::NotYours) => return Err(AudioRefusal::Words(NOT_YOUR_AUDIO)),
     }
-    match crate::chat_audio::duration_of(db, id).await? {
-        Some(duration_ms) => Ok(Some(Audio { id: id.to_owned(), duration_ms })),
+    match crate::chat_audio::meta_of(db, id).await? {
+        Some((duration_ms, peaks)) => Ok(Some(Audio { id: id.to_owned(), duration_ms, peaks })),
         None => Err(AudioRefusal::Words(NO_SUCH_AUDIO)),
     }
 }
@@ -2315,7 +2380,7 @@ mod tests {
 
     #[test]
     fn a_voice_message_is_kept_as_its_id_and_its_length() {
-        let a = Audio { id: "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into(), duration_ms: 4_250 };
+        let a = Audio { id: "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into(), duration_ms: 4_250, peaks: None };
         assert_eq!(a.stored(), "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e,4250");
         assert_eq!(Audio::parse(Some(&a.stored())), Some(a.clone()));
         assert_eq!(Audio::parse(Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e")), None, "no length, no voice message");
@@ -2338,6 +2403,36 @@ mod tests {
         .unwrap();
         assert_eq!(kept.audio, None, "a line kept before voice messages reads as none");
         assert!(!serde_json::to_string(&kept).unwrap().contains("audio"));
+    }
+
+    #[test]
+    fn a_voice_message_keeps_its_waveform() {
+        let id = "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e";
+        let peaks = Peaks::of(&[0.0, 0.25, 0.5, 1.0]).unwrap();
+        let a = Audio { id: id.into(), duration_ms: 4_250, peaks: Some(peaks.clone()) };
+        assert_eq!(a.stored(), format!("{id},4250,00193264"));
+        assert_eq!(Audio::parse(Some(&a.stored())), Some(a.clone()));
+        let json = serde_json::to_value(&a).unwrap();
+        assert_eq!(json, serde_json::json!({ "id": id, "duration_ms": 4250, "peaks": [0.0, 0.25, 0.5, 1.0] }));
+        assert_eq!(serde_json::from_value::<Audio>(json).unwrap(), a);
+        assert_eq!(Audio::parse(Some(&format!("{id},4250,zz"))), Some(Audio { id: id.into(), duration_ms: 4_250, peaks: None }), "a bad waveform reads as flat");
+        assert_eq!(Audio::parse(Some(&format!("{id},4250,65"))).unwrap().peaks, None, "over the top is no waveform");
+        assert_eq!(Peaks::of_kept(&peaks.kept()), Some(peaks));
+    }
+
+    #[test]
+    fn a_waveform_is_short_and_between_zero_and_one() {
+        assert!(Peaks::of(&[0.5; 40]).is_some());
+        assert!(Peaks::of(&[0.5; Peaks::MAX]).is_some());
+        assert_eq!(Peaks::of(&[0.5; Peaks::MAX + 1]), None);
+        assert_eq!(Peaks::of(&[]), None);
+        assert_eq!(Peaks::of(&[0.2, 1.01]), None);
+        assert_eq!(Peaks::of(&[-0.01]), None);
+        assert_eq!(Peaks::of(&[f64::NAN]), None);
+        assert_eq!(Peaks::of(&[f64::INFINITY]), None);
+        assert_eq!(Peaks::of_kept(&[101]), None);
+        assert_eq!(Peaks::of_kept(&[-1]), None);
+        assert!(serde_json::from_value::<Audio>(serde_json::json!({ "id": "a", "duration_ms": 1, "peaks": [2.0] })).is_err());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { atom, type Atom, type PrimitiveAtom } from 'jotai';
 
 import { api, messageOf } from '@/infra/api';
-import { type ChatAudio, MAX_AUDIO_BYTES } from '@/infra/chat-audio';
+import { type ChatAudio, markPlayed, MAX_AUDIO_BYTES, peaksOf } from '@/infra/chat-audio';
 import { type ChatVideo, readVideo } from '@/infra/chat-video';
 import { compressChatImage } from '@/infra/picture';
 import { store } from '@/infra/store';
@@ -44,6 +44,7 @@ export interface PendingVoice {
   key: string;
   blob: Blob;
   durationMs: number;
+  peaks?: number[];
   previewUrl: string;
   status: AttachStatus;
   audio?: ChatAudio;
@@ -63,11 +64,13 @@ export async function uploadVideo(file: File, onProgress: (sent: number) => void
   return { id: saved.id, poster: saved.poster };
 }
 
-export async function uploadVoice(blob: Blob, onProgress: (sent: number) => void): Promise<ChatAudio> {
+export async function uploadVoice(blob: Blob, peaks: number[] | undefined, onProgress: (sent: number) => void): Promise<ChatAudio> {
   if (blob.size === 0) throw new Error('nothing was recorded');
   if (blob.size > MAX_AUDIO_BYTES) throw new Error('voice message too big. 2 mb at most');
-  const saved = await api.uploadChatAudio(blob, onProgress);
-  return { id: saved.id, duration_ms: saved.duration_ms };
+  const saved = await api.uploadChatAudio(blob, peaks, onProgress);
+  markPlayed(saved.id);
+  const kept = peaksOf(saved.peaks);
+  return kept ? { id: saved.id, duration_ms: saved.duration_ms, peaks: kept } : { id: saved.id, duration_ms: saved.duration_ms };
 }
 
 export function releaseAttached({ pictures, video, voice }: Attached) {
@@ -150,9 +153,9 @@ export class Attachments {
     store.set(this.videoAtom, null);
   }
 
-  addVoice(blob: Blob, durationMs: number) {
+  addVoice(blob: Blob, durationMs: number, peaks?: number[]) {
     this.removeVoice();
-    const voice: PendingVoice = { key: crypto.randomUUID(), blob, durationMs, previewUrl: URL.createObjectURL(blob), status: 'uploading', progress: 0 };
+    const voice: PendingVoice = { key: crypto.randomUUID(), blob, durationMs, peaks, previewUrl: URL.createObjectURL(blob), status: 'uploading', progress: 0 };
     store.set(this.voiceAtom, voice);
     this.startVoice(voice.key);
   }
@@ -264,7 +267,7 @@ export class Attachments {
   private startVoice(key: string) {
     const voice = this.voice();
     if (!voice || voice.key !== key) return;
-    const run: Promise<void> = uploadVoice(voice.blob, (progress) => this.patchVoice(key, { progress }))
+    const run: Promise<void> = uploadVoice(voice.blob, voice.peaks, (progress) => this.patchVoice(key, { progress }))
       .then(
         (audio) => this.patchVoice(key, { status: 'ready', audio, progress: 1, error: undefined }),
         (err: unknown) => this.patchVoice(key, { status: 'error', error: messageOf(err) })

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { AUDIO_BITS_PER_SECOND, MAX_AUDIO_BYTES, MAX_AUDIO_MS, micRefusal, pickRecorderType, VOICE_CONSTRAINTS } from '@/infra/chat-audio';
+import { AUDIO_BITS_PER_SECOND, MAX_AUDIO_BYTES, MAX_AUDIO_MS, micRefusal, peaksFrom, pickRecorderType, VOICE_CONSTRAINTS } from '@/infra/chat-audio';
+import { type MicLevel, openMicLevel } from '@/infra/mic-level';
 
 export type RecorderPhase = 'idle' | 'asking' | 'recording' | 'stopped';
 
@@ -8,11 +9,13 @@ export interface RecordedClip {
   blob: Blob;
   durationMs: number;
   url: string;
+  peaks?: number[];
 }
 
 export interface VoiceRecorder {
   phase: RecorderPhase;
   elapsedMs: number;
+  levels: number[];
   clip: RecordedClip | null;
   start: () => void;
   stop: () => void;
@@ -21,7 +24,8 @@ export interface VoiceRecorder {
   discard: () => void;
 }
 
-const TICK_MS = 200;
+const TICK_MS = 100;
+export const LIVE_BARS = 34;
 const SLICE_MS = 1000;
 const BYTES_HEADROOM = 64 * 1024;
 
@@ -33,6 +37,23 @@ interface Take {
   startedAt: number;
   dropped: boolean;
   after: ((clip: RecordedClip) => void) | null;
+  meter: MicLevel | null;
+  heard: number[];
+}
+
+function hush(now: Take) {
+  now.meter?.close();
+  now.meter = null;
+}
+
+function meterOf(stream: MediaStream): MicLevel | null {
+  const track = stream.getAudioTracks()[0];
+  if (!track) return null;
+  try {
+    return openMicLevel(track);
+  } catch {
+    return null;
+  }
 }
 
 function release(stream: MediaStream | null) {
@@ -42,6 +63,7 @@ function release(stream: MediaStream | null) {
 export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorder {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [levels, setLevels] = useState<number[]>([]);
   const [clip, setClip] = useState<RecordedClip | null>(null);
   const said = useRef(onError);
   useEffect(() => {
@@ -70,6 +92,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
       stopTimer();
       const now = take.current;
       if (!now) return;
+      hush(now);
       now.dropped = now.dropped || dropped;
       if (now.recorder && now.recorder.state !== 'inactive') {
         try {
@@ -102,6 +125,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
     const ask = ++asking.current;
     setPhase('asking');
     setElapsedMs(0);
+    setLevels([]);
     navigator.mediaDevices.getUserMedia(VOICE_CONSTRAINTS).then(
       (stream) => {
         if (ask !== asking.current) {
@@ -118,7 +142,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
           fail('this browser cannot record');
           return;
         }
-        const now: Take = { stream, recorder, chunks: [], bytes: 0, startedAt: Date.now(), dropped: false, after: null };
+        const now: Take = { stream, recorder, chunks: [], bytes: 0, startedAt: Date.now(), dropped: false, after: null, meter: meterOf(stream), heard: [] };
         take.current = now;
         recorder.ondataavailable = (e) => {
           if (e.data.size === 0) return;
@@ -128,6 +152,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
         };
         recorder.onerror = () => {
           now.dropped = true;
+          hush(now);
           fail('recording stopped');
           if (recorder.state !== 'inactive') recorder.stop();
           else {
@@ -137,6 +162,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
           }
         };
         recorder.onstop = () => {
+          hush(now);
           release(stream);
           if (take.current === now) take.current = null;
           stopTimer();
@@ -148,7 +174,8 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
             setElapsedMs(0);
             return;
           }
-          const kept = { blob, durationMs, url: URL.createObjectURL(blob) };
+          const peaks = peaksFrom(now.heard);
+          const kept: RecordedClip = peaks ? { blob, durationMs, url: URL.createObjectURL(blob), peaks } : { blob, durationMs, url: URL.createObjectURL(blob) };
           setElapsedMs(durationMs);
           if (now.after) {
             URL.revokeObjectURL(kept.url);
@@ -175,6 +202,10 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
         timer.current = setInterval(() => {
           const ms = Date.now() - now.startedAt;
           setElapsedMs(ms);
+          if (now.meter) {
+            now.heard.push(now.meter.read(performance.now()));
+            setLevels(now.heard.slice(-LIVE_BARS));
+          }
           if (ms >= MAX_AUDIO_MS && recorder.state === 'recording') recorder.stop();
         }, TICK_MS);
       },
@@ -217,6 +248,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
       take.current = null;
       if (now) {
         now.dropped = true;
+        hush(now);
         if (now.recorder && now.recorder.state !== 'inactive') {
           try {
             now.recorder.stop();
@@ -232,5 +264,5 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
     []
   );
 
-  return { phase, elapsedMs, clip, start, stop, stopThen, cancel, discard };
+  return { phase, elapsedMs, levels, clip, start, stop, stopThen, cancel, discard };
 }
