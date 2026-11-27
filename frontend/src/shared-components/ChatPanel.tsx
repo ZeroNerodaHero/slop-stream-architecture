@@ -581,7 +581,7 @@ const ChatRow = memo(function ChatRow({
         <>
           <Speaker line={line} room={room} />
           <span className="ml-1 inline-flex items-center gap-1 align-middle">
-            <Marks line={line} mine={mine} small={shape === 'bubbles'} />
+            <Marks line={line} mine={mine && shape !== 'bubbles'} small={shape === 'bubbles'} />
           </span>
         </>
       }
