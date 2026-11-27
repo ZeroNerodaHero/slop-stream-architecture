@@ -280,7 +280,7 @@ export function Tile({
     >
       {mini ? <Tooltip content={what}>{button}</Tooltip> : button}
       {tile.stream ? (
-        <Picture stream={tile.stream} mirror={tile.self && tile.kind === 'person'} contain={tile.kind === 'screen' || size === 'big'} />
+        <Picture stream={tile.stream} contain={tile.kind === 'screen' || size === 'big'} />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center">
           <FaceWithPresence
@@ -352,9 +352,9 @@ function dropIfLoose(stream: MediaStream, el: HTMLVideoElement) {
   }, 0);
 }
 
-function Picture({ stream, mirror, contain }: { stream: MediaStream; mirror: boolean; contain: boolean }) {
+function Picture({ stream, contain }: { stream: MediaStream; contain: boolean }) {
   const host = useRef<HTMLDivElement>(null);
-  const look = cn('absolute inset-0 h-full w-full bg-black', contain ? 'object-contain' : 'object-cover', mirror && '[transform:scaleX(-1)]');
+  const look = cn('absolute inset-0 h-full w-full bg-black', contain ? 'object-contain' : 'object-cover');
   useLayoutEffect(() => {
     const box = host.current;
     if (!box) return;
