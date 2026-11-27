@@ -2444,15 +2444,25 @@
     return { table, sum };
   }
 
-  function faultTile(F, summary, line, redraw) {
+  function keptText(F, total) {
+    const n = F.rows.length;
+    const late = has(F.since) && has(F.from) && F.since > F.from ? `, keeping since ${faultTime(F.since)}` : '';
+    if (!n) return '';
+    if (n >= total) return ` · all ${count(n)} kept${late}, times in Chicago`;
+    if (has(F.cap) && n >= F.cap) return ` · newest ${count(n)} kept, ${count(F.cap)} a line at most, times in Chicago`;
+    return ` · ${count(n)} kept${late}, times in Chicago`;
+  }
+
+  function faultTile(F, summary, total, line, redraw) {
     const t = el('div', 'tile wide');
     const head = el('div', 'head');
     const rows = F && Array.isArray(F.rows) ? F.rows : [];
-    head.append(el('span', 'label', 'errors'), el('span', 'value mono', `${summary}${rows.length ? ` · newest ${rows.length} kept, times in Chicago` : ''}`));
+    head.append(el('span', 'label', 'errors'), el('span', 'value mono', `${summary}${F && !F.error ? keptText({ ...F, rows }, total) : ''}`));
     t.append(head);
+    if (F && F.live_error) t.append(el('div', 'note', `the box did not answer, these are the ones kept before: ${F.live_error}`));
     if (!F) t.append(el('div', 'empty', 'loading'));
     else if (F.error) t.append(el('div', 'note', `could not load the errors: ${F.error}`));
-    else if (!rows.length) t.append(el('div', 'empty', 'none kept: no errors since this process last started'));
+    else if (!rows.length) t.append(el('div', 'empty', `none kept in the last ${F.range || sel.range}${has(F.since) && has(F.from) && F.since > F.from ? `, keeping since ${faultTime(F.since)}` : ''}`));
     else if (errView === 'grouped') {
       const { table, sum } = faultGroupTable(rows, line, redraw);
       const bar = el('div', 'fbar');
@@ -2650,7 +2660,7 @@
             : [{ name: 'errors', v: D.err, color: COLORS.red }] });
         tile({ label: `time spent per ${per(secs)}`, read: spent, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }, true);
       }
-      body.append(faultTile(D.faults, S ? `${count(I ? I.err : 0)} dropped ${over}` : `${count(r.err)} ${r.err === 1 ? 'error' : 'errors'}${r.kind === 'http' ? ` · ${count(r.e4)} 4xx` : ''} ${over}`, v.open, () => timingRender(v)));
+      body.append(faultTile(D.faults, S ? `${count(I ? I.err : 0)} dropped ${over}` : `${count(r.err)} ${r.err === 1 ? 'error' : 'errors'}${r.kind === 'http' ? ` · ${count(r.e4)} 4xx` : ''} ${over}`, S ? (I ? I.err : 0) : (r.err || 0) + (r.e4 || 0), v.open, () => timingRender(v)));
     }
     const held = holdHint(dr);
     dr.replaceChildren(v.ui.grip, head, stats, body);
@@ -3004,9 +3014,9 @@
     const pair = pairOf(row);
     const fk = row && row.kind === 'session' && row.dir === 'out' ? (pair ? pair.key : null) : key;
     const faults = fk
-      ? getJson(`/api/monitor/timings/errors?target=${encodeURIComponent(target)}&key=${encodeURIComponent(fk)}`)
-        .then((f) => ({ rows: (Array.isArray(f.rows) ? f.rows : []).filter((x) => x && typeof x === 'object'), kept: f.kept || 100 }), (e) => ({ error: e.message }))
-      : Promise.resolve({ rows: [], kept: 100 });
+      ? getJson(`/api/monitor/timings/errors?target=${encodeURIComponent(target)}&key=${encodeURIComponent(fk)}&range=${sel.range}`)
+        .then((f) => ({ ...f, rows: (Array.isArray(f.rows) ? f.rows : []).filter((x) => x && typeof x === 'object') }), (e) => ({ error: e.message }))
+      : Promise.resolve({ rows: [] });
     try {
       const [d, p, f] = await Promise.all([get(key), pair ? get(pair.key).catch(() => null) : null, faults]);
       if (v.open === id) v.detail = { ...normDetail(d), id, pair: p ? normDetail(p) : null, faults: f };
