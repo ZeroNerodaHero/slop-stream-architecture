@@ -11,7 +11,7 @@ import {
   freeCell,
   GRID_COLS,
   GRID_ROWS,
-  LAYOUT_GRIDS,
+  LAYOUT_IDS,
   overlaps,
   placeIn,
   placeShown,
@@ -25,6 +25,9 @@ import {
   readPanels,
   readPreset,
   readRail,
+  readSlots,
+  seedSlots,
+  START_GRID,
   TILE_IDS,
   typingInto,
   unreadAfter,
@@ -52,41 +55,35 @@ test('the old face and rigging modules fold into source settings', () => {
   assert.deepEqual(readGrid({ rig: { x: 6, y: 6, w: 3, h: 3 } }).source, { x: 6, y: 6, w: 3, h: 3 });
   assert.deepEqual(readGrid({ source: { x: 1, y: 1, w: 2, h: 2 }, face: { x: 0, y: 0, w: 3, h: 3 } }).source, { x: 1, y: 1, w: 2, h: 2 });
   assert.deepEqual(readGrid(null).source, DEFAULT_GRID.source);
-  assert.equal(presetOf({ panels: readPanels({ hidden: ['rig', 'face'] }), layout: 1, grid: DEFAULT_GRID }, { panels: { hidden: ['source'] } }), 'mine');
+  assert.equal(presetOf({ panels: readPanels({ hidden: ['rig', 'face'] }), layout: 'obs' }, { panels: { hidden: ['source'] } }), 'mine');
   assert.equal(TILE_IDS.includes('face' as never), false);
   assert.equal(TILE_IDS.includes('rig' as never), false);
 });
 
 test('the one built in preset is default: everything open on obs left', () => {
   assert.deepEqual(Object.keys(PRESETS), ['default']);
-  assert.deepEqual(PRESETS.default, { panels: { hidden: [] }, layout: 1 });
+  assert.deepEqual(PRESETS.default, { panels: { hidden: [] }, layout: 'obs' });
 });
 
-test('a kept layout that is not one of the five falls back to obs left', () => {
-  assert.equal(readLayout(3), 3);
-  assert.equal(readLayout(5), 5);
-  assert.equal(readLayout('3'), 1);
-  assert.equal(readLayout(9), 1);
-  assert.equal(readLayout(undefined), 1);
+test('only obs left is built in, then four custom slots, and an old built in layout falls back to obs left', () => {
+  assert.deepEqual(LAYOUT_IDS, ['obs', 'c1', 'c2', 'c3', 'c4']);
+  assert.equal(readLayout('c3'), 'c3');
+  assert.equal(readLayout('obs'), 'obs');
+  for (const old of [1, 2, 3, 4, 5, '3', 9, undefined, null]) assert.equal(readLayout(old), 'obs', String(old));
 });
 
-test('each layout puts every module in one place, and closed ones nowhere', () => {
-  for (const layout of [1, 2, 3, 4] as const) {
-    const a = arrange(layout, []);
-    const all = [...a.left, ...a.right, ...a.below, ...a.under, ...a.side].sort();
-    assert.deepEqual(all, ['chat', 'sound', 'source', 'sources'], `layout ${layout}`);
-  }
-  assert.deepEqual(arrange(1, ['source']).left, ['sources', 'sound']);
-  assert.deepEqual(arrange(3, [], ['chat']).side, []);
-  assert.equal(placeIn(arrange(1, []), 'chat'), 'under');
-  assert.equal(placeIn(arrange(3, []), 'chat'), 'side');
-  assert.equal(placeIn(arrange(3, []), 'source'), 'row');
-  assert.equal(placeIn(arrange(2, []), 'source'), 'column');
-  assert.equal(placeIn(arrange(1, ['source']), 'source'), null);
+test('obs left puts every module in one place, and closed ones nowhere', () => {
+  const a = arrange([]);
+  assert.deepEqual([...a.left, ...a.right, ...a.below, ...a.under, ...a.side].sort(), ['chat', 'sound', 'source', 'sources']);
+  assert.deepEqual(arrange(['source']).left, ['sources', 'sound']);
+  assert.deepEqual(arrange([], ['chat']).under, []);
+  assert.equal(placeIn(arrange([]), 'chat'), 'under');
+  assert.equal(placeIn(arrange([]), 'source'), 'column');
+  assert.equal(placeIn(arrange(['source']), 'source'), null);
 });
 
 test('the grids every layout opens edit mode with have no overlaps and stay in bounds', () => {
-  for (const grid of [DEFAULT_GRID, ...Object.values(LAYOUT_GRIDS)]) {
+  for (const grid of [DEFAULT_GRID, START_GRID]) {
     for (const id of TILE_IDS) {
       const c = grid[id];
       assert.deepEqual(clampCell(id, c), c, id);
@@ -113,27 +110,52 @@ test('a module put back finds a free cell, or none when the grid is full', () =>
 });
 
 test('a preset is found from its modules and layout, and the picked one wins a tie', () => {
-  const look = (layout: 1 | 2 | 3 | 4 | 5, hidden: string[] = [], grid = DEFAULT_GRID) => ({ panels: readPanels({ hidden }), layout, grid });
-  const yours = { panels: ALL, layout: 3 as const };
-  assert.equal(presetOf(look(1), null), 'default');
-  assert.equal(presetOf(look(3), null), null);
-  assert.equal(presetOf(look(1, ['sound', 'sources']), null), null);
-  assert.equal(presetOf(look(3), yours), 'mine');
-  assert.equal(presetOf(look(1), yours), 'default');
-  assert.equal(presetOf(look(1), { panels: ALL }), 'default');
-  assert.equal(presetOf(look(1), { panels: ALL }, 'mine'), 'mine');
-  assert.equal(presetOf(look(3), yours, 'default'), 'mine');
-  assert.equal(presetOf(look(1, ['source']), { panels: { hidden: ['source'] } }), 'mine');
-  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
-  const grid = { panels: ALL, layout: 5 as const, grid: custom };
-  assert.equal(presetOf(look(5, [], custom), grid), 'mine');
-  assert.equal(presetOf(look(5), grid), null);
+  const look = (layout: 'obs' | 'c1' | 'c2' | 'c3' | 'c4', hidden: string[] = []) => ({ panels: readPanels({ hidden }), layout });
+  const yours = { panels: ALL, layout: 'c2' as const };
+  assert.equal(presetOf(look('obs'), null), 'default');
+  assert.equal(presetOf(look('c2'), null), null);
+  assert.equal(presetOf(look('obs', ['sound', 'sources']), null), null);
+  assert.equal(presetOf(look('c2'), yours), 'mine');
+  assert.equal(presetOf(look('obs'), yours), 'default');
+  assert.equal(presetOf(look('obs'), { panels: ALL }), 'default');
+  assert.equal(presetOf(look('obs'), { panels: ALL }, 'mine'), 'mine');
+  assert.equal(presetOf(look('c2'), yours, 'default'), 'mine');
+  assert.equal(presetOf(look('obs', ['source']), { panels: { hidden: ['source'] } }), 'mine');
   assert.equal(readPreset(null), null);
   assert.equal(readPreset({ layout: 4 }), null);
   assert.deepEqual(readPreset({ layout: 7, panels: { hidden: ['source', 'chat'] } }), { panels: { hidden: ['source', 'chat'] } });
-  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { panels: ALL, layout: 4 });
-  assert.deepEqual(readPreset({ layout: 5, grid: custom, panels: ALL }), { panels: ALL, layout: 5, grid: custom });
-  assert.deepEqual(readPreset({ layout: 2, grid: custom, panels: ALL }), { panels: ALL, layout: 2 });
+  assert.deepEqual(readPreset({ layout: 'c3', panels: ALL }), { panels: ALL, layout: 'c3' });
+});
+
+test('a preset saved with an old layout maps to obs left, and old custom 5 maps to custom slot 1', () => {
+  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
+  assert.deepEqual(readPreset({ layout: 1, panels: ALL }), { panels: ALL, layout: 'obs' });
+  for (const old of [2, 3, 4]) assert.deepEqual(readPreset({ layout: old, grid: custom, panels: ALL }), { panels: ALL, layout: 'obs' });
+  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { panels: ALL, layout: 'obs' });
+  assert.deepEqual(readPreset({ layout: 5, grid: custom, panels: ALL }), { panels: ALL, layout: 'c1' });
+  assert.deepEqual(readPreset({ layout: 'nope', panels: ALL }), { panels: ALL });
+});
+
+test('an empty custom slot starts with the stream across the bottom and every module in a row along the top', () => {
+  const modules = TILE_IDS.filter((id) => id !== 'preview');
+  for (const id of modules) assert.equal(START_GRID[id].y, 0, id);
+  assert.equal(modules.reduce((w, id) => w + START_GRID[id].w, 0), GRID_COLS);
+  const top = Math.max(...modules.map((id) => START_GRID[id].h));
+  assert.deepEqual(START_GRID.preview, { x: 0, y: top, w: GRID_COLS, h: GRID_ROWS - top });
+});
+
+test('custom slots are read one by one, junk is empty, and an old custom grid seeds slot 1 once', () => {
+  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
+  const empty = { c1: null, c2: null, c3: null, c4: null };
+  assert.deepEqual(readSlots(null), empty);
+  assert.deepEqual(readSlots('junk'), empty);
+  assert.deepEqual(readSlots({ c2: custom, c3: 4, c9: custom }), { ...empty, c2: custom });
+  assert.deepEqual(readSlots({ c1: { chat: { x: 'a' } } }).c1, DEFAULT_GRID);
+  assert.deepEqual(seedSlots(null, null), empty);
+  assert.deepEqual(seedSlots(custom, null), { ...empty, c1: custom });
+  assert.deepEqual(seedSlots(null, { layout: 5, grid: custom, panels: ALL }), { ...empty, c1: custom });
+  assert.deepEqual(seedSlots(null, { layout: 3, grid: custom, panels: ALL }), empty);
+  assert.deepEqual(seedSlots('junk', 'junk'), empty);
 });
 
 test('only your preset takes a name, trimmed, and an empty one falls back to yours', () => {

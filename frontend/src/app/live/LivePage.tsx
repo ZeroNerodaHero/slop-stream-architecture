@@ -68,6 +68,7 @@ import {
   liveGridAtom,
   liveLayoutAtom,
   liveMineAtom,
+  migrateLayouts,
   migratePresets,
   livePanelsAtom,
   livePresetAtom,
@@ -187,6 +188,7 @@ function useHudBeside(on: boolean) {
 }
 
 migratePresets();
+migrateLayouts();
 
 function usePresetKeys() {
   useEffect(() => {
@@ -633,7 +635,7 @@ export function LivePage() {
   const modelDialog = picking && <ModelDialog onClose={() => setPicking(false)} />;
 
   const skip: ModuleId[] = windowed ? ['chat'] : [];
-  const a = layout === 5 ? null : arrange(layout, panels.hidden, skip);
+  const a = layout === 'obs' ? arrange(panels.hidden, skip) : null;
   const isRailOpen = railOpen(rail, width);
   const columnPx = width >= 1600 ? 280 : 264;
   const besideChat =
@@ -785,7 +787,7 @@ export function LivePage() {
   }
 
   const gridShown = TILE_IDS.filter((t) => t === 'preview' || (!panels.hidden.includes(t) && !skip.includes(t)));
-  const placeOf = (id: ModuleId): Place | null => (layout === 5 ? (gridShown.includes(id) ? 'tile' : null) : placeIn(a!, id));
+  const placeOf = (id: ModuleId): Place | null => (a ? placeIn(a, id) : gridShown.includes(id) ? 'tile' : null);
   const reserve = a ? reserveFor(a.below.length > 0, rowH, a.under.length > 0) : '0px';
   const column = 'flex w-[16.5rem] shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain min-[1600px]:w-[17.5rem]';
 
