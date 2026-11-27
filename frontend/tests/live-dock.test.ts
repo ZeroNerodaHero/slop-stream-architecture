@@ -52,7 +52,7 @@ test('the old face and rigging modules fold into source settings', () => {
   assert.deepEqual(readGrid({ rig: { x: 6, y: 6, w: 3, h: 3 } }).source, { x: 6, y: 6, w: 3, h: 3 });
   assert.deepEqual(readGrid({ source: { x: 1, y: 1, w: 2, h: 2 }, face: { x: 0, y: 0, w: 3, h: 3 } }).source, { x: 1, y: 1, w: 2, h: 2 });
   assert.deepEqual(readGrid(null).source, DEFAULT_GRID.source);
-  assert.equal(presetOf(1, readPanels({ hidden: ['rig', 'face'] }), null), 'sources');
+  assert.equal(presetOf(readPanels({ hidden: ['rig', 'face'] }), { panels: { hidden: ['source'] } }), 'mine');
   assert.equal(TILE_IDS.includes('face' as never), false);
   assert.equal(TILE_IDS.includes('rig' as never), false);
 });
