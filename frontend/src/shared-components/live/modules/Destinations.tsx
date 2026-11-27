@@ -205,7 +205,7 @@ export function DestinationsBody() {
           )}
         </div>
       )}
-      <span id="destination-status" className="min-w-0 truncate text-xs text-textSecondary empty:-mt-2" aria-live="polite">
+      <span id="destination-status" className="min-w-0 break-words text-xs text-textSecondary empty:-mt-2" aria-live="polite">
         {status}
       </span>
     </div>

@@ -365,7 +365,7 @@ function LinkedLogins() {
                     onClick={() => rememberReturn(true)}
                     aria-label={`link ${providerLabel(p)}`}
                     style={providerBrandStyle(p)}
-                    className={buttonClassName('primary', 'border-[var(--brand)] bg-[var(--brand)] text-white hover:border-[var(--brand-hover)] hover:bg-[var(--brand-hover)]', 'sm')}
+                    className={buttonClassName('primary', 'border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-on)] hover:border-[var(--brand-hover)] hover:bg-[var(--brand-hover)]', 'sm')}
                   >
                     link
                   </a>

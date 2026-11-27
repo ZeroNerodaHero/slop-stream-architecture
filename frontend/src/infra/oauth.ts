@@ -1,6 +1,6 @@
 import type { OAuthProvider } from '@/infra/api';
 
-export const PROVIDER_LABEL: Record<string, string> = { google: 'Google', discord: 'Discord' };
+export const PROVIDER_LABEL: Record<string, string> = { google: 'Google', discord: 'Discord', twitch: 'Twitch', kick: 'Kick' };
 
 export function providerLabel(p: OAuthProvider | null | undefined): string {
   if (!p) return 'that account';
