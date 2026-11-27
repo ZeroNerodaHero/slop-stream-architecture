@@ -85,6 +85,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { useVoiceRecorder } from '@/shared-components/useVoiceRecorder';
 import { useStackedWindow } from '@/shared-components/useStackedWindow';
 import { cn } from '@/utils/cn';
+import { ChatEmpty } from '@/shared-components/ChatEmpty';
 
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 300;
@@ -1039,9 +1040,7 @@ export function FriendChat() {
               >
                 {!thread?.loaded && lines.length === 0 && <p className="text-textTertiary">loading</p>}
                 {thread?.loaded && lines.length === 0 && (
-                  <p id="friend-chat-empty" className="text-textTertiary">
-                    nothing yet. say hi to {name}: only the two of you see this.
-                  </p>
+                  <ChatEmpty id="friend-chat-empty">nothing yet. say hi to {name}: only the two of you see this.</ChatEmpty>
                 )}
                 {lines.map((line, i) => {
                   const mine = line.from === me;

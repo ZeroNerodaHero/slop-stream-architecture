@@ -1,3 +1,5 @@
+mod about_blocks;
+mod about_md;
 mod about_page;
 mod agent;
 mod analytics;
@@ -833,6 +835,7 @@ fn router(state: AppState) -> Router {
         .merge(turnstile::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
+        .merge(about_blocks::routes())
         .merge(groups::routes())
         .merge(group_mod::routes())
         .merge(pins::routes())

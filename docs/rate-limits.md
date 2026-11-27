@@ -45,8 +45,9 @@ load, per action), not a measurement.
 | ✅ | `DELETE /api/streamers/{name}/avatar`, `/thumbs/{id}`, `/offline`, `/assets/{id}` | Remove an upload | none | **120** + **20 new names** | account / IP | 1 min; 1 h | rare |
 | ✅ | `PUT /api/streamers/{name}/offline-note`, `/about`, `/socials` | Edit profile text | none | **120** + **20 new names** | account / IP | 1 min; 1 h | low |
 | ✅ | `PUT /api/streamers/{name}/presence` | Set presence status | none | **120** + **20 new names** | account / IP | 1 min; 1 h | low (per status change) |
-| ✅ | `GET /api/streamers/{name}/about-page`, `GET /about-file/{id}` | Read the about page & its files | none | **600** | account / IP | 1 min | medium (profile page) |
+| ✅ | `GET /api/streamers/{name}/about-page`, `/about-blocks`, `/about-blocks/draft`, `GET /about-file/{id}` | Read the about page & its files | none | **600** | account / IP | 1 min | medium (profile page) |
 | ✅ | `PUT /api/streamers/{name}/about-page`, `PUT /about-file` | Save about page / upload its file | none | **60** + **20 new names** | account / IP | 1 h | low |
+| ✅ | `PUT /api/streamers/{name}/about-blocks`, `POST /about-blocks/publish` | Save the about draft / publish it | none | **120** (write) | account / IP | 1 min | medium (autosave while editing) |
 | ✅ | `GET /watch/`, `GET /watch/{*rest}` | HTML watch page with preview tags | none | **120 / IP** | IP | 1 min | high (shared links, unfurl bots) |
 | ✅ | `POST /api/streamers/{name}/follow`, `/unfollow` | Follow / unfollow | 120 / account | same **+ 120** (write tier) | account | 1 h; 1 min | low (per click) |
 | ✅ | `GET /api/following`, `/api/people`, `/api/recent` | Sidebar lists | none | **600** | account / IP | 1 min | high (every page load) |

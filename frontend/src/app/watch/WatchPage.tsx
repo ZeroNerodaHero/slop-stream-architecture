@@ -615,8 +615,8 @@ export function WatchPage() {
               chatSide === 'right' && 'beside:col-start-1 beside:mt-0',
               chatSide === 'left' && 'beside:col-start-2 beside:row-start-2 beside:mt-0',
               theater && 'beside:mt-2',
-              'bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:p-3 bubble:pt-2',
-              theater && 'bubble:py-0'
+              'pb-4 bubble:mt-2 bubble:rounded-panel bubble:bg-backgroundSecondary bubble:px-3 bubble:pt-2',
+              theater && 'bubble:pt-0'
             )}
           >
             <div ref={theater ? fitTail : undefined} id={theater ? 'watch-strip' : undefined} className={cn('flex border-b border-primaryStroke bubble:border-transparent', theater && 'min-h-12 items-end gap-4 bubble:items-center')}>

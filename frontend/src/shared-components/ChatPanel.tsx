@@ -49,6 +49,7 @@ import { usePeek } from '@/shared-components/peek';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { CHAT_GRIP, useChatWindowBar } from '@/shared-components/ChatSlot';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { ChatEmpty } from '@/shared-components/ChatEmpty';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { useVoiceRecorder } from '@/shared-components/useVoiceRecorder';
@@ -1119,13 +1120,13 @@ export function ChatPanel({
             role="log"
             aria-live="polite"
             data-style={shape}
-            className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 text-sm', shape === 'bubbles' ? 'leading-tight' : 'leading-snug')}
+            className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 text-sm', shape === 'bubbles' ? 'leading-tight' : 'leading-snug', !waiting && lines.length === 0 && 'flex flex-col')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
             {!waiting && lines.length === 0 && (
-              <div className={cn('flex flex-col', shape === 'log' ? 'gap-1' : shape === 'bubbles' ? 'gap-px' : 'gap-0.5')}>
+              <div className={cn('flex flex-1 flex-col', shape === 'log' ? 'gap-1' : shape === 'bubbles' ? 'gap-px' : 'gap-0.5')}>
                 {!server && welcome && <WelcomeLine key={room.key} welcome={welcome} />}
-                <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
+                <ChatEmpty>{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</ChatEmpty>
               </div>
             )}
             {!waiting && lines.length > 0 && (
