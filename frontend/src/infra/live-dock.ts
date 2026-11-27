@@ -1,5 +1,5 @@
 import { atom } from 'jotai';
-import { atomWithStorage } from 'jotai/utils';
+import { atomWithStorage, RESET } from 'jotai/utils';
 
 import { store } from './store.ts';
 
@@ -43,19 +43,39 @@ export const RAIL_WORDS: Record<RailSection, string> = {
   destinations: 'destinations'
 };
 
-export const LAYOUT_IDS = [1, 2, 3, 4, 5] as const;
+export const SLOT_IDS = ['c1', 'c2', 'c3', 'c4'] as const;
+export type SlotId = (typeof SLOT_IDS)[number];
+export const LAYOUT_IDS = ['obs', ...SLOT_IDS] as const;
 export type LayoutId = (typeof LAYOUT_IDS)[number];
 
 export const LAYOUT_WORDS: Record<LayoutId, string> = {
-  1: 'obs left',
-  2: 'obs right',
-  3: 'bottom dock',
-  4: 'split',
-  5: 'custom'
+  obs: 'obs left',
+  c1: 'custom 1',
+  c2: 'custom 2',
+  c3: 'custom 3',
+  c4: 'custom 4'
 };
 
+export const LAYOUT_MARKS: Record<LayoutId, string> = {
+  obs: '1',
+  c1: 'c1',
+  c2: 'c2',
+  c3: 'c3',
+  c4: 'c4'
+};
+
+export function isSlot(id: unknown): id is SlotId {
+  return SLOT_IDS.some((slot) => slot === id);
+}
+
 export function readLayout(raw: unknown): LayoutId {
-  return LAYOUT_IDS.find((id) => id === raw) ?? 1;
+  return LAYOUT_IDS.find((id) => id === raw) ?? 'obs';
+}
+
+export function readPresetLayout(raw: unknown): LayoutId | undefined {
+  if (raw === 5) return 'c1';
+  if (raw === 1 || raw === 2 || raw === 3 || raw === 4) return 'obs';
+  return LAYOUT_IDS.find((id) => id === raw);
 }
 
 export type Place = 'column' | 'row' | 'under' | 'side' | 'tile' | 'phone';
@@ -68,16 +88,11 @@ export interface Arrangement {
   side: ModuleId[];
 }
 
-const ARRANGEMENTS: Record<Exclude<LayoutId, 5>, Arrangement> = {
-  1: { left: ['sources', 'source', 'sound'], right: [], below: [], under: ['chat'], side: [] },
-  2: { left: [], right: ['sources', 'source', 'sound'], below: [], under: ['chat'], side: [] },
-  3: { left: [], right: [], below: ['sources', 'source', 'sound'], under: [], side: ['chat'] },
-  4: { left: ['sources', 'source'], right: [], below: ['sound'], under: [], side: ['chat'] }
-};
+const OBS_LEFT: Arrangement = { left: ['sources', 'source', 'sound'], right: [], below: [], under: ['chat'], side: [] };
 
-export function arrange(layout: Exclude<LayoutId, 5>, hidden: readonly ModuleId[], skip: readonly ModuleId[] = []): Arrangement {
+export function arrange(hidden: readonly ModuleId[], skip: readonly ModuleId[] = []): Arrangement {
   const keep = (ids: ModuleId[]) => ids.filter((id) => !hidden.includes(id) && !skip.includes(id));
-  const a = ARRANGEMENTS[layout];
+  const a = OBS_LEFT;
   return { left: keep(a.left), right: keep(a.right), below: keep(a.below), under: keep(a.under), side: keep(a.side) };
 }
 
@@ -108,36 +123,30 @@ export const DEFAULT_GRID: Grid = {
   sound: { x: 9, y: 7, w: 3, h: 5 }
 };
 
-export const LAYOUT_GRIDS: Record<Exclude<LayoutId, 5>, Grid> = {
-  1: {
-    sources: { x: 0, y: 0, w: 3, h: 3 },
-    source: { x: 0, y: 3, w: 3, h: 6 },
-    sound: { x: 0, y: 9, w: 3, h: 3 },
-    preview: { x: 3, y: 0, w: 9, h: 8 },
-    chat: { x: 3, y: 8, w: 9, h: 4 }
-  },
-  2: {
-    preview: { x: 0, y: 0, w: 9, h: 8 },
-    chat: { x: 0, y: 8, w: 9, h: 4 },
-    sources: { x: 9, y: 0, w: 3, h: 3 },
-    source: { x: 9, y: 3, w: 3, h: 6 },
-    sound: { x: 9, y: 9, w: 3, h: 3 }
-  },
-  3: {
-    preview: { x: 0, y: 0, w: 9, h: 8 },
-    chat: { x: 9, y: 0, w: 3, h: 12 },
-    sources: { x: 0, y: 8, w: 3, h: 4 },
-    source: { x: 3, y: 8, w: 4, h: 4 },
-    sound: { x: 7, y: 8, w: 2, h: 4 }
-  },
-  4: {
-    sources: { x: 0, y: 0, w: 3, h: 6 },
-    source: { x: 0, y: 6, w: 3, h: 6 },
-    preview: { x: 3, y: 0, w: 6, h: 8 },
-    sound: { x: 3, y: 8, w: 6, h: 4 },
-    chat: { x: 9, y: 0, w: 3, h: 12 }
-  }
+export const START_GRID: Grid = {
+  chat: { x: 0, y: 0, w: 3, h: 4 },
+  sources: { x: 3, y: 0, w: 3, h: 4 },
+  source: { x: 6, y: 0, w: 3, h: 4 },
+  sound: { x: 9, y: 0, w: 3, h: 4 },
+  preview: { x: 0, y: 4, w: 12, h: 8 }
 };
+
+export type Slots = Record<SlotId, Grid | null>;
+
+export function readSlots(raw: unknown): Slots {
+  const s = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const slots = {} as Slots;
+  for (const id of SLOT_IDS) slots[id] = s[id] && typeof s[id] === 'object' ? readGrid(s[id]) : null;
+  return slots;
+}
+
+export function seedSlots(oldGrid: unknown, mine: unknown): Slots {
+  const slots = readSlots(null);
+  const m = mine && typeof mine === 'object' ? (mine as Record<string, unknown>) : {};
+  const seed = oldGrid && typeof oldGrid === 'object' ? oldGrid : m.layout === 5 && m.grid && typeof m.grid === 'object' ? m.grid : null;
+  if (seed) slots.c1 = readGrid(seed);
+  return slots;
+}
 
 const MIN_CELL: Record<TileId, { w: number; h: number }> = {
   preview: { w: 3, h: 3 },
@@ -215,18 +224,16 @@ export const PRESET_NAME_MAX = 32;
 export interface Preset {
   panels: LivePanels;
   layout?: LayoutId;
-  grid?: Grid;
   name?: string;
 }
 
 export interface Look {
   panels: LivePanels;
   layout: LayoutId;
-  grid: Grid;
 }
 
 export const PRESETS: Record<Exclude<PresetId, 'mine'>, Preset> = {
-  default: { panels: { hidden: [] }, layout: 1 }
+  default: { panels: { hidden: [] }, layout: 'obs' }
 };
 
 export const PRESET_WORDS: Record<PresetId, { name: string; what: string }> = {
@@ -239,9 +246,8 @@ export function readPreset(raw: unknown): Preset | null {
   const p = raw as Record<string, unknown>;
   if (!p.panels || typeof p.panels !== 'object') return null;
   const preset: Preset = { panels: readPanels(p.panels) };
-  const layout = LAYOUT_IDS.find((id) => id === p.layout);
+  const layout = readPresetLayout(p.layout);
   if (layout !== undefined) preset.layout = layout;
-  if (layout === 5 && p.grid && typeof p.grid === 'object') preset.grid = readGrid(p.grid);
   const name = readPresetName(p.name);
   if (name) preset.name = name;
   return preset;
@@ -257,14 +263,8 @@ export function presetName(id: PresetId, mine: Preset | null): string {
   return (id === 'mine' && mine?.name) || PRESET_WORDS[id].name;
 }
 
-export function sameGrid(a: Grid, b: Grid): boolean {
-  return TILE_IDS.every((id) => a[id].x === b[id].x && a[id].y === b[id].y && a[id].w === b[id].w && a[id].h === b[id].h);
-}
-
 export function lookMatches(p: Preset, now: Look): boolean {
-  if (!samePanels(p.panels, now.panels)) return false;
-  if (p.layout !== undefined && p.layout !== now.layout) return false;
-  return !p.grid || sameGrid(p.grid, now.grid);
+  return samePanels(p.panels, now.panels) && (p.layout === undefined || p.layout === now.layout);
 }
 
 export function samePanels(a: LivePanels, b: LivePanels): boolean {
@@ -339,8 +339,9 @@ export function unreadWords(count: number): string {
 
 const json = { getOnInit: true } as const;
 const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', readPanels(null), undefined, json);
-const storedLayoutAtom = atomWithStorage<unknown>('settings.liveLayout', 1, undefined, json);
+const storedLayoutAtom = atomWithStorage<unknown>('settings.liveLayout', 'obs', undefined, json);
 const storedGridAtom = atomWithStorage<unknown>('settings.liveGrid', null, undefined, json);
+const storedSlotsAtom = atomWithStorage<unknown>('settings.liveSlots', null, undefined, json);
 const storedMineAtom = atomWithStorage<unknown>('settings.livePresetMine', null, undefined, json);
 const storedPresetsDefaultAtom = atomWithStorage<unknown>('settings.livePresetsDefault', false, undefined, json);
 const storedRailAtom = atomWithStorage<unknown>('settings.liveRail', null, undefined, json);
@@ -348,10 +349,14 @@ const storedPickedAtom = atomWithStorage<unknown>('settings.livePresetPicked', n
 
 export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
 export const liveLayoutAtom = atom<LayoutId>((get) => readLayout(get(storedLayoutAtom)));
-export const liveGridAtom = atom<Grid>((get) => readGrid(get(storedGridAtom)));
+export const liveSlotsAtom = atom<Slots>((get) => readSlots(get(storedSlotsAtom)));
+export const liveGridAtom = atom<Grid>((get) => {
+  const layout = get(liveLayoutAtom);
+  return (isSlot(layout) && get(liveSlotsAtom)[layout]) || START_GRID;
+});
 export const liveMineAtom = atom<Preset | null>((get) => readPreset(get(storedMineAtom)));
 export const livePresetAtom = atom<PresetId | null>((get) =>
-  presetOf({ panels: get(livePanelsAtom), layout: get(liveLayoutAtom), grid: get(liveGridAtom) }, get(liveMineAtom), get(storedPickedAtom))
+  presetOf({ panels: get(livePanelsAtom), layout: get(liveLayoutAtom) }, get(liveMineAtom), get(storedPickedAtom))
 );
 export const liveRailAtom = atom<RailState>((get) => readRail(get(storedRailAtom)));
 export const liveEditingAtom = atom(false);
@@ -370,7 +375,9 @@ export function setLayout(layout: LayoutId) {
 }
 
 export function setGrid(grid: Grid) {
-  store.set(storedGridAtom, grid);
+  const layout = store.get(liveLayoutAtom);
+  if (!isSlot(layout)) return;
+  store.set(storedSlotsAtom, { ...store.get(liveSlotsAtom), [layout]: grid });
 }
 
 export function setRail(open: boolean) {
@@ -398,13 +405,12 @@ export function applyPreset(id: PresetId) {
   store.set(storedPickedAtom, id);
   store.set(liveEditingAtom, false);
   if (p.layout !== undefined) store.set(storedLayoutAtom, p.layout);
-  if (p.grid) store.set(storedGridAtom, p.grid);
-  if (store.get(liveLayoutAtom) !== 5 || p.grid) {
+  if (!isSlot(store.get(liveLayoutAtom))) {
     setPanels({ hidden: [...p.panels.hidden] });
     return;
   }
   const placed = placeShown(store.get(liveGridAtom), store.get(livePanelsAtom).hidden, p.panels.hidden);
-  store.set(storedGridAtom, placed.grid);
+  setGrid(placed.grid);
   setPanels({ hidden: placed.hidden });
 }
 
@@ -412,7 +418,6 @@ export function saveMine() {
   const layout = store.get(liveLayoutAtom);
   const name = store.get(liveMineAtom)?.name;
   const mine: Preset = { panels: store.get(livePanelsAtom), layout };
-  if (layout === 5) mine.grid = store.get(liveGridAtom);
   if (name) mine.name = name;
   store.set(storedMineAtom, mine);
   store.set(storedPickedAtom, 'mine');
@@ -437,17 +442,26 @@ export function migratePresets() {
   store.set(storedPresetsDefaultAtom, true);
 }
 
+export function migrateLayouts() {
+  if (store.get(storedSlotsAtom) !== null) return;
+  store.set(storedSlotsAtom, seedSlots(store.get(storedGridAtom), store.get(storedMineAtom)));
+  store.set(storedGridAtom, RESET);
+}
+
 export function forgetMine() {
   store.set(storedMineAtom, null);
 }
 
-export function startEditing(from: LayoutId) {
-  if (from !== 5) {
-    const panels = store.get(livePanelsAtom);
-    store.set(storedGridAtom, LAYOUT_GRIDS[from]);
-    setPanels(panels);
-  }
-  store.set(storedLayoutAtom, 5);
+export function pickLayout(id: LayoutId) {
+  store.set(storedLayoutAtom, id);
+  if (isSlot(id) && !store.get(liveSlotsAtom)[id]) startEditing();
+  else stopEditing();
+}
+
+export function startEditing() {
+  const layout = store.get(liveLayoutAtom);
+  if (!isSlot(layout)) return;
+  if (!store.get(liveSlotsAtom)[layout]) setGrid(START_GRID);
   store.set(liveEditingAtom, true);
 }
 
@@ -456,7 +470,7 @@ export function stopEditing() {
 }
 
 export function resetGrid() {
-  store.set(storedGridAtom, DEFAULT_GRID);
+  setGrid(START_GRID);
 }
 
 export function showInGrid(id: ModuleId): boolean {
@@ -465,7 +479,7 @@ export function showInGrid(id: ModuleId): boolean {
   const shown = TILE_IDS.filter((t) => t === 'preview' || !panels.hidden.includes(t));
   const cell = fits(grid, shown, id, grid[id]) ? grid[id] : freeCell(grid, shown, id);
   if (!cell) return false;
-  store.set(storedGridAtom, { ...grid, [id]: cell });
+  setGrid({ ...grid, [id]: cell });
   setHidden(id, false);
   return true;
 }
