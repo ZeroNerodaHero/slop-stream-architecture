@@ -207,6 +207,7 @@ pub(crate) enum Event {
     Count(usize, Utf8Bytes),
     React(Arc<React>, Utf8Bytes, Frame),
     Delete(Arc<str>, Utf8Bytes, Frame),
+    Embed(Arc<EmbedUpdate>, Utf8Bytes, Frame),
 }
 
 impl Event {
@@ -229,6 +230,18 @@ impl Event {
     pub(crate) fn delete(id: &str, topic: &str) -> Self {
         Event::Delete(id.into(), frame_of(&Out::Delete { id }), frame_of(&RtOut::Delete { topic, id }))
     }
+
+    pub(crate) fn embed(update: EmbedUpdate, topic: &str) -> Self {
+        let legacy = frame_of(&Out::Embed(&update));
+        let rt = frame_of(&RtOut::Embed { topic, update: &update });
+        Event::Embed(Arc::new(update), legacy, rt)
+    }
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub(crate) struct EmbedUpdate {
+    pub(crate) id: String,
+    pub(crate) embed: Option<crate::unfurl::Embed>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -258,6 +271,8 @@ pub(crate) struct Line {
     pub(crate) mentions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) reactions: Vec<Reaction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) embed: Option<crate::unfurl::Embed>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -472,6 +487,13 @@ enum Out<'a> {
     Delete { id: &'a str },
     #[serde(rename = "delete")]
     ChannelDelete { channel: &'a str, id: &'a str },
+    Embed(&'a EmbedUpdate),
+    #[serde(rename = "embed")]
+    ChannelEmbed {
+        channel: &'a str,
+        #[serde(flatten)]
+        update: &'a EmbedUpdate,
+    },
     #[serde(rename = "react")]
     ChannelReact {
         channel: &'a str,
@@ -888,7 +910,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     last_seen = id;
                     if send_frame(&mut socket, frame).await.is_err() { break; }
                 }
-                Ok(Event::Count(_, frame) | Event::React(_, frame, _) | Event::Delete(_, frame, _)) => {
+                Ok(Event::Count(_, frame) | Event::React(_, frame, _) | Event::Delete(_, frame, _) | Event::Embed(_, frame, _)) => {
                     if send_frame(&mut socket, frame).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -1391,6 +1413,12 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
             remember(s, room, id, w, text, images, (vid.as_deref(), aud.as_deref()), reply, mentions);
         }
     }
+    if let (Some(id), Some(user)) = (&id, w.user_id.filter(|_| w.verified)) {
+        if let Some(url) = crate::unfurl::wanted(text) {
+            let job = crate::unfurl::Job::Room { room: room.to_owned(), server: server.map(str::to_owned), id: id.clone(), user, url, at: crate::unfurl::now_ms() };
+            crate::unfurl::enqueue(&mut r, &job).await;
+        }
+    }
     if let Some(actor) = w.user_id {
         notify_line(s, server, room, actor, text, named);
     }
@@ -1425,10 +1453,23 @@ pub(crate) async fn remove_line(db: &PgPool, r: &mut Redis, room: &str, id: &str
     let _: i64 = r.xdel(room_key(room), &[id]).await?;
     sqlx::query("DELETE FROM chat_lines WHERE room = $1 AND id = $2").bind(room).bind(id).execute(db).await?;
     sqlx::query("DELETE FROM chat_reactions WHERE room = $1 AND line_id = $2").bind(room).bind(id).execute(db).await?;
+    sqlx::query("DELETE FROM chat_embeds WHERE room = $1 AND line_id = $2").bind(room).bind(id).execute(db).await?;
     let key = react_key(room);
     let _: (Option<String>, bool) = redis::pipe()
         .atomic()
         .xadd_maxlen(&key, StreamMaxlen::Approx(KEEP_REACTS), "*", &[("del", id)])
+        .expire(&key, ROOM_TTL_SECS)
+        .query_async(r)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn publish_embed(r: &mut Redis, room: &str, id: &str, embed: Option<&crate::unfurl::Embed>) -> Result<(), crate::ApiError> {
+    let stored = embed.and_then(|e| serde_json::to_string(e).ok()).unwrap_or_default();
+    let key = react_key(room);
+    let _: (Option<String>, bool) = redis::pipe()
+        .atomic()
+        .xadd_maxlen(&key, StreamMaxlen::Approx(KEEP_REACTS), "*", &[("emb", id), ("e", stored.as_str())])
         .expire(&key, ROOM_TTL_SECS)
         .query_async(r)
         .await?;
@@ -1628,6 +1669,7 @@ pub(crate) async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uu
             let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
             with_faces(&s.db, &mut lines).await;
             reactions::with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
+            crate::unfurl::with_embeds(&s.db, lines.iter_mut().map(|l| (room, l))).await;
             lines
         }
         Err(e) => {
@@ -1702,6 +1744,9 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 }
                 Some((channel, Ok(Event::Delete(id, ..)))) => {
                     if send(&mut socket, &Out::ChannelDelete { channel: &channel, id: &id }).await.is_err() { break; }
+                }
+                Some((channel, Ok(Event::Embed(update, ..)))) => {
+                    if send(&mut socket, &Out::ChannelEmbed { channel: &channel, update: &update }).await.is_err() { break; }
                 }
                 Some((_, Err(n))) => {
                     let missed = format!("missed {n} lines");
@@ -1925,6 +1970,9 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
                     rlast = entry.id.clone();
                     if let Some(id) = entry.get::<String>("del") {
                         let _ = tx.send(Event::delete(&id, &topic));
+                    } else if let Some(id) = entry.get::<String>("emb") {
+                        let embed = crate::unfurl::parse_stored(entry.get::<String>("e").as_deref());
+                        let _ = tx.send(Event::embed(EmbedUpdate { id, embed }, &topic));
                     } else if let Some(react) = react_from(&entry) {
                         let _ = tx.send(Event::react(react, &topic));
                     }
@@ -2058,6 +2106,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         reply,
         mentions,
         reactions: Vec::new(),
+        embed: None,
     })
 }
 
@@ -2160,6 +2209,7 @@ mod tests {
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
+            embed: None,
         };
         let text = serde_json::to_string(&Out::ChannelMessage { channel: "general", line: &line }).unwrap();
         let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -2194,6 +2244,7 @@ mod tests {
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
+            embed: None,
         };
         let quote = Reply::of(&line);
         assert_eq!(quote.text.chars().count(), REPLY_QUOTE_CHARS);
@@ -2773,6 +2824,7 @@ mod tests {
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
+            embed: None,
         }];
         let started = Instant::now();
         with_faces(&pool, &mut lines).await;
@@ -2810,6 +2862,7 @@ mod tests {
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
+            embed: None,
         }];
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, Some(1690000000));
@@ -2882,6 +2935,7 @@ mod tests {
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
+            embed: None,
         };
         let written = serde_json::to_string(&Out::Message(&line)).unwrap();
         let (tx, mut a) = broadcast::channel(4);

@@ -210,6 +210,8 @@ enum Out {
     },
     #[serde(rename = "dm_react")]
     DmReact { id: i64, from: String, to: String, emoji: String, on: bool },
+    #[serde(rename = "dm_embed")]
+    DmEmbed { id: i64, from: String, to: String, embed: Option<crate::unfurl::Embed> },
     #[serde(rename = "dm_read")]
     DmRead {
         name: String,
@@ -814,6 +816,11 @@ impl Gateway {
                 let (Some(from), Some(id), Some(emoji)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("emoji")) else { return };
                 let on = entry.get::<String>("on").as_deref() == Some("1");
                 self.tell(&[&from, &name], Out::DmReact { id, from: from.clone(), to: name.clone(), emoji, on }).await;
+            }
+            "dm_embed" => {
+                let (Some(from), Some(id)): (Option<String>, Option<i64>) = (entry.get("from"), entry.get("id")) else { return };
+                let embed = crate::unfurl::parse_stored(entry.get::<String>("embed").as_deref());
+                self.tell(&[&from, &name], Out::DmEmbed { id, from: from.clone(), to: name.clone(), embed }).await;
             }
             "dm_read" => {
                 let (Some(peer), Some(id)): (Option<String>, Option<i64>) = (entry.get("peer"), entry.get("id")) else { return };

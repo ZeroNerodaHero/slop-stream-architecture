@@ -1185,6 +1185,11 @@ async fn messages(State(s): State<AppState>, Path(group): Path<String>, Query(q)
         all.extend(lines.iter_mut().map(|l| (room.as_str(), l)));
     }
     crate::reactions::with_reactions(&s.db, user, all).await;
+    let mut all: Vec<(&str, &mut Line)> = Vec::new();
+    for (room, (_, lines)) in rooms.iter().zip(pages.iter_mut()) {
+        all.extend(lines.iter_mut().map(|l| (room.as_str(), l)));
+    }
+    crate::unfurl::with_embeds(&s.db, all).await;
     let out: serde_json::Map<String, Value> = pages.into_iter().map(|(channel, lines)| (channel, json!(lines))).collect();
     Ok(Json(Value::Object(out)))
 }

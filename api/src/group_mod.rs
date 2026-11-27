@@ -369,6 +369,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/members/{name}", get(one_member))
         .route("/api/groups/{group}/members/{name}/messages", get(member_messages))
         .route("/api/groups/{group}/channels/{channel}/messages/{id}", axum::routing::delete(delete_message))
+        .route("/api/groups/{group}/channels/{channel}/messages/{id}/embed/hide", post(hide_embed))
         .route("/api/groups/{group}/kick", post(kick))
         .route("/api/groups/{group}/timeout", post(timeout))
         .route("/api/groups/{group}/timeout/{name}", axum::routing::delete(lift_timeout))
@@ -1511,15 +1512,22 @@ async fn member_messages(State(s): State<AppState>, Path((group, name)): Path<(S
     Ok(Json(json!({ "lines": out, "next": next })))
 }
 
-async fn delete_message(State(s): State<AppState>, Path((group, channel, id)): Path<(String, String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
-    let who = me.ok_or_else(login)?;
-    let (group, channel) = groups::channel_names(&group, &channel)?;
+struct Removable {
+    group: String,
+    channel: String,
+    room: String,
+    id: String,
+    line: crate::chat::Line,
+}
+
+async fn removable(s: &AppState, who: &crate::auth::Account, group: &str, channel: &str, id: &str) -> Result<Removable, ApiError> {
+    let (group, channel) = groups::channel_names(group, channel)?;
     let group = server(&s.db, &group).await?;
     let admin = s.admins.iter().any(|a| a.id == who.id);
     if !groups::may_see_text(&s.db, &group, &channel, Some(who.id), admin).await? {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
     }
-    let id = crate::history::stream_id(&id)?;
+    let id = crate::history::stream_id(id)?;
     let room = format!("{group}/{channel}");
     let mut r = s.redis.clone();
     let Some(line) = crate::history::line_at(&s.db, &mut r, &room, &id).await? else {
@@ -1531,11 +1539,26 @@ async fn delete_message(State(s): State<AppState>, Path((group, channel, id)): P
         None => false,
     };
     let actor_owner = is_owner(&s.db, who.id, &group).await?;
-    let moderates = allows(&s, who.id, &group, KICK).await?;
+    let moderates = allows(s, who.id, &group, KICK).await?;
     if !may_delete(who.id, actor_owner, moderates, author, author_owner) {
         return Err(no_power());
     }
-    paced(&s, who.id).await?;
+    paced(s, who.id).await?;
+    Ok(Removable { group, channel, room, id, line })
+}
+
+async fn hide_embed(State(s): State<AppState>, Path((group, channel, id)): Path<(String, String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(login)?;
+    let Removable { group, channel, room, id, line } = removable(&s, &who, &group, &channel, &id).await?;
+    crate::unfurl::hide_line(&s.db, &mut s.redis.clone(), &room, &id).await?;
+    log::info!("{}: hid the embed on {}'s line {id} in #{channel} of {group}", who.name, line.from);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_message(State(s): State<AppState>, Path((group, channel, id)): Path<(String, String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(login)?;
+    let Removable { group, channel, room, id, line } = removable(&s, &who, &group, &channel, &id).await?;
+    let mut r = s.redis.clone();
     let unpinned = sqlx::query("DELETE FROM channel_pins WHERE server = $1 AND channel = $2 AND message_id = $3")
         .bind(&group)
         .bind(&channel)

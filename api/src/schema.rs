@@ -25,6 +25,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0019-chat-audio", include_str!("../migrations/0019-chat-audio.sql")),
     ("0020-dm-calls", include_str!("../migrations/0020-dm-calls.sql")),
     ("0021-chat-audio-peaks", include_str!("../migrations/0021-chat-audio-peaks.sql")),
+    ("0023-link-embeds", include_str!("../migrations/0023-link-embeds.sql")),
 ];
 
 pub(crate) async fn ensure(db: &PgPool) -> anyhow::Result<()> {

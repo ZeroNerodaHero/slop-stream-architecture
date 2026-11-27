@@ -213,6 +213,35 @@ async fn delete_line(State(s): State<AppState>, Path((name, id)): Path<(String, 
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn hide_embed(State(s): State<AppState>, Path((name, id)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let stream = the_stream(&s.db, &name).await?;
+    let me = me.ok_or_else(login)?;
+    let mut r = s.redis.clone();
+    let Some(line) = crate::history::line_at(&s.db, &mut r, &stream.name, &id).await? else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, crate::chat::NO_SUCH_LINE));
+    };
+    let speaker = line.user_id.filter(|_| line.verified);
+    let own = speaker == Some(me.id);
+    if !own {
+        let (_, rank) = moderator(&s, Some(me.clone()), &stream).await?;
+        let target = if line.streamer && stream.owner != Some(me.id) {
+            Rank::Owner
+        } else {
+            match speaker {
+                Some(user) => rank_on(&s.db, &admin_ids(&s), &stream, user).await?,
+                None => Rank::Nobody,
+            }
+        };
+        if !may_act(rank, target) {
+            return Err(outranked(target));
+        }
+    }
+    paced(&s, &me).await?;
+    crate::unfurl::hide_line(&s.db, &mut r, &stream.name, &line.id).await?;
+    log::info!("{}: hid the embed on {}'s line {} in {}", me.name, line.from, line.id, stream.name);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 struct BanIn {
     name: String,
@@ -460,6 +489,7 @@ async fn remove_site_janny(State(s): State<AppState>, Path(user): Path<String>, 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/streams/{name}/chat/{id}", delete(delete_line))
+        .route("/api/streams/{name}/chat/{id}/embed/hide", axum::routing::post(hide_embed))
         .route("/api/streams/{name}/bans", get(list_bans).post(ban))
         .route("/api/streams/{name}/bans/{user}", delete(unban))
         .route("/api/streams/{name}/timeouts", axum::routing::post(timeout))
