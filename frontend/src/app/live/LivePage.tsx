@@ -67,6 +67,7 @@ import {
   liveEditingAtom,
   liveGridAtom,
   liveLayoutAtom,
+  migratePresets,
   livePanelsAtom,
   livePresetAtom,
   liveRailAtom,
@@ -78,7 +79,6 @@ import {
   presetForKey,
   railOpen,
   resetGrid,
-  saveMine,
   setGrid,
   setRail,
   showInGrid,
@@ -186,6 +186,8 @@ function useHudBeside(on: boolean) {
   }, [on]);
 }
 
+migratePresets();
+
 function usePresetKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -285,11 +287,6 @@ function EditBar({ hidden, onAdd }: { hidden: ModuleId[]; onAdd: (id: ModuleId) 
       <Button id="live-edit-reset" size="sm" className="h-7 shrink-0 px-2.5 py-0 text-xs" onClick={resetGrid}>
         reset
       </Button>
-      <Tooltip content="keep this grid and these modules as yours">
-        <Button id="live-edit-save" size="sm" className="h-7 shrink-0 px-2.5 py-0 text-xs" onClick={saveMine}>
-          save as preset
-        </Button>
-      </Tooltip>
       <Button id="live-edit-done" size="sm" variant="primary" className="h-7 shrink-0 px-3 py-0 text-xs" onClick={stopEditing}>
         done
       </Button>
@@ -461,32 +458,32 @@ function Rail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       className="w-[15.25rem] shrink-0"
       strip={
         <>
+          <ModuleBoundary id="thumbnail" name="thumbnail" small>
+            <ThumbnailModule strip />
+          </ModuleBoundary>
           <ModuleBoundary id="studio" name="studio" small>
             <StudioModule strip />
-          </ModuleBoundary>
-          <ModuleBoundary id="layout" name="layout switcher" small>
-            <LayoutModule strip />
           </ModuleBoundary>
           <ModuleBoundary id="presets" name="presets" small>
             <PresetsModule strip />
           </ModuleBoundary>
           <span className="flex-1" />
-          <ModuleBoundary id="thumbnail" name="thumbnail" small>
-            <ThumbnailModule strip />
+          <ModuleBoundary id="layout" name="layout switcher" small>
+            <LayoutModule strip />
           </ModuleBoundary>
         </>
       }
       footer={
-        <ModuleBoundary id="thumbnail" name="thumbnail">
-          <ThumbnailModule />
+        <ModuleBoundary id="layout" name="layout switcher">
+          <LayoutModule />
         </ModuleBoundary>
       }
     >
+      <ModuleBoundary id="thumbnail" name="thumbnail">
+        <ThumbnailModule />
+      </ModuleBoundary>
       <ModuleBoundary id="studio" name="studio">
         <StudioModule />
-      </ModuleBoundary>
-      <ModuleBoundary id="layout" name="layout switcher">
-        <LayoutModule />
       </ModuleBoundary>
       <ModuleBoundary id="presets" name="presets">
         <PresetsModule />
@@ -556,8 +553,8 @@ export function LivePage() {
   };
 
   useEffect(() => {
-    setCameraOnly(preset === 'camera');
-  }, [preset]);
+    setCameraOnly(false);
+  }, []);
 
   useEffect(() => {
     void startCamera();
@@ -659,7 +656,7 @@ export function LivePage() {
   };
 
   const presetWords = preset ? PRESET_WORDS[preset].name : 'custom';
-  const PresetIcon = PRESET_ICONS[preset ?? 'full'];
+  const PresetIcon = PRESET_ICONS[preset ?? 'default'];
 
   if (mobile) {
     const panel = (t: PhoneTab, children: ReactNode, className?: string) => (
@@ -764,15 +761,14 @@ export function LivePage() {
                   <DrawerClose onClose={() => setDrawer(false)} />
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+                  <ModuleBoundary id="thumbnail" name="thumbnail">
+                    <ThumbnailModule />
+                  </ModuleBoundary>
                   <ModuleBoundary id="studio" name="studio">
                     <StudioModule prefix="drawer" />
                   </ModuleBoundary>
                   <ModuleBoundary id="presets" name="presets">
                     <PresetsModule />
-                  </ModuleBoundary>
-                  <span className="flex-1" />
-                  <ModuleBoundary id="thumbnail" name="thumbnail">
-                    <ThumbnailModule />
                   </ModuleBoundary>
                 </div>
               </>
