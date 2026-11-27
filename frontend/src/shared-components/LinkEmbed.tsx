@@ -29,7 +29,7 @@ export function LinkEmbed({ embed, text, onHide }: { embed: Embed | null | undef
       data-link-embed={siteOf(url)}
       className={cn(
         'relative mt-1 flex w-[27rem] max-w-full items-start gap-2 overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary px-3 py-2 text-left',
-        '[[data-bubble]_&]:w-full [[data-bubble]_&]:rounded-none [[data-bubble]_&]:border-0 [[data-bubble]_&]:bg-transparent [[data-bubble]_&]:px-0 [[data-bubble]_&]:pb-1',
+        '[[data-bubble]_&]:rounded-none [[data-bubble]_&]:border-0 [[data-bubble]_&]:bg-transparent [[data-bubble]_&]:px-0 [[data-bubble]_&]:pb-1',
         color && 'border-l-2 [[data-bubble]_&]:border-l-2 [[data-bubble]_&]:pl-2'
       )}
       style={color ? { borderLeftColor: color } : undefined}
