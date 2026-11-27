@@ -50,6 +50,8 @@ import {
   watchUrlAtom
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
+import { publishPipAtom } from '@/infra/atoms/publish-state';
+import { stopSounds, watchSources } from '@/infra/atoms/source-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';
 import {
@@ -87,6 +89,7 @@ import {
 } from '@/infra/live-dock';
 import { CHAT_MOBILE, keyboardStrip, useIsMobile } from '@/infra/mobile';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
+import { store } from '@/infra/store';
 import { inTauri } from '@/infra/update-check';
 import { Button } from '@/shared-components/Button';
 import { ChatOpenButton, useChatSide } from '@/shared-components/ChatSlot';
@@ -97,11 +100,10 @@ import { FOLD_BUTTON, ModuleBoundary } from '@/shared-components/live/Dock';
 import { ModelDialog } from '@/shared-components/live/ModelDialog';
 import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { ChatModule, ChatWindow, Unread, useUnread } from '@/shared-components/live/modules/Chat';
-import { FaceModule } from '@/shared-components/live/modules/Face';
 import { LayoutModule } from '@/shared-components/live/modules/LayoutSwitcher';
 import { PRESET_ICONS, PresetsModule } from '@/shared-components/live/modules/Presets';
-import { RigModule } from '@/shared-components/live/modules/Rigging';
 import { SoundModule } from '@/shared-components/live/modules/Sound';
+import { SourceModule } from '@/shared-components/live/modules/Source';
 import { SourcesModule } from '@/shared-components/live/modules/Sources';
 import { StartStop, StudioFold, StudioModule } from '@/shared-components/live/modules/Studio';
 import { ThumbnailModule } from '@/shared-components/live/modules/Thumbnail';
@@ -116,9 +118,9 @@ import { cn } from '@/utils/cn';
 import { streamNumbers } from '@/utils/count';
 import { roveTabs } from '@/utils/tabs';
 
-type PhoneTab = ModuleId;
-const PHONE_TABS: readonly PhoneTab[] = ['sources', 'face', 'rig', 'sound', 'chat'];
-const PHONE_WORDS: Record<PhoneTab, string> = { sources: 'sources', face: 'face', rig: 'rig', sound: 'sound', chat: 'chat' };
+type PhoneTab = Exclude<ModuleId, 'source'>;
+const PHONE_TABS: readonly PhoneTab[] = ['sources', 'sound', 'chat'];
+const PHONE_WORDS: Record<PhoneTab, string> = { sources: 'sources', sound: 'sound', chat: 'chat' };
 
 const TAB_KEY = 'live-tab';
 const DESKTOP = inTauri();
@@ -560,7 +562,11 @@ export function LivePage() {
   useEffect(() => {
     void startCamera();
     void enterLivePage();
-    return leaveLivePage;
+    watchSources();
+    return () => {
+      leaveLivePage();
+      if (!store.get(publishPipAtom)) stopSounds();
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -647,8 +653,7 @@ export function LivePage() {
 
   const body = (id: ModuleId, place: Place): ReactNode => {
     if (id === 'sources') return <SourcesModule place={place} onModel={openModel} />;
-    if (id === 'face') return <FaceModule place={place} onModel={openModel} />;
-    if (id === 'rig') return <RigModule place={place} />;
+    if (id === 'source') return <SourceModule place={place} onModel={openModel} />;
     if (id === 'sound') return <SoundModule place={place} />;
     return <ChatModule place={place} className={place === 'phone' ? cn('h-full min-h-0 flex-1', CHAT_MOBILE) : undefined} />;
   };
