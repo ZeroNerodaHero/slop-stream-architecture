@@ -1,6 +1,6 @@
-import { RiChat3Line } from '@remixicon/react';
+import { RiChat3Line, RiPencilLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import {
@@ -148,6 +148,7 @@ function WatchStats({ muted, volume, className }: { muted: boolean; volume: numb
 
 export function WatchPage() {
   const [tab, setTab] = useState<PhoneTab>('about');
+  const [aboutEditing, setAboutEditing] = useState(false);
   const mobile = useIsMobile();
   const [body, narrow] = useNarrowBody(!mobile);
   usePinnedPage(mobile);
@@ -493,6 +494,24 @@ export function WatchPage() {
     </div>
   );
 
+  const editAbout = (open: () => void, on: boolean) =>
+    mine &&
+    !(on && aboutEditing) && (
+      <Tooltip content="edit about">
+        <Button
+          id="about-edit"
+          size="sm"
+          aria-label="edit about"
+          className="-mb-px self-stretch px-2 py-0 max-md:min-h-0 max-md:bubble:mb-0"
+          onClick={() => {
+            open();
+            setAboutEditing(true);
+          }}
+        >
+          <RiPencilLine size={16} aria-hidden />
+        </Button>
+      </Tooltip>
+    );
   const notLive = NOT_LIVE_WORDS[presence];
   const offlineWords = phase === 'waiting' && !expecting && notLive && <p className="mb-4 text-sm text-textSecondary">{notLive}</p>;
 
@@ -510,7 +529,7 @@ export function WatchPage() {
         <>
           <div className="[&>div]:mt-0">{status}</div>
           {offlineWords}
-          <About key={name} name={name} edit={mine} />
+          <About key={name} name={name} edit={mine} editing={mine && aboutEditing} onEditing={setAboutEditing} />
         </>
       ) : t === 'calendar' ? (
         <Calendar name={name} />
@@ -541,23 +560,25 @@ export function WatchPage() {
                 {tabs.map((t) => {
                   const on = t === shown;
                   return (
-                    <button
-                      key={t}
-                      id={`tab-${t}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={on}
-                      aria-controls={`panel-${t}`}
-                      tabIndex={on ? 0 : -1}
-                      onClick={() => openTab(t)}
-                      className={cn(
-                        '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 bubble:mb-0 bubble:min-h-10 bubble:rounded-control bubble:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
-                        t === 'chat' && 'ml-auto',
-                        on ? 'border-primaryBlue text-textPrimary bubble:bg-backgroundTertiary' : 'border-transparent text-textSecondary'
-                      )}
-                    >
-                      {t}
-                    </button>
+                    <Fragment key={t}>
+                      <button
+                        id={`tab-${t}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={on}
+                        aria-controls={`panel-${t}`}
+                        tabIndex={on ? 0 : -1}
+                        onClick={() => openTab(t)}
+                        className={cn(
+                          '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 bubble:mb-0 bubble:min-h-10 bubble:rounded-control bubble:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
+                          t === 'chat' && 'ml-auto',
+                          on ? 'border-primaryBlue text-textPrimary bubble:bg-backgroundTertiary' : 'border-transparent text-textSecondary'
+                        )}
+                      >
+                        {t}
+                      </button>
+                      {t === 'about' && editAbout(() => openTab('about'), on)}
+                    </Fragment>
                   );
                 })}
               </div>
@@ -624,19 +645,21 @@ export function WatchPage() {
                 {deskTabs.map((t) => {
                   const on = t === deskTab;
                   return (
-                    <button
-                      key={t}
-                      id={`tab-${t}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={on}
-                      aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
-                      tabIndex={on ? 0 : -1}
-                      onClick={() => setTab(t)}
-                      className={cn(TAB, theater && 'text-sm', t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
-                    >
-                      {t}
-                    </button>
+                    <Fragment key={t}>
+                      <button
+                        id={`tab-${t}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={on}
+                        aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
+                        tabIndex={on ? 0 : -1}
+                        onClick={() => setTab(t)}
+                        className={cn(TAB, theater && 'text-sm', t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
+                      >
+                        {t}
+                      </button>
+                      {t === 'about' && editAbout(() => setTab('about'), on)}
+                    </Fragment>
                   );
                 })}
               </div>
@@ -646,7 +669,7 @@ export function WatchPage() {
                 {deskTab === 'about' ? (
                   <>
                     {offlineWords}
-                    <About key={name} name={name} edit={mine} />
+                    <About key={name} name={name} edit={mine} editing={mine && aboutEditing} onEditing={setAboutEditing} />
                   </>
                 ) : deskTab === 'calendar' ? (
                   <Calendar name={name} />
