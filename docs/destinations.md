@@ -55,6 +55,7 @@ sequenceDiagram
 - twitch asks `user:read:email channel:read:stream_key channel:manage:broadcast user:read:chat user:write:chat` and always shows its consent page (`force_verify`)
 - kick asks `user:read channel:read channel:write streamkey:read chat:write events:subscribe`
 - connecting the same account again updates its row. ten destinations each at most
+- one slop login per twitch or kick account: one another login has (as a destination or a login) is refused with "that twitch is already linked to another account" (`accounts.md`, migration `0025`)
 - disconnecting deletes the row and revokes the token with the platform
 
 ## routes

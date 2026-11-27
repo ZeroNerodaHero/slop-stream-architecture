@@ -65,6 +65,7 @@ pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
         "/api/signup" | "/api/login" | "/api/logout" | "/api/logout-all" | "/api/password" | "/api/name" if !read => AUTH,
         "/api/errors" if !read => REPORT,
         "/api/oauth/{provider}/start" | "/api/oauth/{provider}/callback" | "/api/oauth/{provider}/unlink" => OAUTH,
+        "/api/auth/{platform}/start" | "/api/auth/{platform}/callback" => OAUTH,
         "/api/oauth/signup" if !read => OAUTH,
         p if read && p != "/api/search" && p.ends_with("/search") => SEARCH,
         _ if read => READ,
@@ -372,6 +373,7 @@ mod tests {
         assert_eq!(api_rule(&get, "/api/me"), READ);
         assert_eq!(api_rule(&get, "/api/oauth/{provider}/start"), OAUTH);
         assert_eq!(api_rule(&get, "/api/oauth/{provider}/callback"), OAUTH);
+        assert_eq!(api_rule(&get, "/api/auth/{platform}/callback"), OAUTH);
         assert_eq!(api_rule(&post, "/api/oauth/{provider}/unlink"), OAUTH);
         assert_eq!(api_rule(&post, "/api/oauth/signup"), OAUTH);
         assert_eq!(api_rule(&get, "/api/oauth/signup"), READ);

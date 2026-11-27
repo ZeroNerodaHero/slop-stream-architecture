@@ -1,7 +1,7 @@
 # accounts
 
 username + password, in postgres, and/or a linked Google or Discord login (see
-"google, discord" below). optional: nobody has to log in.
+"google, discord, twitch, kick" below). optional: nobody has to log in.
 
 ## the short answer
 
@@ -149,7 +149,7 @@ changed:
 - `test/auth.js`: twenty steps, see `spec.md`.
 - `video/src/main.rs`: `owns_stream`, the one call to the api's heartbeat that makes the socket honour the gate. the api decides; video checks that it did. (no signing: one http round trip on the same box is simpler than a second secret.)
 
-## google, discord
+## google, discord, twitch, kick
 
 `api/src/oauth.rs`. a second way into the same accounts: the login it makes is the same
 `logins` row and the same cookie (same flags) as a password login.
@@ -178,7 +178,9 @@ changed:
 
   a provider without both values, or every provider without `PUBLIC_URL`, is off: no button, its routes answer with a "not set up" page, and the api log says which at boot (never the values). nothing crashes. a changed value needs the api restarted (read once at boot). google refuses a bare ip and plain http (localhost aside), so this needs the domain and its certificate.
 - **scopes.** google `openid email profile` (and `prompt=select_account`), discord `identify email`.
-- **one list.** `PROVIDERS` in `oauth.rs` is every provider the api knows: slug, env prefix, label, the three urls, the scope, any extra query pairs, and the function that reads the user endpoint's answer. a new provider (github, twitch again, ...) is one entry there, its two env vars (and the two lines in `docker-compose.yml`), and its callback in its console; the routes, the buttons, the security tab and the verified mark go by the list. the pages have a label and an icon per slug (`frontend/src/infra/oauth.ts`, `OAuthButtons.tsx` `ProviderIcon`) and fall back to the slug and a plain icon for one they do not know. the database has no list: `oauth_identities.provider` is checked for a slug's shape only (`schema.sql`). twitch was here once and is gone: nothing reads `TWITCH_*` any more.
+- **twitch and kick.** they log in with the same `TWITCH_*` / `KICK_*` clients as destinations, with only identity scopes (twitch `user:read:email`, kick `user:read`), and come back to the callbacks destinations registered: `{PUBLIC_URL}/api/auth/{twitch,kick}/callback`. their `oauth_state` cookie is on `/api/auth` instead of `/api/oauth`, and that callback hands the request to the login code when the query `state` matches `oauth_state`, and to destinations otherwise.
+- **one owner per twitch or kick account.** a twitch or kick account belongs to one slop login, whether it got there as a login (`oauth_identities`) or as a place to stream to (`stream_destinations`). logging in with one that somebody connected as a destination logs into them (and adds it as a way in). linking or connecting one that another login owns fails with "that twitch is already linked to another account", and a sign up never makes a second account for it. the database holds this too: a unique index on `stream_destinations (platform, external_id)` and a trigger on both tables that refuses a row whose account the other table gives to somebody else (migration `0025`).
+- **one list.** `PROVIDERS` in `oauth.rs` is every provider the api knows: slug, env prefix, label, the three urls, the scope, any extra query pairs, and the function that reads the user endpoint's answer. a new provider (github, twitch again, ...) is one entry there, its two env vars (and the two lines in `docker-compose.yml`), and its callback in its console; the routes, the buttons, the security tab and the verified mark go by the list. the pages have a label and an icon per slug (`frontend/src/infra/oauth.ts`, `OAuthButtons.tsx` `ProviderIcon`) and fall back to the slug and a plain icon for one they do not know. the database has no list: `oauth_identities.provider` is checked for a slug's shape only (`schema.sql`). twitch and kick are back as logins, sharing their client with destinations (`destinations.md`).
 - **verified.** an account with at least one provider linked is *verified*: a blue badge (`OAuthMark.tsx`, tooltip "verified: a Google or Discord login is linked to this account") beside the name, next to the `✓` (which only says the name has an account). any provider counts, a future one too. it is worked out where it is read, never stored: `oauth.rs` `linked_sql!("s")` is `EXISTS (SELECT 1 FROM oauth_identities oi WHERE oi.user_id = s.id)`, put in the query that already reads the `streamers` row, so a list is still one query (no n+1) and the mark cannot drift from the links: unlink the last one and it is gone on the next read. the unique `(user_id, provider)` index is the one it probes (user_id leads), so no new index. on the wire it is `oauth_verified` (the name `verified` was taken by the ✓):
   - `GET /api/me` (yours; the security and profile tabs), `GET /api/oauth/identities`.
   - `GET /api/streamers/:name` (the profile popup, the person card), `GET /watch/:name`'s grant (the watch page title; live, only when the stream is the account's own session, the ✓'s rule).
@@ -192,6 +194,6 @@ changed:
 ## not here
 
 - email, reset links, 2fa (oauth identities keep a verified email for when they come)
-- github, twitch or other providers. one more entry in `PROVIDERS` in `oauth.rs` (see "one list")
+- github or other providers. one more entry in `PROVIDERS` in `oauth.rs` (see "one list")
 - display names with capitals. the stream name is the login name (it can change, `ids.md`, but it is still the one word)
 - admin pages
