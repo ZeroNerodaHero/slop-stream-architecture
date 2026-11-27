@@ -17,6 +17,7 @@ import {
   placeShown,
   PRESETS,
   presetForKey,
+  presetName,
   presetOf,
   railOpen,
   readGrid,
@@ -24,7 +25,6 @@ import {
   readPanels,
   readPreset,
   readRail,
-  readRailFolds,
   TILE_IDS,
   typingInto,
   unreadAfter,
@@ -52,24 +52,14 @@ test('the old face and rigging modules fold into source settings', () => {
   assert.deepEqual(readGrid({ rig: { x: 6, y: 6, w: 3, h: 3 } }).source, { x: 6, y: 6, w: 3, h: 3 });
   assert.deepEqual(readGrid({ source: { x: 1, y: 1, w: 2, h: 2 }, face: { x: 0, y: 0, w: 3, h: 3 } }).source, { x: 1, y: 1, w: 2, h: 2 });
   assert.deepEqual(readGrid(null).source, DEFAULT_GRID.source);
-  assert.equal(presetOf(readPanels({ hidden: ['rig', 'face'] }), { panels: { hidden: ['source'] } }), 'mine');
+  assert.equal(presetOf({ panels: readPanels({ hidden: ['rig', 'face'] }), layout: 1, grid: DEFAULT_GRID }, { panels: { hidden: ['source'] } }), 'mine');
   assert.equal(TILE_IDS.includes('face' as never), false);
   assert.equal(TILE_IDS.includes('rig' as never), false);
 });
 
-test('every rail section is open until folded, and an old thumbnail fold carries over once', () => {
-  const OPEN = { studio: true, layout: true, presets: true, thumbnail: true };
-  assert.deepEqual(readRailFolds(null), OPEN);
-  assert.deepEqual(readRailFolds('junk', 'junk'), OPEN);
-  assert.deepEqual(readRailFolds({ studio: false, presets: false, layout: 'no', extra: false }), { ...OPEN, studio: false, presets: false });
-  assert.deepEqual(readRailFolds(null, { thumbnail: false, rig: false }), { ...OPEN, thumbnail: false });
-  assert.deepEqual(readRailFolds({ thumbnail: true }, { thumbnail: false }), OPEN);
-});
-
-test('the one built in preset is default, and a preset only holds which modules are shown', () => {
+test('the one built in preset is default: everything open on obs left', () => {
   assert.deepEqual(Object.keys(PRESETS), ['default']);
-  for (const p of Object.values(PRESETS)) assert.deepEqual(Object.keys(p), ['panels']);
-  assert.deepEqual(PRESETS.default.panels.hidden, []);
+  assert.deepEqual(PRESETS.default, { panels: { hidden: [] }, layout: 1 });
 });
 
 test('a kept layout that is not one of the five falls back to obs left', () => {
@@ -122,15 +112,38 @@ test('a module put back finds a free cell, or none when the grid is full', () =>
   assert.ok(cell && fits(roomy, shown, 'source', cell) && cell.x + cell.w <= GRID_COLS && cell.y + cell.h <= GRID_ROWS);
 });
 
-test('a preset is found from the shown modules alone, whatever the layout', () => {
-  assert.equal(presetOf(ALL, null), 'default');
-  assert.equal(presetOf({ hidden: ['sound', 'sources'] }, null), null);
-  assert.equal(presetOf({ hidden: ['source'] }, { panels: { hidden: ['source'] } }), 'mine');
-  assert.equal(presetOf(ALL, { panels: { hidden: ['source'] } }), 'default');
+test('a preset is found from its modules and layout, and the picked one wins a tie', () => {
+  const look = (layout: 1 | 2 | 3 | 4 | 5, hidden: string[] = [], grid = DEFAULT_GRID) => ({ panels: readPanels({ hidden }), layout, grid });
+  const yours = { panels: ALL, layout: 3 as const };
+  assert.equal(presetOf(look(1), null), 'default');
+  assert.equal(presetOf(look(3), null), null);
+  assert.equal(presetOf(look(1, ['sound', 'sources']), null), null);
+  assert.equal(presetOf(look(3), yours), 'mine');
+  assert.equal(presetOf(look(1), yours), 'default');
+  assert.equal(presetOf(look(1), { panels: ALL }), 'default');
+  assert.equal(presetOf(look(1), { panels: ALL }, 'mine'), 'mine');
+  assert.equal(presetOf(look(3), yours, 'default'), 'mine');
+  assert.equal(presetOf(look(1, ['source']), { panels: { hidden: ['source'] } }), 'mine');
+  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
+  const grid = { panels: ALL, layout: 5 as const, grid: custom };
+  assert.equal(presetOf(look(5, [], custom), grid), 'mine');
+  assert.equal(presetOf(look(5), grid), null);
   assert.equal(readPreset(null), null);
   assert.equal(readPreset({ layout: 4 }), null);
   assert.deepEqual(readPreset({ layout: 7, panels: { hidden: ['source', 'chat'] } }), { panels: { hidden: ['source', 'chat'] } });
-  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { panels: ALL });
+  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { panels: ALL, layout: 4 });
+  assert.deepEqual(readPreset({ layout: 5, grid: custom, panels: ALL }), { panels: ALL, layout: 5, grid: custom });
+  assert.deepEqual(readPreset({ layout: 2, grid: custom, panels: ALL }), { panels: ALL, layout: 2 });
+});
+
+test('only your preset takes a name, trimmed, and an empty one falls back to yours', () => {
+  assert.deepEqual(readPreset({ panels: ALL, name: '  stream  ' }), { panels: ALL, name: 'stream' });
+  assert.deepEqual(readPreset({ panels: ALL, name: '   ' }), { panels: ALL });
+  assert.equal(readPreset({ panels: ALL, name: 'x'.repeat(40) })?.name?.length, 32);
+  assert.equal(presetName('mine', { panels: ALL, name: 'stream' }), 'stream');
+  assert.equal(presetName('mine', { panels: ALL }), 'yours');
+  assert.equal(presetName('mine', null), 'yours');
+  assert.equal(presetName('default', { panels: ALL, name: 'stream' }), 'default');
 });
 
 test('modules kept by a retired built in preset are recognised, a hand picked set is not', () => {
@@ -202,7 +215,7 @@ test('the badge stops at 99+', () => {
 });
 
 const MODULES = join(import.meta.dirname, '../src/shared-components/live/modules');
-const NAMES = ['Sources', 'Source', 'Sound', 'Chat', 'Presets', 'Thumbnail', 'Studio', 'LayoutSwitcher'];
+const NAMES = ['Sources', 'Source', 'Sound', 'Chat', 'Presets', 'Thumbnail', 'Studio', 'LayoutSwitcher', 'Destinations'];
 
 test('every go live module has its own file and none imports another', () => {
   const files = readdirSync(MODULES).filter((f) => f.endsWith('.tsx'));

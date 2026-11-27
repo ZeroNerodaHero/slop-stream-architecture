@@ -1,6 +1,7 @@
+import { RiCheckLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
-import { LAYOUT_IDS, LAYOUT_WORDS, type LayoutId, liveEditingAtom, liveLayoutAtom, setLayout, startEditing, stopEditing } from '@/infra/live-dock';
+import { LAYOUT_IDS, LAYOUT_WORDS, type LayoutId, liveEditingAtom, liveLayoutAtom, resetGrid, setLayout, startEditing, stopEditing } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
@@ -64,6 +65,16 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
       setLayout(id);
     }
   };
+  if (strip && editing)
+    return (
+      <div className="flex flex-col items-center border-t border-primaryStroke py-2">
+        <Tooltip content="stop editing">
+          <button id="live-layout-done" type="button" aria-label="stop editing" onClick={stopEditing} className={cn(FOLD_BUTTON, 'border-primaryBlue text-primaryBlue')}>
+            <RiCheckLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
+      </div>
+    );
   if (strip) {
     const next: LayoutId = layout >= 4 ? 1 : ((layout + 1) as LayoutId);
     return (
@@ -84,18 +95,34 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
       className="border-t border-primaryStroke px-3 py-2.5"
       bodyClassName="pt-2"
       aside={
-        <Tooltip content={editing ? 'you are editing' : 'edit this layout on a grid'}>
-          <Button
-            id="live-layout-edit"
-            size="sm"
-            variant="outline"
-            disabled={editing}
-            onClick={() => startEditing(layout)}
-            className="h-6 px-2 py-0 text-xs normal-case tracking-normal max-md:min-h-0"
-          >
-            edit
-          </Button>
-        </Tooltip>
+        <>
+          <Tooltip content={editing ? 'you are editing' : 'edit this layout on a grid'}>
+            <Button
+              id="live-layout-edit"
+              size="sm"
+              variant="outline"
+              disabled={editing}
+              onClick={() => startEditing(layout)}
+              className="h-6 px-2 py-0 text-xs normal-case tracking-normal max-md:min-h-0"
+            >
+              edit
+            </Button>
+          </Tooltip>
+          {editing && (
+            <>
+              <Tooltip content="put the grid back">
+                <Button id="live-edit-reset" size="sm" onClick={resetGrid} className="h-6 px-2 py-0 text-xs normal-case tracking-normal max-md:min-h-0">
+                  reset
+                </Button>
+              </Tooltip>
+              <Tooltip content="stop editing">
+                <Button id="live-edit-done" size="sm" variant="primary" onClick={stopEditing} className="h-6 px-2 py-0 text-xs normal-case tracking-normal max-md:min-h-0">
+                  done
+                </Button>
+              </Tooltip>
+            </>
+          )}
+        </>
       }
     >
       <div role="group" aria-label="layout" className="grid grid-cols-5 gap-1.5">

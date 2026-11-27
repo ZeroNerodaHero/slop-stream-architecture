@@ -67,6 +67,7 @@ import {
   liveEditingAtom,
   liveGridAtom,
   liveLayoutAtom,
+  liveMineAtom,
   migratePresets,
   livePanelsAtom,
   livePresetAtom,
@@ -75,14 +76,12 @@ import {
   type ModuleId,
   type Place,
   placeIn,
-  PRESET_WORDS,
   presetForKey,
+  presetName,
   railOpen,
-  resetGrid,
   setGrid,
   setRail,
   showInGrid,
-  stopEditing,
   TILE_IDS,
   type TileId,
   typingInto
@@ -106,7 +105,7 @@ import { PRESET_ICONS, PresetsModule } from '@/shared-components/live/modules/Pr
 import { SoundModule } from '@/shared-components/live/modules/Sound';
 import { SourceModule } from '@/shared-components/live/modules/Source';
 import { SourcesModule } from '@/shared-components/live/modules/Sources';
-import { StartStop, StudioFold, StudioModule } from '@/shared-components/live/modules/Studio';
+import { StartStop, StudioModule } from '@/shared-components/live/modules/Studio';
 import { ThumbnailModule } from '@/shared-components/live/modules/Thumbnail';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -285,12 +284,6 @@ function EditBar({ hidden, onAdd }: { hidden: ModuleId[]; onAdd: (id: ModuleId) 
           </Button>
         ))}
       </div>
-      <Button id="live-edit-reset" size="sm" className="h-7 shrink-0 px-2.5 py-0 text-xs" onClick={resetGrid}>
-        reset
-      </Button>
-      <Button id="live-edit-done" size="sm" variant="primary" className="h-7 shrink-0 px-3 py-0 text-xs" onClick={stopEditing}>
-        done
-      </Button>
     </div>
   );
 }
@@ -453,7 +446,6 @@ function Rail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       title="studio"
       what="rail"
       sideways
-      aside={<StudioFold />}
       open={open}
       onToggle={onToggle}
       className="w-[15.25rem] shrink-0"
@@ -534,6 +526,7 @@ export function LivePage() {
   const layout = useAtomValue(liveLayoutAtom);
   const editing = useAtomValue(liveEditingAtom);
   const preset = useAtomValue(livePresetAtom);
+  const mine = useAtomValue(liveMineAtom);
   const rail = useAtomValue(liveRailAtom);
   const cameraOnly = useAtomValue(cameraOnlyAtom);
   const width = useWindowWidth();
@@ -662,7 +655,7 @@ export function LivePage() {
     return <ChatModule place={place} className={place === 'phone' ? cn('h-full min-h-0 flex-1', CHAT_MOBILE) : undefined} />;
   };
 
-  const presetWords = preset ? PRESET_WORDS[preset].name : 'custom';
+  const presetWords = preset ? presetName(preset, mine) : 'custom';
   const PresetIcon = PRESET_ICONS[preset ?? 'default'];
 
   if (mobile) {
