@@ -1,4 +1,4 @@
-import { RiAddLine, RiBroadcastLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine } from '@remixicon/react';
+import { RiAddLine, RiBroadcastLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
 
@@ -18,12 +18,14 @@ const KEY = DESTINATIONS_KEY;
 const ICONS: Record<DestinationPlatform, RemixiconComponentType> = {
   twitch: RiTwitchLine,
   kick: RiKickLine,
+  youtube: RiYoutubeLine,
   custom: RiLinkM
 };
 
 export const DESTINATION_WORDS: Record<DestinationPlatform, string> = {
   twitch: 'twitch',
   kick: 'kick',
+  youtube: 'youtube',
   custom: 'custom rtmp'
 };
 const WORDS = DESTINATION_WORDS;
@@ -161,7 +163,7 @@ export function DestinationsBody() {
   const [custom, setCustom] = useState(false);
   if (!data) return null;
   const taken = new Set(data.destinations.map((d) => d.platform));
-  const oauth = data.platforms.filter((p): p is 'twitch' | 'kick' => p !== 'custom' && !taken.has(p));
+  const oauth = data.platforms.filter((p): p is Exclude<DestinationPlatform, 'custom'> => p !== 'custom' && !taken.has(p));
   const canCustom = data.platforms.includes('custom') && !taken.has('custom');
   return (
     <div className="flex flex-col gap-2">

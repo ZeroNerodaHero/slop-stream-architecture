@@ -1,4 +1,4 @@
-import { RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine } from '@remixicon/react';
+import { RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, useEffect, useState } from 'react';
@@ -389,7 +389,15 @@ function LinkedLogins() {
 const DESTINATION_ICONS: Record<DestinationPlatform, RemixiconComponentType> = {
   twitch: RiTwitchLine,
   kick: RiKickLine,
+  youtube: RiYoutubeLine,
   custom: RiLinkM
+};
+
+const DESTINATION_LABELS: Record<DestinationPlatform, string> = {
+  twitch: 'Twitch',
+  kick: 'Kick',
+  youtube: 'YouTube',
+  custom: DESTINATION_WORDS.custom
 };
 
 function StreamDestinations() {
@@ -425,7 +433,7 @@ function StreamDestinations() {
             <li key={d.id} id={`sec-destination-${d.platform}`} className="flex items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
               <span className="flex shrink-0 items-center gap-2 text-sm font-semibold">
                 <Icon aria-hidden size={16} />
-                {d.platform === 'custom' ? DESTINATION_WORDS.custom : providerLabel(d.platform)}
+                {DESTINATION_LABELS[d.platform]}
               </span>
               <span className={PILL}>
                 <span className="flex min-w-0 items-center py-1.5 pl-3 pr-3 text-textPrimary">

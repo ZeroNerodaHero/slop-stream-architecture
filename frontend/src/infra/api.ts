@@ -639,7 +639,7 @@ function ownerQuery(owner: Owner): string {
   return `session=${owner.session}&token=${owner.token}`;
 }
 
-export type DestinationPlatform = 'twitch' | 'kick' | 'custom';
+export type DestinationPlatform = 'twitch' | 'kick' | 'youtube' | 'custom';
 
 export interface Destination {
   id: string;
@@ -664,8 +664,9 @@ export const api = {
   removeDestination: (id: string) => request<null>('DELETE', `/api/destinations/${encodeURIComponent(id)}`),
   setDestinationEnabled: (id: string, enabled: boolean) => request<Destination>('POST', `/api/destinations/${encodeURIComponent(id)}/enabled`, { enabled }),
   refreshDestination: (id: string) => request<Destination>('POST', `/api/destinations/${encodeURIComponent(id)}/refresh`),
-  goLiveDestinations: (title: string, category?: string) =>
-    request<{ results: { id: string; platform: DestinationPlatform; ok: boolean; error?: string }[] }>('POST', '/api/destinations/live', { title, category }),
+  goLiveDestinations: (title: string, category?: string, privacy?: 'unlisted' | 'public' | 'private') =>
+    request<{ results: { id: string; platform: DestinationPlatform; ok: boolean; error?: string }[] }>('POST', '/api/destinations/live', { title, category, privacy }),
+  stopDestinations: () => request<{ results: { id: string; platform: DestinationPlatform; ok: boolean; ended?: number; error?: string }[] }>('POST', '/api/destinations/stop'),
   meAsked: (response: Promise<Response>) => answerOf<MeInfo>('GET', '/api/me', response),
   signup: (name: string, password: string, turnstile_token?: string) =>
     request<{ name: string }>('POST', '/api/signup', { name, password, turnstile_token }),

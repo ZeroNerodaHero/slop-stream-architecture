@@ -1,6 +1,6 @@
 # destinations
 
-send one stream to slop, and slop sends it on to twitch, kick or any rtmp server. this is the
+send one stream to slop, and slop sends it on to twitch, kick, youtube or any rtmp server. this is the
 first slice: connecting the accounts and keeping their keys. the relay that pushes video to them
 is phase 1. `scripts/multistream-phase0/` tests the relay on one box.
 
@@ -11,6 +11,7 @@ every route answers 404 and the go-live page shows nothing new until the api has
 - `STREAM_KEY_ENC`: 32 random bytes, base64 (`openssl rand -base64 32`). tokens, urls and keys are sealed with it
 - `PUBLIC_URL`: already set for google and discord. the callbacks are `{PUBLIC_URL}/api/auth/{twitch,kick}/callback`
 - `TWITCH_CLIENT_ID` + `TWITCH_CLIENT_SECRET`, `KICK_CLIENT_ID` + `KICK_CLIENT_SECRET`: one pair is enough. a platform without its pair stays off
+- youtube: `YOUTUBE_ENABLED=1`. it reuses the google login client (`GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`); `YOUTUBE_CLIENT_ID` + `YOUTUBE_CLIENT_SECRET` override it. without `YOUTUBE_ENABLED` youtube stays hidden even when google login is on
 
 losing `STREAM_KEY_ENC` loses every stored token and key: each person connects again. changing it does the same.
 
@@ -20,10 +21,10 @@ losing `STREAM_KEY_ENC` loses every stored token and key: each person connects a
 
 | column | what |
 | --- | --- |
-| `platform` | `twitch`, `kick` or `custom` |
+| `platform` | `twitch`, `kick`, `youtube` or `custom` (migration `0027` adds youtube) |
 | `external_id`, `external_name` | the account on that platform. null for custom |
 | `access_token`, `refresh_token` | sealed |
-| `stream_url`, `stream_key` | sealed. twitch is always `rtmps://live.twitch.tv:443/app` |
+| `stream_url`, `stream_key` | sealed. twitch is always `rtmps://live.twitch.tv:443/app`. youtube is the ingest of the `slop` live stream |
 | `token_expires_at`, `scopes` | from the token answer |
 | `enabled` | off means the relay skips it |
 
@@ -61,6 +62,17 @@ sequenceDiagram
 - the live rail shows a switch per destination (`enabled`) and only the connect pills for platforms not yet connected
 - disconnecting lives in settings, security, stream destinations. it deletes the row and revokes the token with the platform
 
+## youtube
+
+- google oauth with `https://www.googleapis.com/auth/youtube`, `access_type=offline` and `prompt=consent`, so a refresh token comes back every time. pkce s256 too
+- the callback is `{PUBLIC_URL}/api/auth/youtube/callback`
+- on connect: the channel (`channels?mine=true`, named by its handle), then a reusable live stream titled `slop` (rtmp, variable resolution and frame rate), made once and found again on every reconnect. its rtmps ingest and stream name are sealed as the url and key
+- a google account with no channel is refused. live streaming off (`liveStreamingNotEnabled`) or blocked (`livePermissionBlocked`) still connects, and the status line says `youtube connected, but ...` with what to do
+- go live (`POST /api/destinations/live`): a broadcast with the title (100 characters at most), unlisted unless `privacy` says `public` or `private`, `enableAutoStart`, `enableAutoStop`, `recordFromStart` and `enableDvr`, bound to the `slop` stream. a broadcast that is still upcoming on that stream is updated instead of making another
+- stop (`POST /api/destinations/stop`): every active broadcast on the `slop` stream goes to `complete`. auto stop ends it anyway once video stops
+- disconnecting revokes the token at `oauth2.googleapis.com/revoke`
+- the go-live page does not call `live` or `stop` yet: they come in with the relay, since youtube only starts once video arrives
+
 ## routes
 
 | route | what |
@@ -70,15 +82,16 @@ sequenceDiagram
 | `DELETE /api/destinations/{id}` | disconnect |
 | `POST /api/destinations/{id}/enabled` | `{ enabled }` |
 | `POST /api/destinations/{id}/refresh` | a new token, then a fresh stream key |
-| `POST /api/destinations/live` | `{ title, category? }`: sets the title and category on every enabled account. 10 a minute |
-| `GET /api/auth/{twitch,kick}/start`, `/callback` | the connect flow above |
+| `POST /api/destinations/live` | `{ title, category?, privacy? }`: sets the title and category on every enabled account, and makes or updates the youtube broadcast. 10 a minute |
+| `POST /api/destinations/stop` | ends the live youtube broadcast. 10 a minute |
+| `GET /api/auth/{twitch,kick,youtube}/start`, `/callback` | the connect flow above |
 
 all of them need a login (401 without one). tokens refresh on their own two minutes before they expire.
 
 ## the go-live page
 
-a `destinations` fold in the studio rail, under presets: the connected places, `twitch` and
-`kick` to connect, `rtmp` for any server. it is hidden when the list answers 404 or 401. it is a
+a `destinations` fold in the studio rail, under presets: the connected places with a switch each, `twitch`,
+`kick` and `youtube` to connect while not yet connected, `rtmp` for any server. it is hidden when the list answers 404 or 401. it is a
 rail fold and not a dock module because every dock layout's grid is full.
 
 ## phase 0: the relay on one box
@@ -101,4 +114,4 @@ what it showed on 2026-11-27:
 ## what billy adds in prod
 
 `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `KICK_CLIENT_ID`, `KICK_CLIENT_SECRET`, `STREAM_KEY_ENC`
-in `.env`. `docker-compose.yml` already passes them to the api. the migration runs when the api starts.
+in `.env`, and `YOUTUBE_ENABLED=1` once the google cloud side is done. `docker-compose.yml` already passes them to the api. the migration runs when the api starts.

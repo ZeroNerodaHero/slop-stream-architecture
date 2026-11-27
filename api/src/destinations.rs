@@ -29,20 +29,25 @@ const URL_MAX: usize = 512;
 const KEY_MAX: usize = 512;
 const TITLE_MAX: usize = 140;
 const CATEGORY_MAX: usize = 100;
+const YOUTUBE_TITLE_MAX: usize = 100;
+const YOUTUBE_STREAM: &str = "slop";
+const PRIVACY: [&str; 3] = ["unlisted", "public", "private"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Platform {
     Twitch,
     Kick,
+    Youtube,
 }
 
 impl Platform {
-    const ALL: [Platform; 2] = [Platform::Twitch, Platform::Kick];
+    const ALL: [Platform; 3] = [Platform::Twitch, Platform::Kick, Platform::Youtube];
 
     pub(crate) fn slug(self) -> &'static str {
         match self {
             Platform::Twitch => "twitch",
             Platform::Kick => "kick",
+            Platform::Youtube => "youtube",
         }
     }
 
@@ -50,6 +55,7 @@ impl Platform {
         match self {
             Platform::Twitch => "Twitch",
             Platform::Kick => "Kick",
+            Platform::Youtube => "YouTube",
         }
     }
 
@@ -57,6 +63,7 @@ impl Platform {
         match self {
             Platform::Twitch => "TWITCH",
             Platform::Kick => "KICK",
+            Platform::Youtube => "YOUTUBE",
         }
     }
 
@@ -68,6 +75,7 @@ impl Platform {
         match self {
             Platform::Twitch => "user:read:email channel:read:stream_key channel:manage:broadcast user:read:chat user:write:chat",
             Platform::Kick => "user:read channel:read channel:write streamkey:read chat:write events:subscribe",
+            Platform::Youtube => "https://www.googleapis.com/auth/youtube",
         }
     }
 }
@@ -94,6 +102,12 @@ impl Spec {
                 token_url: "https://id.kick.com/oauth/token".into(),
                 revoke_url: "https://id.kick.com/oauth/revoke".into(),
                 api_url: "https://api.kick.com/public/v1".into(),
+            },
+            Platform::Youtube => Spec {
+                authorize_url: "https://accounts.google.com/o/oauth2/v2/auth".into(),
+                token_url: "https://oauth2.googleapis.com/token".into(),
+                revoke_url: "https://oauth2.googleapis.com/revoke".into(),
+                api_url: "https://www.googleapis.com/youtube/v3".into(),
             },
         }
     }
@@ -176,7 +190,7 @@ impl Config {
             let on: Vec<&str> = config.platforms().into_iter().map(Platform::slug).collect();
             log::info!("destinations: on for {on:?} and custom rtmp, callbacks at <PUBLIC_URL>/api/auth/<platform>/callback");
         } else {
-            log::info!("destinations: off (needs STREAM_KEY_ENC, PUBLIC_URL, and TWITCH_ or KICK_ _CLIENT_ID and _CLIENT_SECRET)");
+            log::info!("destinations: off (needs STREAM_KEY_ENC, PUBLIC_URL, and TWITCH_ or KICK_ _CLIENT_ID and _CLIENT_SECRET, or YOUTUBE_ENABLED with GOOGLE_ _CLIENT_ID and _CLIENT_SECRET)");
         }
         config
     }
@@ -196,7 +210,13 @@ impl Config {
         };
         let mut apps = HashMap::new();
         for p in Platform::ALL {
-            match (val(&format!("{}_CLIENT_ID", p.env())), val(&format!("{}_CLIENT_SECRET", p.env()))) {
+            let own = (val(&format!("{}_CLIENT_ID", p.env())), val(&format!("{}_CLIENT_SECRET", p.env())));
+            let pair = match p {
+                Platform::Youtube if !val("YOUTUBE_ENABLED").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")) => continue,
+                Platform::Youtube => (own.0.or_else(|| val("GOOGLE_CLIENT_ID")), own.1.or_else(|| val("GOOGLE_CLIENT_SECRET"))),
+                _ => own,
+            };
+            match pair {
                 (Some(id), Some(secret)) => {
                     apps.insert(p, App { id, secret, spec: Spec::of(p) });
                 }
@@ -303,23 +323,47 @@ fn first(v: &Value) -> Option<&Value> {
     v.get("data").and_then(Value::as_array).and_then(|a| a.first())
 }
 
+fn items(v: &Value) -> &[Value] {
+    v.get("items").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()
+}
+
 pub(crate) fn parse_account(p: Platform, v: &Value) -> Option<Account> {
-    let row = first(v)?;
     match p {
-        Platform::Twitch => Some(Account { id: id_of(row, "id")?, name: text_of(row, "login").or_else(|| text_of(row, "display_name"))? }),
-        Platform::Kick => Some(Account { id: id_of(row, "user_id")?, name: text_of(row, "name")? }),
+        Platform::Twitch => {
+            let row = first(v)?;
+            Some(Account { id: id_of(row, "id")?, name: text_of(row, "login").or_else(|| text_of(row, "display_name"))? })
+        }
+        Platform::Kick => {
+            let row = first(v)?;
+            Some(Account { id: id_of(row, "user_id")?, name: text_of(row, "name")? })
+        }
+        Platform::Youtube => {
+            let row = items(v).first()?;
+            let snippet = row.get("snippet")?;
+            Some(Account { id: id_of(row, "id")?, name: text_of(snippet, "customUrl").or_else(|| text_of(snippet, "title"))? })
+        }
     }
 }
 
 pub(crate) fn parse_ingest(p: Platform, v: &Value) -> Option<Ingest> {
-    let row = first(v)?;
     match p {
-        Platform::Twitch => Some(Ingest { url: TWITCH_INGEST.into(), key: text_of(row, "stream_key")? }),
+        Platform::Twitch => Some(Ingest { url: TWITCH_INGEST.into(), key: text_of(first(v)?, "stream_key")? }),
         Platform::Kick => {
-            let stream = row.get("stream")?;
+            let stream = first(v)?.get("stream")?;
             Some(Ingest { url: text_of(stream, "url")?, key: text_of(stream, "key")? })
         }
+        Platform::Youtube => parse_youtube_stream(v).map(|(_, ingest)| ingest),
     }
+}
+
+pub(crate) fn parse_youtube_stream(v: &Value) -> Option<(String, Ingest)> {
+    let info = v.pointer("/cdn/ingestionInfo")?;
+    let url = text_of(info, "rtmpsIngestionAddress").or_else(|| text_of(info, "ingestionAddress"))?;
+    Some((id_of(v, "id")?, Ingest { url, key: text_of(info, "streamName")? }))
+}
+
+pub(crate) fn youtube_reason(v: &Value) -> Option<String> {
+    v.pointer("/error/errors/0/reason").and_then(Value::as_str).map(str::to_owned).filter(|r| !r.is_empty())
 }
 
 fn kick_slug(v: &Value) -> Option<String> {
@@ -332,6 +376,7 @@ enum Fail {
     Status(StatusCode),
     Shape,
     Unauthorized,
+    Said(String),
 }
 
 impl Fail {
@@ -339,6 +384,12 @@ impl Fail {
         match self {
             Fail::Unauthorized => format!("{} let go of this app. connect again", p.label()),
             Fail::Status(s) if s.as_u16() == 429 => format!("{} says slow down. try again soon", p.label()),
+            Fail::Said(r) if r == "liveStreamingNotEnabled" => "YouTube live is off for this channel. turn it on at youtube.com/features, it can take a day".to_owned(),
+            Fail::Said(r) if r == "livePermissionBlocked" => "YouTube blocked live streaming on this channel. see youtube.com/features".to_owned(),
+            Fail::Said(r) if r == "noChannel" => "that google account has no YouTube channel yet. make one, then connect".to_owned(),
+            Fail::Said(r) if r == "insufficientPermissions" || r == "forbidden" => format!("{} did not let slop manage live. connect again", p.label()),
+            Fail::Said(r) if r == "rateLimitExceeded" || r == "userRequestsExceedRateLimit" || r == "quotaExceeded" => format!("{} says slow down. try again soon", p.label()),
+            Fail::Said(r) => format!("{} said no ({r})", p.label()),
             _ => format!("could not reach {}. try again", p.label()),
         }
     }
@@ -373,7 +424,7 @@ fn authed(p: Platform, app: &App, req: reqwest::RequestBuilder, access: &str) ->
     let req = req.bearer_auth(access).header(header::ACCEPT, "application/json");
     match p {
         Platform::Twitch => req.header("Client-Id", &app.id),
-        Platform::Kick => req,
+        Platform::Kick | Platform::Youtube => req,
     }
 }
 
@@ -409,6 +460,7 @@ fn warn(p: Platform, what: &str, fail: &Fail) {
         Fail::Status(s) => log::warn!("destinations {}: {what}: http {s}", p.slug()),
         Fail::Shape => log::warn!("destinations {}: {what}: an answer of another shape", p.slug()),
         Fail::Unauthorized => log::info!("destinations {}: {what}: refused", p.slug()),
+        Fail::Said(r) => log::info!("destinations {}: {what}: {r}", p.slug()),
     }
 }
 
@@ -440,9 +492,47 @@ async fn exchange_refresh(cfg: &Config, app: &App, refresh: &str) -> Result<Toke
     parse_tokens(&v, Utc::now()).ok_or(Fail::Shape)
 }
 
+async fn youtube(cfg: &Config, app: &App, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>, access: &str) -> Result<Value, Fail> {
+    let url = format!("{}{path}", app.spec.api_url);
+    let mut req = cfg.http.request(method, url).query(query).bearer_auth(access).header(header::ACCEPT, "application/json");
+    if let Some(body) = body {
+        req = req.json(body);
+    }
+    let res = req.send().await.map_err(|e| Fail::Http(scrub(e)))?;
+    let status = res.status();
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(Fail::Unauthorized);
+    }
+    let v: Value = res.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        return Err(youtube_reason(&v).map(Fail::Said).unwrap_or(Fail::Status(status)));
+    }
+    Ok(v)
+}
+
 async fn account_of(cfg: &Config, p: Platform, app: &App, access: &str) -> Result<Account, Fail> {
+    if p == Platform::Youtube {
+        let v = youtube(cfg, app, reqwest::Method::GET, "/channels", &[("part", "id,snippet"), ("mine", "true")], None, access).await?;
+        return parse_account(p, &v).ok_or_else(|| Fail::Said("noChannel".into()));
+    }
     let v = api_get(cfg, p, app, "/users", &[], access).await?;
     parse_account(p, &v).ok_or(Fail::Shape)
+}
+
+async fn youtube_stream(cfg: &Config, app: &App, access: &str, make: bool) -> Result<Option<Value>, Fail> {
+    let list = youtube(cfg, app, reqwest::Method::GET, "/liveStreams", &[("part", "id,snippet,cdn"), ("mine", "true"), ("maxResults", "50")], None, access).await?;
+    if let Some(found) = items(&list).iter().find(|s| s.pointer("/snippet/title").and_then(Value::as_str) == Some(YOUTUBE_STREAM)) {
+        return Ok(Some(found.clone()));
+    }
+    if !make {
+        return Ok(None);
+    }
+    let body = json!({
+        "snippet": { "title": YOUTUBE_STREAM, "description": "slop sends your stream here" },
+        "cdn": { "ingestionType": "rtmp", "resolution": "variable", "frameRate": "variable" },
+        "contentDetails": { "isReusable": true },
+    });
+    youtube(cfg, app, reqwest::Method::POST, "/liveStreams", &[("part", "id,snippet,cdn,contentDetails")], Some(&body), access).await.map(Some)
 }
 
 async fn ingest_of(cfg: &Config, p: Platform, app: &App, account: &Account, access: &str) -> Result<(Ingest, Option<String>), Fail> {
@@ -455,12 +545,26 @@ async fn ingest_of(cfg: &Config, p: Platform, app: &App, account: &Account, acce
             let v = api_get(cfg, p, app, "/channels", &[], access).await?;
             Ok((parse_ingest(p, &v).ok_or(Fail::Shape)?, kick_slug(&v)))
         }
+        Platform::Youtube => {
+            let stream = youtube_stream(cfg, app, access, true).await?.ok_or(Fail::Shape)?;
+            let (id, ingest) = parse_youtube_stream(&stream).ok_or(Fail::Shape)?;
+            Ok((ingest, Some(id)))
+        }
     }
 }
 
 async fn revoke(cfg: &Config, p: Platform, app: &App, token: &str) {
     let done = match p {
         Platform::Twitch => form_post(cfg, &app.spec.revoke_url, &[("client_id", &app.id), ("token", token)]).await.map(|_| ()),
+        Platform::Youtube => {
+            let body = url::form_urlencoded::Serializer::new(String::new()).append_pair("token", token).finish();
+            let res = cfg.http.post(&app.spec.revoke_url).header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(body).send().await;
+            match res {
+                Ok(r) if r.status().is_success() => Ok(()),
+                Ok(r) => Err(Fail::Status(r.status())),
+                Err(e) => Err(Fail::Http(scrub(e))),
+            }
+        }
         Platform::Kick => {
             let res = cfg.http.post(&app.spec.revoke_url).query(&[("token", token), ("token_hint_type", "access_token")]).send().await;
             match res {
@@ -483,7 +587,7 @@ fn opened(cfg: &Config, user: Uuid, platform: &str, field: &str, raw: Option<&[u
     cfg.sealer().open(&aad(user, platform, field), raw?)
 }
 
-pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Platform, code: &str, verifier: &str) -> Result<Uuid, String> {
+pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Platform, code: &str, verifier: &str) -> Result<(Uuid, Option<String>), String> {
     let app = cfg.app(p).ok_or_else(|| format!("{} is not set up here", p.label()))?;
     let tokens = exchange_code(cfg, p, app, code, verifier).await.map_err(|f| {
         warn(p, "token", &f);
@@ -493,10 +597,14 @@ pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Plat
         warn(p, "user", &f);
         f.words(p)
     })?;
+    let mut note = None;
     let ingest = match ingest_of(cfg, p, app, &account, &tokens.access).await {
         Ok((ingest, _)) => Some(ingest),
         Err(f) => {
             warn(p, "stream key", &f);
+            if matches!(f, Fail::Said(_)) {
+                note = Some(f.words(p));
+            }
             None
         }
     };
@@ -552,7 +660,7 @@ pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Plat
             log::info!("destinations {slug}: swapped one account for another");
         }
     }
-    Ok(id)
+    Ok((id, note))
 }
 
 fn taken_words(p: Platform) -> String {
@@ -688,7 +796,7 @@ pub(crate) fn pick_category(v: &Value, name: &str, id_key: &str) -> Option<Strin
     exact.or_else(|| rows.first()).and_then(|r| id_of(r, id_key))
 }
 
-async fn set_channel(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest, title: &str, category: Option<&str>) -> Result<(), Fail> {
+async fn set_channel(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest, title: &str, category: Option<&str>, privacy: &str) -> Result<(), Fail> {
     let p = Platform::from_slug(&d.platform).ok_or(Fail::Shape)?;
     let app = cfg.app(p).ok_or(Fail::Shape)?.clone();
     let access = fresh_access(cfg, db, user, d, false).await?;
@@ -712,7 +820,84 @@ async fn set_channel(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest, 
             }
             api_patch(cfg, p, &app, "/channels", &[], &body, &access).await
         }
+        Platform::Youtube => youtube_live(cfg, db, user, d, &app, &access, title, privacy).await,
     }
+}
+
+async fn keep_ingest(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest, ingest: &Ingest) -> Result<(), Fail> {
+    let same = opened(cfg, user, &d.platform, "key", d.key.as_deref()).as_deref() == Some(ingest.key.as_str())
+        && opened(cfg, user, &d.platform, "url", d.url.as_deref()).as_deref() == Some(ingest.url.as_str());
+    if same {
+        return Ok(());
+    }
+    let url = sealed(cfg, user, &d.platform, "url", Some(&ingest.url));
+    let key = sealed(cfg, user, &d.platform, "key", Some(&ingest.key));
+    sqlx::query("UPDATE stream_destinations SET stream_url = $3, stream_key = $4, updated_at = now() WHERE id = $1 AND user_id = $2")
+        .bind(d.id)
+        .bind(user)
+        .bind(&url)
+        .bind(&key)
+        .execute(db)
+        .await
+        .map_err(|e| Fail::Http(format!("postgres: {e}")))?;
+    d.url = url;
+    d.key = key;
+    Ok(())
+}
+
+fn bound_to<'a>(list: &'a Value, stream: &str) -> impl Iterator<Item = &'a Value> + 'a {
+    let stream = stream.to_owned();
+    items(list).iter().filter(move |b| b.pointer("/contentDetails/boundStreamId").and_then(Value::as_str) == Some(stream.as_str()))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn youtube_live(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest, app: &App, access: &str, title: &str, privacy: &str) -> Result<(), Fail> {
+    let stream = youtube_stream(cfg, app, access, true).await?.ok_or(Fail::Shape)?;
+    let (stream_id, ingest) = parse_youtube_stream(&stream).ok_or(Fail::Shape)?;
+    keep_ingest(cfg, db, user, d, &ingest).await?;
+    let title: String = title.chars().take(YOUTUBE_TITLE_MAX).collect();
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let parts = [("part", "id,snippet,contentDetails,status"), ("broadcastStatus", "upcoming"), ("broadcastType", "all"), ("maxResults", "50")];
+    let upcoming = youtube(cfg, app, reqwest::Method::GET, "/liveBroadcasts", &parts, None, access).await?;
+    if let Some(id) = bound_to(&upcoming, &stream_id).find_map(|b| id_of(b, "id")) {
+        let body = json!({
+            "id": id,
+            "snippet": { "title": title, "scheduledStartTime": now },
+            "status": { "privacyStatus": privacy, "selfDeclaredMadeForKids": false },
+        });
+        youtube(cfg, app, reqwest::Method::PUT, "/liveBroadcasts", &[("part", "id,snippet,status")], Some(&body), access).await?;
+        return Ok(());
+    }
+    let body = json!({
+        "snippet": { "title": title, "scheduledStartTime": now },
+        "status": { "privacyStatus": privacy, "selfDeclaredMadeForKids": false },
+        "contentDetails": { "enableAutoStart": true, "enableAutoStop": true, "recordFromStart": true, "enableDvr": true },
+    });
+    let made = youtube(cfg, app, reqwest::Method::POST, "/liveBroadcasts", &[("part", "id,snippet,contentDetails,status")], Some(&body), access).await?;
+    let id = id_of(&made, "id").ok_or(Fail::Shape)?;
+    youtube(cfg, app, reqwest::Method::POST, "/liveBroadcasts/bind", &[("id", &id), ("part", "id,contentDetails"), ("streamId", &stream_id)], None, access).await?;
+    Ok(())
+}
+
+async fn youtube_stop(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest) -> Result<usize, Fail> {
+    let app = cfg.app(Platform::Youtube).ok_or(Fail::Shape)?.clone();
+    let access = fresh_access(cfg, db, user, d, false).await?;
+    let Some(stream) = youtube_stream(cfg, &app, &access, false).await? else {
+        return Ok(0);
+    };
+    let stream_id = id_of(&stream, "id").ok_or(Fail::Shape)?;
+    let parts = [("part", "id,contentDetails,status"), ("broadcastStatus", "active"), ("broadcastType", "all"), ("maxResults", "50")];
+    let active = youtube(cfg, &app, reqwest::Method::GET, "/liveBroadcasts", &parts, None, &access).await?;
+    let mut done = 0;
+    for id in bound_to(&active, &stream_id).filter_map(|b| id_of(b, "id")).collect::<Vec<_>>() {
+        let q = [("broadcastStatus", "complete"), ("id", id.as_str()), ("part", "id,status")];
+        match youtube(cfg, &app, reqwest::Method::POST, "/liveBroadcasts/transition", &q, None, &access).await {
+            Ok(_) => done += 1,
+            Err(Fail::Said(r)) if r == "redundantTransition" => {}
+            Err(f) => return Err(f),
+        }
+    }
+    Ok(done)
 }
 
 fn gate(s: &AppState) -> Result<&Config, ApiError> {
@@ -780,8 +965,14 @@ pub(crate) fn authorize_url(cfg: &Config, p: Platform, state: &str, verifier: &s
         .append_pair("state", state)
         .append_pair("code_challenge", &pkce_challenge(verifier))
         .append_pair("code_challenge_method", "S256");
-    if p == Platform::Twitch {
-        to.query_pairs_mut().append_pair("force_verify", "true");
+    match p {
+        Platform::Twitch => {
+            to.query_pairs_mut().append_pair("force_verify", "true");
+        }
+        Platform::Youtube => {
+            to.query_pairs_mut().append_pair("access_type", "offline").append_pair("prompt", "consent");
+        }
+        Platform::Kick => {}
     }
     Some(to.to_string())
 }
@@ -847,9 +1038,13 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
         return Ok(fail("that connect link is broken. try again"));
     };
     match connect(cfg, &s.db, me.id, p, &code, &started.verifier).await {
-        Ok(_) => {
+        Ok((_, None)) => {
             log::info!("{}: connected {}", me.name, p.slug());
             Ok(back("destination", p.slug()))
+        }
+        Ok((_, Some(note))) => {
+            log::info!("{}: connected {} without a stream key yet", me.name, p.slug());
+            Ok(fail(&format!("{} connected, but {note}", p.slug())))
         }
         Err(words) => Ok(fail(&words)),
     }
@@ -984,6 +1179,8 @@ struct LiveBody {
     title: String,
     #[serde(default)]
     category: Option<String>,
+    #[serde(default)]
+    privacy: Option<String>,
 }
 
 pub(crate) fn clean_title(raw: &str) -> Option<String> {
@@ -998,6 +1195,10 @@ async fn go_live(State(s): State<AppState>, Me(me): Me, body: Result<Json<LiveBo
     let Json(body) = body?;
     let title = clean_title(&body.title).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "a title, 140 characters at most"))?;
     let category = body.category.as_deref().map(str::trim).filter(|c| !c.is_empty()).map(|c| c.chars().take(CATEGORY_MAX).collect::<String>());
+    let privacy = match body.privacy.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        None => PRIVACY[0],
+        Some(p) => PRIVACY.into_iter().find(|k| *k == p).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "privacy is unlisted, public or private"))?,
+    };
     auth::limit(&s, &format!("dest:live:{}", me.id), 60, 10, "slow down").await?;
     let mut out = Vec::new();
     for mut d in dests_of(&s.db, me.id).await? {
@@ -1005,11 +1206,31 @@ async fn go_live(State(s): State<AppState>, Me(me): Me, body: Result<Json<LiveBo
         if !d.enabled || cfg.app(p).is_none() {
             continue;
         }
-        match set_channel(cfg, &s.db, me.id, &mut d, &title, category.as_deref()).await {
+        match set_channel(cfg, &s.db, me.id, &mut d, &title, category.as_deref(), privacy).await {
             Ok(()) => out.push(json!({ "id": d.id, "platform": d.platform, "ok": true })),
             Err(f) => {
                 warn(p, "title", &f);
                 out.push(json!({ "id": d.id, "platform": d.platform, "ok": false, "error": f.words(p) }));
+            }
+        }
+    }
+    Ok(Json(json!({ "results": out })))
+}
+
+async fn stop_live(State(s): State<AppState>, Me(me): Me) -> ApiResult {
+    let cfg = gate(&s)?;
+    let me = signed_in(me)?;
+    auth::limit(&s, &format!("dest:stop:{}", me.id), 60, 10, "slow down").await?;
+    let mut out = Vec::new();
+    for mut d in dests_of(&s.db, me.id).await? {
+        if d.platform != Platform::Youtube.slug() || cfg.app(Platform::Youtube).is_none() {
+            continue;
+        }
+        match youtube_stop(cfg, &s.db, me.id, &mut d).await {
+            Ok(ended) => out.push(json!({ "id": d.id, "platform": d.platform, "ok": true, "ended": ended })),
+            Err(f) => {
+                warn(Platform::Youtube, "stop", &f);
+                out.push(json!({ "id": d.id, "platform": d.platform, "ok": false, "error": f.words(Platform::Youtube) }));
             }
         }
     }
@@ -1021,6 +1242,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/destinations", get(list))
         .route("/api/destinations/custom", post(add_custom))
         .route("/api/destinations/live", post(go_live))
+        .route("/api/destinations/stop", post(stop_live))
         .route("/api/destinations/{id}", delete(remove))
         .route("/api/destinations/{id}/enabled", post(set_enabled))
         .route("/api/destinations/{id}/refresh", post(refresh_route))
@@ -1249,8 +1471,8 @@ mod tests {
         let cfg = Config::for_test("http://localhost:5173", KEY, &[(Platform::Twitch, spec)]);
         let user = crate::auth::tests::row(&pool, &format!("dest-{}", std::process::id()), Some("hash")).await;
         assert!(connect(&cfg, &pool, user, Platform::Twitch, "bad", &random_hex()).await.is_err());
-        let id = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap();
-        let again = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap();
+        let id = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap().0;
+        let again = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap().0;
         assert_eq!(id, again);
         let raw: (Vec<u8>, Vec<u8>, Vec<u8>, String) = sqlx::query_as("SELECT access_token, stream_key, stream_url, external_name FROM stream_destinations WHERE id = $1").bind(id).fetch_one(&pool).await.unwrap();
         assert!(!raw.0.windows(5).any(|w| w == b"acc-1"));
@@ -1287,8 +1509,8 @@ mod tests {
         sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, 'twitch', '4242')").bind(a).execute(&pool).await.unwrap();
         let refused = connect(&cfg, &pool, b, Platform::Twitch, "good", &random_hex()).await;
         assert_eq!(refused, Err("that twitch is already linked to another account".to_owned()));
-        let mine = connect(&cfg, &pool, a, Platform::Twitch, "good", &random_hex()).await.expect("a logs in with it and streams to it");
-        assert_eq!(connect(&cfg, &pool, a, Platform::Twitch, "good", &random_hex()).await, Ok(mine), "connecting again just reconnects");
+        let mine = connect(&cfg, &pool, a, Platform::Twitch, "good", &random_hex()).await.expect("a logs in with it and streams to it").0;
+        assert_eq!(connect(&cfg, &pool, a, Platform::Twitch, "good", &random_hex()).await.map(|c| c.0), Ok(mine), "connecting again just reconnects");
         sqlx::query("DELETE FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id = '4242'").execute(&pool).await.unwrap();
         assert_eq!(connect(&cfg, &pool, b, Platform::Twitch, "good", &random_hex()).await, Err("that twitch is already linked to another account".to_owned()), "a still streams to it");
         assert!(!owned_elsewhere(&pool, a, Platform::Twitch, "4242").await.unwrap());
@@ -1310,12 +1532,12 @@ mod tests {
         sqlx::query("DELETE FROM stream_destinations WHERE platform = 'twitch' AND external_id IN ('4242', '5151')").execute(&pool).await.unwrap();
         sqlx::query("DELETE FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id IN ('4242', '5151')").execute(&pool).await.unwrap();
         let user = crate::auth::tests::row(&pool, &format!("dest-one-{run}"), Some("hash")).await;
-        let first = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap();
+        let first = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap().0;
         let off = switch(&pool, user, first, false).await.unwrap().unwrap();
         assert!(!off.enabled);
-        assert_eq!(connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap(), first, "the same account reconnects in place");
+        assert_eq!(connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap().0, first, "the same account reconnects in place");
         assert!(!dest_of(&pool, user, first).await.unwrap().unwrap().enabled, "a reconnect keeps the switch where it was");
-        let swapped = connect(&cfg, &pool, user, Platform::Twitch, "second", &random_hex()).await.unwrap();
+        let swapped = connect(&cfg, &pool, user, Platform::Twitch, "second", &random_hex()).await.unwrap().0;
         assert_eq!(swapped, first, "another twitch account takes the one twitch row");
         let d = dest_of(&pool, user, first).await.unwrap().unwrap();
         assert_eq!((d.external_id.as_deref(), d.name.as_deref(), d.enabled), (Some("5151"), Some("billyalt"), true));
@@ -1333,5 +1555,261 @@ mod tests {
         let dup = sqlx::query("INSERT INTO stream_destinations (user_id, platform, external_id) VALUES ($1, 'twitch', 'x-other')").bind(user).execute(&pool).await;
         assert!(dup.is_err_and(|e| crate::unique_violation(&e)), "the database holds one per platform too");
         sqlx::query("DELETE FROM streamers WHERE id = $1").bind(user).execute(&pool).await.unwrap();
+    }
+
+    #[test]
+    fn youtube_stays_hidden_until_it_is_turned_on() {
+        let base = [("PUBLIC_URL", "https://nodentity.xyz"), ("STREAM_KEY_ENC", KEY), ("GOOGLE_CLIENT_ID", "gid"), ("GOOGLE_CLIENT_SECRET", "gsecret"), ("TWITCH_CLIENT_ID", "tid"), ("TWITCH_CLIENT_SECRET", "ts")];
+        assert_eq!(vars(&base).platforms(), vec![Platform::Twitch], "google login alone does not turn youtube on");
+        let mut on = base.to_vec();
+        on.push(("YOUTUBE_ENABLED", "1"));
+        let cfg = vars(&on);
+        assert_eq!(cfg.platforms(), vec![Platform::Twitch, Platform::Youtube]);
+        assert_eq!(cfg.app(Platform::Youtube).map(|a| a.id.as_str()), Some("gid"), "the google login client is reused");
+        assert_eq!(cfg.redirect_uri(Platform::Youtube).as_deref(), Some("https://nodentity.xyz/api/auth/youtube/callback"));
+        let mut own = on.clone();
+        own.extend([("YOUTUBE_CLIENT_ID", "yid"), ("YOUTUBE_CLIENT_SECRET", "ys")]);
+        assert_eq!(vars(&own).app(Platform::Youtube).map(|a| a.id.as_str()), Some("yid"));
+        let mut off = base.to_vec();
+        off.push(("YOUTUBE_ENABLED", "0"));
+        assert_eq!(vars(&off).platforms(), vec![Platform::Twitch]);
+        let url = authorize_url(&cfg, Platform::Youtube, "st", &"v".repeat(64)).unwrap();
+        assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
+        let q = query_of(&url);
+        assert_eq!(q.get("scope").map(String::as_str), Some("https://www.googleapis.com/auth/youtube"));
+        assert_eq!(q.get("access_type").map(String::as_str), Some("offline"));
+        assert_eq!(q.get("prompt").map(String::as_str), Some("consent"));
+        assert_eq!(q.get("code_challenge_method").map(String::as_str), Some("S256"));
+        assert_eq!(q.get("redirect_uri").map(String::as_str), Some("https://nodentity.xyz/api/auth/youtube/callback"));
+        assert!(!q.contains_key("force_verify"));
+    }
+
+    #[test]
+    fn youtube_reasons_read_as_words() {
+        let off = json!({"error": {"code": 403, "errors": [{"reason": "liveStreamingNotEnabled", "domain": "youtube.liveBroadcast"}]}});
+        assert_eq!(youtube_reason(&off).as_deref(), Some("liveStreamingNotEnabled"));
+        assert_eq!(youtube_reason(&json!({"error": {}})), None);
+        let words = |r: &str| Fail::Said(r.into()).words(Platform::Youtube);
+        assert!(words("liveStreamingNotEnabled").contains("youtube.com/features"));
+        assert!(words("livePermissionBlocked").contains("blocked"));
+        assert!(words("noChannel").contains("no YouTube channel"));
+        assert_eq!(words("somethingNew"), "YouTube said no (somethingNew)");
+        let stream = json!({"id": "s1", "cdn": {"ingestionInfo": {"ingestionAddress": "rtmp://a/live2", "rtmpsIngestionAddress": "rtmps://a/live2", "streamName": "k"}}});
+        assert_eq!(parse_youtube_stream(&stream), Some(("s1".into(), Ingest { url: "rtmps://a/live2".into(), key: "k".into() })));
+        let acct = json!({"items": [{"id": "UC1", "snippet": {"title": "Billy", "customUrl": "@billy"}}]});
+        assert_eq!(parse_account(Platform::Youtube, &acct), Some(Account { id: "UC1".into(), name: "@billy".into() }));
+        assert_eq!(parse_account(Platform::Youtube, &json!({"items": []})), None);
+    }
+
+    #[derive(Default)]
+    struct Yt {
+        streams: Vec<Value>,
+        broadcasts: Vec<Value>,
+        revoked: Vec<String>,
+    }
+
+    type Shared = Arc<std::sync::Mutex<Yt>>;
+
+    async fn google() -> (String, Shared) {
+        use axum::extract::Form;
+        fn said(reason: &str) -> (StatusCode, Json<Value>) {
+            (StatusCode::FORBIDDEN, Json(json!({"error": {"code": 403, "errors": [{"reason": reason}]}})))
+        }
+        fn bearer(h: &HeaderMap) -> String {
+            h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).unwrap_or_default().trim_start_matches("Bearer ").to_owned()
+        }
+        async fn token(Form(f): Form<HashMap<String, String>>) -> Result<Json<Value>, StatusCode> {
+            if f.get("client_secret").map(String::as_str) != Some("youtube-secret") {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            match (f.get("grant_type").map(String::as_str), f.get("code").map(String::as_str)) {
+                (Some("authorization_code"), Some(code)) if f.get("code_verifier").is_some_and(|v| v.len() == 64) => match code {
+                    "yt-good" => Ok(Json(json!({"access_token": "ya-1", "refresh_token": "yr-1", "expires_in": 3599, "scope": "https://www.googleapis.com/auth/youtube"}))),
+                    "yt-off" => Ok(Json(json!({"access_token": "yoff", "refresh_token": "yr-off", "expires_in": 3599}))),
+                    "yt-blocked" => Ok(Json(json!({"access_token": "yblk", "refresh_token": "yr-blk", "expires_in": 3599}))),
+                    "yt-none" => Ok(Json(json!({"access_token": "ynone", "expires_in": 3599}))),
+                    _ => Err(StatusCode::BAD_REQUEST),
+                },
+                (Some("refresh_token"), _) if f.get("refresh_token").map(String::as_str) == Some("yr-1") => Ok(Json(json!({"access_token": "ya-2", "expires_in": 3599}))),
+                _ => Err(StatusCode::BAD_REQUEST),
+            }
+        }
+        async fn channels(headers: HeaderMap, Query(q): Query<HashMap<String, String>>) -> (StatusCode, Json<Value>) {
+            if q.get("mine").map(String::as_str) != Some("true") {
+                return (StatusCode::BAD_REQUEST, Json(json!({})));
+            }
+            let id = match bearer(&headers).as_str() {
+                "ya-1" | "ya-2" => "UCbilly",
+                "yoff" => "UCoff",
+                "yblk" => "UCblk",
+                _ => return (StatusCode::OK, Json(json!({"items": []}))),
+            };
+            (StatusCode::OK, Json(json!({"items": [{"id": id, "snippet": {"title": "Billy", "customUrl": format!("@{}", id.to_lowercase())}}]})))
+        }
+        async fn list_streams(State(yt): State<Shared>, headers: HeaderMap) -> Json<Value> {
+            let mine = bearer(&headers).starts_with("ya-");
+            Json(json!({"items": if mine { yt.lock().unwrap().streams.clone() } else { Vec::new() }}))
+        }
+        async fn add_stream(State(yt): State<Shared>, headers: HeaderMap, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+            match bearer(&headers).as_str() {
+                "yoff" => return said("liveStreamingNotEnabled"),
+                "yblk" => return said("livePermissionBlocked"),
+                _ => {}
+            }
+            let cdn = &body["cdn"];
+            if cdn["ingestionType"] != "rtmp" || cdn["resolution"] != "variable" || cdn["frameRate"] != "variable" {
+                return (StatusCode::BAD_REQUEST, Json(json!({})));
+            }
+            let mut yt = yt.lock().unwrap();
+            let n = yt.streams.len() + 1;
+            let made = json!({"id": format!("st-{n}"), "snippet": body["snippet"], "cdn": {"ingestionInfo": {"ingestionAddress": "rtmp://a.rtmp.youtube.com/live2", "rtmpsIngestionAddress": "rtmps://a.rtmps.youtube.com/live2", "streamName": format!("yt-key-{n}")}}});
+            yt.streams.push(made.clone());
+            (StatusCode::OK, Json(made))
+        }
+        async fn list_broadcasts(State(yt): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+            let want = match q.get("broadcastStatus").map(String::as_str) {
+                Some("upcoming") => "ready",
+                Some("active") => "live",
+                _ => "",
+            };
+            let found: Vec<Value> = yt.lock().unwrap().broadcasts.iter().filter(|b| b["status"]["lifeCycleStatus"] == want).cloned().collect();
+            Json(json!({"items": found}))
+        }
+        async fn add_broadcast(State(yt): State<Shared>, Json(mut body): Json<Value>) -> Json<Value> {
+            let mut yt = yt.lock().unwrap();
+            body["id"] = json!(format!("b-{}", yt.broadcasts.len() + 1));
+            body["status"]["lifeCycleStatus"] = json!("ready");
+            yt.broadcasts.push(body.clone());
+            Json(body)
+        }
+        async fn put_broadcast(State(yt): State<Shared>, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+            let mut yt = yt.lock().unwrap();
+            let Some(b) = yt.broadcasts.iter_mut().find(|b| b["id"] == body["id"]) else {
+                return (StatusCode::NOT_FOUND, Json(json!({})));
+            };
+            if body["snippet"]["scheduledStartTime"].as_str().is_none() {
+                return (StatusCode::BAD_REQUEST, Json(json!({})));
+            }
+            b["snippet"]["title"] = body["snippet"]["title"].clone();
+            b["status"]["privacyStatus"] = body["status"]["privacyStatus"].clone();
+            (StatusCode::OK, Json(b.clone()))
+        }
+        async fn bind(State(yt): State<Shared>, Query(q): Query<HashMap<String, String>>) -> (StatusCode, Json<Value>) {
+            let mut yt = yt.lock().unwrap();
+            let Some(b) = yt.broadcasts.iter_mut().find(|b| b["id"].as_str() == q.get("id").map(String::as_str)) else {
+                return (StatusCode::NOT_FOUND, Json(json!({})));
+            };
+            b["contentDetails"]["boundStreamId"] = json!(q.get("streamId"));
+            (StatusCode::OK, Json(b.clone()))
+        }
+        async fn transition(State(yt): State<Shared>, Query(q): Query<HashMap<String, String>>) -> (StatusCode, Json<Value>) {
+            let mut yt = yt.lock().unwrap();
+            let Some(b) = yt.broadcasts.iter_mut().find(|b| b["id"].as_str() == q.get("id").map(String::as_str)) else {
+                return (StatusCode::NOT_FOUND, Json(json!({})));
+            };
+            if q.get("broadcastStatus").map(String::as_str) != Some("complete") || b["status"]["lifeCycleStatus"] != "live" {
+                return said("redundantTransition");
+            }
+            b["status"]["lifeCycleStatus"] = json!("complete");
+            (StatusCode::OK, Json(b.clone()))
+        }
+        async fn revoke(State(yt): State<Shared>, Form(f): Form<HashMap<String, String>>) -> StatusCode {
+            yt.lock().unwrap().revoked.extend(f.get("token").cloned());
+            StatusCode::OK
+        }
+        let yt: Shared = Arc::default();
+        let app = Router::new()
+            .route("/token", axum::routing::post(token))
+            .route("/revoke", axum::routing::post(revoke))
+            .route("/yt/channels", get(channels))
+            .route("/yt/liveStreams", get(list_streams).post(add_stream))
+            .route("/yt/liveBroadcasts", get(list_broadcasts).post(add_broadcast).put(put_broadcast))
+            .route("/yt/liveBroadcasts/bind", axum::routing::post(bind))
+            .route("/yt/liveBroadcasts/transition", axum::routing::post(transition))
+            .with_state(Arc::clone(&yt));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), yt)
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn youtube_connects_goes_live_and_stops() {
+        let pool = crate::auth::tests::test_db().await;
+        let (base, yt) = google().await;
+        let spec = Spec { authorize_url: format!("{base}/authorize"), token_url: format!("{base}/token"), revoke_url: format!("{base}/revoke"), api_url: format!("{base}/yt") };
+        let cfg = Config::for_test("http://localhost:5173", KEY, &[(Platform::Youtube, spec)]);
+        sqlx::query("DELETE FROM stream_destinations WHERE platform = 'youtube' AND external_id IN ('UCbilly', 'UCoff', 'UCblk')").execute(&pool).await.unwrap();
+        let run = std::process::id();
+        let user = crate::auth::tests::row(&pool, &format!("yt-{run}"), Some("hash")).await;
+
+        let (id, note) = connect(&cfg, &pool, user, Platform::Youtube, "yt-good", &random_hex()).await.unwrap();
+        assert_eq!(note, None);
+        let mut d = dest_of(&pool, user, id).await.unwrap().unwrap();
+        assert_eq!((d.platform.as_str(), d.external_id.as_deref(), d.name.as_deref(), d.enabled), ("youtube", Some("UCbilly"), Some("@ucbilly"), true));
+        assert_eq!(opened(&cfg, user, "youtube", "key", d.key.as_deref()).as_deref(), Some("yt-key-1"));
+        assert_eq!(opened(&cfg, user, "youtube", "url", d.url.as_deref()).as_deref(), Some("rtmps://a.rtmps.youtube.com/live2"));
+        assert_eq!(opened(&cfg, user, "youtube", "refresh", d.refresh.as_deref()).as_deref(), Some("yr-1"), "offline access left a refresh token");
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT stream_key FROM stream_destinations WHERE id = $1").bind(id).fetch_one(&pool).await.unwrap();
+        assert!(!raw.windows(8).any(|w| w == b"yt-key-1"));
+        assert_eq!(yt.lock().unwrap().streams[0]["snippet"]["title"], YOUTUBE_STREAM);
+
+        let long = "t".repeat(130);
+        set_channel(&cfg, &pool, user, &mut d, &long, None, "unlisted").await.unwrap();
+        {
+            let yt = yt.lock().unwrap();
+            assert_eq!(yt.broadcasts.len(), 1);
+            let b = &yt.broadcasts[0];
+            assert_eq!(b["snippet"]["title"].as_str().map(str::len), Some(100), "youtube titles stop at 100");
+            assert_eq!(b["status"]["privacyStatus"], "unlisted");
+            assert_eq!(b["status"]["selfDeclaredMadeForKids"], false);
+            for flag in ["enableAutoStart", "enableAutoStop", "recordFromStart", "enableDvr"] {
+                assert_eq!(b["contentDetails"][flag], true, "{flag}");
+            }
+            assert_eq!(b["contentDetails"]["boundStreamId"], "st-1");
+        }
+        set_channel(&cfg, &pool, user, &mut d, "second go", None, "public").await.unwrap();
+        {
+            let yt = yt.lock().unwrap();
+            assert_eq!(yt.broadcasts.len(), 1, "a broadcast that never started is reused");
+            assert_eq!(yt.broadcasts[0]["snippet"]["title"], "second go");
+            assert_eq!(yt.broadcasts[0]["status"]["privacyStatus"], "public");
+        }
+        yt.lock().unwrap().broadcasts[0]["status"]["lifeCycleStatus"] = json!("live");
+        assert_eq!(youtube_stop(&cfg, &pool, user, &mut d).await.unwrap(), 1);
+        assert_eq!(yt.lock().unwrap().broadcasts[0]["status"]["lifeCycleStatus"], "complete");
+        assert_eq!(youtube_stop(&cfg, &pool, user, &mut d).await.unwrap(), 0, "nothing left to stop");
+        set_channel(&cfg, &pool, user, &mut d, "third", None, "unlisted").await.unwrap();
+        assert_eq!(yt.lock().unwrap().broadcasts.len(), 2, "a finished broadcast is not reused");
+
+        assert_eq!(connect(&cfg, &pool, user, Platform::Youtube, "yt-good", &random_hex()).await.unwrap().0, id);
+        assert_eq!(yt.lock().unwrap().streams.len(), 1, "the slop stream is reused, so the key stays the same");
+
+        let off = crate::auth::tests::row(&pool, &format!("yt-off-{run}"), Some("hash")).await;
+        let (off_id, note) = connect(&cfg, &pool, off, Platform::Youtube, "yt-off", &random_hex()).await.unwrap();
+        assert!(note.as_deref().is_some_and(|n| n.contains("youtube.com/features") && n.contains("off")), "{note:?}");
+        assert!(dest_of(&pool, off, off_id).await.unwrap().unwrap().key.is_none());
+        let mut od = dest_of(&pool, off, off_id).await.unwrap().unwrap();
+        let live = set_channel(&cfg, &pool, off, &mut od, "x", None, "unlisted").await.unwrap_err();
+        assert!(live.words(Platform::Youtube).contains("youtube.com/features"));
+
+        let blk = crate::auth::tests::row(&pool, &format!("yt-blk-{run}"), Some("hash")).await;
+        let (_, note) = connect(&cfg, &pool, blk, Platform::Youtube, "yt-blocked", &random_hex()).await.unwrap();
+        assert!(note.as_deref().is_some_and(|n| n.contains("blocked")), "{note:?}");
+
+        let none = crate::auth::tests::row(&pool, &format!("yt-none-{run}"), Some("hash")).await;
+        let refused = connect(&cfg, &pool, none, Platform::Youtube, "yt-none", &random_hex()).await.unwrap_err();
+        assert!(refused.contains("no YouTube channel"), "{refused}");
+
+        let taken = connect(&cfg, &pool, off, Platform::Youtube, "yt-good", &random_hex()).await;
+        assert_eq!(taken, Err("that youtube is already linked to another account".to_owned()));
+        assert!(yt.lock().unwrap().revoked.contains(&"ya-1".to_owned()), "a refused connect gives its token back");
+
+        revoke(&cfg, Platform::Youtube, cfg.app(Platform::Youtube).unwrap(), "ya-2").await;
+        assert!(yt.lock().unwrap().revoked.contains(&"ya-2".to_owned()));
+        for u in [user, off, blk, none] {
+            sqlx::query("DELETE FROM streamers WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+        }
     }
 }
