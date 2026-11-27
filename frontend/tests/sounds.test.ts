@@ -8,9 +8,11 @@ import {
   bellUrl,
   choiceOf,
   customRefusal,
+  stepOwnCall,
   stepRoster,
   throttle,
   volumeOf,
+  type CallPhase,
   type RosterState
 } from '../src/infra/sound-logic.ts';
 
@@ -135,4 +137,30 @@ test('throttle lets one through per gap', () => {
   assert.equal(may(100), false);
   assert.equal(may(1499), false);
   assert.equal(may(1500), true);
+});
+
+const own = (phases: CallPhase[]) => {
+  let inCall = false;
+  return phases.map((phase) => {
+    const step = stepOwnCall(inCall, phase);
+    inCall = step.inCall;
+    return step.sound;
+  });
+};
+
+test('my own join plays once the call connects and my leave plays when it ends', () => {
+  assert.deepEqual(own(['idle', 'joining', 'connected', 'connected', 'idle']), [null, null, 'voiceJoin', null, 'voiceLeave']);
+});
+
+test('a reconnect inside the same call stays quiet', () => {
+  assert.deepEqual(own(['joining', 'connected', 'joining', 'joining', 'connected', 'idle']), [null, 'voiceJoin', null, null, null, 'voiceLeave']);
+});
+
+test('a join that never connects makes no sound, a dropped call that gives up plays leave', () => {
+  assert.deepEqual(own(['joining', 'failed', 'idle']), [null, null, null]);
+  assert.deepEqual(own(['joining', 'connected', 'joining', 'failed', 'idle']), [null, 'voiceJoin', null, 'voiceLeave', null]);
+});
+
+test('moving channels plays leave then join', () => {
+  assert.deepEqual(own(['connected', 'idle', 'joining', 'connected']), ['voiceJoin', 'voiceLeave', null, 'voiceJoin']);
 });

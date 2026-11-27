@@ -116,17 +116,16 @@ export async function checkCustomFile(file: Blob): Promise<string> {
   return customRefusal(file.size, seconds);
 }
 
+const UNLOCK_EVENTS = ['pointerdown', 'pointerup', 'keydown', 'touchend', 'click'] as const;
+
 let unlocking = false;
 
 export function installSoundUnlock(): void {
   if (unlocking || typeof window === 'undefined') return;
   unlocking = true;
   const unlock = () => {
-    window.removeEventListener('pointerdown', unlock, true);
-    window.removeEventListener('keydown', unlock, true);
     const c = context();
     if (c && c.state !== 'running') void c.resume().catch(() => undefined);
   };
-  window.addEventListener('pointerdown', unlock, true);
-  window.addEventListener('keydown', unlock, true);
+  for (const name of UNLOCK_EVENTS) window.addEventListener(name, unlock, true);
 }
