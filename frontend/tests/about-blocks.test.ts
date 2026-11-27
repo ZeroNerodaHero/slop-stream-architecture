@@ -10,6 +10,7 @@ import {
   httpUrl,
   isBlank,
   joinedWord,
+  kindWord,
   markdownToHtml,
   moved,
   newId,
@@ -104,4 +105,7 @@ test('blank blocks stay off the viewer page', () => {
   assert.equal(isBlank(blankBlock('image'), 0), true);
   assert.equal(isBlank(blankBlock('stats'), 0), false);
   assert.equal(blockWord(blankBlock('text', { md: '### hi there' })), 'text · hi there');
+  assert.equal(kindWord('buttons'), 'links');
+  assert.equal(kindWord('gallery'), 'gallery');
+  assert.equal(blockWord(blankBlock('buttons', { items: [{ file: 0, label: 'discord', href: '' }] })), 'links · discord');
 });

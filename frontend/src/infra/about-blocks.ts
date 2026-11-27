@@ -428,6 +428,10 @@ export function isBlank(b: AboutBlock, socials: number): boolean {
   }
 }
 
+export function kindWord(kind: BlockKind): string {
+  return kind === 'buttons' ? 'links' : kind;
+}
+
 export function blockWord(b: AboutBlock): string {
   const first =
     b.md
@@ -436,5 +440,5 @@ export function blockWord(b: AboutBlock): string {
       ?.replace(/^[#>*\-+\d.)\s]+/, '')
       .replace(/[*_~[\]]/g, '') ?? '';
   const word = b.title || first || b.items.find((i) => i.label)?.label || '';
-  return word ? `${b.kind} · ${word.slice(0, 40)}` : b.kind;
+  return word ? `${kindWord(b.kind)} · ${word.slice(0, 40)}` : kindWord(b.kind);
 }

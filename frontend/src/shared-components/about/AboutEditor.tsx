@@ -28,6 +28,7 @@ import {
   GRID,
   blockWord,
   clampSpan,
+  kindWord,
   moved,
   newId,
   starterBlock,
@@ -307,7 +308,7 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
             className="flex h-7 items-center gap-2 rounded-control border border-primaryStroke bg-backgroundSecondary px-2 text-xs text-textPrimary transition-colors hover:border-primaryBlue"
           >
             <span className="text-textTertiary">{KIND_ICON[kind]}</span>
-            {kind}
+            {kindWord(kind)}
           </button>
         ))}
       </div>
