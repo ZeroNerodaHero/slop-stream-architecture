@@ -97,7 +97,7 @@ function SoundRow({ event, label, id }: { event: SoundEvent; label: string; id: 
               setNote('');
               setSoundChoice(event, next);
             }}
-            className="w-40 min-w-0 max-md:flex-1"
+            className="w-40 min-w-0 self-stretch py-0 max-md:flex-1"
           />
           <Tooltip content="preview">
             <Button
