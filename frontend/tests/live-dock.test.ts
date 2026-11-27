@@ -14,6 +14,7 @@ import {
   LAYOUT_GRIDS,
   overlaps,
   placeIn,
+  placeShown,
   PRESETS,
   presetForKey,
   presetOf,
@@ -27,7 +28,8 @@ import {
   TILE_IDS,
   typingInto,
   unreadAfter,
-  unreadWords
+  unreadWords,
+  wasRetiredPreset
 } from '../src/infra/live-dock.ts';
 
 const ALL = { hidden: [] };
@@ -64,11 +66,10 @@ test('every rail section is open until folded, and an old thumbnail fold carries
   assert.deepEqual(readRailFolds({ thumbnail: true }, { thumbnail: false }), OPEN);
 });
 
-test('presets pick modules by showing and hiding them, never by folding', () => {
-  for (const p of Object.values(PRESETS)) assert.deepEqual(Object.keys(p.panels), ['hidden']);
-  assert.deepEqual(PRESETS.camera.panels.hidden, ['sources', 'sound']);
-  assert.deepEqual(PRESETS.sources.panels.hidden, ['source']);
-  assert.deepEqual(PRESETS.full.panels.hidden, []);
+test('the one built in preset is default, and a preset only holds which modules are shown', () => {
+  assert.deepEqual(Object.keys(PRESETS), ['default']);
+  for (const p of Object.values(PRESETS)) assert.deepEqual(Object.keys(p), ['panels']);
+  assert.deepEqual(PRESETS.default.panels.hidden, []);
 });
 
 test('a kept layout that is not one of the five falls back to obs left', () => {
@@ -121,22 +122,40 @@ test('a module put back finds a free cell, or none when the grid is full', () =>
   assert.ok(cell && fits(roomy, shown, 'source', cell) && cell.x + cell.w <= GRID_COLS && cell.y + cell.h <= GRID_ROWS);
 });
 
-test('a preset is found again from the layout and the shown modules', () => {
-  assert.equal(presetOf(1, ALL, null), 'full');
-  assert.equal(presetOf(2, ALL, null), null);
-  assert.equal(presetOf(1, { hidden: ['sound', 'sources'] }, null), 'camera');
-  assert.equal(presetOf(1, { hidden: ['source'] }, null), 'sources');
-  assert.equal(presetOf(PRESETS.safe.layout, PRESETS.safe.panels, null), 'safe');
-  assert.equal(presetOf(PRESETS.chat.layout, { hidden: ['sound', 'source', 'sources'] }, null), 'chat');
-  assert.equal(presetOf(3, { hidden: ['source'] }, { layout: 3, panels: { hidden: ['source'] } }), 'mine');
-  assert.equal(readPreset({ layout: 7, panels: {} }), null);
-  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { layout: 4, panels: ALL });
+test('a preset is found from the shown modules alone, whatever the layout', () => {
+  assert.equal(presetOf(ALL, null), 'default');
+  assert.equal(presetOf({ hidden: ['sound', 'sources'] }, null), null);
+  assert.equal(presetOf({ hidden: ['source'] }, { panels: { hidden: ['source'] } }), 'mine');
+  assert.equal(presetOf(ALL, { panels: { hidden: ['source'] } }), 'default');
+  assert.equal(readPreset(null), null);
+  assert.equal(readPreset({ layout: 4 }), null);
+  assert.deepEqual(readPreset({ layout: 7, panels: { hidden: ['source', 'chat'] } }), { panels: { hidden: ['source', 'chat'] } });
+  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { panels: ALL });
 });
 
-test('only the keys 1 to 5 pick a preset', () => {
-  assert.equal(presetForKey('1'), 'full');
-  assert.equal(presetForKey('5'), 'safe');
-  assert.equal(presetForKey('6'), null);
+test('modules kept by a retired built in preset are recognised, a hand picked set is not', () => {
+  assert.equal(wasRetiredPreset({ hidden: ['sound', 'sources'] }), true);
+  assert.equal(wasRetiredPreset({ hidden: ['rig', 'face'] }), true);
+  assert.equal(wasRetiredPreset({ hidden: ['sources', 'face', 'rig', 'sound'] }), true);
+  assert.equal(wasRetiredPreset({ hidden: ['sources', 'source', 'sound'] }), true);
+  assert.equal(wasRetiredPreset({ hidden: [] }), false);
+  assert.equal(wasRetiredPreset({ hidden: ['rig'] }), false);
+  assert.equal(wasRetiredPreset({ hidden: ['sources', 'sound', 'chat'] }), false);
+  assert.equal(wasRetiredPreset(null), false);
+});
+
+test('showing modules on a custom grid keeps every placed tile and only moves one that would overlap', () => {
+  const grid = { ...DEFAULT_GRID, sound: { x: 3, y: 7, w: 9, h: 5 } };
+  const out = placeShown(grid, ['source', 'sources'], []);
+  for (const id of TILE_IDS.filter((t) => t !== 'source')) assert.deepEqual(out.grid[id], grid[id]);
+  assert.deepEqual(out.hidden, ['source']);
+  assert.deepEqual(placeShown(DEFAULT_GRID, ['source'], []), { grid: DEFAULT_GRID, hidden: [] });
+});
+
+test('only the key 1 picks a preset', () => {
+  assert.equal(presetForKey('1'), 'default');
+  assert.equal(presetForKey('2'), null);
+  assert.equal(presetForKey('5'), null);
   assert.equal(presetForKey('0'), null);
   assert.equal(presetForKey('a'), null);
   assert.equal(presetForKey('F1'), null);

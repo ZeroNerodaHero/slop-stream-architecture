@@ -1,4 +1,4 @@
-import { RiAddLine, RiChat3Line, RiCloseLine, RiEqualizerLine, type RemixiconComponentType, RiShieldLine, RiStackLine, RiStarLine, RiVidiconLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiEqualizerLine, type RemixiconComponentType, RiStarLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
 import { applyPreset, forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, PRESET_WORDS, saveMine, setRail, setRailFold } from '@/infra/live-dock';
@@ -9,11 +9,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 export const PRESET_ICONS: Record<PresetId, RemixiconComponentType> = {
-  full: RiEqualizerLine,
-  camera: RiVidiconLine,
-  sources: RiStackLine,
-  chat: RiChat3Line,
-  safe: RiShieldLine,
+  default: RiEqualizerLine,
   mine: RiStarLine
 };
 
@@ -23,7 +19,7 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
   const ids: PresetId[] = mine ? [...HOTKEY_PRESETS, 'mine'] : [...HOTKEY_PRESETS];
   const open = useRailFold('presets');
   if (strip && !open) {
-    const Icon = PRESET_ICONS[current ?? 'full'];
+    const Icon = PRESET_ICONS[current ?? 'default'];
     const words = `open the presets, now ${current ? PRESET_WORDS[current].name : 'custom'}`;
     return (
       <div className="flex flex-col items-center border-b border-primaryStroke py-2">
@@ -121,7 +117,7 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
           );
         })}
       </ul>
-      <Tooltip content="keep this layout and these modules as yours">
+      <Tooltip content="keep these modules as yours">
         <Button id="live-preset-save" size="sm" variant="outline" className="mt-1 h-7 gap-1 self-start px-2.5 py-0 text-xs max-md:min-h-0" onClick={saveMine}>
           <RiAddLine aria-hidden size={14} />
           save current
