@@ -80,6 +80,20 @@ export function stepRoster(state: RosterState, key: string, settled: boolean, us
   return { state: { key, users: now }, joined, left };
 }
 
+export type CallPhase = 'idle' | 'joining' | 'connected' | 'failed';
+
+export interface OwnCallStep {
+  inCall: boolean;
+  sound: 'voiceJoin' | 'voiceLeave' | null;
+}
+
+export function stepOwnCall(wasIn: boolean, phase: CallPhase): OwnCallStep {
+  const inCall = phase === 'connected' || (wasIn && phase === 'joining');
+  if (inCall && !wasIn) return { inCall, sound: 'voiceJoin' };
+  if (!inCall && wasIn) return { inCall, sound: 'voiceLeave' };
+  return { inCall, sound: null };
+}
+
 export function throttle(gapMs: number): (now: number) => boolean {
   let last = -Infinity;
   return (now) => {

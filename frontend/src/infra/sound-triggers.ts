@@ -3,7 +3,7 @@ import { notificationsAtom } from '@/infra/atoms/notification-atoms';
 import { voiceSeatsAtom } from '@/infra/atoms/voice-atoms';
 import { voiceCallAtom } from '@/infra/atoms/voice-state';
 import { onEvents } from '@/infra/events';
-import { NO_ROSTER, NOTIFY_GAP_MS, stepRoster, throttle } from '@/infra/sound-logic';
+import { NO_ROSTER, NOTIFY_GAP_MS, stepOwnCall, stepRoster, throttle } from '@/infra/sound-logic';
 import { installSoundUnlock, playSound } from '@/infra/sounds';
 import { store } from '@/infra/store';
 
@@ -45,6 +45,7 @@ function watchRoster() {
   let roster = NO_ROSTER;
   let connectedAt = 0;
   let wasConnected = false;
+  let inCall = false;
   const check = (seatsChanged: boolean) =>
     queueMicrotask(() => {
       const call = store.get(voiceCallAtom);
@@ -62,6 +63,9 @@ function watchRoster() {
     const connected = store.get(voiceCallAtom).phase === 'connected';
     if (connected && !wasConnected) connectedAt = performance.now();
     wasConnected = connected;
+    const own = stepOwnCall(inCall, store.get(voiceCallAtom).phase);
+    inCall = own.inCall;
+    if (own.sound) playSound(own.sound);
     check(false);
   });
 }
