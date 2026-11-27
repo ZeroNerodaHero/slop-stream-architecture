@@ -11,7 +11,6 @@ import {
   RiGroupLine,
   RiHeading,
   RiImageLine,
-  RiLayoutMasonryLine,
   RiMusic2Line,
   RiSeparator,
   RiStackLine,
@@ -27,20 +26,16 @@ import {
   BLOCKS_MAX,
   type BlockKind,
   GRID,
-  type Template,
-  TEMPLATES,
   blockWord,
   clampSpan,
+  kindWord,
   moved,
   newId,
   starterBlock,
-  templateBlocks,
   wireBlock
 } from '@/infra/about-blocks';
 import { api } from '@/infra/api';
 import { Button } from '@/shared-components/Button';
-import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
-import { MenuButton } from '@/shared-components/MenuButton';
 import { DragHandle, useReorder } from '@/shared-components/Reorderable';
 import { Segmented } from '@/shared-components/Segmented';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -50,7 +45,6 @@ import { cellStyle, GridFrame, PHONE_AT, shownOn, useWidth } from './AboutGrid';
 import { BlockSettings } from './BlockSettings';
 import { BlockView, type PageMeta } from './BlockView';
 import { PageView } from './PageView';
-import { TemplatePicker } from './Templates';
 
 const KIND_ICON: Record<BlockKind, ReactNode> = {
   heading: <RiHeading size={14} aria-hidden />,
@@ -148,7 +142,6 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const published = useRef<AboutPage | null>(null);
-  const [asking, setAsking] = useState<Template['key'] | null>(null);
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const width = useWidth(frame);
@@ -258,13 +251,6 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
     touch((list) => list.filter((b) => b.id !== id));
     setSel(blocks[at + 1]?.id ?? blocks[at - 1]?.id ?? null);
   };
-  const applyTemplate = (key: Template['key']) => {
-    const next = templateBlocks(key, name);
-    touch(() => next);
-    setSel(next[0]?.id ?? null);
-    setAsking(null);
-  };
-  const pickTemplate = (key: Template['key']) => (blocks.length > 0 ? setAsking(key) : applyTemplate(key));
 
   const publish = async () => {
     await flush();
@@ -322,7 +308,7 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
             className="flex h-7 items-center gap-2 rounded-control border border-primaryStroke bg-backgroundSecondary px-2 text-xs text-textPrimary transition-colors hover:border-primaryBlue"
           >
             <span className="text-textTertiary">{KIND_ICON[kind]}</span>
-            {kind}
+            {kindWord(kind)}
           </button>
         ))}
       </div>
@@ -363,8 +349,7 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
   const canvas =
     blocks.length === 0 ? (
       <div className="flex flex-col gap-2 rounded-card border border-dashed border-secondaryStroke p-3">
-        <p className="text-sm text-textSecondary">start from a template, or add blocks on the left.</p>
-        <TemplatePicker onPick={pickTemplate} id="about-editor-templates" />
+        <p className="text-sm text-textSecondary">add blocks on the left.</p>
       </div>
     ) : (
       <div className={cn(phone && 'mx-auto w-[390px] max-w-full rounded-panel border border-primaryStroke bg-background p-2')}>
@@ -484,16 +469,6 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
             className="[&_[aria-checked=true]]:text-primaryBlue"
           />
         )}
-        <MenuButton
-          id="about-template"
-          label="templates"
-          boxed
-          items={TEMPLATES.map((t) => ({ key: t.key, id: `about-template-${t.key}`, label: t.label, onPick: () => pickTemplate(t.key) }))}
-          className="flex h-7 items-center gap-1.5 rounded-control border border-primaryStroke bg-backgroundSecondary px-2 text-xs font-semibold text-textPrimary hover:border-primaryBlue"
-        >
-          <RiLayoutMasonryLine size={14} aria-hidden />
-          templates
-        </MenuButton>
         <span role="status" className="ml-auto min-w-0 truncate text-xs text-textTertiary">
           {status || (savedAt !== null ? agoWord(savedAt, Math.max(now, savedAt)) : changed ? 'not published yet' : '')}
         </span>
@@ -538,16 +513,6 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
           {canvas}
           <div className="rounded-card border border-primaryStroke p-2.5">{inspector}</div>
         </div>
-      )}
-      {asking && (
-        <ConfirmDialog
-          id="about-template-confirm"
-          title="start over from a template?"
-          message="this replaces the blocks on your draft. what's published stays until you publish again."
-          yes="use template"
-          onYes={() => applyTemplate(asking)}
-          onNo={() => setAsking(null)}
-        />
       )}
     </div>
   );

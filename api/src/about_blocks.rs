@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sqlx::PgConnection;
 
 use crate::about_md::{html_to_md, render, text_to_md};
-use crate::about_page::{about_key, clean_color, decode_entities, ensure_row, ext_of, file_src, http_url, StoredBlock, StoredPage, BLOCKS_MAX};
+use crate::about_page::{about_key, decode_entities, ensure_row, ext_of, file_src, http_url, StoredBlock, StoredPage, BLOCKS_MAX};
 use crate::auth::Me;
 use crate::chat::clean_text;
 use crate::s3;
@@ -58,6 +58,12 @@ pub(crate) struct Block {
     pub(crate) phone: String,
     pub(crate) fill: String,
     pub(crate) accent: String,
+    pub(crate) paint: String,
+    pub(crate) ink: String,
+    pub(crate) edge: String,
+    pub(crate) tint: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
     pub(crate) font: String,
     pub(crate) align: String,
     pub(crate) href: String,
@@ -165,6 +171,20 @@ fn link(raw: &str, strict: bool) -> Result<String, ApiError> {
     }
 }
 
+fn color(raw: &str, strict: bool) -> Result<String, ApiError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    if raw.len() == 7 && raw.starts_with('#') && raw[1..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(raw.to_ascii_lowercase());
+    }
+    if strict {
+        return Err(bad("not a color. it needs to be #rrggbb"));
+    }
+    Ok(String::new())
+}
+
 fn file(id: i64, want: &str, have: &Files, strict: bool) -> Result<i64, ApiError> {
     if id <= 0 {
         return Ok(0);
@@ -188,7 +208,13 @@ fn clean(b: &Block, have: &Files, strict: bool) -> Result<Block, ApiError> {
         span: if b.span <= 0 { default_span(kind) } else { b.span.clamp(SPAN_MIN, SPAN_MAX) },
         phone: pick(&b.phone, &PHONES, "full"),
         fill: pick(&b.fill, &FILLS, default_fill(kind)),
-        accent: clean_color(&b.accent),
+        accent: color(&b.accent, strict)?,
+        paint: color(&b.paint, strict)?,
+        ink: color(&b.ink, strict)?,
+        edge: color(&b.edge, strict)?,
+        tint: color(&b.tint, strict)?,
+        from: color(&b.from, strict)?,
+        to: color(&b.to, strict)?,
         font: pick(&b.font, &FONTS, "geist"),
         align: pick(&b.align, &ALIGNS, "left"),
         ..Block::default()
@@ -676,6 +702,42 @@ mod tests {
         let mut gallery = block("gallery");
         gallery.items = vec![Item { file: 7, label: "wip rig".into(), href: String::new() }];
         assert_eq!(clean(&gallery, &have, true).unwrap().items[0].file, 7);
+    }
+
+    #[test]
+    fn colors_are_kept_as_lowercase_hex_and_anything_else_is_refused() {
+        let have = files();
+        let mut heading = block("heading");
+        heading.paint = " #0A0B0C ".into();
+        heading.ink = "#ffffff".into();
+        heading.edge = "#123abc".into();
+        heading.tint = "#FF00AA".into();
+        heading.from = "#000000".into();
+        heading.to = "#abcdef".into();
+        let kept = clean(&heading, &have, true).unwrap();
+        assert_eq!(
+            [kept.paint.as_str(), kept.ink.as_str(), kept.edge.as_str(), kept.tint.as_str(), kept.from.as_str(), kept.to.as_str()],
+            ["#0a0b0c", "#ffffff", "#123abc", "#ff00aa", "#000000", "#abcdef"]
+        );
+        assert_eq!(clean(&block("text"), &have, true).unwrap().paint, "");
+        for raw in ["red", "#fff", "123456", "#12345g", "#1234567", "url(x)", "#ff00aa;color:red"] {
+            for field in 0..7 {
+                let mut b = block("panel");
+                let slot = match field {
+                    0 => &mut b.accent,
+                    1 => &mut b.paint,
+                    2 => &mut b.ink,
+                    3 => &mut b.edge,
+                    4 => &mut b.tint,
+                    5 => &mut b.from,
+                    _ => &mut b.to,
+                };
+                *slot = raw.into();
+                assert_eq!(clean(&b, &have, true).unwrap_err().message(), "not a color. it needs to be #rrggbb");
+                let loose = clean(&b, &have, false).unwrap();
+                assert!([loose.accent, loose.paint, loose.ink, loose.edge, loose.tint, loose.from, loose.to].iter().all(String::is_empty));
+            }
+        }
     }
 
     #[test]

@@ -1,21 +1,20 @@
-import { RiPencilLine } from '@remixicon/react';
 import { useEffect, useState } from 'react';
 
-import { type AboutPage, type Template, isBlank, templateBlocks, wireBlock } from '@/infra/about-blocks';
+import { type AboutPage, isBlank } from '@/infra/about-blocks';
 import { api } from '@/infra/api';
-import { Button } from '@/shared-components/Button';
 import { useNarrow } from '@/shared-components/about/AboutGrid';
 import { AboutEditor } from '@/shared-components/about/AboutEditor';
 import { PageView } from '@/shared-components/about/PageView';
-import { TemplatePicker } from '@/shared-components/about/Templates';
 
 interface AboutProps {
   name: string;
   edit?: boolean;
+  editing?: boolean;
+  onEditing?: (on: boolean) => void;
   id?: string;
 }
 
-export function About({ name, edit = false, id }: AboutProps) {
+export function About({ name, edit = false, editing = false, onEditing, id }: AboutProps) {
   const box = id ?? `about-${name}`;
   const [page, setPage] = useState<AboutPage | null>(null);
   const [failed, setFailed] = useState(false);
@@ -40,16 +39,25 @@ export function About({ name, edit = false, id }: AboutProps) {
     };
   }, [name, tries]);
 
-  const openEditor = async (key?: Template['key']) => {
-    setStatus('');
-    try {
-      let next = await api.aboutDraft(name);
-      if (key && next.blocks.length === 0) next = await api.saveAboutDraft(name, templateBlocks(key, name).map(wireBlock));
-      setDraft(next);
-    } catch (err: unknown) {
-      setStatus(err instanceof Error ? err.message : 'could not open the editor');
-    }
-  };
+  useEffect(() => {
+    if (!editing) return;
+    let live = true;
+    api
+      .aboutDraft(name)
+      .then((d) => {
+        if (!live) return;
+        setStatus('');
+        setDraft(d);
+      })
+      .catch((err: unknown) => {
+        if (!live) return;
+        setStatus(err instanceof Error ? err.message : 'could not open the editor');
+        onEditing?.(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [editing, name, onEditing]);
 
   if (failed) {
     return (
@@ -72,7 +80,7 @@ export function About({ name, edit = false, id }: AboutProps) {
 
   if (!page) return null;
 
-  if (draft) {
+  if (editing && draft) {
     return (
       <section id={box} aria-label={`edit about ${name}`}>
         <AboutEditor
@@ -81,6 +89,7 @@ export function About({ name, edit = false, id }: AboutProps) {
           meta={page}
           onClose={(live) => {
             setDraft(null);
+            onEditing?.(false);
             if (live) setPage({ ...live, changed: undefined });
           }}
         />
@@ -105,15 +114,8 @@ export function About({ name, edit = false, id }: AboutProps) {
     }
     return (
       <div ref={setFrame} id={box} data-empty className="flex flex-col gap-3">
-        <p className="text-sm text-textSecondary">nothing on your about yet. start from one of these:</p>
-        <TemplatePicker onPick={(key) => void openEditor(key)} />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button id="about-edit" size="sm" className="gap-1.5" onClick={() => void openEditor()}>
-            <RiPencilLine size={16} aria-hidden />
-            edit
-          </Button>
-          {statusLine}
-        </div>
+        <p className="text-sm text-textSecondary">nothing on your about yet.</p>
+        {statusLine}
       </div>
     );
   }
@@ -123,15 +125,7 @@ export function About({ name, edit = false, id }: AboutProps) {
       <section id={box} aria-label={`about ${name}`}>
         <PageView blocks={page.blocks} meta={page} name={name} phone={phone} id={box} />
       </section>
-      {edit && (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button id="about-edit" size="sm" className="gap-1.5 self-start" onClick={() => void openEditor()}>
-            <RiPencilLine size={16} aria-hidden />
-            edit
-          </Button>
-          {statusLine}
-        </div>
-      )}
+      {edit && statusLine}
     </div>
   );
 }

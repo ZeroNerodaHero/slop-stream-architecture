@@ -12,6 +12,61 @@ export const ALIGNS = ['left', 'center', 'right'] as const;
 export type Align = (typeof ALIGNS)[number];
 export const ACCENTS = ['', '#5b3ea6', '#1fa58c', '#c4772b', '#c43b5c', '#4f8bff'] as const;
 export type FileKind = 'image' | 'video' | 'sound';
+export const COLOR_KEYS = ['accent', 'paint', 'ink', 'edge', 'tint', 'from', 'to'] as const;
+export type ColorKey = (typeof COLOR_KEYS)[number];
+
+export interface Hsv {
+  h: number;
+  s: number;
+  v: number;
+}
+
+export function cleanHex(raw: string): string | null {
+  const t = raw.trim().toLowerCase();
+  const hex = t.startsWith('#') ? t : `#${t}`;
+  return /^#[0-9a-f]{6}$/.test(hex) ? hex : null;
+}
+
+export function hexToHsv(hex: string): Hsv {
+  const ok = cleanHex(hex) ?? '#000000';
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(ok.slice(i, i + 2), 16) / 255) as [number, number, number];
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  let h = 0;
+  if (d > 0) {
+    if (max === r) h = ((g - b) / d + 6) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+  }
+  return { h: h * 60, s: max === 0 ? 0 : d / max, v: max };
+}
+
+export function hsvToHex({ h, s, v }: Hsv): string {
+  const hue = (((h % 360) + 360) % 360) / 60;
+  const sat = Math.min(1, Math.max(0, s));
+  const val = Math.min(1, Math.max(0, v));
+  const f = (n: number) => {
+    const k = (n + hue) % 6;
+    return val - val * sat * Math.max(0, Math.min(k, 4 - k, 1));
+  };
+  return `#${[f(5), f(3), f(1)]
+    .map((c) =>
+      Math.round(c * 255)
+        .toString(16)
+        .padStart(2, '0')
+    )
+    .join('')}`;
+}
+
+export function inkOn(hex: string): string {
+  const ok = cleanHex(hex);
+  if (!ok) return '#ffffff';
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(ok.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000000' : '#ffffff';
+}
 
 export const GRID = 12;
 export const SPAN_MIN = 3;
@@ -38,6 +93,12 @@ export interface AboutBlock {
   phone: Phone;
   fill: Fill;
   accent: string;
+  paint: string;
+  ink: string;
+  edge: string;
+  tint: string;
+  from: string;
+  to: string;
   font: Font;
   align: Align;
   href: string;
@@ -117,6 +178,12 @@ export function blankBlock(kind: BlockKind, over: Partial<AboutBlock> = {}): Abo
     phone: 'full',
     fill: defaultFill(kind),
     accent: '',
+    paint: '',
+    ink: '',
+    edge: '',
+    tint: '',
+    from: '',
+    to: '',
     font: 'geist',
     align: 'left',
     href: '',
@@ -178,6 +245,7 @@ export function wireBlock(b: AboutBlock): AboutBlock {
   const { html: _html, ...rest } = b;
   return {
     ...rest,
+    ...Object.fromEntries(COLOR_KEYS.map((k) => [k, cleanHex(b[k] ?? '') ?? ''])),
     href: cleanLink(b.href) ?? '',
     link: cleanLink(b.link) ?? '',
     items: b.items.slice(0, ITEMS_MAX).map((item) => ({ ...item, href: cleanLink(item.href) ?? '' }))
@@ -398,70 +466,6 @@ export function markdownToHtml(md: string): string {
   return out + closeOpen(open);
 }
 
-export interface Template {
-  key: 'panels' | 'bio' | 'banner' | 'blank';
-  label: string;
-}
-
-export const TEMPLATES: readonly Template[] = [
-  { key: 'panels', label: 'twitch panels' },
-  { key: 'bio', label: 'bio + links' },
-  { key: 'banner', label: 'banner + grid' },
-  { key: 'blank', label: 'blank' }
-];
-
-export function templateBlocks(key: Template['key'], name: string): AboutBlock[] {
-  const hi = `### hi, i'm ${name}\nwhat you stream, when, and what people come back for.`;
-  const rules = '1. be nice\n2. no spoilers\n3. no backseating';
-  const setup = '- **cam** your camera\n- **mic** your mic\n- **pc** your pc';
-  switch (key) {
-    case 'panels':
-      return [
-        blankBlock('panel', { span: 4, fill: 'accent', accent: '#5b3ea6', title: 'about me', md: hi }),
-        blankBlock('schedule', { span: 4, title: "when i'm on", md: '**8pm ct** · most nights' }),
-        blankBlock('panel', { span: 4, fill: 'accent', accent: '#c43b5c', title: 'rules', md: rules }),
-        blankBlock('panel', { span: 4, title: 'setup', md: setup }),
-        blankBlock('panel', { span: 4, fill: 'accent', accent: '#4f8bff', title: 'discord', md: 'clips, chat between streams.', label: 'join', link: '' }),
-        blankBlock('socials', { span: 4, title: 'socials' })
-      ];
-    case 'bio':
-      return [
-        blankBlock('text', { span: 7, md: hi }),
-        blankBlock('stats', { span: 5, socials: true }),
-        blankBlock('buttons', {
-          span: 12,
-          items: [
-            { file: 0, label: 'my discord', href: '' },
-            { file: 0, label: 'commissions', href: '' },
-            { file: 0, label: 'wishlist', href: '' }
-          ]
-        })
-      ];
-    case 'banner':
-      return [
-        blankBlock('heading', { span: 12, title: name.toUpperCase(), sub: 'what i do · when i stream' }),
-        blankBlock('text', { span: 7, md: hi }),
-        blankBlock('stats', { span: 5, socials: true }),
-        blankBlock('schedule', { span: 4, title: "when i'm on", md: '**8pm ct** · most nights' }),
-        blankBlock('buttons', {
-          span: 4,
-          items: [
-            { file: 0, label: 'join the discord', href: '' },
-            { file: 0, label: 'commissions', href: '' },
-            { file: 0, label: 'wishlist', href: '' }
-          ]
-        }),
-        blankBlock('sound', { span: 4, title: 'theme song' }),
-        blankBlock('gallery', { span: 12 }),
-        blankBlock('panel', { span: 4, fill: 'accent', accent: '#c43b5c', title: 'rules', md: rules }),
-        blankBlock('panel', { span: 4, title: 'setup', md: setup }),
-        blankBlock('panel', { span: 4, fill: 'accent', accent: '#5b3ea6', title: 'discord', md: 'clips, wip, movie nights.', label: 'join', link: '' })
-      ];
-    default:
-      return [];
-  }
-}
-
 export function moved<T>(list: readonly T[], from: number, to: number): T[] {
   const next = [...list];
   if (from < 0 || from >= next.length) return next;
@@ -492,6 +496,10 @@ export function isBlank(b: AboutBlock, socials: number): boolean {
   }
 }
 
+export function kindWord(kind: BlockKind): string {
+  return kind === 'buttons' ? 'links' : kind;
+}
+
 export function blockWord(b: AboutBlock): string {
   const first =
     b.md
@@ -500,5 +508,5 @@ export function blockWord(b: AboutBlock): string {
       ?.replace(/^[#>*\-+\d.)\s]+/, '')
       .replace(/[*_~[\]]/g, '') ?? '';
   const word = b.title || first || b.items.find((i) => i.label)?.label || '';
-  return word ? `${b.kind} · ${word.slice(0, 40)}` : b.kind;
+  return word ? `${kindWord(b.kind)} · ${word.slice(0, 40)}` : kindWord(b.kind);
 }

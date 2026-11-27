@@ -5,6 +5,7 @@ import {
   ACCENTS,
   type AboutBlock,
   ALIGNS,
+  type ColorKey,
   FILLS,
   FONT_WORD,
   FONTS,
@@ -18,6 +19,7 @@ import {
   WANTS,
   cleanLink,
   fileSrc,
+  kindWord,
   spanOptions
 } from '@/infra/about-blocks';
 import { Button } from '@/shared-components/Button';
@@ -26,6 +28,8 @@ import { Segmented } from '@/shared-components/Segmented';
 import { Select } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+
+import { ColorChip, ColorPick, RAINBOW } from './ColorPick';
 
 const ACCEPT: Record<FileKind, string> = { image: 'image/*', video: 'video/mp4,video/webm', sound: 'audio/*' };
 const FILE_WORD: Record<FileKind, string> = { image: 'picture', video: 'clip', sound: 'sound' };
@@ -41,6 +45,18 @@ const TOOLS: readonly [string, ReactNode, string, string, boolean][] = [
 const SMALL_INPUT = cn(INPUT, 'py-1 text-sm');
 const ICON_BUTTON =
   'flex size-7 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors hover:border-primaryBlue hover:text-textPrimary';
+
+const FALLBACK: Record<ColorKey, string> = {
+  accent: '#5b3ea6',
+  paint: '#1b1b24',
+  ink: '#ffffff',
+  edge: '#3a3a4a',
+  tint: '#4f8bff',
+  from: '#0d1530',
+  to: '#2d2140'
+};
+const COLOR_WORD: Record<ColorKey, string> = { accent: 'accent', paint: 'fill', ink: 'text', edge: 'border', tint: 'link', from: 'from', to: 'to' };
+const LINKY: ReadonlySet<AboutBlock['kind']> = new Set(['text', 'panel', 'buttons', 'schedule', 'quote']);
 
 export type Upload = (kind: FileKind, file: File) => Promise<number>;
 
@@ -182,6 +198,18 @@ export function BlockSettings({
 }) {
   const wants = WANTS[b.kind];
   const [busy, setBusy] = useState('');
+  const [open, setOpen] = useState<ColorKey | null>(null);
+  const preset = (ACCENTS as readonly string[]).includes(b.accent);
+  const toggle = (key: ColorKey) => setOpen((now) => (now === key ? null : key));
+  const picker = (keys: readonly ColorKey[]) =>
+    open && keys.includes(open) ? (
+      <ColorPick key={open} id={id(`color-${open}`)} label={COLOR_WORD[open]} value={b[open] ?? ''} fallback={FALLBACK[open]} onChange={(hex) => onPatch({ [open]: hex })} />
+    ) : null;
+  const shown: ColorKey[] = [];
+  if (b.fill === 'card' || (b.kind === 'panel' && b.fill !== 'none')) shown.push('paint');
+  shown.push('ink');
+  if (b.fill !== 'none' || b.kind === 'divider') shown.push('edge');
+  if (LINKY.has(b.kind)) shown.push('tint');
   const id = (part: string) => `about-set-${part}`;
   const send = async (kind: FileKind, file: File, done: (fileId: number) => void) => {
     setBusy(`uploading ${FILE_WORD[kind]}…`);
@@ -197,7 +225,7 @@ export function BlockSettings({
   return (
     <div id="about-settings" className="flex flex-col gap-2.5">
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-sm font-bold text-textPrimary">{b.kind}</h3>
+        <h3 className="text-sm font-bold text-textPrimary">{kindWord(b.kind)}</h3>
         <span className="text-xs text-textTertiary">
           block {index + 1} of {count}
         </span>
@@ -261,7 +289,10 @@ export function BlockSettings({
                   role="radio"
                   aria-checked={on}
                   aria-label={word}
-                  onClick={() => onPatch({ accent: color })}
+                  onClick={() => {
+                    onPatch({ accent: color });
+                    if (open === 'accent') setOpen(null);
+                  }}
                   style={{ backgroundColor: color || undefined }}
                   className={cn(
                     'size-5 rounded-control border-2 outline-offset-1',
@@ -272,8 +303,42 @@ export function BlockSettings({
               </Tooltip>
             );
           })}
+          <Tooltip content={!preset ? `custom ${b.accent}` : 'custom'}>
+            <button
+              id={id('accent-custom')}
+              type="button"
+              role="radio"
+              aria-checked={!preset}
+              aria-expanded={open === 'accent'}
+              aria-label="custom"
+              onClick={() => toggle('accent')}
+              style={{ backgroundColor: !preset ? b.accent : undefined, backgroundImage: preset ? RAINBOW : undefined }}
+              className={cn('size-5 rounded-control border-2 border-transparent outline-offset-1', (!preset || open === 'accent') && 'outline outline-2 outline-textPrimary')}
+            />
+          </Tooltip>
         </div>
       </Row>
+      {picker(['accent'])}
+      <Row label="colors">
+        <div className="flex flex-wrap gap-1">
+          {shown.map((key) => (
+            <ColorChip key={key} id={id(`color-${key}-chip`)} word={COLOR_WORD[key]} value={b[key] ?? ''} open={open === key} onClick={() => toggle(key)} />
+          ))}
+        </div>
+      </Row>
+      {picker(shown)}
+      {b.fill === 'accent' && (
+        <>
+          <Row label="gradient">
+            <div className="flex flex-wrap gap-1">
+              {(['from', 'to'] as const).map((key) => (
+                <ColorChip key={key} id={id(`color-${key}-chip`)} word={COLOR_WORD[key]} value={b[key] ?? ''} open={open === key} onClick={() => toggle(key)} />
+              ))}
+            </div>
+          </Row>
+          {picker(['from', 'to'])}
+        </>
+      )}
       <Row label="font">
         <Select id={id('font')} label="font" value={b.font} options={FONTS.map((f) => ({ value: f, label: FONT_WORD[f] }))} onChange={(font) => onPatch({ font })} className="w-full text-sm" />
       </Row>
@@ -412,7 +477,7 @@ export function BlockSettings({
                 onClick={() => onPatch({ items: [...b.items, { file: 0, label: '', href: '' }] })}
               >
                 <RiAddLine size={14} aria-hidden />
-                {b.kind === 'gallery' ? 'add a tile' : 'add a button'}
+                {b.kind === 'gallery' ? 'add a tile' : 'add a link'}
               </Button>
             )}
           </div>

@@ -2,29 +2,32 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  BLOCK_KINDS,
   ITEMS_MAX,
-  SPAN_MAX,
-  SPAN_MIN,
-  TEMPLATES,
   blankBlock,
   blockWord,
+  cleanHex,
+  hexToHsv,
+  hsvToHex,
+  inkOn,
   cleanLink,
   compactCount,
   httpUrl,
   isBlank,
   joinedWord,
+  kindWord,
   markdownToHtml,
   moved,
   newId,
   spanOptions,
-  templateBlocks,
   weekdaysOf,
   wireBlock
 } from '../src/infra/about-blocks.ts';
 
 test('markdown becomes the same tags the server allows', () => {
-  assert.equal(markdownToHtml("### hi i'm wolf\nvtuber rigger, late night\n**just chatting**"), "<h3>hi i'm wolf</h3><p>vtuber rigger, late night<br><strong>just chatting</strong></p>");
+  assert.equal(
+    markdownToHtml("### hi i'm wolf\nvtuber rigger, late night\n**just chatting**"),
+    "<h3>hi i'm wolf</h3><p>vtuber rigger, late night<br><strong>just chatting</strong></p>"
+  );
   assert.equal(markdownToHtml('# big'), '<h2>big</h2>');
   assert.equal(markdownToHtml('1. be nice\n2. no spoilers'), '<ol><li>be nice</li><li>no spoilers</li></ol>');
   assert.equal(markdownToHtml('- **cam** iphone\n- mic'), '<ul><li><strong>cam</strong> iphone</li><li>mic</li></ul>');
@@ -63,27 +66,18 @@ test('links are http or https only', () => {
 });
 
 test('wire blocks drop html and bad links', () => {
-  const b = blankBlock('panel', { html: '<p>x</p>', href: 'javascript:alert(1)', link: 'discord.gg/wolf', items: Array.from({ length: 20 }, () => ({ file: 0, label: 'x', href: 'nope nope' })) });
+  const b = blankBlock('panel', {
+    html: '<p>x</p>',
+    href: 'javascript:alert(1)',
+    link: 'discord.gg/wolf',
+    items: Array.from({ length: 20 }, () => ({ file: 0, label: 'x', href: 'nope nope' }))
+  });
   const w = wireBlock(b);
   assert.equal('html' in w, false);
   assert.equal(w.href, '');
   assert.equal(w.link, 'https://discord.gg/wolf');
   assert.equal(w.items.length, ITEMS_MAX);
   assert.equal(w.items[0]?.href, '');
-});
-
-test('templates are valid pages', () => {
-  for (const t of TEMPLATES) {
-    const blocks = templateBlocks(t.key, 'wolf');
-    assert.equal(new Set(blocks.map((b) => b.id)).size, blocks.length);
-    for (const b of blocks) {
-      assert.ok(BLOCK_KINDS.includes(b.kind));
-      assert.ok(b.span >= SPAN_MIN && b.span <= SPAN_MAX);
-      assert.match(b.id, /^[a-z0-9-]{1,16}$/);
-    }
-  }
-  assert.deepEqual(templateBlocks('blank', 'wolf'), []);
-  assert.equal(templateBlocks('banner', 'wolf')[0]?.title, 'WOLF');
 });
 
 test('ids fit the server rule', () => {
@@ -123,4 +117,23 @@ test('blank blocks stay off the viewer page', () => {
   assert.equal(isBlank(blankBlock('image'), 0), true);
   assert.equal(isBlank(blankBlock('stats'), 0), false);
   assert.equal(blockWord(blankBlock('text', { md: '### hi there' })), 'text · hi there');
+  assert.equal(kindWord('buttons'), 'links');
+  assert.equal(kindWord('gallery'), 'gallery');
+  assert.equal(blockWord(blankBlock('buttons', { items: [{ file: 0, label: 'discord', href: '' }] })), 'links · discord');
+});
+
+test('colors are #rrggbb in lowercase or nothing', () => {
+  assert.equal(cleanHex('#FF00AA'), '#ff00aa');
+  assert.equal(cleanHex(' 1fa58c '), '#1fa58c');
+  for (const bad of ['', '#fff', 'red', '#12345g', '#1234567', 'url(x)']) assert.equal(cleanHex(bad), null);
+  for (const hex of ['#000000', '#ffffff', '#5b3ea6', '#1fa58c', '#c4772b', '#ff0000', '#00ff00', '#0000ff', '#808080']) assert.equal(hsvToHex(hexToHsv(hex)), hex);
+  assert.deepEqual(hexToHsv('#ff0000'), { h: 0, s: 1, v: 1 });
+  assert.equal(hsvToHex({ h: 120, s: 1, v: 1 }), '#00ff00');
+  assert.equal(inkOn('#ffffff'), '#000000');
+  assert.equal(inkOn('#0d1530'), '#ffffff');
+});
+
+test('a block on the wire carries only good colors', () => {
+  const b = wireBlock(blankBlock('heading', { accent: '#ABCDEF', paint: 'nope', ink: '#ffffff', from: '#0D1530', to: '#fff' }));
+  assert.deepEqual([b.accent, b.paint, b.ink, b.edge, b.tint, b.from, b.to], ['#abcdef', '', '#ffffff', '', '', '#0d1530', '']);
 });
