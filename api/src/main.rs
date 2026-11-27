@@ -13,6 +13,7 @@ mod dm_calls;
 mod dms;
 mod emotes;
 mod events;
+mod fault_log;
 mod follows;
 mod group_mod;
 mod groups;
