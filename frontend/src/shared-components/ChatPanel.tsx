@@ -30,6 +30,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingVideo, PICTURE_ACCEPT, splitFiles, STREAM_CHAT_VIDEO, STREAM_VIDEO_OFF } from '@/shared-components/ChatAttach';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
+import { LinkEmbed } from '@/shared-components/LinkEmbed';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
@@ -79,6 +80,7 @@ interface ChatPanelProps {
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
+  embedMod?: (line: ChatLine) => boolean;
   welcome?: Welcome | null;
   className?: string;
 }
@@ -546,6 +548,7 @@ interface ChatRowProps {
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
   lineSide?: (line: ChatLine) => ReactNode;
+  hidesEmbed: boolean;
   bare?: boolean;
   firstInList?: boolean;
 }
@@ -567,6 +570,7 @@ const ChatRow = memo(function ChatRow({
   lineActions,
   lineMenu,
   lineSide,
+  hidesEmbed,
   bare,
   firstInList
 }: ChatRowProps) {
@@ -609,6 +613,7 @@ const ChatRow = memo(function ChatRow({
           {line.video && <ChatVideoPlayer video={line.video} />}
           {line.audio && <ChatAudioPlayer audio={line.audio} />}
           <ChatEmbeds text={line.text} />
+          <LinkEmbed embed={line.embed} text={line.text} onHide={hidesEmbed && !line.pending ? () => room.hideEmbed(line) : undefined} />
         </>
       }
       mark={line.pending ? undefined : lineMark?.(line)}
@@ -681,6 +686,7 @@ interface RowCtx {
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
   lineSide?: (line: ChatLine) => ReactNode;
+  embedMod?: (line: ChatLine) => boolean;
   bare: boolean;
   hasHeader: boolean;
 }
@@ -714,6 +720,7 @@ function rowNode(lines: readonly ChatLine[], i: number, ctx: RowCtx): ReactNode 
       lineActions={ctx.lineActions}
       lineMenu={ctx.lineMenu}
       lineSide={ctx.lineSide}
+      hidesEmbed={!!ctx.me && !!line.embed && (mine || !!ctx.embedMod?.(line))}
       bare={ctx.bare}
       firstInList={ctx.bare ? !ctx.hasHeader && i === 0 : undefined}
     />
@@ -729,7 +736,7 @@ function rowTopPad(lines: readonly ChatLine[], i: number, shape: ChatStyle, hasH
   return place.bucket ? 'calc(1px + 0.25rem)' : '1px';
 }
 
-function useRowCtx(name: string, room: ChatRoom, extra: Pick<RowCtx, 'replies' | 'reacts' | 'jumps' | 'lineMark' | 'lineActions' | 'lineMenu' | 'lineSide' | 'bare' | 'hasHeader'>): RowCtx {
+function useRowCtx(name: string, room: ChatRoom, extra: Pick<RowCtx, 'replies' | 'reacts' | 'jumps' | 'lineMark' | 'lineActions' | 'lineMenu' | 'lineSide' | 'embedMod' | 'bare' | 'hasHeader'>): RowCtx {
   const shape = useAtomValue(chatStyleAtom);
   const flash = useAtomValue(room.flashAtom);
   const asStreamer = useAtomValue(room.asStreamerAtom);
@@ -747,6 +754,7 @@ export function RoomLines({
   lineActions,
   lineMenu,
   lineSide,
+  embedMod,
   replies = false,
   reacts = false,
   jumps = false
@@ -758,11 +766,12 @@ export function RoomLines({
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
   lineSide?: (line: ChatLine) => ReactNode;
+  embedMod?: (line: ChatLine) => boolean;
   replies?: boolean;
   reacts?: boolean;
   jumps?: boolean;
 }) {
-  const ctx = useRowCtx(name, room, { replies, reacts, jumps, lineMark, lineActions, lineMenu, lineSide, bare: false, hasHeader: false });
+  const ctx = useRowCtx(name, room, { replies, reacts, jumps, lineMark, lineActions, lineMenu, lineSide, embedMod, bare: false, hasHeader: false });
   return <>{lines.map((_, i) => rowNode(lines, i, ctx))}</>;
 }
 
@@ -776,6 +785,7 @@ function ChatLog({
   lineActions,
   lineMenu,
   lineSide,
+  embedMod,
   replies = false,
   reacts = false,
   jumps = false
@@ -789,12 +799,13 @@ function ChatLog({
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
   lineSide?: (line: ChatLine) => ReactNode;
+  embedMod?: (line: ChatLine) => boolean;
   replies?: boolean;
   reacts?: boolean;
   jumps?: boolean;
 }) {
   const hasHeader = header !== null && header !== undefined && header !== false;
-  const ctx = useRowCtx(name, room, { replies, reacts, jumps, lineMark, lineActions, lineMenu, lineSide, bare: true, hasHeader });
+  const ctx = useRowCtx(name, room, { replies, reacts, jumps, lineMark, lineActions, lineMenu, lineSide, embedMod, bare: true, hasHeader });
   const vref = useRef<VirtuosoHandle | null>(null);
   const scroller = useRef<HTMLElement | null>(null);
   const resizer = useRef<ResizeObserver | null>(null);
@@ -929,6 +940,7 @@ export function ChatPanel({
   lineMark,
   lineActions,
   lineMenu,
+  embedMod,
   welcome = null,
   className
 }: ChatPanelProps) {
@@ -1126,6 +1138,7 @@ export function ChatPanel({
                 lineMark={lineMark}
                 lineActions={lineActions}
                 lineMenu={lineMenu}
+                embedMod={embedMod}
                 replies={!needsNick}
                 reacts
                 jumps

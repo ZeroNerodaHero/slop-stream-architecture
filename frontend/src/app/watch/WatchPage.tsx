@@ -193,6 +193,7 @@ export function WatchPage() {
   const phoneTabs = myPage ? MY_PHONE_TABS : PHONE_TABS;
   const canModerate = useAtomValue(canModerateAtom) || myPage;
   const modActions = canModerate && name ? (line: ChatLine) => <ChatModActions name={name} line={line} me={me} /> : undefined;
+  const embedMod = canModerate ? () => true : undefined;
   const phase = useAtomValue(watchPhaseAtom);
   useShowsWatch(playerRef, phase !== 'waiting' && phase !== 'loading', { small: false, fixed: false });
   const presence = useAtomValue(presenceOfAtom(name));
@@ -505,7 +506,7 @@ export function WatchPage() {
     };
     const content = (t: PhoneTab) =>
       t === 'chat' ? (
-        <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
+        <ChatPanel name={name} lineActions={modActions} embedMod={embedMod} welcome={welcome} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
       ) : t === 'about' ? (
         <>
           <div className="[&>div]:mt-0">{status}</div>
@@ -669,7 +670,7 @@ export function WatchPage() {
             className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
           >
             <ChatSlot tabbed={chatTab} fluid={theater} resizable>
-              <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
+              <ChatPanel name={name} lineActions={modActions} embedMod={embedMod} welcome={welcome} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
             </ChatSlot>
           </div>
         )}

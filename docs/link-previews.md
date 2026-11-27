@@ -35,3 +35,13 @@ A hidden card is kept as `hidden` (a room line) or `embed_hidden` (a DM), so a l
 ## turning it off
 
 `UNFURL=off` (or `0`, `false`, `no`) on the api stops the worker, and on the chat service stops the queueing. It is on when unset. The api needs a route out to the internet and working dns; nothing else.
+
+## the card in the app
+
+`LinkEmbed` (`shared-components/LinkEmbed.tsx`) sits under the line's pictures, video, voice message and players in every chat: a stream's chat and a group's (`ChatPanel`'s `ChatRow`), a DM (`FriendChat`'s `DmRow`, the phone's too) and a group's pins list (no hide button there). Its text is text nodes only. The title is an `ExternalLink`, so the leave-site word covers it. The picture is lazy and sits in a box with the stored width and height as its aspect ratio (320 px tall at most), so nothing moves when it loads; a picture that fails is dropped and the card stays. The card is 27rem wide at most and the whole width on a phone; in a bubble it loses its own border and fill and takes the bubble's width. A `color` is a 2px left edge. A card with neither title nor description, a link the chat plays inline, or the `show embeds` setting off draws nothing.
+
+The `×` (a boxed button, tooltip `hide embed`) shows for the line's sayer and for whoever may remove the line: `ChatPanel`'s `embedMod` (the watch page and the streamer's own chat module pass it for a moderator; a group passes it when `lineModItems` has `delete`). It hides at once and puts the card back with the api's words if the api says no.
+
+`infra/link-embed.ts` reads a card off the wire (`linkEmbedOf`, through `fromWire` and the DM `lineOf`) and finds a line's first link (`firstLink`); `tests/link-embed.test.ts` covers both.
+
+Hooks for a browser test: the card is `[data-link-embed]` (its value is the host), inside the line's `[data-id="<line id>"]`; then `[data-embed-site]`, `a[data-embed-title]`, `[data-embed-description]`, `[data-embed-image] img`, and `button[data-embed-hide][aria-label="hide embed"]`. In the pins list it is inside `[data-pin-embed="<line id>"]`.

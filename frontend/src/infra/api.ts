@@ -3,6 +3,7 @@ import { type ChatAudio, peaksQuery } from '@/infra/chat-audio';
 import type { ChatVideo } from '@/infra/chat-video';
 import type { CallMark } from '@/infra/dm-call';
 import type { Emote, GroupEmote } from '@/infra/emotes';
+import type { LinkEmbed } from '@/infra/link-embed';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
 import type { Socials } from '@/infra/socials';
@@ -65,6 +66,7 @@ export interface DmLine {
   mentions?: string[];
   reactions?: Reaction[];
   call?: CallMark | null;
+  embed?: LinkEmbed | null;
 }
 
 export interface DmCallAnswer {
@@ -762,6 +764,9 @@ export const api = {
   banMember: (group: string, name: string, reason: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/ban`, { name, reason }),
   unbanMember: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/bans/${encodeURIComponent(name)}`),
   deleteChatLine: (name: string, id: string) => request<null>('DELETE', `/api/streams/${encodeURIComponent(name)}/chat/${encodeURIComponent(id)}`),
+  hideStreamEmbed: (name: string, id: string) => request<null>('POST', `/api/streams/${encodeURIComponent(name)}/chat/${encodeURIComponent(id)}/embed/hide`),
+  hideGroupEmbed: (group: string, channel: string, id: string) =>
+    request<null>('POST', `/api/groups/${encodeURIComponent(group)}/channels/${encodeURIComponent(channel)}/messages/${encodeURIComponent(id)}/embed/hide`),
   banFromChat: (name: string, who: string, reason = '') => request<null>('POST', `/api/streams/${encodeURIComponent(name)}/bans`, { name: who, reason }),
   unbanFromChat: (name: string, who: string) => request<null>('DELETE', `/api/streams/${encodeURIComponent(name)}/bans/${encodeURIComponent(who)}`),
   timeoutInChat: (name: string, who: string, seconds: number) => request<null>('POST', `/api/streams/${encodeURIComponent(name)}/timeouts`, { name: who, seconds }),
@@ -815,6 +820,7 @@ export const api = {
   reactDm: (name: string, id: number, emoji: string, on: boolean) =>
     request<{ id: number; reactions: unknown }>('PUT', `/api/dm/${encodeURIComponent(name)}/react`, { id, emoji, on }),
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
+  hideDmEmbed: (name: string, id: number) => request<null>('POST', `/api/dm/${encodeURIComponent(name)}/embed/hide`, { id }),
   startDmCall: (name: string) => request<DmCallAnswer>('POST', `/api/dm/${encodeURIComponent(name)}/call`, undefined, { report: false }),
   acceptDmCall: (name: string, id: string) => request<DmCallAnswer>('POST', `/api/dm/${encodeURIComponent(name)}/call/accept`, { id }, { report: false }),
   declineDmCall: (name: string, id: string) => request<null>('POST', `/api/dm/${encodeURIComponent(name)}/call/decline`, { id }, { report: false }),

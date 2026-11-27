@@ -56,6 +56,7 @@ export function ChatBody({ className, embedded = true }: { className: string; em
       welcome={welcome}
       embedded={embedded}
       lineActions={me && me === chatRoom ? (line) => <ChatModActions name={chatRoom} line={line} me={me} /> : undefined}
+      embedMod={me && me === chatRoom ? () => true : undefined}
       className={className}
     />
   );

@@ -10,6 +10,7 @@ import { audioOf, type ChatAudio } from '@/infra/chat-audio';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { callMarkOf } from '@/infra/dm-call';
 import { encodeEmotes } from '@/infra/emotes';
+import { type LinkEmbed, linkEmbedOf } from '@/infra/link-embed';
 import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
@@ -188,13 +189,14 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
   store.set(dmThreadsAtom, { ...threads, [name]: next(threads[name]) });
 }
 
-function lineOf(line: Omit<DmLine, 'images' | 'call'> & { images?: unknown; call?: unknown }): DmLine {
+function lineOf(line: Omit<DmLine, 'images' | 'call' | 'embed'> & { images?: unknown; call?: unknown; embed?: unknown }): DmLine {
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
   const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
   const video = videoOf(line.video);
   const audio = audioOf(line.audio);
   const mentions = Array.isArray(line.mentions) ? line.mentions.filter((m): m is string => typeof m === 'string') : [];
   const call = callMarkOf(line.call);
+  const embed = linkEmbedOf(line.embed);
   const base = {
     id: line.id,
     from: line.from,
@@ -205,7 +207,8 @@ function lineOf(line: Omit<DmLine, 'images' | 'call'> & { images?: unknown; call
     ...(video ? { video } : {}),
     ...(audio ? { audio } : {}),
     ...(mentions.length > 0 ? { mentions } : {}),
-    ...(call ? { call } : {})
+    ...(call ? { call } : {}),
+    ...(embed ? { embed } : {})
   };
   return 'reactions' in line ? { ...base, reactions: reactionsOf(line.reactions) } : base;
 }
@@ -215,7 +218,8 @@ function merge(a: DmLine[], b: DmLine[]): DmLine[] {
   for (const line of a) byId.set(line.id, line);
   for (const line of b) {
     const had = byId.get(line.id);
-    byId.set(line.id, line.reactions === undefined && had?.reactions ? { ...line, reactions: had.reactions } : line);
+    const fresh = line.reactions === undefined;
+    byId.set(line.id, fresh && had ? { ...line, ...(had.reactions ? { reactions: had.reactions } : {}), ...(had.embed !== undefined ? { embed: had.embed } : {}) } : line);
   }
   return [...byId.values()].sort((x, y) => x.id - y.id);
 }
@@ -351,12 +355,34 @@ export async function reactDm(name: string, line: DmLine, emoji: string): Promis
   }
 }
 
-function touchLine(name: string, id: number, next: (now: Reaction[] | undefined) => Reaction[]) {
+function patchLine(name: string, id: number, next: (line: DmLine) => DmLine) {
   const thread = store.get(dmThreadsAtom)[name];
-  if (thread?.lines.some((l) => l.id === id)) setThread(name, () => ({ ...thread, lines: thread.lines.map((l) => (l.id === id ? { ...l, reactions: next(l.reactions) } : l)) }));
+  if (thread?.lines.some((l) => l.id === id)) setThread(name, () => ({ ...thread, lines: thread.lines.map((l) => (l.id === id ? next(l) : l)) }));
   const results = store.get(dmResultsAtom);
-  if (results?.name === name && results.lines.some((l) => l.id === id))
-    store.set(dmResultsAtom, { ...results, lines: results.lines.map((l) => (l.id === id ? { ...l, reactions: next(l.reactions) } : l)) });
+  if (results?.name === name && results.lines.some((l) => l.id === id)) store.set(dmResultsAtom, { ...results, lines: results.lines.map((l) => (l.id === id ? next(l) : l)) });
+}
+
+function touchLine(name: string, id: number, next: (now: Reaction[] | undefined) => Reaction[]) {
+  patchLine(name, id, (l) => ({ ...l, reactions: next(l.reactions) }));
+}
+
+function setDmEmbed(peer: string, id: number, embed: LinkEmbed | null) {
+  patchLine(peer, id, (l) => ({ ...l, embed }));
+}
+
+function embeddedOn(frame: { id: number; from: string; to: string; embed?: unknown }) {
+  const me = store.get(meAtom);
+  if (!me || (frame.from !== me && frame.to !== me)) return;
+  setDmEmbed(frame.from === me ? frame.to : frame.from, frame.id, linkEmbedOf(frame.embed));
+}
+
+export function hideDmEmbed(peer: string, line: DmLine) {
+  const was = line.embed ?? null;
+  setDmEmbed(peer, line.id, null);
+  api.hideDmEmbed(peer, line.id).catch((err: unknown) => {
+    setDmEmbed(peer, line.id, was);
+    showDmNotice(messageOf(err));
+  });
 }
 
 export function showDmNotice(text: string) {
@@ -427,6 +453,7 @@ let linkWasOpen = false;
 onEvents((event) => {
   if (event.type === 'dm') arrived(event);
   else if (event.type === 'dm_react') reactedOn(event);
+  else if (event.type === 'dm_embed') embeddedOn(event);
   else if (event.type === 'dm_read') readElsewhere(event);
   else if (event.type === 'link') {
     if (event.phase !== 'open') return;
