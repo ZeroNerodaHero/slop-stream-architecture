@@ -431,13 +431,15 @@ struct Loaded {
     have: Files,
     socials: Value,
     joined: Option<DateTime<Utc>>,
+    avatar: Option<i64>,
 }
 
-type LoadRow = (uuid::Uuid, Value, Option<Value>, Option<Value>, Value, Option<DateTime<Utc>>);
+type LoadRow = (uuid::Uuid, Value, Option<Value>, Option<Value>, Value, Option<DateTime<Utc>>, Option<i64>);
 
 async fn load(conn: &mut PgConnection, name: &str) -> Result<Loaded, ApiError> {
     let row: Option<LoadRow> = sqlx::query_as(
-        "SELECT id, about_page, about_draft, about_live, socials, CASE WHEN password_hash IS NOT NULL THEN created_at END
+        "SELECT id, about_page, about_draft, about_live, socials, CASE WHEN password_hash IS NOT NULL THEN created_at END,
+                (EXTRACT(EPOCH FROM avatar_at))::bigint
          FROM streamers WHERE name = $1",
     )
     .bind(name)
@@ -445,8 +447,8 @@ async fn load(conn: &mut PgConnection, name: &str) -> Result<Loaded, ApiError> {
     .await?;
     let files: Vec<(i64, String, String)> = sqlx::query_as("SELECT id, kind, mime FROM about_files WHERE name = $1").bind(name).fetch_all(&mut *conn).await?;
     let have: Files = files.into_iter().map(|(id, kind, mime)| (id, (kind, mime))).collect();
-    let Some((row, v1, draft, live, socials, joined)) = row else {
-        return Ok(Loaded { row: None, v1: StoredPage::default(), draft: None, live: None, have, socials: Value::Null, joined: None });
+    let Some((row, v1, draft, live, socials, joined, avatar)) = row else {
+        return Ok(Loaded { row: None, v1: StoredPage::default(), draft: None, live: None, have, socials: Value::Null, joined: None, avatar: None });
     };
     let doc = |v: Option<Value>| v.and_then(|v| serde_json::from_value::<Doc>(v).ok());
     Ok(Loaded {
@@ -457,6 +459,7 @@ async fn load(conn: &mut PgConnection, name: &str) -> Result<Loaded, ApiError> {
         have,
         socials,
         joined,
+        avatar,
     })
 }
 
@@ -496,13 +499,12 @@ fn shown(blocks: &[Block]) -> Vec<Shown<'_>> {
 
 async fn answer(s: &AppState, name: &str, l: &Loaded, blocks: &[Block]) -> Result<Value, ApiError> {
     let followers = crate::follows::stats(&s.db, name, None).await?.followers;
-    let streams: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE name = $1 OR (user_id IS NOT NULL AND user_id = $2)")
-        .bind(name)
-        .bind(l.row)
-        .fetch_one(&s.db)
-        .await?;
+    let streams: i64 = match (l.joined, l.row) {
+        (Some(_), Some(id)) => sqlx::query_scalar("SELECT count(*) FROM sessions WHERE user_id = $1").bind(id).fetch_one(&s.db).await?,
+        _ => sqlx::query_scalar("SELECT count(*) FROM sessions WHERE name = $1").bind(name).fetch_one(&s.db).await?,
+    };
     let socials = serde_json::from_value::<crate::profile::Socials>(l.socials.clone()).unwrap_or_default();
-    Ok(json!({ "blocks": shown(blocks), "followers": followers, "streams": streams, "joined": l.joined, "socials": socials }))
+    Ok(json!({ "blocks": shown(blocks), "followers": followers, "streams": streams, "joined": l.joined, "avatar": l.avatar, "socials": socials }))
 }
 
 pub(crate) fn routes() -> Router<AppState> {
