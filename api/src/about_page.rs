@@ -19,7 +19,8 @@ use crate::test_streamers::DummySecret;
 use crate::{may_write, unique_violation, valid_name, ApiError, ApiResult, AppState, Name};
 
 const TEXT_MAX: usize = 10_000;
-const BLOCKS_MAX: usize = 40;
+pub(crate) const BLOCKS_MAX: usize = 60;
+pub(crate) const FILES_MAX: usize = 60;
 const POS_MAX: i32 = 1600;
 const Z_MAX: i32 = 40;
 const W_MIN: i32 = 80;
@@ -96,7 +97,7 @@ struct Kept {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Paint {
+pub(crate) struct Paint {
     #[serde(default, skip_serializing_if = "is_zero")]
     r: i32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -112,7 +113,7 @@ struct Paint {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     stroke_color: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    align: String,
+    pub(crate) align: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -148,7 +149,7 @@ pub(crate) fn about_key(row: uuid::Uuid, id: i64, ext: &str) -> String {
     format!("about/{row}/{id}.{ext}")
 }
 
-fn file_src(name: &str, id: i64) -> String {
+pub(crate) fn file_src(name: &str, id: i64) -> String {
     format!("/api/streamers/{name}/about-file/{id}")
 }
 
@@ -214,7 +215,7 @@ async fn put_page(
     let Json(body) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "bad json body"))?;
     may_write(&s, &name, me.name(), secret.0.as_deref()).await?;
     if body.blocks.len() > BLOCKS_MAX {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "40 blocks at most"));
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("{BLOCKS_MAX} blocks at most")));
     }
     let row = ensure_row(&s.db, &name).await?;
     let mut conn = s.db.acquire().await?;
@@ -239,7 +240,7 @@ async fn save_page(
         sqlx::query_as("SELECT id, kind, mime FROM about_files WHERE name = $1").bind(name).fetch_all(&mut *conn).await?;
     let have: HashMap<i64, (String, String)> = existing.iter().cloned().map(|(id, kind, mime)| (id, (kind, mime))).collect();
     let kept = plan(&body, &have)?;
-    let mut used = HashSet::new();
+    let mut used = crate::about_blocks::kept_by_blocks(&mut *conn, name).await?;
     for block in &kept {
         if block.fresh {
             sqlx::query("INSERT INTO about_files (name, id, kind, mime, bytes) VALUES ($1, $2, 'text', 'text/plain', 0)")
@@ -462,7 +463,7 @@ fn clean_font(s: &str) -> String {
     }
 }
 
-fn clean_color(s: &str) -> String {
+pub(crate) fn clean_color(s: &str) -> String {
     let s = s.trim();
     if s.len() == 7 && s.as_bytes().first() == Some(&b'#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit()) {
         return s.to_ascii_lowercase();
@@ -548,7 +549,7 @@ async fn put_file(
         let inserted: Option<i64> = match sqlx::query_scalar(
             "INSERT INTO about_files (name, id, kind, mime, bytes)
              SELECT $1, $2, $3, $4, $5
-             WHERE (SELECT count(*) FROM about_files WHERE name = $1) < $6
+             WHERE (SELECT count(*) FROM about_files WHERE name = $1 AND kind <> 'text') < $6
              RETURNING id",
         )
         .bind(&name)
@@ -556,7 +557,7 @@ async fn put_file(
         .bind(kind.kind)
         .bind(kind.mime)
         .bind(body.len() as i32)
-        .bind(BLOCKS_MAX as i64)
+        .bind(FILES_MAX as i64)
         .fetch_optional(&s.db)
         .await
         {
@@ -565,7 +566,7 @@ async fn put_file(
             Err(e) => return Err(e.into()),
         };
         let Some(id) = inserted else {
-            return Err(ApiError::new(StatusCode::CONFLICT, "40 files at most. remove one first"));
+            return Err(ApiError::new(StatusCode::CONFLICT, format!("{FILES_MAX} files at most. remove one first")));
         };
         if let Err(e) = s3::put(&s.s3, &about_key(row, id, kind.ext), &body, kind.mime).await {
             if let Err(drop) = sqlx::query("DELETE FROM about_files WHERE name = $1 AND id = $2")
@@ -705,27 +706,27 @@ pub(crate) fn ext_of(kind: &str, mime: &str) -> &'static str {
 }
 
 #[derive(Serialize, Deserialize, Default)]
-struct StoredPage {
-    blocks: Vec<StoredBlock>,
+pub(crate) struct StoredPage {
+    pub(crate) blocks: Vec<StoredBlock>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct StoredBlock {
+pub(crate) struct StoredBlock {
     #[serde(rename = "type")]
-    kind: String,
-    id: i64,
-    x: i32,
-    y: i32,
-    z: i32,
+    pub(crate) kind: String,
+    pub(crate) id: i64,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) z: i32,
     #[serde(default)]
-    w: i32,
+    pub(crate) w: i32,
     #[serde(default)]
-    h: i32,
+    pub(crate) h: i32,
     #[serde(flatten, default)]
-    look: Paint,
+    pub(crate) look: Paint,
 }
 
-async fn ensure_row(db: &PgPool, name: &str) -> Result<uuid::Uuid, sqlx::Error> {
+pub(crate) async fn ensure_row(db: &PgPool, name: &str) -> Result<uuid::Uuid, sqlx::Error> {
     sqlx::query_scalar(
         "INSERT INTO streamers (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
     )
@@ -734,7 +735,7 @@ async fn ensure_row(db: &PgPool, name: &str) -> Result<uuid::Uuid, sqlx::Error> 
     .await
 }
 
-fn sanitize_html(raw: &str) -> String {
+pub(crate) fn sanitize_html(raw: &str) -> String {
     let mut out = String::new();
     let mut budget = TEXT_MAX;
     let mut i = 0;
@@ -903,7 +904,7 @@ fn canon(name: &str) -> Option<&'static str> {
     })
 }
 
-fn href_of(attrs: &str) -> Option<String> {
+pub(crate) fn href_of(attrs: &str) -> Option<String> {
     let lower = attrs.to_ascii_lowercase();
     let mut i = 0;
     while let Some(rel) = lower[i..].find("href") {
@@ -932,7 +933,7 @@ fn href_of(attrs: &str) -> Option<String> {
     None
 }
 
-fn http_url(raw: &str) -> Option<String> {
+pub(crate) fn http_url(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() || raw.chars().count() > 500 {
         return None;
@@ -977,7 +978,7 @@ fn push_text(out: &mut String, text: &str, budget: &mut usize) {
     }
 }
 
-fn decode_entities(s: &str) -> String {
+pub(crate) fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(amp) = rest.find('&') {
