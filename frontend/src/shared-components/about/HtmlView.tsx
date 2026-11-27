@@ -32,7 +32,7 @@ function render(node: Node, key: string): ReactNode {
     const href = httpUrl(node.getAttribute('href') ?? '');
     if (!href) return <span key={key}>{kids}</span>;
     return (
-      <ExternalLink key={key} href={href} from={FROM} className="text-primaryBlue underline-offset-2 hover:underline">
+      <ExternalLink data-link key={key} href={href} from={FROM} className="text-primaryBlue underline-offset-2 hover:underline">
         {kids}
       </ExternalLink>
     );
