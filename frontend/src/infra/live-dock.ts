@@ -3,7 +3,8 @@ import { atomWithStorage } from 'jotai/utils';
 
 import { store } from './store.ts';
 
-export const DOCK_PANELS = ['sources', 'face', 'rig', 'sound'] as const;
+export const DOCK_PANELS = ['sources', 'source', 'sound'] as const;
+const LEGACY_SOURCE = ['face', 'rig'] as const;
 export type DockPanel = (typeof DOCK_PANELS)[number];
 export type DockTab = DockPanel | 'chat';
 export type ModuleId = DockTab;
@@ -18,15 +19,17 @@ export interface LivePanels {
 export const DOCK_WORDS: Record<TileId, string> = {
   preview: 'preview',
   sources: 'sources',
-  face: 'face',
-  rig: 'rigging',
+  source: 'source settings',
   sound: 'sound',
   chat: 'chat'
 };
 
 export function readPanels(raw: unknown): LivePanels {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return { hidden: Array.isArray(p.hidden) ? MODULE_IDS.filter((id) => (p.hidden as unknown[]).includes(id)) : [] };
+  if (!Array.isArray(p.hidden)) return { hidden: [] };
+  const hidden = p.hidden as unknown[];
+  const legacy = LEGACY_SOURCE.every((id) => hidden.includes(id));
+  return { hidden: MODULE_IDS.filter((id) => hidden.includes(id) || (id === 'source' && legacy)) };
 }
 
 export const RAIL_SECTIONS = ['studio', 'layout', 'presets', 'thumbnail'] as const;
@@ -74,10 +77,10 @@ export interface Arrangement {
 }
 
 const ARRANGEMENTS: Record<Exclude<LayoutId, 5>, Arrangement> = {
-  1: { left: ['sources', 'face', 'rig', 'sound'], right: [], below: [], under: ['chat'], side: [] },
-  2: { left: [], right: ['sources', 'face', 'rig', 'sound'], below: [], under: ['chat'], side: [] },
-  3: { left: [], right: [], below: ['sources', 'face', 'rig', 'sound'], under: [], side: ['chat'] },
-  4: { left: ['sources', 'face'], right: [], below: ['rig', 'sound'], under: [], side: ['chat'] }
+  1: { left: ['sources', 'source', 'sound'], right: [], below: [], under: ['chat'], side: [] },
+  2: { left: [], right: ['sources', 'source', 'sound'], below: [], under: ['chat'], side: [] },
+  3: { left: [], right: [], below: ['sources', 'source', 'sound'], under: [], side: ['chat'] },
+  4: { left: ['sources', 'source'], right: [], below: ['sound'], under: [], side: ['chat'] }
 };
 
 export function arrange(layout: Exclude<LayoutId, 5>, hidden: readonly ModuleId[], skip: readonly ModuleId[] = []): Arrangement {
@@ -109,16 +112,14 @@ export const DEFAULT_GRID: Grid = {
   preview: { x: 0, y: 0, w: 8, h: 7 },
   chat: { x: 8, y: 0, w: 4, h: 7 },
   sources: { x: 0, y: 7, w: 3, h: 5 },
-  face: { x: 3, y: 7, w: 3, h: 5 },
-  rig: { x: 6, y: 7, w: 3, h: 5 },
+  source: { x: 3, y: 7, w: 6, h: 5 },
   sound: { x: 9, y: 7, w: 3, h: 5 }
 };
 
 export const LAYOUT_GRIDS: Record<Exclude<LayoutId, 5>, Grid> = {
   1: {
     sources: { x: 0, y: 0, w: 3, h: 3 },
-    face: { x: 0, y: 3, w: 3, h: 3 },
-    rig: { x: 0, y: 6, w: 3, h: 3 },
+    source: { x: 0, y: 3, w: 3, h: 6 },
     sound: { x: 0, y: 9, w: 3, h: 3 },
     preview: { x: 3, y: 0, w: 9, h: 8 },
     chat: { x: 3, y: 8, w: 9, h: 4 }
@@ -127,24 +128,21 @@ export const LAYOUT_GRIDS: Record<Exclude<LayoutId, 5>, Grid> = {
     preview: { x: 0, y: 0, w: 9, h: 8 },
     chat: { x: 0, y: 8, w: 9, h: 4 },
     sources: { x: 9, y: 0, w: 3, h: 3 },
-    face: { x: 9, y: 3, w: 3, h: 3 },
-    rig: { x: 9, y: 6, w: 3, h: 3 },
+    source: { x: 9, y: 3, w: 3, h: 6 },
     sound: { x: 9, y: 9, w: 3, h: 3 }
   },
   3: {
     preview: { x: 0, y: 0, w: 9, h: 8 },
     chat: { x: 9, y: 0, w: 3, h: 12 },
     sources: { x: 0, y: 8, w: 3, h: 4 },
-    face: { x: 3, y: 8, w: 2, h: 4 },
-    rig: { x: 5, y: 8, w: 2, h: 4 },
+    source: { x: 3, y: 8, w: 4, h: 4 },
     sound: { x: 7, y: 8, w: 2, h: 4 }
   },
   4: {
     sources: { x: 0, y: 0, w: 3, h: 6 },
-    face: { x: 0, y: 6, w: 3, h: 6 },
+    source: { x: 0, y: 6, w: 3, h: 6 },
     preview: { x: 3, y: 0, w: 6, h: 8 },
-    rig: { x: 3, y: 8, w: 3, h: 4 },
-    sound: { x: 6, y: 8, w: 3, h: 4 },
+    sound: { x: 3, y: 8, w: 6, h: 4 },
     chat: { x: 9, y: 0, w: 3, h: 12 }
   }
 };
@@ -152,8 +150,7 @@ export const LAYOUT_GRIDS: Record<Exclude<LayoutId, 5>, Grid> = {
 const MIN_CELL: Record<TileId, { w: number; h: number }> = {
   preview: { w: 3, h: 3 },
   sources: { w: 2, h: 2 },
-  face: { w: 2, h: 2 },
-  rig: { w: 2, h: 2 },
+  source: { w: 2, h: 2 },
   sound: { w: 2, h: 2 },
   chat: { w: 2, h: 3 }
 };
@@ -175,13 +172,28 @@ export function fits(grid: Grid, shown: readonly TileId[], id: TileId, cell: Cel
   return shown.every((other) => other === id || !overlaps(cell, grid[other]));
 }
 
+function cellOf(raw: unknown): Cell | null {
+  const c = raw as Partial<Cell> | undefined;
+  return c && [c.x, c.y, c.w, c.h].every((n) => typeof n === 'number' && Number.isFinite(n)) ? (c as Cell) : null;
+}
+
+function legacySourceCell(g: Record<string, unknown>): Cell | null {
+  const face = cellOf(g.face);
+  const rig = cellOf(g.rig);
+  if (face && rig) {
+    const [a, b] = face.y < rig.y || (face.y === rig.y && face.x <= rig.x) ? [face, rig] : [rig, face];
+    if (a.x === b.x && a.w === b.w && a.y + a.h === b.y) return { x: a.x, y: a.y, w: a.w, h: a.h + b.h };
+    if (a.y === b.y && a.h === b.h && a.x + a.w === b.x) return { x: a.x, y: a.y, w: a.w + b.w, h: a.h };
+  }
+  return face ?? rig;
+}
+
 export function readGrid(raw: unknown): Grid {
   const g = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const grid = {} as Grid;
   for (const id of TILE_IDS) {
-    const c = g[id] as Partial<Cell> | undefined;
-    const ok = c && [c.x, c.y, c.w, c.h].every((n) => typeof n === 'number' && Number.isFinite(n));
-    grid[id] = ok ? clampCell(id, c as Cell) : DEFAULT_GRID[id];
+    const c = cellOf(g[id]) ?? (id === 'source' ? legacySourceCell(g) : null);
+    grid[id] = c ? clampCell(id, c) : DEFAULT_GRID[id];
   }
   return grid;
 }
@@ -214,14 +226,14 @@ export interface Preset {
 export const PRESETS: Record<Exclude<PresetId, 'mine'>, Preset> = {
   full: { layout: 1, panels: { hidden: [] } },
   camera: { layout: 1, panels: { hidden: ['sources', 'sound'] } },
-  sources: { layout: 1, panels: { hidden: ['face', 'rig'] } },
-  chat: { layout: 4, panels: { hidden: ['sources', 'face', 'rig', 'sound'] } },
-  safe: { layout: 1, panels: { hidden: ['sources', 'face', 'rig', 'sound'] } }
+  sources: { layout: 1, panels: { hidden: ['source'] } },
+  chat: { layout: 4, panels: { hidden: ['sources', 'source', 'sound'] } },
+  safe: { layout: 1, panels: { hidden: ['sources', 'source', 'sound'] } }
 };
 
 export const PRESET_WORDS: Record<PresetId, { name: string; what: string }> = {
   full: { name: 'full edit', what: 'everything open' },
-  camera: { name: 'camera only', what: 'face · rigging' },
+  camera: { name: 'camera only', what: 'source settings' },
   sources: { name: 'sources only', what: 'sources · sound' },
   chat: { name: 'chat focus', what: 'chat · preview' },
   safe: { name: 'live safe', what: 'start · chat, locked' },

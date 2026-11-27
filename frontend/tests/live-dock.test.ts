@@ -36,8 +36,23 @@ test('every module is shown until it is closed, and old fold flags are dropped',
   assert.deepEqual(readPanels(null), ALL);
   assert.deepEqual(readPanels('junk'), ALL);
   assert.deepEqual(readPanels({ rig: false, chat: false, thumbnail: false, dock: false }), ALL);
-  assert.deepEqual(readPanels({ sources: false, hidden: ['rig', 'nope', 'chat', 3] }), { hidden: ['rig', 'chat'] });
+  assert.deepEqual(readPanels({ sources: false, hidden: ['source', 'nope', 'chat', 3] }), { hidden: ['source', 'chat'] });
   assert.deepEqual(readPanels({ hidden: 'rig' }), ALL);
+});
+
+test('the old face and rigging modules fold into source settings', () => {
+  assert.deepEqual(readPanels({ hidden: ['rig', 'chat'] }), { hidden: ['chat'] });
+  assert.deepEqual(readPanels({ hidden: ['face', 'chat'] }), { hidden: ['chat'] });
+  assert.deepEqual(readPanels({ hidden: ['face', 'rig', 'sound'] }), { hidden: ['source', 'sound'] });
+  assert.deepEqual(readGrid({ face: { x: 0, y: 3, w: 3, h: 3 }, rig: { x: 0, y: 6, w: 3, h: 3 } }).source, { x: 0, y: 3, w: 3, h: 6 });
+  assert.deepEqual(readGrid({ rig: { x: 5, y: 8, w: 2, h: 4 }, face: { x: 3, y: 8, w: 2, h: 4 } }).source, { x: 3, y: 8, w: 4, h: 4 });
+  assert.deepEqual(readGrid({ face: { x: 0, y: 0, w: 3, h: 3 }, rig: { x: 6, y: 6, w: 3, h: 3 } }).source, { x: 0, y: 0, w: 3, h: 3 });
+  assert.deepEqual(readGrid({ rig: { x: 6, y: 6, w: 3, h: 3 } }).source, { x: 6, y: 6, w: 3, h: 3 });
+  assert.deepEqual(readGrid({ source: { x: 1, y: 1, w: 2, h: 2 }, face: { x: 0, y: 0, w: 3, h: 3 } }).source, { x: 1, y: 1, w: 2, h: 2 });
+  assert.deepEqual(readGrid(null).source, DEFAULT_GRID.source);
+  assert.equal(presetOf(1, readPanels({ hidden: ['rig', 'face'] }), null), 'sources');
+  assert.equal(TILE_IDS.includes('face' as never), false);
+  assert.equal(TILE_IDS.includes('rig' as never), false);
 });
 
 test('every rail section is open until folded, and an old thumbnail fold carries over once', () => {
@@ -52,7 +67,7 @@ test('every rail section is open until folded, and an old thumbnail fold carries
 test('presets pick modules by showing and hiding them, never by folding', () => {
   for (const p of Object.values(PRESETS)) assert.deepEqual(Object.keys(p.panels), ['hidden']);
   assert.deepEqual(PRESETS.camera.panels.hidden, ['sources', 'sound']);
-  assert.deepEqual(PRESETS.sources.panels.hidden, ['face', 'rig']);
+  assert.deepEqual(PRESETS.sources.panels.hidden, ['source']);
   assert.deepEqual(PRESETS.full.panels.hidden, []);
 });
 
@@ -68,15 +83,15 @@ test('each layout puts every module in one place, and closed ones nowhere', () =
   for (const layout of [1, 2, 3, 4] as const) {
     const a = arrange(layout, []);
     const all = [...a.left, ...a.right, ...a.below, ...a.under, ...a.side].sort();
-    assert.deepEqual(all, ['chat', 'face', 'rig', 'sound', 'sources'], `layout ${layout}`);
+    assert.deepEqual(all, ['chat', 'sound', 'source', 'sources'], `layout ${layout}`);
   }
-  assert.deepEqual(arrange(1, ['rig']).left, ['sources', 'face', 'sound']);
+  assert.deepEqual(arrange(1, ['source']).left, ['sources', 'sound']);
   assert.deepEqual(arrange(3, [], ['chat']).side, []);
   assert.equal(placeIn(arrange(1, []), 'chat'), 'under');
   assert.equal(placeIn(arrange(3, []), 'chat'), 'side');
-  assert.equal(placeIn(arrange(3, []), 'rig'), 'row');
-  assert.equal(placeIn(arrange(2, []), 'face'), 'column');
-  assert.equal(placeIn(arrange(1, ['face']), 'face'), null);
+  assert.equal(placeIn(arrange(3, []), 'source'), 'row');
+  assert.equal(placeIn(arrange(2, []), 'source'), 'column');
+  assert.equal(placeIn(arrange(1, ['source']), 'source'), null);
 });
 
 test('the grids every layout opens edit mode with have no overlaps and stay in bounds', () => {
@@ -92,28 +107,28 @@ test('the grids every layout opens edit mode with have no overlaps and stay in b
 test('a cell is clamped into the 12 by 12 grid and never under its smallest size', () => {
   assert.deepEqual(clampCell('sources', { x: 11, y: -3, w: 4, h: 1 }), { x: 8, y: 0, w: 4, h: 2 });
   assert.deepEqual(clampCell('preview', { x: 0.4, y: 0.6, w: 40, h: 2 }), { x: 0, y: 1, w: GRID_COLS, h: 3 });
-  assert.deepEqual(readGrid({ chat: { x: 'a' }, rig: { x: 1, y: 2, w: 3, h: 4 } }).chat, DEFAULT_GRID.chat);
-  assert.deepEqual(readGrid({ rig: { x: 1, y: 2, w: 3, h: 4 } }).rig, { x: 1, y: 2, w: 3, h: 4 });
+  assert.deepEqual(readGrid({ chat: { x: 'a' }, sound: { x: 1, y: 2, w: 3, h: 4 } }).chat, DEFAULT_GRID.chat);
+  assert.deepEqual(readGrid({ sound: { x: 1, y: 2, w: 3, h: 4 } }).sound, { x: 1, y: 2, w: 3, h: 4 });
 });
 
 test('a module put back finds a free cell, or none when the grid is full', () => {
-  const shown = TILE_IDS.filter((t) => t !== 'rig');
-  const grid = { ...DEFAULT_GRID, sound: { x: 6, y: 7, w: 6, h: 5 } };
-  assert.equal(fits(grid, shown, 'rig', grid.rig), false);
-  assert.equal(freeCell(grid, shown, 'rig'), null);
+  const shown = TILE_IDS.filter((t) => t !== 'source');
+  const grid = { ...DEFAULT_GRID, sound: { x: 3, y: 7, w: 9, h: 5 } };
+  assert.equal(fits(grid, shown, 'source', grid.source), false);
+  assert.equal(freeCell(grid, shown, 'source'), null);
   const roomy = { ...DEFAULT_GRID, sound: { x: 9, y: 7, w: 3, h: 5 } };
-  const cell = freeCell(roomy, shown, 'rig');
-  assert.ok(cell && fits(roomy, shown, 'rig', cell) && cell.x + cell.w <= GRID_COLS && cell.y + cell.h <= GRID_ROWS);
+  const cell = freeCell(roomy, shown, 'source');
+  assert.ok(cell && fits(roomy, shown, 'source', cell) && cell.x + cell.w <= GRID_COLS && cell.y + cell.h <= GRID_ROWS);
 });
 
 test('a preset is found again from the layout and the shown modules', () => {
   assert.equal(presetOf(1, ALL, null), 'full');
   assert.equal(presetOf(2, ALL, null), null);
   assert.equal(presetOf(1, { hidden: ['sound', 'sources'] }, null), 'camera');
-  assert.equal(presetOf(1, { hidden: ['rig', 'face'] }, null), 'sources');
+  assert.equal(presetOf(1, { hidden: ['source'] }, null), 'sources');
   assert.equal(presetOf(PRESETS.safe.layout, PRESETS.safe.panels, null), 'safe');
-  assert.equal(presetOf(PRESETS.chat.layout, { hidden: ['sound', 'rig', 'face', 'sources'] }, null), 'chat');
-  assert.equal(presetOf(3, { hidden: ['rig'] }, { layout: 3, panels: { hidden: ['rig'] } }), 'mine');
+  assert.equal(presetOf(PRESETS.chat.layout, { hidden: ['sound', 'source', 'sources'] }, null), 'chat');
+  assert.equal(presetOf(3, { hidden: ['source'] }, { layout: 3, panels: { hidden: ['source'] } }), 'mine');
   assert.equal(readPreset({ layout: 7, panels: {} }), null);
   assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { layout: 4, panels: ALL });
 });
@@ -168,7 +183,7 @@ test('the badge stops at 99+', () => {
 });
 
 const MODULES = join(import.meta.dirname, '../src/shared-components/live/modules');
-const NAMES = ['Sources', 'Face', 'Rigging', 'Sound', 'Chat', 'Presets', 'Thumbnail', 'Studio', 'LayoutSwitcher'];
+const NAMES = ['Sources', 'Source', 'Sound', 'Chat', 'Presets', 'Thumbnail', 'Studio', 'LayoutSwitcher'];
 
 test('every go live module has its own file and none imports another', () => {
   const files = readdirSync(MODULES).filter((f) => f.endsWith('.tsx'));

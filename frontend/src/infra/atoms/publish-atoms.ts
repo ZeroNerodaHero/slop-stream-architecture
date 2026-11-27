@@ -1580,6 +1580,25 @@ function setMixRow(id: string, change: (row: MixRow) => MixRow) {
   rememberMix(next);
 }
 
+export function mixSound(id: string, label: string, track: MediaStreamTrack) {
+  addMixRow(id, label, track);
+}
+
+export function unmixSound(id: string) {
+  mixer?.remove(id);
+  store.set(
+    mixRowsAtom,
+    store.get(mixRowsAtom).filter((r) => r.id !== id)
+  );
+}
+
+export function relabelMix(id: string, label: string) {
+  store.set(
+    mixRowsAtom,
+    store.get(mixRowsAtom).map((r) => (r.id === id ? { ...r, label } : r))
+  );
+}
+
 export function setMixLevel(id: string, level: number) {
   setMixRow(id, (row) => ({ ...row, level: Math.min(1, Math.max(0, level)) }));
 }

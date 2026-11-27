@@ -14,7 +14,6 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import type { FaceLines, FaceMarks } from '@/infra/face';
 import type { Place } from '@/infra/live-dock';
-import { DockPanel } from '@/shared-components/live/Dock';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -239,7 +238,7 @@ function RigBody({ place }: { place: Place }) {
   const note =
     sharing && picture
       ? "only you see this. your camera's picture is hidden while you share a screen: a share of this page would send it."
-      : "only you see this. your camera's picture is not sent."
+      : "only you see this. your camera's picture is not sent.";
   return (
     <div ref={rootRef} data-compact={compact || undefined} className="flex flex-col">
       <div className={cn('flex flex-wrap items-start gap-x-3 px-3 pb-1.5 pt-2', compact ? 'gap-y-1.5' : 'gap-y-2')}>
@@ -314,11 +313,7 @@ function RigBody({ place }: { place: Place }) {
   );
 }
 
-export function RigModule({ place }: { place: Place }) {
+export function Rigging({ place }: { place: Place }) {
   const model = useAtomValue(modelAtom);
-  return (
-    <DockPanel tab="rig" place={place}>
-      {model ? <RigBody place={place} /> : <p className="px-3 py-2.5 text-sm text-textTertiary">the rigging, your face read live, is here once a model is on.</p>}
-    </DockPanel>
-  );
+  return model ? <RigBody place={place} /> : null;
 }

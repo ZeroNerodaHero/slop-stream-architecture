@@ -10,8 +10,7 @@ import { cn } from '@/utils/cn';
 
 export const DOCK_IDS: Record<ModuleId, string> = {
   sources: 'sources-panel',
-  face: 'face-panel',
-  rig: 'rig',
+  source: 'source-panel',
   sound: 'mixer',
   chat: 'live-chat'
 };
