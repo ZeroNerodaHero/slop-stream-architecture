@@ -174,7 +174,7 @@ export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; 
   const open = useRailFold('studio');
   if (strip)
     return (
-      <div id="live-controls" data-open={open} className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke pb-2">
+      <div id="live-controls" data-open={open} className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke py-2">
         <RoundStart />
         {open && <CopyLink />}
         <LiveStatus prefix="" quiet />

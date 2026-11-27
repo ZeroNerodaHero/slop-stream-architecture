@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 
-import { LAYOUT_IDS, LAYOUT_WORDS, type LayoutId, liveEditingAtom, liveLayoutAtom, liveLockedAtom, setLayout, startEditing, stopEditing } from '@/infra/live-dock';
+import { LAYOUT_IDS, LAYOUT_WORDS, type LayoutId, liveEditingAtom, liveLayoutAtom, setLayout, startEditing, stopEditing } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
@@ -54,12 +54,9 @@ function LayoutGlyph({ id }: { id: LayoutId }) {
   );
 }
 
-const LOCKED = 'live safe is locked: pick another preset first';
-
 export function LayoutModule({ strip = false }: { strip?: boolean }) {
   const layout = useAtomValue(liveLayoutAtom);
   const editing = useAtomValue(liveEditingAtom);
-  const locked = useAtomValue(liveLockedAtom);
   const pick = (id: LayoutId) => {
     if (id === 5) startEditing(5);
     else {
@@ -70,9 +67,9 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
   if (strip) {
     const next: LayoutId = layout >= 4 ? 1 : ((layout + 1) as LayoutId);
     return (
-      <div className="flex flex-col items-center border-b border-primaryStroke py-2">
-        <Tooltip content={locked ? LOCKED : `layout ${layout}, ${LAYOUT_WORDS[layout]}. click for ${next}, ${LAYOUT_WORDS[next]}`}>
-          <button id="live-layout-next" type="button" aria-label={`next layout: ${LAYOUT_WORDS[next]}`} disabled={locked} onClick={() => pick(next)} className={cn(FOLD_BUTTON, 'disabled:opacity-40')}>
+      <div className="flex flex-col items-center border-t border-primaryStroke py-2">
+        <Tooltip content={`layout ${layout}, ${LAYOUT_WORDS[layout]}. click for ${next}, ${LAYOUT_WORDS[next]}`}>
+          <button id="live-layout-next" type="button" aria-label={`next layout: ${LAYOUT_WORDS[next]}`} onClick={() => pick(next)} className={FOLD_BUTTON}>
             <LayoutGlyph id={layout} />
           </button>
         </Tooltip>
@@ -84,15 +81,15 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
       section="layout"
       id="live-layouts"
       title="layout"
-      className="border-b border-primaryStroke px-3 py-2.5"
+      className="border-t border-primaryStroke px-3 py-2.5"
       bodyClassName="pt-2"
       aside={
-        <Tooltip content={locked ? LOCKED : editing ? 'you are editing' : 'edit this layout on a grid'}>
+        <Tooltip content={editing ? 'you are editing' : 'edit this layout on a grid'}>
           <Button
             id="live-layout-edit"
             size="sm"
             variant="outline"
-            disabled={locked || editing}
+            disabled={editing}
             onClick={() => startEditing(layout)}
             className="h-6 px-2 py-0 text-xs normal-case tracking-normal max-md:min-h-0"
           >
@@ -105,16 +102,15 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
         {LAYOUT_IDS.map((id) => {
           const on = id === layout;
           return (
-            <Tooltip key={id} content={on ? null : locked ? LOCKED : `${id}: ${LAYOUT_WORDS[id]}${id === 5 ? ', edit mode' : ''}`}>
+            <Tooltip key={id} content={on ? null : `${id}: ${LAYOUT_WORDS[id]}${id === 5 ? ', edit mode' : ''}`}>
               <button
                 id={`live-layout-${id}`}
                 type="button"
                 aria-label={`layout ${id}, ${LAYOUT_WORDS[id]}`}
                 aria-pressed={on}
-                disabled={locked && !on}
                 onClick={() => pick(id)}
                 className={cn(
-                  'flex h-10 min-w-0 flex-col items-center justify-center gap-1 rounded-card border text-[11px] font-semibold leading-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue disabled:cursor-default disabled:opacity-40',
+                  'flex h-10 min-w-0 flex-col items-center justify-center gap-1 rounded-card border text-[11px] font-semibold leading-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue',
                   on ? 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue' : 'border-primaryStroke text-textSecondary hover:border-secondaryStroke hover:text-textPrimary'
                 )}
               >

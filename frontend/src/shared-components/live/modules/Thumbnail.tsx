@@ -82,7 +82,7 @@ export function ThumbnailModule({ strip = false }: { strip?: boolean }) {
   const first = useAtomValue(streamThumbsAtom)[0];
   if (strip)
     return (
-      <div className="flex flex-col items-center pt-2">
+      <div className="flex flex-col items-center border-b border-primaryStroke pb-2">
         <Tooltip content="thumbnail">
           <button id="live-thumb-mini" type="button" aria-label="open the thumbnail" onClick={() => setRail(true)} className={cn(FOLD_BUTTON, 'h-6 w-8 overflow-hidden p-0')}>
             {first !== undefined ? (
@@ -95,7 +95,7 @@ export function ThumbnailModule({ strip = false }: { strip?: boolean }) {
       </div>
     );
   return (
-    <RailSection section="thumbnail" id="thumbs-panel" title="thumbnail" className="border-t border-primaryStroke px-3 py-2.5" bodyClassName="pt-2">
+    <RailSection section="thumbnail" id="thumbs-panel" title="thumbnail" className="border-b border-primaryStroke px-3 py-2.5" bodyClassName="pt-2">
       <ThumbnailsBody />
     </RailSection>
   );
