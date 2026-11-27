@@ -18,6 +18,7 @@ import {
   WANTS,
   cleanLink,
   fileSrc,
+  kindWord,
   spanOptions
 } from '@/infra/about-blocks';
 import { Button } from '@/shared-components/Button';
@@ -197,7 +198,7 @@ export function BlockSettings({
   return (
     <div id="about-settings" className="flex flex-col gap-2.5">
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-sm font-bold text-textPrimary">{b.kind}</h3>
+        <h3 className="text-sm font-bold text-textPrimary">{kindWord(b.kind)}</h3>
         <span className="text-xs text-textTertiary">
           block {index + 1} of {count}
         </span>
@@ -412,7 +413,7 @@ export function BlockSettings({
                 onClick={() => onPatch({ items: [...b.items, { file: 0, label: '', href: '' }] })}
               >
                 <RiAddLine size={14} aria-hidden />
-                {b.kind === 'gallery' ? 'add a tile' : 'add a button'}
+                {b.kind === 'gallery' ? 'add a tile' : 'add a link'}
               </Button>
             )}
           </div>
