@@ -447,7 +447,7 @@ function CameraPreview({ deviceId, children }: { deviceId: string; children: Rea
             muted
             playsInline
             aria-label="camera preview"
-            className="absolute inset-0 h-full w-full object-cover [transform:scaleX(-1)]"
+            className="absolute inset-0 h-full w-full object-cover"
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-textTertiary">
