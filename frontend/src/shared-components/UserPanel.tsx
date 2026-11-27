@@ -259,25 +259,28 @@ export function UserPanel() {
       )}
     >
       {myPage ? (
-        <Link id="you" to={myPage} aria-label={youLabel} title={youTitle} draggable={false} onClick={closeFriends} className={YOU}>
-          {face}
-        </Link>
+        <Tooltip content={youTitle}>
+          <Link id="you" to={myPage} aria-label={youLabel} draggable={false} onClick={closeFriends} className={YOU}>
+            {face}
+          </Link>
+        </Tooltip>
       ) : (
-        <button
-          id="you"
-          type="button"
-          aria-label={youLabel}
-          aria-haspopup="dialog"
-          title={youTitle}
-          onClick={(e) => {
-            e.currentTarget.focus();
-            closeFriends();
-            openUserModal('profile');
-          }}
-          className={YOU}
-        >
-          {face}
-        </button>
+        <Tooltip content={youTitle}>
+          <button
+            id="you"
+            type="button"
+            aria-label={youLabel}
+            aria-haspopup="dialog"
+            onClick={(e) => {
+              e.currentTarget.focus();
+              closeFriends();
+              openUserModal('profile');
+            }}
+            className={YOU}
+          >
+            {face}
+          </button>
+        </Tooltip>
       )}
 
       {me ? (
@@ -320,35 +323,44 @@ export function UserPanel() {
             <label htmlFor="username" className="sr-only">
               your name
             </label>
-            <span className="relative -mx-1 block">
-              <input
-                id="username"
-                value={nick}
-                onChange={(e) => setNick(e.target.value)}
-                onFocus={(e) => {
-                  nickAtFocus.current = e.currentTarget.value;
-                }}
-                onBlur={(e) => {
-                  if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick');
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                }}
-                placeholder="name"
-                title="your name. click to change it"
-                maxLength={24}
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                className={cn(
-                  NAME_LINE,
-                  'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary focus:border-primaryBlue focus:bg-background',
-                  mirrored ? 'pl-6 text-right' : 'pr-6'
-                )}
-              />
-              <span aria-hidden className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-sm text-textTertiary', mirrored ? 'left-1.5' : 'right-1.5')}>
-                ✎
-              </span>
+            <span className={cn('-mx-1 flex min-w-0 items-center', mirrored && 'flex-row-reverse')}>
+              <Tooltip content="your name. click to change it">
+                <span className="inline-grid min-w-0 grid-cols-[minmax(0,auto)]">
+                  <span aria-hidden className={cn(NAME_LINE, 'invisible col-start-1 row-start-1 mx-0 overflow-hidden whitespace-pre', nick ? 'font-semibold' : 'font-normal')}>
+                    {nick || 'anonymous'}
+                  </span>
+                  <input
+                    id="username"
+                    value={nick}
+                    onChange={(e) => setNick(e.target.value)}
+                    onFocus={(e) => {
+                      nickAtFocus.current = e.currentTarget.value;
+                    }}
+                    onBlur={(e) => {
+                      if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                    placeholder="anonymous"
+                    size={1}
+                    maxLength={24}
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    className={cn(
+                      NAME_LINE,
+                      'col-start-1 row-start-1 mx-0 w-full min-w-0 truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary focus:border-primaryBlue focus:bg-background',
+                      mirrored && 'text-right'
+                    )}
+                  />
+                </span>
+              </Tooltip>
+              <Tooltip content="your name. click to change it">
+                <label htmlFor="username" aria-hidden className="shrink-0 cursor-text text-sm text-textTertiary">
+                  ✎
+                </label>
+              </Tooltip>
             </span>
             <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
               {mobile && (
