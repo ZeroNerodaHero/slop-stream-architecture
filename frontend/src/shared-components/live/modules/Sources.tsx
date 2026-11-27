@@ -1,18 +1,6 @@
-import {
-  RiAddLine,
-  RiAspectRatioLine,
-  RiCloseLine,
-  RiComputerLine,
-  RiEyeLine,
-  RiEyeOffLine,
-  RiFocus3Line,
-  RiImageLine,
-  RiUserSmileLine,
-  RiUserVoiceLine,
-  RiVidiconLine
-} from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiComputerLine, RiImageLine, RiMusic2Line, RiUserSmileLine, RiUserVoiceLine, RiVidiconLine } from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
-import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api } from '@/infra/api';
@@ -21,50 +9,55 @@ import {
   addAvatar,
   addImage,
   cameraAtom,
-  cameraDeviceAtom,
   cameraOn,
   canShareScreenAtom,
   deleteImage,
-  faceCamerasAtom,
-  fitSourceTo,
   hasAvatarAtom,
   hasCameraAtom,
-  hasMicAtom,
   libraryAtom,
   modelAtom,
   modelLoadingAtom,
   moveSourceTo,
   placeImage,
   publishPhaseAtom,
-  refreshFaceCameras,
   removeSource,
   screenShareSupported,
   screenStreamAtom,
   selectedSourceAtom,
   selectSource,
-  setCamera,
-  setSourceFit,
   shareScreen,
   sourceStatusAtom,
   sourcesAtom,
   startMic,
-  streamNameAtom,
-  toggleSource
+  streamNameAtom
 } from '@/infra/atoms/publish-atoms';
-import type { Place } from '@/infra/live-dock';
+import {
+  addSound,
+  removeSound,
+  renameSound,
+  renameSource,
+  soundPlayingAtom,
+  soundsAtom,
+  soundStatusAtom,
+  sourceNamesAtom,
+  sourceNameOf
+} from '@/infra/atoms/source-atoms';
+import { livePanelsAtom, type Place } from '@/infra/live-dock';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import type { Source } from '@/infra/scene';
+import { SOUND_MAX_BYTES, SOUNDS_MAX, type SoundSource } from '@/infra/source-settings';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
-import { DevicePick } from '@/shared-components/live/DevicePick';
 import { DockPanel } from '@/shared-components/live/Dock';
+import { NameEdit, SourceSettings, useSourceFacts } from '@/shared-components/live/SourceSettings';
 import { DragHandle, type DragHandleProps, useReorder } from '@/shared-components/Reorderable';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
-const ROW = 'group/row relative flex h-11 w-full min-w-0 items-center gap-2 border-l-2 pl-0.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
+const ROW = 'relative flex h-11 w-full min-w-0 items-center gap-2 border-l-2 pl-0.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
+const THUMB = 'flex h-7 w-12 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-black';
 const ROW_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const ROW_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
 const MENU_ITEM =
@@ -82,6 +75,8 @@ function AddMenu({ onModel }: { onModel: () => void }) {
   const button = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const soundRef = useRef<HTMLInputElement | null>(null);
+  const soundCount = useAtomValue(soundsAtom).length;
   const canShare = useAtomValue(canShareScreenAtom);
   const hasCamera = useAtomValue(hasCameraAtom);
   const hasAvatar = useAtomValue(hasAvatarAtom);
@@ -215,6 +210,20 @@ function AddMenu({ onModel }: { onModel: () => void }) {
             >
               <RiImageLine aria-hidden size={16} /> image or gif
             </button>
+            <button
+              id="add-sound"
+              role="menuitem"
+              type="button"
+              disabled={soundCount >= SOUNDS_MAX}
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                soundRef.current?.click();
+              }}
+            >
+              <RiMusic2Line aria-hidden size={16} /> custom sound
+              {soundCount >= SOUNDS_MAX && <span className="ml-auto text-xs text-textTertiary">{SOUNDS_MAX} at most</span>}
+            </button>
             {library.length > 0 && (
               <div className="border-t border-primaryStroke px-3 pb-1 pt-2">
                 <p className="mb-1.5 text-xs text-textTertiary">your pictures</p>
@@ -264,145 +273,170 @@ function AddMenu({ onModel }: { onModel: () => void }) {
           if (file) void addImage(file);
         }}
       />
+      <input
+        ref={soundRef}
+        id="sound-file"
+        type="file"
+        accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.m4a,.aac,.flac,.webm"
+        aria-label={`a sound file, ${SOUND_MAX_BYTES / (1024 * 1024)} MB at most`}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void addSound(file);
+        }}
+      />
     </div>
   );
 }
 
-const ICONS = { camera: RiVidiconLine, screen: RiComputerLine, image: RiImageLine, avatar: RiUserVoiceLine } as const;
-const KINDS = { camera: 'camera', screen: 'screen', image: 'picture', avatar: 'avatar' } as const;
-
-function useSourceFacts(source: Source) {
-  const hasMic = useAtomValue(hasMicAtom);
-  const model = useAtomValue(modelAtom);
-  const worn = source.kind === 'camera' ? model : null;
-  const label = worn ? worn.name : source.label;
-  const kind = worn ? 'model' : KINDS[source.kind];
-  const fill = source.fit ? source.fit === 'cover' : source.kind === 'camera';
-  const canRemove = source.kind !== 'camera' || hasMic;
-  const removeWords =
-    source.kind === 'screen'
-      ? 'stop sharing'
-      : source.kind === 'image'
-        ? 'remove (the upload stays in your pictures)'
-        : source.kind === 'avatar'
-          ? 'remove (the + brings it back)'
-          : !hasMic
-            ? `no mic: the ${worn ? 'model' : 'camera'} is all there is`
-            : worn
-              ? 'take the model off: mic only, your avatar stands in'
-              : 'turn the camera off: mic only, your avatar stands in';
-  const removeLabel = source.kind === 'screen' ? 'stop sharing' : worn ? 'take the model off' : source.kind === 'camera' ? 'turn the camera off' : 'remove';
-  return { worn, label, kind, fill, canRemove, removeWords, removeLabel };
-}
-
 interface RowProps {
   source: Source;
-  hasCamera: boolean;
   handle: DragHandleProps;
   item: { 'data-reorder-item': string };
 }
 
-function Row({ source, hasCamera, handle, item }: RowProps) {
-  const selected = useAtomValue(selectedSourceAtom) === source.id;
+function SourceThumb({ source }: { source: Source }) {
   const streamAtom = source.kind === 'camera' ? cameraAtom : screenStreamAtom((source.slot ?? 1) - 1);
   const name = useAtomValue(streamNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
-  const { worn, label, kind, fill, canRemove, removeWords, removeLabel } = useSourceFacts(source);
-  const Icon = worn ? RiUserSmileLine : ICONS[source.kind];
-  return (
-    <li {...item} className={cn(ROW, selected ? ROW_ON : ROW_OFF)}>
-      <DragHandle id={`source-drag-${source.id}`} {...handle} />
-      <button
-        id={`source-${source.id}`}
-        type="button"
-        aria-pressed={selected}
-        onClick={() => selectSource(source.id)}
-        className={cn('flex h-full min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none', !source.shown && 'opacity-60')}
-      >
-        {source.kind === 'image' ? (
-          <img src={api.assetUrl(name, source.asset ?? 0)} alt="" draggable={false} className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-black object-contain" />
-        ) : source.kind === 'avatar' ? (
-          <span className="flex h-7 w-12 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-black">
-            <Face name={name} version={avatar} className="h-6 w-6 text-xs" />
-          </span>
-        ) : (
-          <Thumb id={`source-${source.id}-video`} streamAtom={streamAtom} />
-        )}
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span id={worn ? 'source-model-name' : undefined} className="truncate font-medium">
-            {label}
-          </span>
-          <span className="flex min-w-0 items-center gap-1 text-xs text-textTertiary">
-            <Icon aria-hidden size={12} className="shrink-0" />
-            <span className="truncate">{source.shown ? kind : `${kind} · off the stream`}</span>
-          </span>
-        </span>
-      </button>
-      <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 bg-backgroundTertiary pl-1 pr-1 opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100">
-        <Tooltip
-          content={
-            source.shown ? (source.kind === 'image' ? 'on the stream. click to hide it' : 'on the stream. click to put it beside') : 'off the stream. click to put it on'
-          }
-        >
-          <button
-            id={`source-hide-${source.id}`}
-            type="button"
-            aria-pressed={!source.shown}
-            aria-label={source.shown ? 'take it off the stream' : 'put it on the stream'}
-            onClick={() => toggleSource(source.id)}
-            className={ICON_BUTTON}
-          >
-            {source.shown ? <RiEyeLine aria-hidden size={16} /> : <RiEyeOffLine aria-hidden size={16} />}
-          </button>
-        </Tooltip>
-        {(source.kind === 'camera' || source.kind === 'screen') && (
-          <Tooltip content={fill ? 'fills its box. click to show the whole picture' : 'the whole picture. click to fill its box'}>
-            <button
-              id={`source-fit-${source.id}`}
-              type="button"
-              aria-label={fill ? 'show the whole picture' : 'fill the box'}
-              onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}
-              className={ICON_BUTTON}
-            >
-              <RiAspectRatioLine aria-hidden size={16} />
-            </button>
-          </Tooltip>
-        )}
-        {source.kind === 'image' && hasCamera && (
-          <Tooltip content="fit to the camera: the same box, just over it (a border)">
-            <button
-              id={`source-fit-camera-${source.id}`}
-              type="button"
-              aria-label="fit to the camera"
-              onClick={() => fitSourceTo(source.id, 'cam')}
-              className={ICON_BUTTON}
-            >
-              <RiFocus3Line aria-hidden size={16} />
-            </button>
-          </Tooltip>
-        )}
-        <Tooltip content={removeWords}>
-          <button
-            id={`source-remove-${source.id}`}
-            type="button"
-            aria-label={removeLabel}
-            disabled={!canRemove}
-            onClick={() => removeSource(source.id)}
-            className={cn(ICON_BUTTON, 'hover:border-decrease hover:text-decrease')}
-          >
-            <RiCloseLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
+  if (source.kind === 'image')
+    return (
+      <img
+        src={api.assetUrl(name, source.asset ?? 0)}
+        alt=""
+        draggable={false}
+        className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-black object-contain"
+      />
+    );
+  if (source.kind === 'avatar')
+    return (
+      <span className={THUMB}>
+        <Face name={name} version={avatar} className="h-6 w-6 text-xs" />
       </span>
+    );
+  return <Thumb id={`source-${source.id}-video`} streamAtom={streamAtom} />;
+}
+
+interface RowFrameProps {
+  id: string;
+  name: string;
+  off?: boolean;
+  thumb: ReactNode;
+  start: ReactNode;
+  removeLabel: string;
+  removeWords: string;
+  canRemove: boolean;
+  onRemove: () => void;
+  onRename: (name: string) => void;
+  item?: { 'data-reorder-item': string };
+}
+
+function RowFrame({ id, name, off = false, thumb, start, removeLabel, removeWords, canRemove, onRemove, onRename, item }: RowFrameProps) {
+  const selected = useAtomValue(selectedSourceAtom) === id;
+  const [editing, setEditing] = useState(false);
+  return (
+    <li {...item} data-source={id} className={cn(ROW, selected ? ROW_ON : ROW_OFF)}>
+      {start}
+      {editing ? (
+        <span className="flex h-full min-w-0 flex-1 items-center gap-2">
+          {thumb}
+          <NameEdit
+            id={`source-rename-${id}`}
+            name={name}
+            onSave={(next) => {
+              onRename(next);
+              setEditing(false);
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        </span>
+      ) : (
+        <button
+          id={`source-${id}`}
+          type="button"
+          aria-pressed={selected}
+          aria-keyshortcuts="F2"
+          onClick={() => selectSource(id)}
+          onDoubleClick={() => setEditing(true)}
+          onKeyDown={(e) => {
+            if (e.key !== 'F2') return;
+            e.preventDefault();
+            setEditing(true);
+          }}
+          className={cn('flex h-full min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none', off && 'opacity-60')}
+        >
+          {thumb}
+          <span data-source-name className="min-w-0 flex-1 truncate font-medium">
+            {name}
+          </span>
+          {off && <span className="sr-only">, off the stream</span>}
+        </button>
+      )}
+      <Tooltip content={removeWords}>
+        <button
+          id={`source-remove-${id}`}
+          type="button"
+          aria-label={removeLabel}
+          disabled={!canRemove}
+          onClick={onRemove}
+          className={cn(ICON_BUTTON, 'hover:border-decrease hover:text-decrease focus-visible:border-decrease focus-visible:text-decrease')}
+        >
+          <RiCloseLine aria-hidden size={16} />
+        </button>
+      </Tooltip>
     </li>
   );
 }
 
-function SourceList({ sources }: { sources: Source[] }) {
-  const hasCamera = sources.some((s) => s.kind === 'camera');
+function Row({ source, handle, item }: RowProps) {
+  const model = useAtomValue(modelAtom);
+  const names = useAtomValue(sourceNamesAtom);
+  const label = sourceNameOf(source, model, names);
+  const { canRemove, removeWords, removeLabel } = useSourceFacts(source);
+  return (
+    <RowFrame
+      id={source.id}
+      name={label.name}
+      off={!source.shown}
+      thumb={<SourceThumb source={source} />}
+      start={<DragHandle id={`source-drag-${source.id}`} {...handle} />}
+      removeLabel={removeLabel}
+      removeWords={removeWords}
+      canRemove={canRemove}
+      onRemove={() => removeSource(source.id)}
+      onRename={(next) => renameSource(label, next)}
+      item={item}
+    />
+  );
+}
+
+function SoundRow({ sound }: { sound: SoundSource }) {
+  const playing = useAtomValue(soundPlayingAtom)[sound.id] ?? false;
+  return (
+    <RowFrame
+      id={sound.id}
+      name={sound.name}
+      thumb={
+        <span className={cn(THUMB, playing ? 'text-primaryBlue' : 'text-textTertiary')}>
+          <RiMusic2Line aria-hidden size={14} />
+        </span>
+      }
+      start={<span aria-hidden className="w-[22px] shrink-0" />}
+      removeLabel="remove this sound"
+      removeWords="remove this sound"
+      canRemove
+      onRemove={() => void removeSound(sound.id)}
+      onRename={(next) => renameSound(sound.id, next)}
+    />
+  );
+}
+
+function SourceList({ sources, sounds }: { sources: Source[]; sounds: SoundSource[] }) {
   const byId = new Map(sources.map((s) => [s.id, s]));
   const model = useAtomValue(modelAtom);
-  const sourceLabel = (s: Source | undefined) => (s?.kind === 'camera' && model ? model.name : (s?.label ?? 'source'));
+  const names = useAtomValue(sourceNamesAtom);
+  const sourceLabel = (s: Source | undefined) => (s ? sourceNameOf(s, model, names).name : 'source');
   const reorder = useReorder({
     keys: [...sources].reverse().map((s) => s.id),
     name: (id) => sourceLabel(byId.get(id)),
@@ -413,128 +447,77 @@ function SourceList({ sources }: { sources: Source[] }) {
 
   return (
     <div className="relative">
-      <ul id="source-list" {...reorder.list} className={cn('m-0 list-none divide-y divide-primaryStroke p-0', reorder.held && 'cursor-grabbing')}>
-        {reorder.order.map((id) => {
-          const source = byId.get(id);
-          return source && <Row key={id} source={source} hasCamera={hasCamera} handle={reorder.handle(id)} item={reorder.item(id)} />;
-        })}
-      </ul>
+      {sources.length > 0 && (
+        <ul id="source-list" {...reorder.list} className={cn('m-0 list-none divide-y divide-primaryStroke p-0', reorder.held && 'cursor-grabbing')}>
+          {reorder.order.map((id) => {
+            const source = byId.get(id);
+            return source && <Row key={id} source={source} handle={reorder.handle(id)} item={reorder.item(id)} />;
+          })}
+        </ul>
+      )}
+      {sounds.length > 0 && (
+        <ul id="sound-list" aria-label="sounds" className={cn('m-0 list-none divide-y divide-primaryStroke p-0', sources.length > 0 && 'border-t border-primaryStroke')}>
+          {sounds.map((sound) => (
+            <SoundRow key={sound.id} sound={sound} />
+          ))}
+        </ul>
+      )}
       {reorder.status}
     </div>
   );
 }
 
-const refreshCameras = () => void refreshFaceCameras();
-
-function CameraPick() {
-  const hasCamera = useAtomValue(hasCameraAtom);
-  const devices = useAtomValue(faceCamerasAtom);
-  const current = useAtomValue(cameraDeviceAtom);
-  const model = useAtomValue(modelAtom);
-  return (
-    <DevicePick
-      id="camera-device"
-      label={model ? 'the camera that reads your face' : 'the camera that goes out'}
-      icon={RiVidiconLine}
-      value={current}
-      devices={devices}
-      fallback="default camera"
-      on={hasCamera || model !== null}
-      refresh={refreshCameras}
-      onPick={(id) => void setCamera(id)}
-    />
-  );
-}
-
-function SourceDetail({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
-  const { label, kind, fill, canRemove, removeWords, removeLabel } = useSourceFacts(source);
-  return (
-    <div id="source-detail" className="flex min-w-0 flex-col gap-2 px-3 py-2.5">
-      <p className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate text-xs font-semibold uppercase tracking-wider text-textSecondary">{label}</span>
-        {kind !== label && <span className="shrink-0 text-xs text-textTertiary">{kind}</span>}
-      </p>
-      <div className="flex flex-wrap gap-1.5">
-        <Button id="source-detail-shown" size="sm" aria-pressed={!source.shown} onClick={() => toggleSource(source.id)}>
-          {source.shown ? 'hide' : 'show'}
-        </Button>
-        {(source.kind === 'camera' || source.kind === 'screen') && (
-          <Button id="source-detail-fit" size="sm" onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}>
-            {fill ? 'whole picture' : 'fill box'}
-          </Button>
-        )}
-        {source.kind === 'image' && hasCamera && (
-          <Button id="source-detail-fit-camera" size="sm" onClick={() => fitSourceTo(source.id, 'cam')}>
-            fit camera
-          </Button>
-        )}
-        <Tooltip content={removeWords}>
-          <Button id="source-detail-remove" size="sm" variant="outline-danger" disabled={!canRemove} onClick={() => removeSource(source.id)}>
-            {removeLabel}
-          </Button>
-        </Tooltip>
-      </div>
-      {source.kind === 'camera' && <CameraPick />}
-      <p className="text-xs text-textTertiary">drag it on the preview to move it</p>
-    </div>
-  );
-}
-
-function SourcesBody({ onModel, split = false }: { onModel: () => void; split?: boolean }) {
+function SourcesBody({ onModel, place, inline }: { onModel: () => void; place: Place; inline: boolean }) {
   const sources = useAtomValue(sourcesAtom);
-  const selectedId = useAtomValue(selectedSourceAtom);
+  const sounds = useAtomValue(soundsAtom);
   const status = useAtomValue(sourceStatusAtom);
+  const soundStatus = useAtomValue(soundStatusAtom);
   const phase = useAtomValue(publishPhaseAtom);
   const modelLoading = useAtomValue(modelLoadingAtom);
   const cameraRefused = phase === 'camera-blocked' || phase === 'no-camera';
   const micRefused = phase === 'mic-blocked' || phase === 'no-mic';
-  const selected = sources.find((s) => s.id === selectedId) ?? null;
-  const hasCamera = sources.some((s) => s.kind === 'camera');
   return (
-    <div id="sources" className={cn('min-w-0', split && 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)]')}>
-      <div className={cn('min-w-0', split && 'border-r border-primaryStroke')}>
-        {sources.length === 0 ? (
-          <div className="px-3 py-3 text-sm text-textTertiary">
-            <p>
-              {modelLoading ? 'your model shows up here once it is on' : micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}
-            </p>
-            {cameraRefused && (
-              <Button id="mic-only" size="sm" variant="outline" className="mt-2" onClick={() => void startMic()}>
-                go mic only: your avatar, moving with your voice
-              </Button>
-            )}
-            {micRefused && (
-              <Button id="use-camera" size="sm" variant="outline" className="mt-2" onClick={() => void cameraOn()}>
-                use the camera instead
-              </Button>
-            )}
-          </div>
-        ) : (
-          <SourceList sources={sources} />
-        )}
-        <AddMenu onModel={onModel} />
-        {status && (
-          <p id="source-status" className="px-3 pb-2 text-xs text-textSecondary" aria-live="polite">
-            {status}
+    <div id="sources" className="min-w-0">
+      {sources.length === 0 && (
+        <div className="px-3 py-3 text-sm text-textTertiary">
+          <p>
+            {modelLoading ? 'your model shows up here once it is on' : micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}
           </p>
-        )}
-      </div>
-      {selected ? (
-        <div className={cn(!split && 'border-t border-primaryStroke')}>
-          <SourceDetail source={selected} hasCamera={hasCamera} />
+          {cameraRefused && (
+            <Button id="mic-only" size="sm" variant="outline" className="mt-2" onClick={() => void startMic()}>
+              go mic only: your avatar, moving with your voice
+            </Button>
+          )}
+          {micRefused && (
+            <Button id="use-camera" size="sm" variant="outline" className="mt-2" onClick={() => void cameraOn()}>
+              use the camera instead
+            </Button>
+          )}
         </div>
-      ) : (
-        split && <p className="px-3 py-2.5 text-xs text-textTertiary">pick a source to set it up</p>
+      )}
+      {(sources.length > 0 || sounds.length > 0) && <SourceList sources={sources} sounds={sounds} />}
+      <AddMenu onModel={onModel} />
+      {(status || soundStatus) && (
+        <p id="source-status" className="px-3 pb-2 text-xs text-textSecondary" aria-live="polite">
+          {status || soundStatus}
+        </p>
+      )}
+      {inline && (
+        <div id="source-inline" className="border-t border-primaryStroke">
+          <SourceSettings place={place} onModel={onModel} />
+        </div>
       )}
     </div>
   );
 }
 
 export function SourcesModule({ place, onModel }: { place: Place; onModel: () => void }) {
-  const count = useAtomValue(sourcesAtom).length;
+  const count = useAtomValue(sourcesAtom).length + useAtomValue(soundsAtom).length;
+  const panels = useAtomValue(livePanelsAtom);
+  const inline = place === 'phone' || panels.hidden.includes('source');
   return (
     <DockPanel tab="sources" place={place} count={count || undefined}>
-      <SourcesBody onModel={onModel} />
+      <SourcesBody onModel={onModel} place={place} inline={inline} />
     </DockPanel>
   );
 }

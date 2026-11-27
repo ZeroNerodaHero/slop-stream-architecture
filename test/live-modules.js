@@ -19,8 +19,7 @@ const expect = (cond, what) => {
 
 const MODULES = {
   sources: '#sources-panel',
-  face: '#face-panel',
-  rig: '#rig',
+  source: '#source-panel',
   sound: '#mixer',
   chat: '#live-chat',
   studio: '#live-controls',
@@ -71,14 +70,13 @@ const present = (page) => page.evaluate((all) => Object.entries(all).filter(([, 
   await step('a throw in sound shows its reload panel and nothing else goes', async () => {
     await page.evaluate(() => {
       window.__preview = document.querySelector('#preview');
-      window.__rig = document.querySelector('#rig-video');
     });
     await breakAtom(page, 'micDevicesAtom', null);
     await page.waitForSelector('#live-crash-sound', { timeout: 5000 });
     const all = await present(page);
     expect(!all.includes('sound'), 'sound is still drawn');
     expect(all.length === Object.keys(MODULES).length - 1, `missing ${Object.keys(MODULES).filter((m) => !all.includes(m) && m !== 'sound')}`);
-    expect(await page.evaluate(() => window.__preview === document.querySelector('#preview') && window.__rig === document.querySelector('#rig-video')), 'the preview or the rig video was drawn again');
+    expect(await page.evaluate(() => window.__preview === document.querySelector('#preview')), 'the preview was drawn again');
   });
 
   await step('the reload panel remounts sound alone', async () => {
