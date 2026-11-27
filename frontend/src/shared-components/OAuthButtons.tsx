@@ -1,4 +1,4 @@
-import { RiDiscordFill, RiGoogleFill, RiLoginBoxLine } from '@remixicon/react';
+import { RiDiscordFill, RiGoogleFill, RiKickFill, RiLoginBoxLine, RiTwitchFill } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type CSSProperties, useEffect } from 'react';
 
@@ -7,16 +7,19 @@ import { loadOAuthProviders, oauthProvidersAtom, oauthStartUrl } from '@/infra/a
 import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { cn } from '@/utils/cn';
 
-export const PROVIDER_COLOR: Partial<Record<OAuthProvider, { brand: string; hover: string; text: string }>> = {
+export const PROVIDER_COLOR: Partial<Record<OAuthProvider, { brand: string; hover: string; text: string; on?: string }>> = {
   google: { brand: '#EA4335', hover: '#D33426', text: '#EA4335' },
-  discord: { brand: '#5865F2', hover: '#4752C4', text: '#8891F2' }
+  discord: { brand: '#5865F2', hover: '#4752C4', text: '#8891F2' },
+  twitch: { brand: '#9146FF', hover: '#772CE8', text: '#A970FF' },
+  kick: { brand: '#53FC18', hover: '#3FD10C', text: '#53FC18', on: '#0B0E0F' }
 };
 
 export function providerBrandStyle(provider: OAuthProvider): CSSProperties {
   const color = PROVIDER_COLOR[provider];
   return {
     '--brand': color?.brand ?? 'rgb(var(--primary-color))',
-    '--brand-hover': color?.hover ?? 'rgb(var(--primary-color-hover))'
+    '--brand-hover': color?.hover ?? 'rgb(var(--primary-color-hover))',
+    '--brand-on': color?.on ?? '#fff'
   } as CSSProperties;
 }
 
@@ -26,6 +29,10 @@ export function ProviderIcon({ provider, size = 18 }: { provider: OAuthProvider;
       return <RiGoogleFill aria-hidden size={size} />;
     case 'discord':
       return <RiDiscordFill aria-hidden size={size} />;
+    case 'twitch':
+      return <RiTwitchFill aria-hidden size={size} />;
+    case 'kick':
+      return <RiKickFill aria-hidden size={size} />;
     default:
       return <RiLoginBoxLine aria-hidden size={size} />;
   }

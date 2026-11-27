@@ -502,6 +502,16 @@ pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Plat
         }
     };
     let slug = p.slug();
+    let taken = taken_words(p);
+    let db_error = |e: sqlx::Error| {
+        log::error!("postgres: {e}");
+        "database error".to_owned()
+    };
+    if owned_elsewhere(db, user, p, &account.id).await.map_err(db_error)? {
+        log::info!("destinations {slug}: refused an account another login owns");
+        revoke(cfg, p, app, &tokens.access).await;
+        return Err(taken);
+    }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM stream_destinations WHERE user_id = $1 AND NOT (platform = $2 AND external_id = $3)")
         .bind(user)
         .bind(slug)
@@ -537,11 +547,24 @@ pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Plat
     .bind(sealed(cfg, user, slug, "key", ingest.as_ref().map(|i| i.key.as_str())))
     .fetch_one(db)
     .await
-    .map_err(|e| {
-        log::error!("postgres: {e}");
-        "database error".to_owned()
-    })?;
+    .map_err(|e| if crate::unique_violation(&e) { taken.clone() } else { db_error(e) })?;
     Ok(id)
+}
+
+fn taken_words(p: Platform) -> String {
+    format!("that {} is already linked to another account", p.slug())
+}
+
+pub(crate) async fn owned_elsewhere(db: &sqlx::PgPool, user: Uuid, p: Platform, external_id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM oauth_identities WHERE provider = $1 AND provider_user_id = $2 AND user_id <> $3)
+             OR EXISTS (SELECT 1 FROM stream_destinations WHERE platform = $1 AND external_id = $2 AND user_id <> $3)",
+    )
+    .bind(p.slug())
+    .bind(external_id)
+    .bind(user)
+    .fetch_one(db)
+    .await
 }
 
 fn clean_name(raw: &str) -> String {
@@ -789,6 +812,10 @@ struct CallbackQuery {
 }
 
 async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q): Query<CallbackQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
+    if crate::oauth::is_login_state(&headers, q.state.as_deref()) || !s.destinations.on() {
+        let q = crate::oauth::CallbackQuery { code: q.code, state: q.state, error: q.error };
+        return crate::oauth::finish(&s, &slug, q, &headers).await;
+    }
     let cfg = gate(&s)?;
     let Some(p) = Platform::from_slug(&slug).filter(|p| cfg.app(*p).is_some()) else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "not found"));
@@ -1001,6 +1028,8 @@ mod tests {
 
     const KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
 
+    static ONE_MOCK_ACCOUNT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn vars(pairs: &[(&str, &str)]) -> Config {
         let map: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         Config::from_vars(|k| map.get(k).cloned())
@@ -1203,6 +1232,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn connecting_stores_only_sealed_secrets_and_refreshes_them() {
+        let _one = ONE_MOCK_ACCOUNT.lock().await;
         let pool = crate::auth::tests::test_db().await;
         let base = mock().await;
         let spec = Spec { authorize_url: format!("{base}/authorize"), token_url: format!("{base}/token"), revoke_url: format!("{base}/revoke"), api_url: format!("{base}/helix") };
@@ -1229,5 +1259,32 @@ mod tests {
         assert_eq!(opened(&cfg, user, "twitch", "key", d.key.as_deref()).as_deref(), Some("live_4242_acc-3"));
         sqlx::query("DELETE FROM streamers WHERE id = $1").bind(user).execute(&pool).await.unwrap();
         assert!(dest_of(&pool, user, id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_twitch_another_login_owns_cannot_be_connected() {
+        let _one = ONE_MOCK_ACCOUNT.lock().await;
+        let pool = crate::auth::tests::test_db().await;
+        let base = mock().await;
+        let spec = Spec { authorize_url: format!("{base}/authorize"), token_url: format!("{base}/token"), revoke_url: format!("{base}/revoke"), api_url: format!("{base}/helix") };
+        let cfg = Config::for_test("http://localhost:5173", KEY, &[(Platform::Twitch, spec)]);
+        let run = std::process::id();
+        let a = crate::auth::tests::row(&pool, &format!("dest-own-a-{run}"), Some("hash")).await;
+        let b = crate::auth::tests::row(&pool, &format!("dest-own-b-{run}"), Some("hash")).await;
+        sqlx::query("DELETE FROM stream_destinations WHERE platform = 'twitch' AND external_id = '4242'").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id = '4242'").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, 'twitch', '4242')").bind(a).execute(&pool).await.unwrap();
+        let refused = connect(&cfg, &pool, b, Platform::Twitch, "good", &random_hex()).await;
+        assert_eq!(refused, Err("that twitch is already linked to another account".to_owned()));
+        let mine = connect(&cfg, &pool, a, Platform::Twitch, "good", &random_hex()).await.expect("a logs in with it and streams to it");
+        assert_eq!(connect(&cfg, &pool, a, Platform::Twitch, "good", &random_hex()).await, Ok(mine), "connecting again just reconnects");
+        sqlx::query("DELETE FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id = '4242'").execute(&pool).await.unwrap();
+        assert_eq!(connect(&cfg, &pool, b, Platform::Twitch, "good", &random_hex()).await, Err("that twitch is already linked to another account".to_owned()), "a still streams to it");
+        assert!(!owned_elsewhere(&pool, a, Platform::Twitch, "4242").await.unwrap());
+        assert!(owned_elsewhere(&pool, b, Platform::Twitch, "4242").await.unwrap());
+        for u in [a, b] {
+            sqlx::query("DELETE FROM streamers WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+        }
     }
 }

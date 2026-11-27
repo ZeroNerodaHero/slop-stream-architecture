@@ -40,6 +40,8 @@ pub(crate) struct Spec {
     scope: &'static str,
     authorize_extra: &'static [(&'static str, &'static str)],
     parse: fn(&Value) -> Option<Profile>,
+    callback_base: &'static str,
+    client_id_header: bool,
 }
 
 const GOOGLE: Spec = Spec {
@@ -52,6 +54,8 @@ const GOOGLE: Spec = Spec {
     scope: "openid email profile",
     authorize_extra: &[("prompt", "select_account")],
     parse: parse_google,
+    callback_base: OAUTH_BASE,
+    client_id_header: false,
 };
 
 const DISCORD: Spec = Spec {
@@ -64,9 +68,42 @@ const DISCORD: Spec = Spec {
     scope: "identify email",
     authorize_extra: &[],
     parse: parse_discord,
+    callback_base: OAUTH_BASE,
+    client_id_header: false,
 };
 
-const PROVIDERS: &[Spec] = &[GOOGLE, DISCORD];
+const TWITCH: Spec = Spec {
+    slug: "twitch",
+    env: "TWITCH",
+    label: "Twitch",
+    authorize_url: "https://id.twitch.tv/oauth2/authorize",
+    token_url: "https://id.twitch.tv/oauth2/token",
+    user_url: "https://api.twitch.tv/helix/users",
+    scope: "user:read:email",
+    authorize_extra: &[],
+    parse: parse_twitch,
+    callback_base: SHARED_BASE,
+    client_id_header: true,
+};
+
+const KICK: Spec = Spec {
+    slug: "kick",
+    env: "KICK",
+    label: "Kick",
+    authorize_url: "https://id.kick.com/oauth/authorize",
+    token_url: "https://id.kick.com/oauth/token",
+    user_url: "https://api.kick.com/public/v1/users",
+    scope: "user:read",
+    authorize_extra: &[],
+    parse: parse_kick,
+    callback_base: SHARED_BASE,
+    client_id_header: false,
+};
+
+const OAUTH_BASE: &str = "/api/oauth";
+pub(crate) const SHARED_BASE: &str = "/api/auth";
+
+const PROVIDERS: &[Spec] = &[GOOGLE, DISCORD, TWITCH, KICK];
 
 #[derive(Clone, Copy)]
 pub(crate) struct Provider(&'static Spec);
@@ -93,6 +130,10 @@ impl Provider {
     pub(crate) const GOOGLE: Provider = Provider(&GOOGLE);
     #[cfg(test)]
     pub(crate) const DISCORD: Provider = Provider(&DISCORD);
+    #[cfg(test)]
+    pub(crate) const TWITCH: Provider = Provider(&TWITCH);
+    #[cfg(test)]
+    pub(crate) const KICK: Provider = Provider(&KICK);
 
     pub(crate) fn all() -> impl Iterator<Item = Provider> {
         PROVIDERS.iter().map(Provider)
@@ -108,6 +149,18 @@ impl Provider {
 
     fn label(self) -> &'static str {
         self.0.label
+    }
+
+    fn streams(self) -> bool {
+        self.0.callback_base == SHARED_BASE
+    }
+
+    fn taken(self) -> String {
+        if self.streams() {
+            format!("that {} is already linked to another account", self.slug())
+        } else {
+            format!("that {} account is linked to another account here", self.label())
+        }
     }
 }
 
@@ -129,7 +182,7 @@ impl Config {
         let on: Vec<&str> = config.enabled().into_iter().map(Provider::slug).collect();
         match (&config.public_url, on.is_empty()) {
             (_, true) => log::info!("oauth: no provider set up (<P>_CLIENT_ID and _SECRET for {:?}, and PUBLIC_URL)", PROVIDERS.iter().map(|p| p.env).collect::<Vec<_>>()),
-            (Some(url), false) => log::info!("oauth: {on:?}, callbacks at {url}/api/oauth/<provider>/callback"),
+            (Some(_), false) => log::info!("oauth: {on:?}, callbacks at {:?}", config.enabled().into_iter().filter_map(|p| config.redirect_uri(p)).collect::<Vec<_>>()),
             (None, false) => {}
         }
         config
@@ -173,7 +226,7 @@ impl Config {
     }
 
     fn redirect_uri(&self, p: Provider) -> Option<String> {
-        Some(format!("{}/api/oauth/{}/callback", self.public_url.as_ref()?, p.slug()))
+        Some(format!("{}{}/{}/callback", self.public_url.as_ref()?, p.0.callback_base, p.slug()))
     }
 }
 
@@ -263,11 +316,23 @@ pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 fn short_cookie(name: &str, value: &str, secs: u64) -> String {
-    format!("{name}={value}; Path=/api/oauth; Max-Age={secs}; HttpOnly; Secure; SameSite=Lax")
+    path_cookie(name, value, secs, OAUTH_BASE)
+}
+
+fn path_cookie(name: &str, value: &str, secs: u64, path: &str) -> String {
+    format!("{name}={value}; Path={path}; Max-Age={secs}; HttpOnly; Secure; SameSite=Lax")
 }
 
 fn gone_cookie(name: &str) -> String {
-    format!("{name}=; Path=/api/oauth; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
+    path_cookie(name, "", 0, OAUTH_BASE)
+}
+
+fn gone_state() -> [String; 2] {
+    [path_cookie(STATE_COOKIE, "", 0, OAUTH_BASE), path_cookie(STATE_COOKIE, "", 0, SHARED_BASE)]
+}
+
+pub(crate) fn is_login_state(headers: &HeaderMap, state: Option<&str>) -> bool {
+    check_state(state, cookie_value(headers, STATE_COOKIE).as_deref()).is_ok()
 }
 
 fn redirect_with(to: &str, cookies: &[String]) -> Response {
@@ -286,7 +351,7 @@ fn page_url(key: &str, value: &str) -> String {
 }
 
 fn fail(words: &str) -> Response {
-    redirect_with(&page_url("error", words), &[gone_cookie(STATE_COOKIE)])
+    redirect_with(&page_url("error", words), &gone_state())
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -327,6 +392,35 @@ fn parse_discord(v: &Value) -> Option<Profile> {
     })
 }
 
+fn parse_twitch(v: &Value) -> Option<Profile> {
+    let row = v.get("data").and_then(Value::as_array).and_then(|a| a.first())?;
+    let login = str_of(row, "login");
+    Some(Profile {
+        id: str_of(row, "id")?,
+        email: str_of(row, "email"),
+        suggested: suggest_name(login.as_deref().unwrap_or_default()),
+        name: shown_name(str_of(row, "display_name").as_deref()).or_else(|| shown_name(login.as_deref())),
+        avatar: str_of(row, "profile_image_url").and_then(|u| shown_avatar(&u)),
+    })
+}
+
+fn parse_kick(v: &Value) -> Option<Profile> {
+    let row = v.get("data").and_then(Value::as_array).and_then(|a| a.first())?;
+    let id = match row.get("user_id")? {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) if !s.is_empty() => s.clone(),
+        _ => return None,
+    };
+    let name = str_of(row, "name");
+    Some(Profile {
+        id,
+        email: str_of(row, "email"),
+        suggested: suggest_name(name.as_deref().unwrap_or_default()),
+        name: shown_name(name.as_deref()),
+        avatar: str_of(row, "profile_picture").and_then(|u| shown_avatar(&u)),
+    })
+}
+
 fn discord_avatar(id: &str, hash: Option<&str>) -> Option<String> {
     let n: u64 = id.parse().ok()?;
     let url = match hash {
@@ -346,7 +440,7 @@ fn shown_name(raw: Option<&str>) -> Option<String> {
     Some(capped.trim_end().to_owned()).filter(|n| !n.is_empty())
 }
 
-const AVATAR_HOSTS: [&str; 2] = ["lh3.googleusercontent.com", "cdn.discordapp.com"];
+const AVATAR_HOSTS: [&str; 4] = ["lh3.googleusercontent.com", "cdn.discordapp.com", "static-cdn.jtvnw.net", "files.kick.com"];
 
 fn shown_avatar(raw: &str) -> Option<String> {
     if raw.len() > 512 {
@@ -413,18 +507,19 @@ async fn who_is_it(config: &Config, p: Provider, code: &str, verifier: &str) -> 
         .body(form)
         .send()
         .await
-        .map_err(|e| log::warn!("oauth {}: token: {e}", p.slug()))?;
+        .map_err(|e| log::warn!("oauth {}: token: {}", p.slug(), e.without_url()))?;
     if !res.status().is_success() {
         log::warn!("oauth {}: token: http {}", p.slug(), res.status());
         return Err(());
     }
     let token: Value = res.json().await.map_err(|e| log::warn!("oauth {}: token body: {e}", p.slug()))?;
     let access = token.get("access_token").and_then(Value::as_str).ok_or_else(|| log::warn!("oauth {}: no access_token", p.slug()))?;
-    let res = http()
-        .get(p.0.user_url)
-        .bearer_auth(access)
-        .header(header::ACCEPT, "application/json")
-        .send().await.map_err(|e| log::warn!("oauth {}: user: {e}", p.slug()))?;
+    let mut req = http().get(p.0.user_url).bearer_auth(access).header(header::ACCEPT, "application/json");
+    if p.0.client_id_header {
+        req = req.header("Client-Id", &client.id);
+    }
+    let res = req
+        .send().await.map_err(|e| log::warn!("oauth {}: user: {}", p.slug(), e.without_url()))?;
     if !res.status().is_success() {
         log::warn!("oauth {}: user: http {}", p.slug(), res.status());
         return Err(());
@@ -443,6 +538,33 @@ pub(crate) async fn linked_account(db: &sqlx::PgPool, p: Provider, provider_user
     .fetch_optional(db)
     .await?;
     Ok(row.map(|(id, name)| Account { id, name }))
+}
+
+pub(crate) async fn streaming_owner(db: &sqlx::PgPool, p: Provider, provider_user_id: &str) -> Result<Option<Account>, sqlx::Error> {
+    if !p.streams() {
+        return Ok(None);
+    }
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT s.id, s.name FROM stream_destinations d JOIN streamers s ON s.id = d.user_id
+         WHERE d.platform = $1 AND d.external_id = $2 ORDER BY d.created_at LIMIT 1",
+    )
+    .bind(p.slug())
+    .bind(provider_user_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(id, name)| Account { id, name }))
+}
+
+pub(crate) async fn login_owner(db: &sqlx::PgPool, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<Option<Account>, sqlx::Error> {
+    if let Some(account) = linked_account(db, p, provider_user_id).await? {
+        return Ok(Some(account));
+    }
+    let Some(owner) = streaming_owner(db, p, provider_user_id).await? else { return Ok(None) };
+    let mut conn = db.acquire().await?;
+    if link(&mut conn, owner.id, p, provider_user_id, shown).await? == Linked::Yes {
+        log::info!("{}: linked {} on its first login with it", owner.name, p.slug());
+    }
+    Ok(Some(owner))
 }
 
 #[cfg(test)]
@@ -482,7 +604,23 @@ async fn refresh(db: &sqlx::PgPool, p: Provider, profile: &Profile) {
     .await;
 }
 
-pub(crate) async fn link(conn: &mut sqlx::PgConnection, user: Uuid, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<bool, sqlx::Error> {
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum Linked {
+    Yes,
+    Taken,
+    HasOne,
+}
+
+pub(crate) async fn link(conn: &mut sqlx::PgConnection, user: Uuid, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<Linked, sqlx::Error> {
+    let has_one: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM oauth_identities WHERE user_id = $1 AND provider = $2 AND provider_user_id <> $3)")
+        .bind(user)
+        .bind(p.slug())
+        .bind(provider_user_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    if has_one {
+        return Ok(Linked::HasOne);
+    }
     let done =
         sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id, email, display_name, avatar_url) VALUES ($1, $2, $3, $4, $5, $6)")
             .bind(user)
@@ -494,8 +632,8 @@ pub(crate) async fn link(conn: &mut sqlx::PgConnection, user: Uuid, p: Provider,
             .execute(&mut *conn)
             .await;
     match done {
-        Ok(_) => Ok(true),
-        Err(e) if unique_violation(&e) => Ok(false),
+        Ok(_) => Ok(Linked::Yes),
+        Err(e) if unique_violation(&e) => Ok(Linked::Taken),
         Err(e) => Err(e),
     }
 }
@@ -546,7 +684,7 @@ pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, p
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else { return Err(ApiError::new(StatusCode::CONFLICT, "name taken")) };
-    if !link(&mut tx, id, p, provider_user_id, shown).await? {
+    if link(&mut tx, id, p, provider_user_id, shown).await? != Linked::Yes {
         return Err(ApiError::new(StatusCode::CONFLICT, "that account is linked already. log in with it"));
     }
     tx.commit().await?;
@@ -591,24 +729,31 @@ async fn start(State(s): State<AppState>, Path(slug): Path<String>, Query(q): Qu
         .append_pair("code_challenge", &pkce_challenge(&verifier))
         .append_pair("code_challenge_method", "S256");
     to.query_pairs_mut().extend_pairs(p.0.authorize_extra.iter().copied());
-    Ok(redirect_with(to.as_str(), &[short_cookie(STATE_COOKIE, &state, STATE_SECS)]))
+    Ok(redirect_with(to.as_str(), &[path_cookie(STATE_COOKIE, &state, STATE_SECS, p.0.callback_base)]))
 }
 
 #[derive(Deserialize)]
-struct CallbackQuery {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
+pub(crate) struct CallbackQuery {
+    pub(crate) code: Option<String>,
+    pub(crate) state: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q): Query<CallbackQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
-    let Some(p) = Provider::from_slug(&slug).filter(|p| s.oauth.client(*p).is_some()) else {
+    match Provider::from_slug(&slug) {
+        Some(p) if !p.streams() => finish(&s, &slug, q, &headers).await,
+        _ => Ok(fail("that login is not set up here")),
+    }
+}
+
+pub(crate) async fn finish(s: &AppState, slug: &str, q: CallbackQuery, headers: &HeaderMap) -> Result<Response, ApiError> {
+    let Some(p) = Provider::from_slug(slug).filter(|p| s.oauth.client(*p).is_some()) else {
         return Ok(fail("that login is not set up here"));
     };
     if q.error.is_some() {
         return Ok(fail(&format!("{} said no, or you cancelled", p.label())));
     }
-    let cookie = cookie_value(&headers, STATE_COOKIE);
+    let cookie = cookie_value(headers, STATE_COOKIE);
     let state = match check_state(q.state.as_deref(), cookie.as_deref()) {
         Ok(state) => state,
         Err(words) => return Ok(fail(words)),
@@ -629,33 +774,45 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
     let linked = linked_account(&s.db, p, &profile.id).await?;
 
     if let Some(want) = started.link {
-        let me = auth::whoami(&s.db, &headers).await?;
+        let me = auth::whoami(&s.db, headers).await?;
         if me.as_ref().map(|m| m.id) != Some(want) {
             return Ok(fail("log in again, then link"));
         }
-        return Ok(match linked {
-            Some(owner) if owner.id == want => {
+        let is_linked = linked.is_some();
+        let owner = match linked {
+            Some(owner) => Some(owner),
+            None => streaming_owner(&s.db, p, &profile.id).await?,
+        };
+        return Ok(match (is_linked, owner) {
+            (true, Some(owner)) if owner.id == want => {
                 refresh(&s.db, p, &profile).await;
-                redirect_with(&page_url("linked", p.slug()), &[gone_cookie(STATE_COOKIE)])
+                redirect_with(&page_url("linked", p.slug()), &gone_state())
             }
-            Some(_) => fail(&format!("that {} account is linked to another account here", p.label())),
-            None => {
+            (_, Some(owner)) if owner.id != want => fail(&p.taken()),
+            _ => {
                 let mut conn = s.db.acquire().await?;
-                if link(&mut conn, want, p, &profile.id, &Shown::of(&profile)).await? {
-                    log::info!("{}: linked {}", me.map(|m| m.name).unwrap_or_default(), p.slug());
-                    redirect_with(&page_url("linked", p.slug()), &[gone_cookie(STATE_COOKIE)])
-                } else {
-                    fail(&format!("this account has a {} login already. unlink it first", p.label()))
+                match link(&mut conn, want, p, &profile.id, &Shown::of(&profile)).await? {
+                    Linked::Yes => {
+                        log::info!("{}: linked {}", me.map(|m| m.name).unwrap_or_default(), p.slug());
+                        redirect_with(&page_url("linked", p.slug()), &gone_state())
+                    }
+                    Linked::Taken => fail(&p.taken()),
+                    Linked::HasOne => fail(&format!("this account has a {} login already. unlink it first", p.label())),
                 }
             }
         });
     }
 
-    if let Some(account) = linked {
+    let account = match linked {
+        Some(account) => Some(account),
+        None => login_owner(&s.db, p, &profile.id, &Shown::of(&profile)).await?,
+    };
+    if let Some(account) = account {
         refresh(&s.db, p, &profile).await;
         let token = auth::open_login(&s.db, &account).await?;
         log::info!("{}: logged in with {}", account.name, p.slug());
-        return Ok(redirect_with(&page_url("done", p.slug()), &[gone_cookie(STATE_COOKIE), auth::set_cookie(&token)]));
+        let [a, b] = gone_state();
+        return Ok(redirect_with(&page_url("done", p.slug()), &[a, b, auth::set_cookie(&token)]));
     }
 
     let token = random_hex();
@@ -674,7 +831,8 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
         .arg(SIGNUP_SECS)
         .query_async(&mut s.redis.clone())
         .await?;
-    Ok(redirect_with(&page_url("pick", p.slug()), &[gone_cookie(STATE_COOKIE), short_cookie(SIGNUP_COOKIE, &token, SIGNUP_SECS)]))
+    let [a, b] = gone_state();
+    Ok(redirect_with(&page_url("pick", p.slug()), &[a, b, short_cookie(SIGNUP_COOKIE, &token, SIGNUP_SECS)]))
 }
 
 async fn newcomer(s: &AppState, headers: &HeaderMap) -> Result<Option<(String, Newcomer)>, ApiError> {
@@ -963,13 +1121,13 @@ mod tests {
             assert_eq!(Provider::from_slug(p.slug()), Some(p));
         }
         assert_eq!(Provider::from_slug("github"), None);
-        assert_eq!(Provider::from_slug("twitch"), None, "twitch is gone");
+        assert_eq!(Provider::from_slug("twitch"), Some(Provider::TWITCH), "twitch is back, through the shared callback");
     }
 
     #[test]
     fn the_registry_is_well_formed() {
         let slugs: Vec<&str> = PROVIDERS.iter().map(|p| p.slug).collect();
-        assert_eq!(slugs, ["google", "discord"]);
+        assert_eq!(slugs, ["google", "discord", "twitch", "kick"]);
         for (i, p) in PROVIDERS.iter().enumerate() {
             assert!(!p.slug.is_empty() && p.slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'), "{}", p.slug);
             assert!(p.env.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'), "{}", p.env);
@@ -1007,12 +1165,12 @@ mod tests {
         let with_pw = auth::tests::row(&pool, &format!("oa-pw-{run}"), Some("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")).await;
         let mut conn = pool.acquire().await.unwrap();
         assert!(!is_verified(&pool, with_pw).await.unwrap(), "a password alone is not oauth verified");
-        assert!(link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg-{run}"), &Shown::default()).await.unwrap());
+        assert_eq!(link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg-{run}"), &Shown::default()).await.unwrap(), Linked::Yes);
         assert!(is_verified(&pool, with_pw).await.unwrap(), "linked: verified");
-        assert!(!link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg2-{run}"), &Shown::default()).await.unwrap(), "one google per account");
+        assert_eq!(link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg2-{run}"), &Shown::default()).await.unwrap(), Linked::HasOne, "one google per account");
         let other = create_account(&pool, &format!("oa-only-{run}"), Provider::DISCORD, &format!("ld-{run}"), &Shown::default()).await.unwrap();
         assert!(is_verified(&pool, other).await.unwrap(), "made with a provider: verified");
-        assert!(!link(&mut conn, other, Provider::GOOGLE, &format!("lg-{run}"), &Shown::default()).await.unwrap(), "somebody else's google");
+        assert_eq!(link(&mut conn, other, Provider::GOOGLE, &format!("lg-{run}"), &Shown::default()).await.unwrap(), Linked::Taken, "somebody else's google");
         drop(conn);
         assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::LastWayIn);
         assert!(is_verified(&pool, other).await.unwrap(), "the refused unlink left it linked");
@@ -1020,7 +1178,7 @@ mod tests {
         assert!(!is_verified(&pool, with_pw).await.unwrap(), "nothing linked: not verified");
         assert_eq!(unlink(&pool, with_pw, Provider::GOOGLE).await.unwrap(), Unlink::NotLinked);
         let mut conn = pool.acquire().await.unwrap();
-        assert!(link(&mut conn, other, Provider::GOOGLE, &format!("lg3-{run}"), &Shown::default()).await.unwrap());
+        assert_eq!(link(&mut conn, other, Provider::GOOGLE, &format!("lg3-{run}"), &Shown::default()).await.unwrap(), Linked::Yes);
         drop(conn);
         assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::Yes);
         assert_eq!(unlink(&pool, other, Provider::GOOGLE).await.unwrap(), Unlink::LastWayIn);
@@ -1053,5 +1211,111 @@ mod tests {
         let next = Profile { email: Some("new@b.c".into()), avatar: Some(pic.into()), ..next };
         refresh(&pool, Provider::GOOGLE, &next).await;
         assert_eq!(shown_of(&pool, &pid).await, (Some("new@b.c".into()), Some("Billy B".into()), Some(pic.into())));
+    }
+
+    #[test]
+    fn twitch_and_kick_come_back_to_the_registered_callbacks() {
+        let c = vars(&[
+            ("PUBLIC_URL", "https://nodentity.xyz"),
+            ("TWITCH_CLIENT_ID", "t"),
+            ("TWITCH_CLIENT_SECRET", "ts"),
+            ("KICK_CLIENT_ID", "k"),
+            ("KICK_CLIENT_SECRET", "ks"),
+        ]);
+        assert_eq!(c.enabled(), vec![Provider::TWITCH, Provider::KICK]);
+        assert_eq!(c.redirect_uri(Provider::TWITCH).as_deref(), Some("https://nodentity.xyz/api/auth/twitch/callback"));
+        assert_eq!(c.redirect_uri(Provider::KICK).as_deref(), Some("https://nodentity.xyz/api/auth/kick/callback"));
+        assert_eq!(TWITCH.scope, "user:read:email");
+        assert_eq!(KICK.scope, "user:read");
+        assert!(Provider::TWITCH.streams() && Provider::KICK.streams() && !Provider::GOOGLE.streams());
+        assert_eq!(Provider::TWITCH.taken(), "that twitch is already linked to another account");
+        assert!(path_cookie(STATE_COOKIE, "x", 600, SHARED_BASE).contains("Path=/api/auth;"));
+        assert!(gone_state().iter().any(|c| c.contains("Path=/api/auth;")) && gone_state().iter().any(|c| c.contains("Path=/api/oauth;")));
+    }
+
+    #[test]
+    fn twitch_and_kick_profiles_parse() {
+        let t = parse_profile(
+            Provider::TWITCH,
+            &json!({ "data": [{ "id": "141981764", "login": "twitchdev", "display_name": "TwitchDev", "email": "a@b.c", "profile_image_url": "https://static-cdn.jtvnw.net/jtv_user_pictures/x-profile_image-300x300.png" }] }),
+        )
+        .unwrap();
+        assert_eq!((t.id.as_str(), t.suggested.as_str(), t.name.as_deref(), t.email.as_deref()), ("141981764", "twitchdev", Some("TwitchDev"), Some("a@b.c")));
+        assert!(t.avatar.is_some());
+        let k = parse_profile(Provider::KICK, &json!({ "data": [{ "user_id": 123, "name": "Billy Z", "email": "k@b.c", "profile_picture": "https://files.kick.com/images/user/1/profile_image/a.webp" }] })).unwrap();
+        assert_eq!((k.id.as_str(), k.suggested.as_str(), k.name.as_deref()), ("123", "billy_z", Some("Billy Z")));
+        assert!(k.avatar.is_some());
+        assert!(parse_profile(Provider::KICK, &json!({ "data": [] })).is_none());
+        assert!(parse_profile(Provider::TWITCH, &json!({ "data": [{ "login": "x" }] })).is_none());
+        let elsewhere = parse_profile(Provider::KICK, &json!({ "data": [{ "user_id": "9", "name": "x", "profile_picture": "https://evil.example/a.png" }] })).unwrap();
+        assert_eq!(elsewhere.avatar, None);
+    }
+
+    async fn destination(pool: &sqlx::PgPool, user: Uuid, platform: &str, external_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT INTO stream_destinations (user_id, platform, external_id, external_name) VALUES ($1, $2, $3, 'x')")
+            .bind(user)
+            .bind(platform)
+            .bind(external_id)
+            .execute(pool)
+            .await
+            .map(|_| ())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_a_twitch_login_makes_one_account_and_finds_it_again() {
+        let pool = auth::tests::test_db().await;
+        let run = std::process::id();
+        let tid = format!("tw-login-{run}");
+        assert_eq!(login_owner(&pool, Provider::TWITCH, &tid, &Shown::default()).await.unwrap(), None, "nobody yet: the pick a name page");
+        let name = format!("oa-tw-{run}");
+        let id = create_account(&pool, &name, Provider::TWITCH, &tid, &Shown::default()).await.expect("made");
+        assert_eq!(login_owner(&pool, Provider::TWITCH, &tid, &Shown::default()).await.unwrap(), Some(Account { id, name: name.clone() }));
+        assert_eq!(login_owner(&pool, Provider::TWITCH, &tid, &Shown::default()).await.unwrap().map(|a| a.id), Some(id), "the second login reuses it");
+        let second = create_account(&pool, &format!("oa-tw2-{run}"), Provider::TWITCH, &tid, &Shown::default()).await;
+        assert_eq!(second.expect_err("one account per twitch").into_response().status(), StatusCode::CONFLICT);
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id = $1").bind(&tid).fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_a_twitch_connected_for_streaming_logs_into_its_owner() {
+        let pool = auth::tests::test_db().await;
+        let run = std::process::id();
+        let a = auth::tests::row(&pool, &format!("oa-dest-a-{run}"), Some("hash")).await;
+        let b = auth::tests::row(&pool, &format!("oa-dest-b-{run}"), Some("hash")).await;
+        let kid = format!("kick-{run}");
+        destination(&pool, a, "kick", &kid).await.unwrap();
+        let owner = login_owner(&pool, Provider::KICK, &kid, &Shown::default()).await.unwrap().expect("a");
+        assert_eq!(owner.id, a);
+        assert_eq!(linked_account(&pool, Provider::KICK, &kid).await.unwrap().map(|o| o.id), Some(a), "and it is a way in from now on");
+        let signup = create_account(&pool, &format!("oa-dest-new-{run}"), Provider::KICK, &kid, &Shown::default()).await;
+        assert_eq!(signup.expect_err("no second account").into_response().status(), StatusCode::CONFLICT);
+        let mut conn = pool.acquire().await.unwrap();
+        assert_eq!(link(&mut conn, b, Provider::KICK, &kid, &Shown::default()).await.unwrap(), Linked::Taken, "b cannot take a's kick");
+        assert!(destination(&pool, b, "kick", &kid).await.is_err_and(|e| unique_violation(&e)), "nor stream to it");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_one_twitch_belongs_to_one_login() {
+        let pool = auth::tests::test_db().await;
+        let run = std::process::id();
+        let a = auth::tests::row(&pool, &format!("oa-one-a-{run}"), Some("hash")).await;
+        let b = auth::tests::row(&pool, &format!("oa-one-b-{run}"), Some("hash")).await;
+        let tid = format!("tw-one-{run}");
+        let mut conn = pool.acquire().await.unwrap();
+        assert_eq!(link(&mut conn, a, Provider::TWITCH, &tid, &Shown::default()).await.unwrap(), Linked::Yes);
+        assert_eq!(link(&mut conn, a, Provider::TWITCH, &tid, &Shown::default()).await.unwrap(), Linked::Taken, "already there");
+        assert_eq!(linked_account(&pool, Provider::TWITCH, &tid).await.unwrap().map(|o| o.id), Some(a));
+        assert_eq!(link(&mut conn, b, Provider::TWITCH, &tid, &Shown::default()).await.unwrap(), Linked::Taken);
+        let err = destination(&pool, b, "twitch", &tid).await.expect_err("b cannot stream to a's twitch");
+        assert!(unique_violation(&err));
+        destination(&pool, a, "twitch", &tid).await.expect("a can");
+        let other = format!("tw-other-{run}");
+        assert_eq!(link(&mut conn, a, Provider::TWITCH, &other, &Shown::default()).await.unwrap(), Linked::HasOne);
+        let dup = sqlx::query("UPDATE stream_destinations SET user_id = $1 WHERE platform = 'twitch' AND external_id = $2").bind(b).bind(&tid).execute(&pool).await;
+        assert!(dup.is_err_and(|e| unique_violation(&e)), "moving it to b is refused too");
     }
 }
