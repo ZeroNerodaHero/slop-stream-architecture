@@ -1,3 +1,4 @@
+import type { AboutBlock, AboutPage } from '@/infra/about-blocks';
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
 import { type ChatAudio, peaksQuery } from '@/infra/chat-audio';
 import type { ChatVideo } from '@/infra/chat-video';
@@ -636,26 +637,6 @@ function ownerQuery(owner: Owner): string {
   return `session=${owner.session}&token=${owner.token}`;
 }
 
-export interface PageWire {
-  type: 'text' | 'image' | 'video' | 'sound' | 'line' | 'box' | 'border';
-  id: number;
-  x: number;
-  y: number;
-  z: number;
-  w?: number;
-  h?: number;
-  r?: number;
-  font?: string;
-  size?: number;
-  color?: string;
-  bg?: string;
-  stroke?: number;
-  strokeColor?: string;
-  align?: 'left' | 'center' | 'right' | '';
-  html?: string;
-  src?: string;
-}
-
 export const api = {
   me: () => request<MeInfo>('GET', '/api/me'),
   meAsked: (response: Promise<Response>) => answerOf<MeInfo>('GET', '/api/me', response),
@@ -825,8 +806,10 @@ export const api = {
   dismissNotification: (id: number) => request<null>('DELETE', `/api/notifications/${id}`),
   saveNotifySettings: (settings: NotifySettings) => request<NotifySettings>('PUT', '/api/notifications/settings', settings),
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
-  aboutPage: (name: string) => request<{ blocks: PageWire[] }>('GET', `/api/streamers/${encodeURIComponent(name)}/about-page`),
-  saveAboutPage: (name: string, blocks: PageWire[]) => request<{ blocks: PageWire[] }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-page`, { blocks }),
+  aboutBlocks: (name: string) => request<AboutPage>('GET', `/api/streamers/${encodeURIComponent(name)}/about-blocks`),
+  aboutDraft: (name: string) => request<AboutPage>('GET', `/api/streamers/${encodeURIComponent(name)}/about-blocks/draft`),
+  saveAboutDraft: (name: string, blocks: AboutBlock[]) => request<AboutPage>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-blocks`, { blocks }),
+  publishAbout: (name: string) => request<AboutPage>('POST', `/api/streamers/${encodeURIComponent(name)}/about-blocks/publish`),
   saveAboutFile: (name: string, type: 'image' | 'video' | 'sound', file: Blob) =>
     request<{ id: number; type: string; src: string }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-file?type=${type}`, file),
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),

@@ -18,5 +18,3 @@ export function isSameOrigin(href: string): boolean {
   }
 }
 
-export const TEXT_MAX = 10_000;
-export const BLOCKS_MAX = 40;
