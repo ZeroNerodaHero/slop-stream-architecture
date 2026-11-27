@@ -250,13 +250,14 @@ every line in every process (`api/src/timings.rs`, `video/src/timings.rs`) keeps
 
 every message is cut to 300 characters and scrubbed before it is kept: an email becomes `<email>`, an ip (with or without a port) `<ip>`, a long run of letters and digits that looks like a token `<secret>`, a url's query `?…`.
 
-the path, all on demand (nothing is collected or stored until a panel asks):
+the path:
 
-- the process: `GET :9300/timings/errors?kind=&method=&name=&dir=` (inside docker only, like `/timings`): `{ started, kept, rows }`, newest first.
+- the process: `GET :9300/timings/errors?kind=&method=&name=&dir=` (inside docker only, like `/timings`): `{ started, kept, rows }`, newest first. the two rings above, in memory, empty again after a restart.
 - the agent: `GET /api/metrics?errors=<line key>` with the box's `OPS_TOKEN`. the same path caddy already sends to the agent, so no caddy change. the key's first part names the process, which must be one of `TIMINGS_FROM`; the agent asks that process and answers what it says.
-- the monitor: `GET /api/monitor/timings/errors?target=<box>&key=<line key>`, the agent's answer plus `target` and `key`, or a 502 with what went wrong (`that box's agent keeps no error history yet`, `api keeps no error history yet`: a build from before it). public with the rest of `/api/monitor*` when `STATS_PUBLIC=true`, which is why the messages are only the ones above, scrubbed.
+- the monitor keeps them (`api/src/fault_log.rs`). after every 15 s pull, for each box, the lines whose samples since the last pull have an `err` or a `4xx` (the 24 with the most, `PULL_PER_ROUND`) are asked for their rings, all at once, and the new rows are added to that line's log: a row newer than the newest kept, or as new and not kept yet, so asking again adds nothing twice. a line keeps its newest 500 (`KEEP_PER_LINE`), a box 20,000 in all (`KEEP_PER_BOX`, the oldest of the box go first past that, about 8 MB), nothing older than 7 days (`KEEP_MS`). kept in `/data/errors.json` beside `metrics.json`, written with it every 5 minutes and when the monitor stops; a file it cannot read is moved to `errors.json.bad`, never written over. a box no longer in `TARGETS` is let go. a box's `since` is when the monitor began keeping it.
+- the page: `GET /api/monitor/timings/errors?target=<box>&key=<line key>&range=1h|24h|7d` asks the box's ring once more (so the panel is current to the second), adds it to the log, and answers the log's rows inside the range: `{ rows, kept, cap, since, from, box_kept, box_cap, started, target, key, range }`, newest first. when the box does not answer, the kept rows still come, with `live_error`; a 502 with what went wrong (`that box's agent keeps no error history yet`, `api keeps no error history yet`: a build from before it) only when nothing is kept. public with the rest of `/api/monitor*` when `STATS_PUBLIC=true`, which is why the messages are only the ones above, scrubbed.
 
-the history is the process's: a restart starts it empty.
+the panel's line says how much of the range it holds: `all 849 kept` when it has every error the counts saw, `newest 500 kept, 500 a line at most` at the cap, `… kept, keeping since <time>` when the monitor began keeping after the range starts. a process restart loses nothing kept; more than 100 errors (or 4xx) on one line inside one 15 s pull are more than the process ring holds, and only its newest 100 are kept.
 
 ## stats.nodentity.xyz
 

@@ -61,6 +61,7 @@ struct App {
     cfg: Arc<Config>,
     store: Arc<Mutex<Store>>,
     metrics: Arc<Mutex<HashMap<String, History>>>,
+    faults: Arc<Mutex<crate::fault_log::Log>>,
     started: Instant,
     boxes: reqwest::Client,
     hooks: reqwest::Client,
@@ -637,6 +638,7 @@ async fn metrics_loop(app: App) {
         }
         let now = Utc::now();
         let mut changes = vec![];
+        let mut wanted = vec![];
         {
             let mut m = app.metrics.lock().await;
             for (name, result) in results {
@@ -645,13 +647,17 @@ async fn metrics_loop(app: App) {
                 h.checked_at = Some(now);
                 if has_token {
                     if let Some(change) = agent_check(h, &name, result.as_ref().map(|_| ()).map_err(String::as_str), app.cfg.down_after) {
-                        changes.push((name, change));
+                        changes.push((name.clone(), change));
                     }
                 }
                 match result {
                     Ok(answer) => {
                         let mut samples = answer.samples;
                         samples.sort_by_key(|s| s.at);
+                        let lines = erroring_lines(&samples);
+                        if !lines.is_empty() {
+                            wanted.push((name.clone(), lines));
+                        }
                         for s in samples {
                             h.add(s);
                         }
@@ -677,10 +683,63 @@ async fn metrics_loop(app: App) {
             log::warn!("{text}");
             alert(&app, &text).await;
         }
+        capture_faults(&app, wanted).await;
         if saved.elapsed() >= METRICS_SAVE_EVERY {
             save_metrics(&app).await;
+            save_faults(&app).await;
             saved = Instant::now();
         }
+    }
+}
+
+fn erroring_lines(samples: &[Sample]) -> Vec<(String, u64)> {
+    let mut by: HashMap<String, u64> = HashMap::new();
+    for t in samples.iter().flat_map(|s| s.timings.iter()).filter(|t| t.err > 0 || t.e4 > 0) {
+        *by.entry(t.key()).or_default() += t.err + t.e4;
+    }
+    let mut out: Vec<(String, u64)> = by.into_iter().collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out.truncate(crate::fault_log::PULL_PER_ROUND);
+    out
+}
+
+fn fault_rows(v: &Value) -> Vec<timings::Fault> {
+    v.get("rows").and_then(Value::as_array).into_iter().flatten().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect()
+}
+
+async fn capture_faults(app: &App, wanted: Vec<(String, Vec<(String, u64)>)>) {
+    let mut set = JoinSet::new();
+    for (name, lines) in wanted {
+        let Some(t) = app.cfg.targets.iter().find(|t| t.name == name && t.token.is_some()) else { continue };
+        for (key, _) in lines {
+            let (client, t, name) = (app.boxes.clone(), t.clone(), name.clone());
+            set.spawn(async move {
+                let got = pull_faults(&client, &t, &key).await;
+                (name, key, got)
+            });
+        }
+    }
+    let mut got = vec![];
+    while let Some(Ok(r)) = set.join_next().await {
+        got.push(r);
+    }
+    let now = Utc::now().timestamp_millis();
+    let mut log = app.faults.lock().await;
+    for (name, key, res) in got {
+        match res {
+            Ok(v) => {
+                log.merge(&name, &key, &fault_rows(&v), now);
+            }
+            Err(e) => log::debug!("{name}: errors of {}: {e}", key.replace('\u{1f}', " ")),
+        }
+    }
+    log.prune(now);
+}
+
+async fn save_faults(app: &App) {
+    let log = app.faults.lock().await;
+    if let Err(e) = crate::fault_log::save(&log, &app.cfg.data_dir).await {
+        log::error!("could not write {}: {e}", app.cfg.data_dir.join(crate::fault_log::FILE).display());
     }
 }
 
@@ -893,14 +952,28 @@ async fn timing_faults(State(app): State<App>, Query(q): Query<TimingQuery>) -> 
     let Some(t) = app.cfg.targets.iter().find(|t| t.name == *name) else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
     };
-    match pull_faults(&app.boxes, t, key).await {
-        Ok(mut v) => {
-            v["target"] = json!(name);
-            v["key"] = json!(key);
-            Json(v).into_response()
-        }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))).into_response(),
+    let (tier, range) = match timing_tier(&q.range) {
+        Ok(t) => t,
+        Err(res) => return res,
+    };
+    let (_, width, count) = timings::TIERS[tier];
+    let live = pull_faults(&app.boxes, t, key).await;
+    let now = Utc::now().timestamp_millis();
+    let mut log = app.faults.lock().await;
+    if let Ok(v) = &live {
+        log.merge(name, key, &fault_rows(v), now);
     }
+    let mut out = log.answer(name, key, now - width * count as i64 * 1000);
+    drop(log);
+    match live {
+        Ok(v) => out["started"] = v.get("started").cloned().unwrap_or(Value::Null),
+        Err(e) if out["kept"].as_u64().unwrap_or(0) > 0 || out["since"].is_number() => out["live_error"] = json!(e),
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))).into_response(),
+    }
+    out["target"] = json!(name);
+    out["key"] = json!(key);
+    out["range"] = json!(range);
+    Json(out).into_response()
 }
 
 fn view(t: &TargetState, public: bool) -> Value {
@@ -997,11 +1070,16 @@ pub async fn run() -> anyhow::Result<()> {
     let store = reconcile(load(&cfg.data_dir).await, &cfg.targets);
     save(&store, &cfg.data_dir).await?;
     let metrics = load_metrics(&cfg.data_dir, &cfg.targets).await;
+    let mut faults = crate::fault_log::load(&cfg.data_dir).await;
+    let now_ms = Utc::now().timestamp_millis();
+    faults.keep_boxes(&cfg.targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), now_ms);
+    faults.prune(now_ms);
 
     let app = App {
         cfg: cfg.clone(),
         store: Arc::new(Mutex::new(store)),
         metrics: Arc::new(Mutex::new(metrics)),
+        faults: Arc::new(Mutex::new(faults)),
         started: Instant::now(),
         boxes: reqwest::Client::builder().timeout(PROBE_TIMEOUT).danger_accept_invalid_certs(true).build()?,
         hooks: reqwest::Client::builder().timeout(PROBE_TIMEOUT).build()?,
@@ -1030,6 +1108,7 @@ pub async fn run() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(crate::wait_for_signal()).await?;
     save_metrics(&app).await;
+    save_faults(&app).await;
     Ok(())
 }
 
