@@ -23,7 +23,6 @@ use crate::{ApiError, ApiResult, AppState};
 const STATE_SECS: u64 = 600;
 const STATE_COOKIE: &str = "dest_state";
 const PAGE: &str = "/live";
-const MAX_DESTINATIONS: i64 = 10;
 const REFRESH_AHEAD_SECS: i64 = 120;
 const NAME_MAX: usize = 40;
 const URL_MAX: usize = 512;
@@ -512,27 +511,24 @@ pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Plat
         revoke(cfg, p, app, &tokens.access).await;
         return Err(taken);
     }
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM stream_destinations WHERE user_id = $1 AND NOT (platform = $2 AND external_id = $3)")
+    let before: Option<(Option<String>, Option<Vec<u8>>)> = sqlx::query_as("SELECT external_id, access_token FROM stream_destinations WHERE user_id = $1 AND platform = $2")
         .bind(user)
         .bind(slug)
-        .bind(&account.id)
-        .fetch_one(db)
+        .fetch_optional(db)
         .await
-        .map_err(|e| {
-            log::error!("postgres: {e}");
-            "database error".to_owned()
-        })?;
-    if count >= MAX_DESTINATIONS {
-        return Err(format!("{MAX_DESTINATIONS} places at most. disconnect one first"));
-    }
+        .map_err(db_error)?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO stream_destinations (user_id, platform, external_id, external_name, access_token, refresh_token, token_expires_at, scopes, stream_url, stream_key)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (user_id, platform, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
-           external_name = EXCLUDED.external_name, access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token,
+         ON CONFLICT (user_id, platform) DO UPDATE SET
+           external_id = EXCLUDED.external_id, external_name = EXCLUDED.external_name,
+           access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token,
            token_expires_at = EXCLUDED.token_expires_at, scopes = EXCLUDED.scopes,
-           stream_url = COALESCE(EXCLUDED.stream_url, stream_destinations.stream_url),
-           stream_key = COALESCE(EXCLUDED.stream_key, stream_destinations.stream_key), updated_at = now()
+           stream_url = CASE WHEN stream_destinations.external_id = EXCLUDED.external_id THEN COALESCE(EXCLUDED.stream_url, stream_destinations.stream_url) ELSE EXCLUDED.stream_url END,
+           stream_key = CASE WHEN stream_destinations.external_id = EXCLUDED.external_id THEN COALESCE(EXCLUDED.stream_key, stream_destinations.stream_key) ELSE EXCLUDED.stream_key END,
+           enabled = stream_destinations.enabled OR stream_destinations.external_id IS DISTINCT FROM EXCLUDED.external_id,
+           created_at = CASE WHEN stream_destinations.external_id = EXCLUDED.external_id THEN stream_destinations.created_at ELSE now() END,
+           updated_at = now()
          RETURNING id",
     )
     .bind(user)
@@ -548,6 +544,14 @@ pub(crate) async fn connect(cfg: &Config, db: &sqlx::PgPool, user: Uuid, p: Plat
     .fetch_one(db)
     .await
     .map_err(|e| if crate::unique_violation(&e) { taken.clone() } else { db_error(e) })?;
+    if let Some((Some(old), access)) = before {
+        if old != account.id {
+            if let Some(token) = opened(cfg, user, slug, "access", access.as_deref()) {
+                revoke(cfg, p, app, &token).await;
+            }
+            log::info!("destinations {slug}: swapped one account for another");
+        }
+    }
     Ok(id)
 }
 
@@ -897,22 +901,24 @@ async fn add_custom(State(s): State<AppState>, Me(me): Me, body: Result<Json<Cus
     let url = check_rtmp_url(&body.url).map_err(|w| ApiError::new(StatusCode::BAD_REQUEST, w))?;
     let key = check_key(&body.key).map_err(|w| ApiError::new(StatusCode::BAD_REQUEST, w))?;
     let name = body.name.as_deref().map(clean_name).filter(|n| !n.is_empty()).unwrap_or_else(|| clean_name(url.host_str().unwrap_or("custom")));
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM stream_destinations WHERE user_id = $1").bind(me.id).fetch_one(&s.db).await?;
-    if count >= MAX_DESTINATIONS {
-        return Err(ApiError::new(StatusCode::CONFLICT, format!("{MAX_DESTINATIONS} places at most. disconnect one first")));
-    }
-    let row: Row = sqlx::query_as(
+    let row = put_custom(cfg, &s.db, me.id, &name, url.as_str(), key).await?;
+    log::info!("{}: set their custom destination", me.name);
+    Ok((StatusCode::CREATED, Json(Dest::from(row).summary())))
+}
+
+async fn put_custom(cfg: &Config, db: &sqlx::PgPool, user: Uuid, name: &str, url: &str, key: &str) -> Result<Row, sqlx::Error> {
+    sqlx::query_as(
         "INSERT INTO stream_destinations (user_id, platform, external_name, stream_url, stream_key) VALUES ($1, 'custom', $2, $3, $4)
+         ON CONFLICT (user_id, platform) DO UPDATE SET
+           external_name = EXCLUDED.external_name, stream_url = EXCLUDED.stream_url, stream_key = EXCLUDED.stream_key, updated_at = now()
          RETURNING id, platform, external_id, external_name, access_token, refresh_token, token_expires_at, stream_url, stream_key, enabled, created_at",
     )
-    .bind(me.id)
-    .bind(&name)
-    .bind(sealed(cfg, me.id, "custom", "url", Some(url.as_str())))
-    .bind(sealed(cfg, me.id, "custom", "key", Some(key)))
-    .fetch_one(&s.db)
-    .await?;
-    log::info!("{}: added a custom destination", me.name);
-    Ok((StatusCode::CREATED, Json(Dest::from(row).summary())))
+    .bind(user)
+    .bind(name)
+    .bind(sealed(cfg, user, "custom", "url", Some(url)))
+    .bind(sealed(cfg, user, "custom", "key", Some(key)))
+    .fetch_one(db)
+    .await
 }
 
 async fn remove(State(s): State<AppState>, Path(id): Path<Uuid>, Me(me): Me) -> Result<StatusCode, ApiError> {
@@ -943,17 +949,17 @@ async fn set_enabled(State(s): State<AppState>, Path(id): Path<Uuid>, Me(me): Me
     gate(&s)?;
     let me = signed_in(me)?;
     let Json(body) = body?;
-    let done = sqlx::query("UPDATE stream_destinations SET enabled = $3, updated_at = now() WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(me.id)
-        .bind(body.enabled)
-        .execute(&s.db)
-        .await?;
-    if done.rows_affected() == 0 {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such destination"));
-    }
-    let d = dest_of(&s.db, me.id, id).await?.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such destination"))?;
+    let d = switch(&s.db, me.id, id, body.enabled).await?.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such destination"))?;
+    log::info!("{}: turned their {} destination {}", me.name, d.platform, if d.enabled { "on" } else { "off" });
     Ok(Json(d.summary()))
+}
+
+async fn switch(db: &sqlx::PgPool, user: Uuid, id: Uuid, on: bool) -> Result<Option<Dest>, sqlx::Error> {
+    let done = sqlx::query("UPDATE stream_destinations SET enabled = $3 WHERE id = $1 AND user_id = $2").bind(id).bind(user).bind(on).execute(db).await?;
+    if done.rows_affected() == 0 {
+        return Ok(None);
+    }
+    dest_of(db, user, id).await
 }
 
 async fn refresh_route(State(s): State<AppState>, Path(id): Path<Uuid>, Me(me): Me) -> ApiResult {
@@ -1200,6 +1206,7 @@ mod tests {
                 Some("authorization_code") if f.get("code").map(String::as_str) == Some("good") && f.get("code_verifier").is_some_and(|v| v.len() == 64) && f.get("client_secret").map(String::as_str) == Some("twitch-secret") => {
                     Ok(Json(json!({"access_token": "acc-1", "refresh_token": "ref-1", "expires_in": 1, "scope": ["user:read:email"]})))
                 }
+                Some("authorization_code") if f.get("code").map(String::as_str) == Some("second") => Ok(Json(json!({"access_token": "alt-1", "refresh_token": "alt-ref", "expires_in": 14400}))),
                 Some("refresh_token") => match f.get("refresh_token").map(String::as_str) {
                     Some("ref-1") => Ok(Json(json!({"access_token": "acc-2", "refresh_token": "ref-2", "expires_in": 14400}))),
                     Some("ref-2") => Ok(Json(json!({"access_token": "acc-3", "expires_in": 14400}))),
@@ -1213,14 +1220,17 @@ mod tests {
             if client != Some("twitch-client") {
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            Ok(Json(json!({"data": [{"id": "4242", "login": "billy"}]})))
+            let alt = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).is_some_and(|a| a.starts_with("Bearer alt-"));
+            Ok(Json(if alt { json!({"data": [{"id": "5151", "login": "billyalt"}]}) } else { json!({"data": [{"id": "4242", "login": "billy"}]}) }))
         }
         async fn key(headers: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, StatusCode> {
             let auth = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
-            if q.get("broadcaster_id").map(String::as_str) != Some("4242") || !auth.starts_with("Bearer acc-") {
+            let who = q.get("broadcaster_id").map(String::as_str).unwrap_or_default().to_owned();
+            let ok = (who == "4242" && auth.starts_with("Bearer acc-")) || (who == "5151" && auth.starts_with("Bearer alt-"));
+            if !ok {
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            Ok(Json(json!({"data": [{"stream_key": format!("live_4242_{}", &auth[7..])}]})))
+            Ok(Json(json!({"data": [{"stream_key": format!("live_{who}_{}", &auth[7..])}]})))
         }
         let app = Router::new().route("/token", axum::routing::post(token)).route("/helix/users", get(users)).route("/helix/streams/key", get(key));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1286,5 +1296,42 @@ mod tests {
         for u in [a, b] {
             sqlx::query("DELETE FROM streamers WHERE id = $1").bind(u).execute(&pool).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn one_place_per_platform_that_reconnects_swaps_and_switches() {
+        let _one = ONE_MOCK_ACCOUNT.lock().await;
+        let pool = crate::auth::tests::test_db().await;
+        let base = mock().await;
+        let spec = Spec { authorize_url: format!("{base}/authorize"), token_url: format!("{base}/token"), revoke_url: format!("{base}/revoke"), api_url: format!("{base}/helix") };
+        let cfg = Config::for_test("http://localhost:5173", KEY, &[(Platform::Twitch, spec)]);
+        let run = std::process::id();
+        sqlx::query("DELETE FROM stream_destinations WHERE platform = 'twitch' AND external_id IN ('4242', '5151')").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id IN ('4242', '5151')").execute(&pool).await.unwrap();
+        let user = crate::auth::tests::row(&pool, &format!("dest-one-{run}"), Some("hash")).await;
+        let first = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap();
+        let off = switch(&pool, user, first, false).await.unwrap().unwrap();
+        assert!(!off.enabled);
+        assert_eq!(connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap(), first, "the same account reconnects in place");
+        assert!(!dest_of(&pool, user, first).await.unwrap().unwrap().enabled, "a reconnect keeps the switch where it was");
+        let swapped = connect(&cfg, &pool, user, Platform::Twitch, "second", &random_hex()).await.unwrap();
+        assert_eq!(swapped, first, "another twitch account takes the one twitch row");
+        let d = dest_of(&pool, user, first).await.unwrap().unwrap();
+        assert_eq!((d.external_id.as_deref(), d.name.as_deref(), d.enabled), (Some("5151"), Some("billyalt"), true));
+        assert_eq!(opened(&cfg, user, "twitch", "key", d.key.as_deref()).as_deref(), Some("live_5151_alt-1"));
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM stream_destinations WHERE user_id = $1").bind(user).fetch_one(&pool).await.unwrap();
+        assert_eq!(rows, 1);
+        assert!(switch(&pool, user, first, true).await.unwrap().unwrap().enabled);
+        assert!(switch(&pool, Uuid::from_u128(rand::random()), first, false).await.unwrap().is_none(), "not someone else's");
+        let a = put_custom(&cfg, &pool, user, "a", "rtmp://a/live", "ka").await.unwrap();
+        let b = put_custom(&cfg, &pool, user, "b", "rtmps://b/live", "kb").await.unwrap();
+        assert_eq!(a.0, b.0, "one custom rtmp, replaced in place");
+        let d = dest_of(&pool, user, b.0).await.unwrap().unwrap();
+        assert_eq!(opened(&cfg, user, "custom", "url", d.url.as_deref()).as_deref(), Some("rtmps://b/live"));
+        assert_eq!(opened(&cfg, user, "custom", "key", d.key.as_deref()).as_deref(), Some("kb"));
+        let dup = sqlx::query("INSERT INTO stream_destinations (user_id, platform, external_id) VALUES ($1, 'twitch', 'x-other')").bind(user).execute(&pool).await;
+        assert!(dup.is_err_and(|e| crate::unique_violation(&e)), "the database holds one per platform too");
+        sqlx::query("DELETE FROM streamers WHERE id = $1").bind(user).execute(&pool).await.unwrap();
     }
 }

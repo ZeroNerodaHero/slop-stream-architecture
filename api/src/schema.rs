@@ -29,6 +29,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0023-link-embeds", include_str!("../migrations/0023-link-embeds.sql")),
     ("0024-stream-destinations", include_str!("../migrations/0024-stream-destinations.sql")),
     ("0025-one-owner-per-stream-account", include_str!("../migrations/0025-one-owner-per-stream-account.sql")),
+    ("0026-one-destination-per-platform", include_str!("../migrations/0026-one-destination-per-platform.sql")),
 ];
 
 pub(crate) async fn ensure(db: &PgPool) -> anyhow::Result<()> {
