@@ -1,5 +1,5 @@
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
-import type { ChatAudio } from '@/infra/chat-audio';
+import { type ChatAudio, peaksQuery } from '@/infra/chat-audio';
 import type { ChatVideo } from '@/infra/chat-video';
 import type { CallMark } from '@/infra/dm-call';
 import type { Emote, GroupEmote } from '@/infra/emotes';
@@ -791,8 +791,14 @@ export const api = {
   uploadChatImage: (picture: Blob) => request<{ id: string }>('POST', '/api/chat-images', picture),
   uploadChatVideo: (video: Blob, onProgress?: (sent: number) => void) =>
     uploadWithProgress<{ id: string; poster: string; duration_ms: number }>('/api/chat-videos', video, onProgress, 'video too big. 10 mb at most', 'could not send the video'),
-  uploadChatAudio: (audio: Blob, onProgress?: (sent: number) => void) =>
-    uploadWithProgress<{ id: string; duration_ms: number }>('/api/chat-audio', audio, onProgress, 'voice message too big. 2 mb at most', 'could not send the voice message'),
+  uploadChatAudio: (audio: Blob, peaks: readonly number[] | undefined, onProgress?: (sent: number) => void) =>
+    uploadWithProgress<{ id: string; duration_ms: number; peaks?: number[] | null }>(
+      `/api/chat-audio${peaksQuery(peaks)}`,
+      audio,
+      onProgress,
+      'voice message too big. 2 mb at most',
+      'could not send the voice message'
+    ),
   people: () => request<Person[]>('GET', '/api/people'),
   recent: () => request<Recent[]>('GET', '/api/recent'),
   dms: () => request<DmThread[]>('GET', '/api/dms'),

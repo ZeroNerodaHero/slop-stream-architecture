@@ -4,10 +4,10 @@ import { type ReactNode } from 'react';
 import type { PendingVoice } from '@/infra/chat-attach';
 import { clockOf, MAX_AUDIO_MS } from '@/infra/chat-audio';
 import { Button } from '@/shared-components/Button';
-import { AUDIO_BUTTON, AudioPlayer } from '@/shared-components/ChatAudioPlayer';
+import { AUDIO_BUTTON, AudioPlayer, StripFill } from '@/shared-components/ChatAudioPlayer';
 import { MenuButton } from '@/shared-components/MenuButton';
 import { Tooltip } from '@/shared-components/Tooltip';
-import type { RecordedClip, VoiceRecorder } from '@/shared-components/useVoiceRecorder';
+import { LIVE_BARS, type RecordedClip, type VoiceRecorder } from '@/shared-components/useVoiceRecorder';
 import { cn } from '@/utils/cn';
 
 export function AttachMenu({ id, className, iconSize = 20, onImage, onVoice }: { id: string; className: string; iconSize?: number; onImage: () => void; onVoice: () => void }) {
@@ -39,6 +39,24 @@ function IconAction({ label, onClick, danger, className, children }: { label: st
   );
 }
 
+function LiveBars({ levels }: { levels: readonly number[] }) {
+  const empty = Math.max(0, LIVE_BARS - levels.length);
+  return (
+    <span aria-hidden className="relative flex h-[18px] min-w-0 flex-1 items-center justify-between gap-px overflow-hidden">
+      {Array.from({ length: LIVE_BARS }, (_, i) => {
+        const v = i < empty ? undefined : levels[i - empty];
+        return (
+          <span
+            key={i}
+            className={cn('block w-0.5 shrink-0', v === undefined ? 'bg-secondaryStroke' : 'bg-textPrimary')}
+            style={{ height: v === undefined ? 3 : Math.round(3 + Math.min(1, Math.max(0, v)) * 15) }}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
 export function VoiceBar({
   recorder,
   idPrefix,
@@ -60,18 +78,22 @@ export function VoiceBar({
       </IconAction>
       {phase === 'asking' && <span className="min-w-0 flex-1 truncate text-sm text-textSecondary">allow the microphone</span>}
       {live && (
-        <span className="flex min-w-0 flex-1 items-center gap-2 text-sm" role="timer" aria-live="off">
-          <span aria-hidden className="h-2.5 w-2.5 shrink-0 bg-decrease motion-safe:animate-pulse" />
-          <span className="sr-only">recording</span>
-          <span id={`${idPrefix}-voice-clock`} className="tabular-nums text-textPrimary">
-            {clockOf(elapsedMs)}
+        <span className="relative flex h-7 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary pl-2 pr-2 text-xs max-md:h-11">
+          <StripFill part={elapsedMs / MAX_AUDIO_MS} tone="red" />
+          <span aria-hidden className="relative h-2 w-2 shrink-0 rounded-avatar bg-decrease motion-safe:animate-pulse" />
+          <span className="relative shrink-0 tabular-nums" role="timer" aria-live="off">
+            <span className="sr-only">recording </span>
+            <span id={`${idPrefix}-voice-clock`} className="text-textPrimary">
+              {clockOf(elapsedMs)}
+            </span>
+            <span className="text-textTertiary"> / {clockOf(MAX_AUDIO_MS)}</span>
           </span>
-          <span className="tabular-nums text-textTertiary">/ {clockOf(MAX_AUDIO_MS)}</span>
+          <LiveBars levels={recorder.levels} />
         </span>
       )}
-      {phase === 'stopped' && clip && <AudioPlayer src={clip.url} durationMs={clip.durationMs} label="recording" className="mt-0 min-w-0 flex-1" />}
+      {phase === 'stopped' && clip && <AudioPlayer src={clip.url} durationMs={clip.durationMs} peaks={clip.peaks} label="recording" size="bar" className="mt-0 min-w-0 flex-1" />}
       {live && (
-        <IconAction label="stop" onClick={recorder.stop}>
+        <IconAction label="stop" onClick={recorder.stop} className="border-decrease text-decrease hover:border-decrease">
           <RiStopFill aria-hidden size={16} />
         </IconAction>
       )}

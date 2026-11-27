@@ -16,6 +16,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::auth::Me;
+use crate::chat::Peaks;
 use crate::chat_videos::{
     be32, be64, bin, boxes, child, elements, last_packet_ms, range_of, read_capped, refused_or_broken, run, seconds_ms, uint, Failed, Scratch, CLUSTER,
     CODEC_ID, COPY_TIMEOUT, DOC_TYPE, DURATION, EBML, INFO, MAX_PROBE_OUTPUT, PROBE_TIMEOUT, SEGMENT, TIMECODE_SCALE, TRACKS, TRACK_ENTRY, TRACK_TYPE,
@@ -39,14 +40,32 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/chat-audio/{id}", get(show).delete(take_down))
 }
 
-pub(crate) async fn duration_of(db: &PgPool, id: &str) -> Result<Option<u64>, sqlx::Error> {
+pub(crate) async fn meta_of(db: &PgPool, id: &str) -> Result<Option<(u64, Option<Peaks>)>, sqlx::Error> {
     let Ok(id) = Uuid::parse_str(id) else { return Ok(None) };
-    let ms: Option<i32> = sqlx::query_scalar("SELECT duration_ms FROM chat_audio WHERE id = $1").bind(id).fetch_optional(db).await?;
-    Ok(ms.map(|ms| ms.max(0) as u64))
+    let row: Option<(i32, Option<Vec<i16>>)> = sqlx::query_as("SELECT duration_ms, peaks FROM chat_audio WHERE id = $1").bind(id).fetch_optional(db).await?;
+    Ok(row.map(|(ms, peaks)| (ms.max(0) as u64, peaks.as_deref().and_then(Peaks::of_kept))))
 }
 
-async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
+pub(crate) const BAD_PEAKS: &str = "bad waveform";
+
+pub(crate) fn peaks_of(raw: Option<&str>) -> Result<Option<Peaks>, &'static str> {
+    let Some(raw) = raw else { return Ok(None) };
+    let Some(list) = raw.split('&').find_map(|pair| pair.strip_prefix("peaks=")) else { return Ok(None) };
+    let list = list.replace("%2C", ",").replace("%2c", ",");
+    if list.trim().is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = list.split(',').collect();
+    if parts.len() > Peaks::MAX {
+        return Err(BAD_PEAKS);
+    }
+    let levels = parts.iter().map(|v| v.trim().parse::<f64>().map_err(|_| BAD_PEAKS)).collect::<Result<Vec<f64>, _>>()?;
+    Peaks::of(&levels).map(Some).ok_or(BAD_PEAKS)
+}
+
+async fn upload(State(s): State<AppState>, Me(me): Me, RawQuery(query): RawQuery, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "log in to send a voice message"))?;
+    let peaks = peaks_of(query.as_deref()).map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
     let body = match body {
         Ok(body) => body,
         Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
@@ -84,8 +103,8 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
     }
     let ip = crate::ratelimit::forwarded_ip(&headers);
     let id: Uuid = match sqlx::query_scalar(
-        "INSERT INTO chat_audio (id, mime, bytes, duration_ms, created_by, sha256, uploader_ip)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING id",
+        "INSERT INTO chat_audio (id, mime, bytes, duration_ms, created_by, sha256, uploader_ip, peaks)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(ready.mime)
     .bind(ready.audio.len() as i32)
@@ -93,6 +112,7 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
     .bind(me.id)
     .bind(media::sha256_hex(&ready.audio))
     .bind(ip.as_deref())
+    .bind(peaks.as_ref().map(Peaks::kept))
     .fetch_one(&s.db)
     .await
     {
@@ -116,7 +136,7 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
         ready.mime,
         if ready.encoded { ", encoded again" } else { "" }
     );
-    Ok(Json(json!({ "id": id, "duration_ms": ready.duration_ms })))
+    Ok(Json(json!({ "id": id, "duration_ms": ready.duration_ms, "peaks": peaks })))
 }
 
 fn too_big() -> ApiError {
@@ -512,6 +532,23 @@ fn probe_ogg(b: &[u8]) -> Result<Probe, &'static str> {
 mod tests {
     use super::*;
     use std::process::Stdio;
+
+    #[test]
+    fn an_upload_carries_its_waveform_in_the_query() {
+        assert_eq!(peaks_of(None), Ok(None));
+        assert_eq!(peaks_of(Some("x=1")), Ok(None));
+        assert_eq!(peaks_of(Some("peaks=")), Ok(None));
+        assert_eq!(peaks_of(Some("peaks=0,0.5,1")), Ok(Peaks::of(&[0.0, 0.5, 1.0])));
+        assert_eq!(peaks_of(Some("a=b&peaks=0.25%2C0.75")), Ok(Peaks::of(&[0.25, 0.75])));
+        assert_eq!(peaks_of(Some("peaks=0.5,1.5")), Err(BAD_PEAKS));
+        assert_eq!(peaks_of(Some("peaks=0.5,-0.1")), Err(BAD_PEAKS));
+        assert_eq!(peaks_of(Some("peaks=0.5,loud")), Err(BAD_PEAKS));
+        assert_eq!(peaks_of(Some("peaks=NaN")), Err(BAD_PEAKS));
+        let long = vec!["0.5"; Peaks::MAX + 1].join(",");
+        assert_eq!(peaks_of(Some(&format!("peaks={long}"))), Err(BAD_PEAKS));
+        let most = vec!["0.5"; Peaks::MAX].join(",");
+        assert!(peaks_of(Some(&format!("peaks={most}"))).unwrap().is_some());
+    }
 
     fn mp4_box(kind: &[u8; 4], inside: &[u8]) -> Vec<u8> {
         let mut out = ((inside.len() + 8) as u32).to_be_bytes().to_vec();

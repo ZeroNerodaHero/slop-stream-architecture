@@ -1171,7 +1171,7 @@ export function FriendChat() {
                     sendClassName={cn(INPUT_BUTTON, 'shrink-0 px-0 py-0', mobile ? 'h-11 w-11' : 'h-8 w-8 text-sm')}
                     onSend={(clip) => {
                       if (!name) return;
-                      dmAttach(name).addVoice(clip.blob, clip.durationMs);
+                      dmAttach(name).addVoice(clip.blob, clip.durationMs, clip.peaks);
                       void send();
                     }}
                   />
