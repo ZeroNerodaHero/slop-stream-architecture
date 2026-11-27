@@ -44,6 +44,7 @@ mod timings;
 mod turnstile;
 mod unfurl;
 mod voice;
+mod wiki;
 
 use std::collections::{HashMap, HashSet};
 use std::env;

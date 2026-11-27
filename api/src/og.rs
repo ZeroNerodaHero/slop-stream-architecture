@@ -81,7 +81,7 @@ pub(crate) fn parse(html: &str, base: &Url) -> Page {
     }
 }
 
-fn absolute(raw: &str, base: &Url) -> Option<String> {
+pub(crate) fn absolute(raw: &str, base: &Url) -> Option<String> {
     let raw = decode(raw.trim());
     if raw.is_empty() || raw.len() > crate::ssrf::MAX_URL_LEN {
         return None;
@@ -459,6 +459,16 @@ mod tests {
         assert_eq!(page.description.as_deref(), Some("A page."));
         assert_eq!(page.image, None);
         assert_eq!(page.color, None);
+    }
+
+    #[test]
+    fn meta_description_fills_in_when_og_and_twitter_have_none() {
+        let html = r#"<head><meta property="og:title" content="Titled"><meta name="Description" content="  The plain   description. "><meta name="twitter:card" content="summary"></head>"#;
+        let page = parse(html, &base());
+        assert_eq!(page.title.as_deref(), Some("Titled"));
+        assert_eq!(page.description.as_deref(), Some("The plain description."));
+        let html = r#"<meta name="description" content="loses"><meta property="og:description" content="wins">"#;
+        assert_eq!(parse(html, &base()).description.as_deref(), Some("wins"));
     }
 
     #[test]

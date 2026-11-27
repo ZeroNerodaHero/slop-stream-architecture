@@ -39,6 +39,7 @@ const MAX_DECODE_SIDE: u32 = 8000;
 const MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const MISS: &str = "-";
 const HTML_TYPES: [&str; 2] = ["text/html", "application/xhtml+xml"];
+const JSON_TYPES: [&str; 1] = ["application/json"];
 const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -234,16 +235,37 @@ async fn page_for(s: &AppState, user: Uuid, url: &Url) -> Option<Page> {
             return None;
         }
     }
+    let mut page = match crate::wiki::summary_url(url) {
+        Some(api) => wiki_page(api).await,
+        None => None,
+    };
+    if page.is_none() {
+        page = html_page(url).await;
+    }
+    remember(&mut r, &key, page.as_ref()).await;
+    page
+}
+
+async fn wiki_page(api: Url) -> Option<Page> {
+    let want = Want { types: &JSON_TYPES, accept: "application/json", cap: PAGE_CAP, overflow: Overflow::Refuse };
+    match ssrf::fetch(api, &want).await {
+        Ok(got) => crate::wiki::parse_summary(&got.body, &got.url),
+        Err(why) => {
+            log::info!("unfurl: wikipedia summary {why:?}");
+            None
+        }
+    }
+}
+
+async fn html_page(url: &Url) -> Option<Page> {
     let want = Want { types: &HTML_TYPES, accept: "text/html,application/xhtml+xml;q=0.9", cap: PAGE_CAP, overflow: Overflow::Truncate };
-    let page = match ssrf::fetch(url.clone(), &want).await {
+    match ssrf::fetch(url.clone(), &want).await {
         Ok(got) => Some(og::parse(&String::from_utf8_lossy(&got.body), &got.url)),
         Err(why) => {
             log::info!("unfurl: {} {why:?}", url.host_str().unwrap_or("?"));
             None
         }
-    };
-    remember(&mut r, &key, page.as_ref()).await;
-    page
+    }
 }
 
 fn place_key(place: &Place) -> String {
