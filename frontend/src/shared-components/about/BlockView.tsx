@@ -2,7 +2,7 @@ import { RiExternalLinkLine, RiImageLine, RiMusic2Line, RiVideoLine } from '@rem
 import { useQuery } from '@tanstack/react-query';
 import { type CSSProperties, type ReactNode, useRef, useState } from 'react';
 
-import { ACCENTS, type AboutBlock, type AboutPage, WEEKDAYS, compactCount, fileSrc, joinedWord, markdownToHtml, weekdaysOf } from '@/infra/about-blocks';
+import { ACCENTS, type AboutBlock, type AboutPage, WEEKDAYS, compactCount, fileSrc, inkOn, joinedWord, markdownToHtml, weekdaysOf } from '@/infra/about-blocks';
 import { api } from '@/infra/api';
 import { hostOf } from '@/infra/socials';
 import { buttonClassName } from '@/shared-components/Button';
@@ -22,6 +22,29 @@ const DAY = 24 * 60 * 60 * 1000;
 export function accentBg(accent: string): string {
   if (!accent) return NEUTRAL;
   return `linear-gradient(90deg, color-mix(in srgb, ${accent} 45%, #0b0b10), ${accent})`;
+}
+
+export function blendBg(b: Pick<AboutBlock, 'accent' | 'from' | 'to'>): string {
+  if (!b.from && !b.to) return accentBg(b.accent);
+  const [a, z] = b.accent ? [`color-mix(in srgb, ${b.accent} 45%, #0b0b10)`, b.accent] : ['#0d1530', '#2d2140'];
+  return `linear-gradient(90deg, ${b.from || a}, ${b.to || z})`;
+}
+
+const INKED = '[&_*:not([data-link],[data-link]_*)]:text-inherit';
+const TINTED = '[&_[data-link]]:text-[var(--ab-tint)]';
+
+function look(b: AboutBlock, boxed: boolean, paint: boolean): { style: CSSProperties; className: string } {
+  const style: Record<string, string> = {};
+  if (paint && b.paint) style.backgroundColor = b.paint;
+  if (boxed && b.edge) style.borderColor = b.edge;
+  if (b.ink) style.color = b.ink;
+  if (b.tint) style['--ab-tint'] = b.tint;
+  return { style: style as CSSProperties, className: cn(b.ink && INKED, b.tint && TINTED) };
+}
+
+function tintedButton(b: AboutBlock, solid: boolean): CSSProperties | undefined {
+  if (!b.tint) return undefined;
+  return solid ? { backgroundColor: b.tint, borderColor: b.tint, color: inkOn(b.tint) } : { borderColor: b.tint, color: b.tint };
 }
 
 const FONT: Record<AboutBlock['font'], string> = { geist: 'font-sans', mono: 'font-mono', serif: 'font-serif', display: 'font-sans' };
@@ -81,7 +104,7 @@ function MoreLink({ href, align }: { href: string; align: AboutBlock['align'] })
   if (!href) return null;
   return (
     <p className={cn('text-sm', ALIGN[align])}>
-      <ExternalLink href={href} from={FROM} className="inline-flex items-center gap-1 text-primaryBlue underline-offset-2 hover:underline">
+      <ExternalLink data-link href={href} from={FROM} className="inline-flex items-center gap-1 text-primaryBlue underline-offset-2 hover:underline">
         {shortLink(href)}
         <RiExternalLinkLine size={12} aria-hidden />
       </ExternalLink>
@@ -90,15 +113,16 @@ function MoreLink({ href, align }: { href: string; align: AboutBlock['align'] })
 }
 
 function Shell({ b, name, children, pad = true }: { b: AboutBlock; name: string; children: ReactNode; pad?: boolean }) {
-  const style: CSSProperties | undefined =
+  const paint = look(b, b.fill !== 'none', b.fill === 'card');
+  const style: CSSProperties =
     b.fill === 'accent'
-      ? { backgroundImage: accentBg(b.accent) }
+      ? { backgroundImage: blendBg(b) }
       : b.fill === 'image' && b.bg > 0
         ? { backgroundImage: `linear-gradient(rgb(0 0 0 / 0.55), rgb(0 0 0 / 0.55)), url("${fileSrc(name, b.bg)}")` }
-        : undefined;
+        : {};
   return (
     <div
-      style={style}
+      style={{ ...style, ...paint.style }}
       className={cn(
         'relative flex h-full min-w-0 flex-col gap-2',
         FONT[b.font],
@@ -106,7 +130,8 @@ function Shell({ b, name, children, pad = true }: { b: AboutBlock; name: string;
         b.fill === 'card' && CARD,
         (b.fill === 'accent' || b.fill === 'image') && 'overflow-hidden rounded-card border border-transparent bg-cover bg-center text-white [&_*]:text-inherit',
         b.fill === 'image' && b.bg === 0 && 'border-primaryStroke bg-backgroundTertiary',
-        pad && b.fill !== 'none' && 'p-3'
+        pad && b.fill !== 'none' && 'p-3',
+        paint.className
       )}
     >
       {children}
@@ -131,7 +156,7 @@ function Heading({ b, name, meta, phone }: { b: AboutBlock; name: string; meta: 
   );
   return (
     <Shell b={b} name={name} pad={!banner}>
-      {banner && !phone && !b.accent && b.fill === 'accent' && <svg aria-hidden viewBox="0 0 40 40" className="absolute right-12 top-4 size-10">
+      {banner && !phone && !b.accent && !b.from && !b.to && b.fill === 'accent' && <svg aria-hidden viewBox="0 0 40 40" className="absolute right-12 top-4 size-10">
           <circle cx="20" cy="20" r="20" fill="#f3e3a3" />
         </svg>}
       {b.href ? (
@@ -150,9 +175,10 @@ function Panel({ b, name }: { b: AboutBlock; name: string }) {
   const headStyle: CSSProperties =
     b.file > 0
       ? { backgroundImage: `linear-gradient(transparent 40%, rgb(0 0 0 / 0.6)), url("${fileSrc(name, b.file)}")` }
-      : { backgroundImage: b.fill === 'image' && b.bg > 0 ? `url("${fileSrc(name, b.bg)}")` : accentBg(b.accent) };
+      : { backgroundImage: b.fill === 'image' && b.bg > 0 ? `url("${fileSrc(name, b.bg)}")` : blendBg(b) };
+  const paint = look(b, b.fill !== 'none', b.fill !== 'none');
   return (
-    <div className={cn('flex h-full min-w-0 flex-col overflow-hidden', FONT[b.font], ALIGN[b.align], b.fill !== 'none' && CARD)}>
+    <div style={paint.style} className={cn('flex h-full min-w-0 flex-col overflow-hidden', FONT[b.font], ALIGN[b.align], b.fill !== 'none' && CARD, paint.className)}>
       {header ? (
         <div style={headStyle} className={cn('flex min-h-14 items-end bg-cover bg-center px-3 py-2.5', b.file > 0 && 'min-h-28')}>
           <h3 className={cn('w-full text-lg font-extrabold uppercase leading-tight tracking-wide text-white', ALIGN[b.align])}>{b.title}</h3>
@@ -170,12 +196,14 @@ function Panel({ b, name }: { b: AboutBlock; name: string }) {
         {b.label && (
           <div className={cn('flex', JUSTIFY[b.align])}>
             {b.link ? (
-              <ExternalLink href={b.link} from={FROM} className={buttonClassName('outline', 'gap-1.5 px-3 py-1 text-xs', 'sm')}>
+              <ExternalLink data-link href={b.link} from={FROM} style={tintedButton(b, false)} className={buttonClassName('outline', 'gap-1.5 px-3 py-1 text-xs', 'sm')}>
                 <RiExternalLinkLine size={12} aria-hidden />
                 {b.label}
               </ExternalLink>
             ) : (
-              <span className={buttonClassName('outline', 'gap-1.5 px-3 py-1 text-xs opacity-60', 'sm')}>{b.label}</span>
+              <span data-link style={tintedButton(b, false)} className={buttonClassName('outline', 'gap-1.5 px-3 py-1 text-xs opacity-60', 'sm')}>
+                {b.label}
+              </span>
             )}
           </div>
         )}
@@ -252,13 +280,14 @@ function Buttons({ b, name }: { b: AboutBlock; name: string }) {
       <div className="flex flex-col gap-2">
         {items.map((item, i) => {
           const cls = buttonClassName(i === 0 ? 'primary' : 'secondary', 'w-full gap-1.5 py-2 text-xs', 'sm');
+          const tinted = b.tint ? (i === 0 ? tintedButton(b, true) : { borderColor: b.tint }) : undefined;
           return item.href ? (
-            <ExternalLink key={`${item.label}-${i}`} href={item.href} from={FROM} className={cls}>
+            <ExternalLink data-link key={`${item.label}-${i}`} href={item.href} from={FROM} style={tinted} className={cls}>
               <RiExternalLinkLine size={12} aria-hidden />
               <span className="truncate">{item.label}</span>
             </ExternalLink>
           ) : (
-            <span key={`${item.label}-${i}`} className={cls}>
+            <span data-link key={`${item.label}-${i}`} style={tinted} className={cls}>
               <span className="truncate">{item.label}</span>
             </span>
           );
@@ -494,11 +523,16 @@ function Quote({ b, name }: { b: AboutBlock; name: string }) {
 }
 
 function Divider({ b }: { b: AboutBlock }) {
+  const line = b.edge ? { backgroundColor: b.edge } : undefined;
   return (
     <div role="separator" className="flex items-center gap-3 py-1">
-      <span className="h-px flex-1 bg-primaryStroke" />
-      {b.title && <span className="text-[11px] font-semibold uppercase tracking-wider text-textTertiary">{b.title}</span>}
-      <span className="h-px flex-1 bg-primaryStroke" />
+      <span style={line} className="h-px flex-1 bg-primaryStroke" />
+      {b.title && (
+        <span style={b.ink ? { color: b.ink } : undefined} className="text-[11px] font-semibold uppercase tracking-wider text-textTertiary">
+          {b.title}
+        </span>
+      )}
+      <span style={line} className="h-px flex-1 bg-primaryStroke" />
     </div>
   );
 }
