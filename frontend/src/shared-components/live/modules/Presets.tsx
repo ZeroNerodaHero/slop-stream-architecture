@@ -1,10 +1,12 @@
-import { RiAddLine, RiCloseLine, RiEqualizerLine, type RemixiconComponentType, RiStarLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiEqualizerLine, RiPencilLine, type RemixiconComponentType, RiStarLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
+import { useState } from 'react';
 
-import { applyPreset, forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, PRESET_WORDS, saveMine, setRail, setRailFold } from '@/infra/live-dock';
+import { applyPreset, forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, presetName, PRESET_WORDS, renameMine, saveMine } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
-import { RailSection, useRailFold } from '@/shared-components/live/RailSection';
+import { RailSection } from '@/shared-components/live/RailSection';
+import { NameEdit } from '@/shared-components/live/SourceSettings';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -13,33 +15,19 @@ export const PRESET_ICONS: Record<PresetId, RemixiconComponentType> = {
   mine: RiStarLine
 };
 
+const ROW =
+  'flex h-9 w-full min-w-0 items-center gap-2.5 rounded-card border px-1.5 text-left transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue';
+
+const ROW_ICON = 'flex h-6 w-6 shrink-0 items-center justify-center rounded-avatar';
+
+const ROW_BUTTON =
+  'absolute flex h-6 w-6 items-center justify-center rounded-control border border-transparent text-textTertiary focus-visible:border-primaryBlue focus-visible:outline-none';
+
 export function PresetsModule({ strip = false }: { strip?: boolean }) {
   const current = useAtomValue(livePresetAtom);
   const mine = useAtomValue(liveMineAtom);
+  const [renaming, setRenaming] = useState(false);
   const ids: PresetId[] = mine ? [...HOTKEY_PRESETS, 'mine'] : [...HOTKEY_PRESETS];
-  const open = useRailFold('presets');
-  if (strip && !open) {
-    const Icon = PRESET_ICONS[current ?? 'default'];
-    const words = `open the presets, now ${current ? PRESET_WORDS[current].name : 'custom'}`;
-    return (
-      <div className="flex flex-col items-center border-b border-primaryStroke py-2">
-        <Tooltip content={words}>
-          <button
-            id="live-presets-mini"
-            type="button"
-            aria-label={words}
-            onClick={() => {
-              setRailFold('presets', true);
-              setRail(true);
-            }}
-            className={cn(FOLD_BUTTON, current && 'border-primaryBlue text-primaryBlue')}
-          >
-            <Icon aria-hidden size={16} />
-          </button>
-        </Tooltip>
-      </div>
-    );
-  }
   if (strip)
     return (
       <div role="group" aria-label="presets" className="flex flex-col items-center gap-1.5 border-b border-primaryStroke py-2">
@@ -48,11 +36,11 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
           const on = id === current;
           const key = id === 'mine' ? '' : ` (${i + 1})`;
           return (
-            <Tooltip key={id} content={`${PRESET_WORDS[id].name}${key}`}>
+            <Tooltip key={id} content={`${presetName(id, mine)}${key}`}>
               <button
                 id={`live-preset-${id}`}
                 type="button"
-                aria-label={PRESET_WORDS[id].name}
+                aria-label={presetName(id, mine)}
                 aria-pressed={on}
                 onClick={() => applyPreset(id)}
                 className={cn(FOLD_BUTTON, on ? 'border-primaryBlue text-primaryBlue' : 'border-transparent bg-transparent')}
@@ -71,35 +59,64 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
           const Icon = PRESET_ICONS[id];
           const on = id === current;
           return (
-            <li key={id} className="relative flex items-center">
-              <button
-                id={`live-preset-${id}`}
-                type="button"
-                aria-pressed={on}
-                aria-keyshortcuts={id === 'mine' ? undefined : String(i + 1)}
-                onClick={() => applyPreset(id)}
-                className={cn(
-                  'flex h-9 w-full min-w-0 items-center gap-2.5 rounded-card border px-1.5 text-left transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue',
-                  on ? 'border-primaryBlue bg-primaryBlue/10' : 'border-transparent hover:bg-backgroundTertiary'
-                )}
-              >
-                <span
-                  aria-hidden
-                  className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-avatar', on ? 'bg-primaryBlue text-background' : 'bg-backgroundTertiary text-textSecondary')}
+            <li key={id} className="group/preset relative flex items-center">
+              {id === 'mine' && renaming ? (
+                <div className={cn(ROW, on ? 'border-primaryBlue bg-primaryBlue/10' : 'border-transparent')}>
+                  <span aria-hidden className={cn(ROW_ICON, on ? 'bg-primaryBlue text-background' : 'bg-backgroundTertiary text-textSecondary')}>
+                    <Icon size={15} />
+                  </span>
+                  <NameEdit
+                    id="live-preset-name"
+                    label="preset name"
+                    name={presetName('mine', mine)}
+                    onSave={(name) => {
+                      renameMine(name);
+                      setRenaming(false);
+                    }}
+                    onCancel={() => setRenaming(false)}
+                    className="mr-7"
+                  />
+                </div>
+              ) : (
+                <button
+                  id={`live-preset-${id}`}
+                  type="button"
+                  aria-pressed={on}
+                  aria-keyshortcuts={id === 'mine' ? undefined : String(i + 1)}
+                  onClick={() => applyPreset(id)}
+                  className={cn(ROW, on ? 'border-primaryBlue bg-primaryBlue/10' : 'border-transparent hover:bg-backgroundTertiary')}
                 >
-                  <Icon size={15} />
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className={cn('truncate text-sm leading-tight', on ? 'font-semibold text-textPrimary' : 'text-textPrimary')}>{PRESET_WORDS[id].name}</span>
-                  <span className="truncate text-[11px] leading-tight text-textTertiary">{PRESET_WORDS[id].what}</span>
-                </span>
-                {id !== 'mine' && (
-                  <kbd className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-control border border-primaryStroke px-1 font-sans text-[11px] text-textTertiary">
-                    {i + 1}
-                  </kbd>
-                )}
-                {id === 'mine' && <span className="w-6 shrink-0" />}
-              </button>
+                  <span aria-hidden className={cn(ROW_ICON, on ? 'bg-primaryBlue text-background' : 'bg-backgroundTertiary text-textSecondary')}>
+                    <Icon size={15} />
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className={cn('truncate text-sm leading-tight', on ? 'font-semibold text-textPrimary' : 'text-textPrimary')}>{presetName(id, mine)}</span>
+                    <span className="truncate text-[11px] leading-tight text-textTertiary">{PRESET_WORDS[id].what}</span>
+                  </span>
+                  {id !== 'mine' && (
+                    <kbd className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-control border border-primaryStroke px-1 font-sans text-[11px] text-textTertiary">
+                      {i + 1}
+                    </kbd>
+                  )}
+                  {id === 'mine' && <span className="w-[3.125rem] shrink-0" />}
+                </button>
+              )}
+              {id === 'mine' && !renaming && (
+                <Tooltip content="rename">
+                  <button
+                    id="live-preset-rename"
+                    type="button"
+                    aria-label="rename"
+                    onClick={() => setRenaming(true)}
+                    className={cn(
+                      ROW_BUTTON,
+                      'right-8 opacity-0 transition-opacity duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:opacity-100 group-hover/preset:opacity-100 [@media(hover:none)]:opacity-100'
+                    )}
+                  >
+                    <RiPencilLine aria-hidden size={14} />
+                  </button>
+                </Tooltip>
+              )}
               {id === 'mine' && (
                 <Tooltip content="forget yours">
                   <button
@@ -107,7 +124,7 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
                     type="button"
                     aria-label="forget yours"
                     onClick={forgetMine}
-                    className="absolute right-1.5 flex h-6 w-6 items-center justify-center rounded-control border border-transparent text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none"
+                    className={cn(ROW_BUTTON, 'right-1.5 hover:border-decrease hover:text-decrease')}
                   >
                     <RiCloseLine aria-hidden size={14} />
                   </button>

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
 
 import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl } from '@/infra/api';
-import { setRail, setRailFold } from '@/infra/live-dock';
+import { setRail } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
@@ -225,10 +225,7 @@ export function DestinationsModule({ strip = false }: { strip?: boolean }) {
             id="live-destinations-mini"
             type="button"
             aria-label={words}
-            onClick={() => {
-              setRailFold('destinations', true);
-              setRail(true);
-            }}
+            onClick={() => setRail(true)}
             className={cn(FOLD_BUTTON, count > 0 && 'border-primaryBlue text-primaryBlue')}
           >
             <RiBroadcastLine aria-hidden size={16} />

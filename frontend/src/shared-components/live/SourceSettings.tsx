@@ -74,10 +74,11 @@ interface NameEditProps {
   name: string;
   onSave: (name: string) => void;
   onCancel: () => void;
+  label?: string;
   className?: string;
 }
 
-export function NameEdit({ id, name, onSave, onCancel, className }: NameEditProps) {
+export function NameEdit({ id, name, onSave, onCancel, label = 'source name', className }: NameEditProps) {
   const ref = useRef<HTMLInputElement | null>(null);
   const [draft, setDraft] = useState(name);
   const done = useRef(false);
@@ -94,7 +95,7 @@ export function NameEdit({ id, name, onSave, onCancel, className }: NameEditProp
   return (
     <>
       <label htmlFor={id} className="sr-only">
-        source name
+        {label}
       </label>
       <input
         ref={ref}

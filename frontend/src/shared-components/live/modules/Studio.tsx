@@ -24,7 +24,7 @@ import { SCREEN_SLOTS } from '@/infra/relay';
 import { Button } from '@/shared-components/Button';
 import { ExternalLink } from '@/shared-components/ExternalLink';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
-import { RailFold, RailSection, useRailFold } from '@/shared-components/live/RailSection';
+import { RailSection } from '@/shared-components/live/RailSection';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
@@ -166,17 +166,12 @@ function WatchLink({ prefix }: { prefix: string }) {
   );
 }
 
-export function StudioFold() {
-  return <RailFold section="studio" id="live-controls-toggle" controls="live-controls-body" />;
-}
-
 export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; prefix?: string }) {
-  const open = useRailFold('studio');
   if (strip)
     return (
-      <div id="live-controls" data-open={open} className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke py-2">
+      <div id="live-controls" className="relative flex flex-col items-center gap-1.5 border-b border-primaryStroke py-2">
         <RoundStart />
-        {open && <CopyLink />}
+        <CopyLink />
         <LiveStatus prefix="" quiet />
       </div>
     );
@@ -198,7 +193,7 @@ export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; 
       top={
         <div className="flex flex-col gap-2">
           <StartStop className={START_CLASS} />
-          <LiveStatus prefix="" quiet={!open} />
+          <LiveStatus prefix="" />
         </div>
       }
     >

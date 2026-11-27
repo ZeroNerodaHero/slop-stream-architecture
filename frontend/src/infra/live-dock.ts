@@ -34,7 +34,6 @@ export function readPanels(raw: unknown): LivePanels {
 
 export const RAIL_SECTIONS = ['studio', 'layout', 'presets', 'thumbnail', 'destinations'] as const;
 export type RailSection = (typeof RAIL_SECTIONS)[number];
-export type RailFolds = Record<RailSection, boolean>;
 
 export const RAIL_WORDS: Record<RailSection, string> = {
   studio: 'studio',
@@ -43,14 +42,6 @@ export const RAIL_WORDS: Record<RailSection, string> = {
   thumbnail: 'thumbnail',
   destinations: 'destinations'
 };
-
-export function readRailFolds(raw: unknown, legacy: unknown = null): RailFolds {
-  const f = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const old = legacy && typeof legacy === 'object' ? (legacy as Record<string, unknown>) : {};
-  const open = {} as RailFolds;
-  for (const id of RAIL_SECTIONS) open[id] = typeof f[id] === 'boolean' ? (f[id] as boolean) : !(id === 'thumbnail' && old.thumbnail === false);
-  return open;
-}
 
 export const LAYOUT_IDS = [1, 2, 3, 4, 5] as const;
 export type LayoutId = (typeof LAYOUT_IDS)[number];
@@ -219,12 +210,23 @@ export const PRESET_IDS = ['default', 'mine'] as const;
 export type PresetId = (typeof PRESET_IDS)[number];
 export const HOTKEY_PRESETS: readonly PresetId[] = ['default'];
 
+export const PRESET_NAME_MAX = 32;
+
 export interface Preset {
   panels: LivePanels;
+  layout?: LayoutId;
+  grid?: Grid;
+  name?: string;
+}
+
+export interface Look {
+  panels: LivePanels;
+  layout: LayoutId;
+  grid: Grid;
 }
 
 export const PRESETS: Record<Exclude<PresetId, 'mine'>, Preset> = {
-  default: { panels: { hidden: [] } }
+  default: { panels: { hidden: [] }, layout: 1 }
 };
 
 export const PRESET_WORDS: Record<PresetId, { name: string; what: string }> = {
@@ -236,17 +238,47 @@ export function readPreset(raw: unknown): Preset | null {
   if (!raw || typeof raw !== 'object') return null;
   const p = raw as Record<string, unknown>;
   if (!p.panels || typeof p.panels !== 'object') return null;
-  return { panels: readPanels(p.panels) };
+  const preset: Preset = { panels: readPanels(p.panels) };
+  const layout = LAYOUT_IDS.find((id) => id === p.layout);
+  if (layout !== undefined) preset.layout = layout;
+  if (layout === 5 && p.grid && typeof p.grid === 'object') preset.grid = readGrid(p.grid);
+  const name = readPresetName(p.name);
+  if (name) preset.name = name;
+  return preset;
+}
+
+export function readPresetName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const name = raw.trim().slice(0, PRESET_NAME_MAX);
+  return name || undefined;
+}
+
+export function presetName(id: PresetId, mine: Preset | null): string {
+  return (id === 'mine' && mine?.name) || PRESET_WORDS[id].name;
+}
+
+export function sameGrid(a: Grid, b: Grid): boolean {
+  return TILE_IDS.every((id) => a[id].x === b[id].x && a[id].y === b[id].y && a[id].w === b[id].w && a[id].h === b[id].h);
+}
+
+export function lookMatches(p: Preset, now: Look): boolean {
+  if (!samePanels(p.panels, now.panels)) return false;
+  if (p.layout !== undefined && p.layout !== now.layout) return false;
+  return !p.grid || sameGrid(p.grid, now.grid);
 }
 
 export function samePanels(a: LivePanels, b: LivePanels): boolean {
   return a.hidden.length === b.hidden.length && a.hidden.every((id) => b.hidden.includes(id));
 }
 
-export function presetOf(panels: LivePanels, mine: Preset | null): PresetId | null {
-  if (samePanels(PRESETS.default.panels, panels)) return 'default';
-  if (mine && samePanels(mine.panels, panels)) return 'mine';
-  return null;
+export function presetOf(now: Look, mine: Preset | null, picked: unknown = null): PresetId | null {
+  const of = (id: PresetId) => (id === 'mine' ? mine : PRESETS[id]);
+  const first = PRESET_IDS.find((id) => id === picked);
+  const order: PresetId[] = first ? [first, ...PRESET_IDS.filter((id) => id !== first)] : [...PRESET_IDS];
+  return order.find((id) => {
+    const p = of(id);
+    return p !== null && lookMatches(p, now);
+  }) ?? null;
 }
 
 const RETIRED_PRESETS: readonly (readonly string[])[] = [
@@ -312,24 +344,20 @@ const storedGridAtom = atomWithStorage<unknown>('settings.liveGrid', null, undef
 const storedMineAtom = atomWithStorage<unknown>('settings.livePresetMine', null, undefined, json);
 const storedPresetsDefaultAtom = atomWithStorage<unknown>('settings.livePresetsDefault', false, undefined, json);
 const storedRailAtom = atomWithStorage<unknown>('settings.liveRail', null, undefined, json);
-const storedRailFoldsAtom = atomWithStorage<unknown>('settings.liveRailFolds', null, undefined, json);
+const storedPickedAtom = atomWithStorage<unknown>('settings.livePresetPicked', null, undefined, json);
 
 export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
 export const liveLayoutAtom = atom<LayoutId>((get) => readLayout(get(storedLayoutAtom)));
 export const liveGridAtom = atom<Grid>((get) => readGrid(get(storedGridAtom)));
 export const liveMineAtom = atom<Preset | null>((get) => readPreset(get(storedMineAtom)));
-export const livePresetAtom = atom<PresetId | null>((get) => presetOf(get(livePanelsAtom), get(liveMineAtom)));
+export const livePresetAtom = atom<PresetId | null>((get) =>
+  presetOf({ panels: get(livePanelsAtom), layout: get(liveLayoutAtom), grid: get(liveGridAtom) }, get(liveMineAtom), get(storedPickedAtom))
+);
 export const liveRailAtom = atom<RailState>((get) => readRail(get(storedRailAtom)));
-export const liveRailFoldsAtom = atom<RailFolds>((get) => readRailFolds(get(storedRailFoldsAtom), get(storedPanelsAtom)));
 export const liveEditingAtom = atom(false);
 
 function setPanels(panels: LivePanels) {
-  if (store.get(storedRailFoldsAtom) === null) store.set(storedRailFoldsAtom, store.get(liveRailFoldsAtom));
   store.set(storedPanelsAtom, panels);
-}
-
-export function setRailFold(section: RailSection, open: boolean) {
-  store.set(storedRailFoldsAtom, { ...store.get(liveRailFoldsAtom), [section]: open });
 }
 
 export function setHidden(id: ModuleId, hidden: boolean) {
@@ -367,7 +395,11 @@ export function placeShown(grid: Grid, was: readonly ModuleId[], hidden: readonl
 export function applyPreset(id: PresetId) {
   const p = id === 'mine' ? store.get(liveMineAtom) : PRESETS[id];
   if (!p) return;
-  if (store.get(liveLayoutAtom) !== 5) {
+  store.set(storedPickedAtom, id);
+  store.set(liveEditingAtom, false);
+  if (p.layout !== undefined) store.set(storedLayoutAtom, p.layout);
+  if (p.grid) store.set(storedGridAtom, p.grid);
+  if (store.get(liveLayoutAtom) !== 5 || p.grid) {
     setPanels({ hidden: [...p.panels.hidden] });
     return;
   }
@@ -377,7 +409,23 @@ export function applyPreset(id: PresetId) {
 }
 
 export function saveMine() {
-  store.set(storedMineAtom, { panels: store.get(livePanelsAtom) });
+  const layout = store.get(liveLayoutAtom);
+  const name = store.get(liveMineAtom)?.name;
+  const mine: Preset = { panels: store.get(livePanelsAtom), layout };
+  if (layout === 5) mine.grid = store.get(liveGridAtom);
+  if (name) mine.name = name;
+  store.set(storedMineAtom, mine);
+  store.set(storedPickedAtom, 'mine');
+}
+
+export function renameMine(raw: string) {
+  const mine = store.get(liveMineAtom);
+  if (!mine) return;
+  const next: Preset = { ...mine };
+  const name = readPresetName(raw);
+  if (name) next.name = name;
+  else delete next.name;
+  store.set(storedMineAtom, next);
 }
 
 export function migratePresets() {
