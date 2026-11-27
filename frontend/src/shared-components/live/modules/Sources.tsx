@@ -146,7 +146,7 @@ function AddMenu({ onModel }: { onModel: () => void }) {
             role="menu"
             aria-label="add a source"
             style={place ?? { left: 0, top: 0, visibility: 'hidden' }}
-            className="fixed z-[60] w-56 overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-textPrimary"
+            className="fixed z-[70] w-56 overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-textPrimary"
           >
             {!hasCamera && (
               <button

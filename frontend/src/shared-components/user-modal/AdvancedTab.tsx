@@ -56,7 +56,7 @@ function PerfRow() {
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
       <span className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
         <span>perf overlay</span>
-        <Info tip="fps, main thread busy, memory and network in the top right corner. extended adds a graph of the last minute above each. never leaves this browser" />
+        <Info tip="fps, main thread busy, memory and network, top right until you drag it somewhere else. extended adds a graph of the last minute above each. never leaves this browser" />
       </span>
       <Segmented id="perf-mode" label="perf overlay" options={PERF_OPTIONS} value={mode} onChange={setPerfMode} />
     </div>

@@ -477,7 +477,7 @@ function HoverMenu({
               if (to instanceof Node && (menu.current?.contains(to) || plus.current === to)) return;
               close();
             }}
-            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
+            className="fixed left-0 top-0 z-[70] flex min-w-32 flex-col overflow-hidden rounded-panel border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
           >
             <li role="none" className="px-3 pb-1 pt-0.5 text-xs text-textTertiary">
               {label}

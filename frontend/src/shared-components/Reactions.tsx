@@ -160,7 +160,7 @@ export function ReactionPicker({
             data-line-menu
             data-reaction-picker
             onKeyDown={walk}
-            className="fixed left-0 top-0 z-[60] flex flex-col gap-1 rounded-panel border border-primaryStroke bg-backgroundSecondary p-1.5"
+            className="fixed left-0 top-0 z-[70] flex flex-col gap-1 rounded-panel border border-primaryStroke bg-backgroundSecondary p-1.5"
           >
             <div role="group" aria-label="quick" className="flex gap-0.5 border-b border-primaryStroke pb-1">
               {EMOJIS.slice(0, QUICK).map((e) => cell(e, true))}
