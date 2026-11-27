@@ -495,19 +495,17 @@ export function WatchPage() {
     </div>
   );
 
-  const editAbout = (open: () => void, on: boolean) =>
+  const editAbout = (on: boolean) =>
     mine &&
-    !(on && aboutEditing) && (
+    on &&
+    !aboutEditing && (
       <Tooltip content="edit about">
         <Button
           id="about-edit"
           size="sm"
           aria-label="edit about"
           className="-mb-px self-stretch px-2 py-0"
-          onClick={() => {
-            open();
-            setAboutEditing(true);
-          }}
+          onClick={() => setAboutEditing(true)}
         >
           <RiPencilLine size={16} aria-hidden />
         </Button>
@@ -663,7 +661,7 @@ export function WatchPage() {
                   const on = t === deskTab;
                   return (
                     <Fragment key={t}>
-                      {t === 'about' && editAbout(() => setTab('about'), on)}
+                      {t === 'about' && editAbout(on)}
                       <button
                         id={`tab-${t}`}
                         type="button"
