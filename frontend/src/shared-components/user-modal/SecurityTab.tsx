@@ -1,7 +1,9 @@
+import { RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine } from '@remixicon/react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, useEffect, useState } from 'react';
 
-import { api, messageOf, type OAuthIdentities } from '@/infra/api';
+import { api, type DestinationPlatform, messageOf, type OAuthIdentities } from '@/infra/api';
 import {
   authBusyAtom,
   authErrorAtom,
@@ -29,6 +31,7 @@ import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
 import { Button, buttonClassName } from '@/shared-components/Button';
+import { DESTINATION_WORDS, DESTINATIONS_KEY, useDestinations } from '@/shared-components/live/modules/Destinations';
 import { OAuthButtons, ProviderIcon, providerBrandStyle } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -202,6 +205,8 @@ function LoggedIn({ me }: { me: string }) {
       </Block>
 
       <LinkedLogins />
+
+      <StreamDestinations />
 
       <Block title="sessions">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -377,6 +382,86 @@ function LinkedLogins() {
         <p className="sr-only">{OAUTH_MARK_WORDS}</p>
       </div>
       <Status id="sec-linked-status" text={status} quiet />
+    </Block>
+  );
+}
+
+const DESTINATION_ICONS: Record<DestinationPlatform, RemixiconComponentType> = {
+  twitch: RiTwitchLine,
+  kick: RiKickLine,
+  custom: RiLinkM
+};
+
+function StreamDestinations() {
+  const { data } = useDestinations();
+  const client = useQueryClient();
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sure, setSure] = useState<string | null>(null);
+  if (!data?.destinations.length) return null;
+
+  async function disconnect(id: string, name: string) {
+    setBusy(true);
+    setStatus('');
+    try {
+      await api.removeDestination(id);
+      setStatus(`${name} disconnected: slop no longer holds its keys`);
+      await client.invalidateQueries({ queryKey: DESTINATIONS_KEY });
+    } catch (err) {
+      setStatus(`not disconnected: ${messageOf(err)}`);
+    } finally {
+      setSure(null);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Block id="sec-destinations" title="stream destinations" tip="the switch in the live rail pauses one; disconnect drops its keys">
+      <ul className="flex flex-col">
+        {data.destinations.map((d) => {
+          const Icon = DESTINATION_ICONS[d.platform];
+          const name = d.name || DESTINATION_WORDS[d.platform];
+          return (
+            <li key={d.id} id={`sec-destination-${d.platform}`} className="flex items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
+              <span className="flex shrink-0 items-center gap-2 text-sm font-semibold">
+                <Icon aria-hidden size={16} />
+                {d.platform === 'custom' ? DESTINATION_WORDS.custom : providerLabel(d.platform)}
+              </span>
+              <span className={PILL}>
+                <span className="flex min-w-0 items-center py-1.5 pl-3 pr-3 text-textPrimary">
+                  <span className="min-w-0 max-w-[180px] truncate">{name}</span>
+                </span>
+                {sure === d.id ? (
+                  <>
+                    <button
+                      id={`sec-disconnect-${d.platform}`}
+                      type="button"
+                      disabled={busy}
+                      className={`${SEGMENT} ${FOCUS} border-decrease bg-decrease text-white hover:opacity-90 disabled:opacity-50`}
+                      onClick={() => void disconnect(d.id, name)}
+                    >
+                      sure? disconnect
+                    </button>
+                    <button type="button" className={`${SEGMENT} ${FOCUS} text-textSecondary hover:bg-backgroundTertiary hover:text-textPrimary`} onClick={() => setSure(null)}>
+                      keep
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    id={`sec-disconnect-${d.platform}`}
+                    type="button"
+                    className={`${SEGMENT} ${FOCUS} text-textSecondary hover:bg-decrease/10 hover:text-decrease`}
+                    onClick={() => setSure(d.id)}
+                  >
+                    disconnect
+                  </button>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <Status id="sec-destinations-status" text={status} quiet />
     </Block>
   );
 }

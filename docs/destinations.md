@@ -54,16 +54,19 @@ sequenceDiagram
 - pkce s256 on both. kick requires it; twitch ignores it, the state cookie is what protects twitch
 - twitch asks `user:read:email channel:read:stream_key channel:manage:broadcast user:read:chat user:write:chat` and always shows its consent page (`force_verify`)
 - kick asks `user:read channel:read channel:write streamkey:read chat:write events:subscribe`
-- connecting the same account again updates its row. ten destinations each at most
+- one destination per platform per user: one twitch, one kick, one custom rtmp (unique `(user_id, platform)`, migration `0026`, which kept the newest row of any duplicates and logged each one it removed as a postgres warning)
+- connecting again updates that row in place and keeps its switch. connecting a different account of the same platform takes the row over, switches it on and revokes the old account's token
+- adding a custom rtmp again replaces its url and key
 - one slop login per twitch or kick account: one another login has (as a destination or a login) is refused with "that twitch is already linked to another account" (`accounts.md`, migration `0025`)
-- disconnecting deletes the row and revokes the token with the platform
+- the live rail shows a switch per destination (`enabled`) and only the connect pills for platforms not yet connected
+- disconnecting lives in settings, security, stream destinations. it deletes the row and revokes the token with the platform
 
 ## routes
 
 | route | what |
 | --- | --- |
 | `GET /api/destinations` | `{ platforms, destinations: [{ id, platform, name, enabled, has_key, connected_at }] }` |
-| `POST /api/destinations/custom` | `{ url, key, name? }`. `rtmp://` or `rtmps://`, no login in the url |
+| `POST /api/destinations/custom` | `{ url, key, name? }`. `rtmp://` or `rtmps://`, no login in the url. replaces the one you have |
 | `DELETE /api/destinations/{id}` | disconnect |
 | `POST /api/destinations/{id}/enabled` | `{ enabled }` |
 | `POST /api/destinations/{id}/refresh` | a new token, then a fresh stream key |

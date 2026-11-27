@@ -1,4 +1,4 @@
-import { RiAddLine, RiBroadcastLine, RiCloseLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine } from '@remixicon/react';
+import { RiAddLine, RiBroadcastLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
 
@@ -8,10 +8,12 @@ import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
+import { Switch } from '@/shared-components/Switch';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-const KEY = ['destinations'];
+export const DESTINATIONS_KEY = ['destinations'];
+const KEY = DESTINATIONS_KEY;
 
 const ICONS: Record<DestinationPlatform, RemixiconComponentType> = {
   twitch: RiTwitchLine,
@@ -19,15 +21,16 @@ const ICONS: Record<DestinationPlatform, RemixiconComponentType> = {
   custom: RiLinkM
 };
 
-const WORDS: Record<DestinationPlatform, string> = {
+export const DESTINATION_WORDS: Record<DestinationPlatform, string> = {
   twitch: 'twitch',
   kick: 'kick',
   custom: 'custom rtmp'
 };
+const WORDS = DESTINATION_WORDS;
 
 const SMALL = 'h-7 gap-1 px-2.5 py-0 text-xs max-md:min-h-0';
 
-function useDestinations() {
+export function useDestinations() {
   return useQuery({
     queryKey: KEY,
     queryFn: api.destinations,
@@ -61,14 +64,14 @@ function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => voi
   const [busy, setBusy] = useState(false);
   const Icon = ICONS[d.platform];
   const name = d.name || WORDS[d.platform];
-  const disconnect = async () => {
+  const flip = async (enabled: boolean) => {
     setBusy(true);
     try {
-      await api.removeDestination(d.id);
-      onStatus(`${name} disconnected`);
+      await api.setDestinationEnabled(d.id, enabled);
+      onStatus(enabled ? `${name} on: it gets the stream` : `${name} off: it sits this one out`);
       await client.invalidateQueries({ queryKey: KEY });
     } catch (e) {
-      onStatus(e instanceof Error ? e.message : 'could not disconnect');
+      onStatus(e instanceof Error ? e.message : 'could not switch it');
     } finally {
       setBusy(false);
     }
@@ -84,17 +87,8 @@ function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => voi
           {WORDS[d.platform]}, {stateOf(d)}
         </span>
       </span>
-      <Tooltip content={`disconnect ${name}`}>
-        <button
-          id={`destination-remove-${d.id}`}
-          type="button"
-          aria-label={`disconnect ${name}`}
-          disabled={busy}
-          onClick={() => void disconnect()}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-transparent text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none disabled:opacity-50"
-        >
-          <RiCloseLine aria-hidden size={14} />
-        </button>
+      <Tooltip content={d.enabled ? `${name} gets the stream: switch off to skip it` : `${name} is off: switch on to send it the stream`}>
+        <Switch id={`destination-switch-${d.id}`} checked={d.enabled} disabled={busy} label={`send the stream to ${name}`} onChange={(on) => void flip(on)} />
       </Tooltip>
     </li>
   );
@@ -166,7 +160,9 @@ export function DestinationsBody() {
   const [status, setStatus] = useState(readBack);
   const [custom, setCustom] = useState(false);
   if (!data) return null;
-  const oauth = data.platforms.filter((p): p is 'twitch' | 'kick' => p !== 'custom');
+  const taken = new Set(data.destinations.map((d) => d.platform));
+  const oauth = data.platforms.filter((p): p is 'twitch' | 'kick' => p !== 'custom' && !taken.has(p));
+  const canCustom = data.platforms.includes('custom') && !taken.has('custom');
   return (
     <div className="flex flex-col gap-2">
       {data.destinations.length > 0 ? (
@@ -180,9 +176,9 @@ export function DestinationsBody() {
           none yet: only slop gets the stream
         </p>
       )}
-      {custom ? (
+      {custom && canCustom ? (
         <CustomForm onDone={() => setCustom(false)} onStatus={setStatus} />
-      ) : (
+      ) : oauth.length === 0 && !canCustom ? null : (
         <div className="flex flex-wrap items-center gap-1.5">
           {oauth.map((p) => {
             const Icon = ICONS[p];
@@ -195,7 +191,7 @@ export function DestinationsBody() {
               </Tooltip>
             );
           })}
-          {data.platforms.includes('custom') && (
+          {canCustom && (
             <Tooltip content="add any rtmp server">
               <Button id="destination-connect-custom" size="sm" className={SMALL} onClick={() => setCustom(true)}>
                 <RiAddLine aria-hidden size={14} />
