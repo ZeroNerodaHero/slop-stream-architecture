@@ -342,7 +342,7 @@ export function ChatTab() {
         <div className="flex items-center gap-2 py-1.5 text-sm font-semibold text-textPrimary">
           <input id="show-embeds" type="checkbox" checked={showEmbeds} onChange={(e) => setShowEmbeds(e.target.checked)} className={CHECKBOX} />
           <label htmlFor="show-embeds">show embeds</label>
-          <Info tip="a player under a youtube, twitch, vimeo or video file link in a line. the player loads only when you press play" />
+          <Info tip="a player under a youtube, twitch, vimeo or video file link in a line, and a preview card under any other link. the player loads only when you press play" />
         </div>
       </fieldset>
 

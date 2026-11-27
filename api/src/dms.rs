@@ -1,7 +1,7 @@
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -59,6 +59,7 @@ struct LineRow {
     audio: Option<String>,
     quote_audio: Option<String>,
     call: Option<Value>,
+    embed: Option<Value>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LineRow {
@@ -82,6 +83,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LineRow {
             audio: row.try_get(14)?,
             quote_audio: row.try_get(15)?,
             call: row.try_get(16)?,
+            embed: row.try_get(17)?,
         })
     }
 }
@@ -90,14 +92,14 @@ const LINE_SELECT: &str = concat!(
     "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image,
                 d.reply_to, qf.name, left(q.text, 120), (EXTRACT(EPOCH FROM qf.avatar_at))::bigint, q.image, ",
     reactions::dm_reactions_sql!(),
-    ", d.video, q.video, d.mentions, d.audio, q.audio, d.call
+    ", d.video, q.video, d.mentions, d.audio, q.audio, d.call, CASE WHEN d.embed_hidden THEN NULL ELSE d.embed END
          FROM dms d JOIN streamers f ON f.id = d.from_id
          LEFT JOIN dms q ON q.id = d.reply_to
              AND LEAST(q.from_id, q.to_id) = LEAST(d.from_id, d.to_id) AND GREATEST(q.from_id, q.to_id) = GREATEST(d.from_id, d.to_id)
          LEFT JOIN streamers qf ON qf.id = q.from_id"
 );
 
-fn line_json(LineRow { id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video, mentions, audio, quote_audio, call }: &LineRow) -> Value {
+fn line_json(LineRow { id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video, mentions, audio, quote_audio, call, embed }: &LineRow) -> Value {
     let reply = reply_to.map(|reply_to| match quote_from {
         Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone(), quote_video.clone(), quote_audio.clone())),
         None => json!({ "id": reply_to, "gone": true }),
@@ -114,6 +116,9 @@ fn line_json(LineRow { id, from, text, at, image, reply_to, quote_from, quote_te
     }
     if let Some(call) = call {
         line["call"] = call.clone();
+    }
+    if let Some(embed) = crate::unfurl::from_row(embed.clone(), false) {
+        line["embed"] = json!(embed);
     }
     line
 }
@@ -338,6 +343,9 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
     presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, (video.as_ref(), audio.as_ref()), at, &me.id.to_string(), reply.as_ref(), &mentions, None).await;
+    if let Some(url) = crate::unfurl::wanted(&text) {
+        crate::unfurl::enqueue(&mut r, &crate::unfurl::Job::Dm { id, from: me.id, to: other.id, url, at: crate::unfurl::now_ms() }).await;
+    }
     log::info!(
         "{}: dm to {} ({} chars, {} pictures{}{})",
         me.name,
@@ -436,6 +444,29 @@ async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Re
     Ok(Json(json!({ "id": body.id, "reactions": now })))
 }
 
+async fn hide_embed(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<IdBody>, JsonRejection>) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let Json(body) = body?;
+    let other = peer(&s.db, &me, name).await?;
+    let hid = sqlx::query("UPDATE dms SET embed_hidden = true, embed = NULL WHERE id = $1 AND from_id = $2 AND to_id = $3")
+        .bind(body.id)
+        .bind(me.id)
+        .bind(other.id)
+        .execute(&s.db)
+        .await?;
+    if hid.rows_affected() == 0 {
+        let theirs: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM dms WHERE id = $1 AND from_id = $2 AND to_id = $3)")
+            .bind(body.id)
+            .bind(other.id)
+            .bind(me.id)
+            .fetch_one(&s.db)
+            .await?;
+        return Err(if theirs { ApiError::new(StatusCode::FORBIDDEN, "only who sent it hides its embed") } else { ApiError::new(StatusCode::NOT_FOUND, NO_SUCH_LINE) });
+    }
+    crate::unfurl::publish_dm(&mut s.redis.clone(), &me.name, &other.name, body.id, None).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn mark_read(db: &PgPool, reader: Uuid, peer: Uuid, id: i64) -> Result<bool, sqlx::Error> {
     let moved = sqlx::query(
         "INSERT INTO dm_reads (reader_id, peer_id, last_read_id) VALUES ($1, $2, $3)
@@ -520,6 +551,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/dm/{name}", get(thread).post(send))
         .route("/api/dm/{name}/read", put(read))
         .route("/api/dm/{name}/react", put(react))
+        .route("/api/dm/{name}/embed/hide", post(hide_embed))
         .route("/api/dm/{name}/search", get(search))
 }
 

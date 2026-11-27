@@ -33,6 +33,7 @@ import {
   dmResultsAtom,
   dmThreadsAtom,
   dmsAtom,
+  hideDmEmbed,
   hideDms,
   loadOlderDm,
   markRead,
@@ -61,6 +62,7 @@ import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingV
 import { ChatLineShape, clock, LineActions, placeOf, quoteWords, ReplyQuote, stamp } from '@/shared-components/ChatLine';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
+import { LinkEmbed } from '@/shared-components/LinkEmbed';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { AttachMenu, PendingVoiceChip, VoiceBar } from '@/shared-components/ChatVoice';
 import { ChatImages } from '@/shared-components/ChatPanel';
@@ -554,6 +556,7 @@ const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmV
           {line.video && <ChatVideoPlayer video={line.video} />}
           {line.audio && <ChatAudioPlayer audio={line.audio} />}
           <ChatEmbeds text={line.text} />
+          <LinkEmbed embed={line.embed} text={line.text} onHide={mine ? () => hideDmEmbed(peer, line) : undefined} />
         </>
       }
       actions={<LineActions onReact={(emoji) => void reactDm(peer, line, emoji)} reactions={line.reactions} me={me} onReply={() => onReply(line)} text={line.text} />}

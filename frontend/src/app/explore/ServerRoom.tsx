@@ -117,6 +117,7 @@ import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useShee
 import { BAR_BUTTON, when } from '@/shared-components/ChatLine';
 import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
 import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
+import { LinkEmbed } from '@/shared-components/LinkEmbed';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
@@ -724,6 +725,11 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
                       {pin.audio && (
                         <div data-pin-audio={pin.id} className="relative z-10">
                           <ChatAudioPlayer audio={pin.audio} small />
+                        </div>
+                      )}
+                      {pin.embed && (
+                        <div data-pin-embed={pin.id} className="relative z-10">
+                          <LinkEmbed embed={pin.embed} text={pin.text} />
                         </div>
                       )}
                     </div>
@@ -1335,6 +1341,7 @@ export function ServerPage() {
                   lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
                   lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
                   lineMenu={(line) => lineModItems(room, me, line.channel ?? channel, line)}
+                  embedMod={(line) => lineModItems(room, me, line.channel ?? channel, line).some((item) => item.key === 'delete')}
                   className={cn('h-full', ROOM_CHAT_MOBILE)}
                 />
               )}

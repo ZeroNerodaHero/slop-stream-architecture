@@ -29,6 +29,7 @@ mod models;
 mod moderate;
 mod monitor;
 mod notify;
+mod og;
 mod oauth;
 mod pins;
 mod presence;
@@ -39,10 +40,13 @@ mod release;
 mod rt;
 mod s3;
 mod socket;
+mod ssrf;
 mod test_streamers;
 mod timings;
 mod turnstile;
+mod unfurl;
 mod voice;
+mod wiki;
 
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -1058,6 +1062,7 @@ async fn main() {
     tokio::spawn(sweep_sessions(state.clone()));
     tokio::spawn(voice::sweep(state.clone()));
     tokio::spawn(analytics::sampler(state.clone()));
+    unfurl::spawn_worker(state.clone(), redis_url.clone());
     axum::serve(listener, router(state))
         .with_graceful_shutdown(wait_for_signal())
         .await

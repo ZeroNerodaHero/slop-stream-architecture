@@ -80,6 +80,8 @@ load, per action), not a measurement.
 | ✅ | `PATCH`, `DELETE /api/groups/{group}/emotes/{id}` | Rename, delete a group emote | none | **120** (moderate) | account | 10 min | rare |
 | ✅ | `POST /api/chat-images` | Upload a chat image | 30 / account | same (Retry-After) **+ 60** (upload) | account | 10 min; 1 h | low (per pasted image) |
 | ✅ | `GET /api/chat-images/{id}` | Show a chat image | none | **600** | account / IP | 1 min | high (images in chat) |
+| ✅ | (no endpoint: the unfurl worker) | Fetch a linked page for a link preview, on a cache miss | none | **20 / account** (`rl:unfurl:<id>`); over it the line simply gets no preview | account | 1 min | low (one per line with a link) |
+| ✅ | `POST /api/streams/{name}/chat/{id}/embed/hide`, `POST /api/groups/{group}/channels/{channel}/messages/{id}/embed/hide`, `POST /api/dm/{name}/embed/hide` | Hide a line's link preview | none | moderation tier / write tier, plus the janny or group mod pace (stream, group) | account | 1 min; 10 min | rare |
 | ✅ | `POST /api/chat-videos` | Upload a chat video (10 MB, 30 s) | 5 / account | same (Retry-After) **+ 12** (video-upload) | account | 10 min; 1 h | low (per video) |
 | ✅ | `GET /api/chat-videos/{id}` | Play a chat video (Range, 206) | none | **600** | account / IP | 1 min | medium (one request per seek or buffer) |
 | ✅ | `GET /api/models`, `/models/{id}`, `/models/{id}/thumb` | Demo VRM models | none | **600** | account / IP | 1 min | low (go-live page) |

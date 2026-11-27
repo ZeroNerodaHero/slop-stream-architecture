@@ -1,7 +1,7 @@
 import { atom, type Atom, type PrimitiveAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import { api, type GroupBadge, type Owner, type PinnedLine } from '@/infra/api';
+import { api, type GroupBadge, messageOf, type Owner, type PinnedLine } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { trackSocket } from '@/infra/debug/sockets';
@@ -17,6 +17,7 @@ import type { Release } from '@/infra/rt/refs';
 import { channelOf, chatTopicOf, type RtFrame, type Subbed } from '@/infra/rt/wire';
 import { store } from '@/infra/store';
 import { fromWire, picturesOf } from '@/infra/chat-wire';
+import { type LinkEmbed, linkEmbedOf } from '@/infra/link-embed';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
 export interface ChatLine {
@@ -37,6 +38,7 @@ export interface ChatLine {
   reply?: ChatReply;
   mentions?: string[];
   reactions?: Reaction[];
+  embed?: LinkEmbed | null;
   pending?: 'sending' | 'failed';
 }
 
@@ -600,6 +602,44 @@ export class ChatRoom {
     }
   }
 
+  private patchLine(channel: string | null, id: string, next: (line: ChatLine) => ChatLine) {
+    const touch = (lines: ChatLine[]) => {
+      const at = lines.findIndex((l) => l.id === id);
+      const line = lines[at];
+      if (!line) return lines;
+      const out = lines.slice();
+      out[at] = next(line);
+      return out;
+    };
+    if (channel !== null && channel !== this.channel) {
+      const tail = this.tails.get(channel);
+      if (tail) this.tails.set(channel, touch(tail));
+    } else {
+      const lines = store.get(this.linesAtom);
+      const out = touch(lines);
+      if (out !== lines) store.set(this.linesAtom, out);
+      if (this.savedTail) this.savedTail = touch(this.savedTail);
+    }
+    const results = store.get(this.resultsAtom);
+    const hit = (l: ChatLine) => l.id === id && (channel === null || l.channel === undefined || l.channel === channel);
+    if (results?.some(hit)) store.set(this.resultsAtom, results.map((l) => (hit(l) ? next(l) : l)));
+  }
+
+  setEmbed(id: string, embed: LinkEmbed | null, channel: string | null = null) {
+    this.patchLine(channel, id, (line) => ({ ...line, embed }));
+  }
+
+  hideEmbed(line: ChatLine) {
+    const channel = this.server ? (line.channel ?? this.channel) : null;
+    const was = line.embed ?? null;
+    this.setEmbed(line.id, null, channel);
+    const asked = this.server && channel ? api.hideGroupEmbed(this.server, channel, line.id) : api.hideStreamEmbed(this.key, line.id);
+    asked.catch((err: unknown) => {
+      this.setEmbed(line.id, was, channel);
+      this.showNotice(messageOf(err));
+    });
+  }
+
   removeLine(id: string, channel: string | null = null) {
     const drop = (lines: ChatLine[]) => (lines.some((l) => l.id === id) ? lines.filter((l) => l.id !== id) : lines);
     if (channel !== null && channel !== this.channel) {
@@ -861,6 +901,8 @@ export class ChatRoom {
       this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
     } else if (msg.type === 'delete' && typeof msg.id === 'string') {
       this.removeLine(msg.id, tagged);
+    } else if (msg.type === 'embed' && typeof msg.id === 'string') {
+      this.setEmbed(msg.id, linkEmbedOf(msg.embed), tagged);
     } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
       this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
     } else if (msg.type === 'error' && msg.error) {

@@ -161,6 +161,11 @@ pub(crate) enum RtOut<'a> {
         topic: &'a str,
         id: &'a str,
     },
+    Embed {
+        topic: &'a str,
+        #[serde(flatten)]
+        update: &'a crate::chat::EmbedUpdate,
+    },
     Gap {
         topic: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -509,7 +514,7 @@ fn forward(topic: Arc<str>, mut rx: broadcast::Receiver<Event>, out: Outbox) -> 
     Forward(tokio::spawn(async move {
         loop {
             let f = match rx.recv().await {
-                Ok(Event::Line(.., f) | Event::React(.., f) | Event::Delete(.., f)) => f,
+                Ok(Event::Line(.., f) | Event::React(.., f) | Event::Delete(.., f) | Event::Embed(.., f)) => f,
                 Ok(Event::Count(count, _)) => frame_of(&RtOut::Count { topic: &topic, count }),
                 Err(broadcast::error::RecvError::Lagged(n)) => frame_of(&RtOut::Gap { topic: &topic, missed: Some(n) }),
                 Err(broadcast::error::RecvError::Closed) => return,

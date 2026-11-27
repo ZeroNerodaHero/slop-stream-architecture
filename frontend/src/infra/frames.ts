@@ -84,6 +84,7 @@ export type ServerFrame =
       call?: unknown;
     }
   | { type: 'dm_react'; id: number; from: string; to: string; emoji: string; on: boolean }
+  | { type: 'dm_embed'; id: number; from: string; to: string; embed: unknown }
   | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }
   | {
       type: 'notification';

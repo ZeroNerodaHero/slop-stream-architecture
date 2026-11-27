@@ -251,6 +251,7 @@ async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: 
     let rooms: Vec<String> = rows.iter().map(|row| row.10.clone()).collect();
     let mut hits: Vec<Hit> = rows.into_iter().map(|row| hit_of(row, server)).collect();
     with_reactions(&s.db, viewer, rooms.iter().map(String::as_str).zip(hits.iter_mut().map(|hit| &mut hit.line))).await;
+    crate::unfurl::with_embeds(&s.db, rooms.iter().map(String::as_str).zip(hits.iter_mut().map(|hit| &mut hit.line))).await;
     Ok(json_hits(hits))
 }
 
@@ -589,6 +590,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         reply: reply.and_then(|r| serde_json::from_value(r).ok()),
         mentions,
         reactions: Vec::new(),
+        embed: None,
         at: at.timestamp_millis().max(0) as u64,
     }
 }
@@ -597,6 +599,7 @@ type JsonLines = axum::Json<Value>;
 
 async fn json_lines(s: &ChatState, room: &str, viewer: Option<Uuid>, mut lines: Vec<Line>) -> JsonLines {
     with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
+    crate::unfurl::with_embeds(&s.db, lines.iter_mut().map(|l| (room, l))).await;
     axum::Json(json!({ "lines": lines }))
 }
 

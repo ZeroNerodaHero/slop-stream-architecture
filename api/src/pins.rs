@@ -60,7 +60,7 @@ pub(crate) async fn pinned_ids(db: &PgPool, server: &str, channels: &[String]) -
 
 type PinRow = (Value, Option<Uuid>, Option<String>, i64);
 
-async fn pins_json(db: &PgPool, rows: Vec<PinRow>) -> Vec<Value> {
+async fn pins_json(db: &PgPool, room: &str, rows: Vec<PinRow>) -> Vec<Value> {
     let mut kept: Vec<(Line, Option<String>, i64)> = rows
         .into_iter()
         .filter_map(|(line, speaker, by, at)| {
@@ -70,6 +70,7 @@ async fn pins_json(db: &PgPool, rows: Vec<PinRow>) -> Vec<Value> {
         })
         .collect();
     with_faces(db, kept.iter_mut().map(|(line, _, _)| line)).await;
+    crate::unfurl::with_embeds(db, kept.iter_mut().map(|(line, _, _)| (room, line))).await;
     kept.into_iter()
         .filter_map(|(line, by, at)| {
             let Value::Object(mut out) = serde_json::to_value(line).ok()? else { return None };
@@ -85,10 +86,10 @@ const PIN_COLUMNS: &str = "p.line, p.speaker_id, s.name, (EXTRACT(EPOCH FROM p.p
 
 async fn list(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
-    let (server, channel, _) = seen(&s, &group, &channel, user).await?;
+    let (server, channel, room) = seen(&s, &group, &channel, user).await?;
     let sql = format!("SELECT {PIN_COLUMNS} WHERE p.server = $1 AND p.channel = $2 ORDER BY p.pinned_at DESC, p.message_id DESC");
     let rows: Vec<PinRow> = sqlx::query_as(&sql).bind(&server).bind(&channel).fetch_all(&s.db).await?;
-    Ok(Json(json!({ "pins": pins_json(&s.db, rows).await })))
+    Ok(Json(json!({ "pins": pins_json(&s.db, &room, rows).await })))
 }
 
 async fn pin(State(s): State<AppState>, Path((group, channel, message)): Path<(String, String, String)>, Me(me): Me) -> ApiResult {
@@ -141,7 +142,7 @@ async fn pin(State(s): State<AppState>, Path((group, channel, message)): Path<(S
     }
     let sql = format!("SELECT {PIN_COLUMNS} WHERE p.server = $1 AND p.channel = $2 AND p.message_id = $3");
     let rows: Vec<PinRow> = sqlx::query_as(&sql).bind(&server).bind(&channel).bind(&id).fetch_all(&s.db).await?;
-    let pin = pins_json(&s.db, rows).await.into_iter().next().ok_or_else(no_such_channel)?;
+    let pin = pins_json(&s.db, &room, rows).await.into_iter().next().ok_or_else(no_such_channel)?;
     Ok(Json(pin))
 }
 
