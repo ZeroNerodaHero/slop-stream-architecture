@@ -177,7 +177,7 @@ impl Config {
     }
 }
 
-fn clean_public_url(raw: &str) -> Option<String> {
+pub(crate) fn clean_public_url(raw: &str) -> Option<String> {
     let url = url::Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return None;
@@ -185,7 +185,7 @@ fn clean_public_url(raw: &str) -> Option<String> {
     Some(url.origin().ascii_serialization())
 }
 
-fn random_hex() -> String {
+pub(crate) fn random_hex() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
@@ -209,11 +209,11 @@ fn base64url(bytes: &[u8]) -> String {
     out
 }
 
-fn pkce_challenge(verifier: &str) -> String {
+pub(crate) fn pkce_challenge(verifier: &str) -> String {
     base64url(&Sha256::digest(verifier.as_bytes()))
 }
 
-fn check_state<'a>(query: Option<&'a str>, cookie: Option<&str>) -> Result<&'a str, &'static str> {
+pub(crate) fn check_state<'a>(query: Option<&'a str>, cookie: Option<&str>) -> Result<&'a str, &'static str> {
     let query = query.filter(|s| is_token(s)).ok_or("that login link is broken. try again")?;
     let cookie = cookie.filter(|s| is_token(s)).ok_or("that login started in another browser, or ran out. try again")?;
     let same = query.len() == cookie.len() && query.bytes().zip(cookie.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
@@ -251,7 +251,7 @@ fn signup_key(token: &str) -> String {
     format!("oauth:signup:{token}")
 }
 
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let prefix = format!("{name}=");
     headers
         .get_all(header::COOKIE)
