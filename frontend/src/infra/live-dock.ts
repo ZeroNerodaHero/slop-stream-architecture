@@ -32,7 +32,7 @@ export function readPanels(raw: unknown): LivePanels {
   return { hidden: MODULE_IDS.filter((id) => hidden.includes(id) || (id === 'source' && legacy)) };
 }
 
-export const RAIL_SECTIONS = ['studio', 'layout', 'presets', 'thumbnail'] as const;
+export const RAIL_SECTIONS = ['studio', 'layout', 'presets', 'thumbnail', 'destinations'] as const;
 export type RailSection = (typeof RAIL_SECTIONS)[number];
 export type RailFolds = Record<RailSection, boolean>;
 
@@ -40,7 +40,8 @@ export const RAIL_WORDS: Record<RailSection, string> = {
   studio: 'studio',
   layout: 'layout',
   presets: 'presets',
-  thumbnail: 'thumbnail'
+  thumbnail: 'thumbnail',
+  destinations: 'destinations'
 };
 
 export function readRailFolds(raw: unknown, legacy: unknown = null): RailFolds {

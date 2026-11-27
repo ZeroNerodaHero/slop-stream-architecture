@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<body>
+<canvas id="c" width="1280" height="720"></canvas>
+<script>
+const c = document.getElementById('c');
+const g = c.getContext('2d');
+let n = 0;
+function draw() {
+  n += 1;
+  g.fillStyle = `hsl(${n % 360} 70% 40%)`;
+  g.fillRect(0, 0, 1280, 720);
+  g.fillStyle = '#fff';
+  g.font = '64px sans-serif';
+  g.fillText(`slop phase 0 frame ${n}`, 80, 360);
+  requestAnimationFrame(draw);
+}
+draw();
+async function go(url) {
+  const video = c.captureStream(30).getVideoTracks()[0];
+  const ac = new AudioContext();
+  const osc = ac.createOscillator();
+  osc.frequency.value = 440;
+  const dst = ac.createMediaStreamDestination();
+  osc.connect(dst);
+  osc.start();
+  const audio = dst.stream.getAudioTracks()[0];
+  const pc = new RTCPeerConnection();
+  const vt = pc.addTransceiver(video, { direction: 'sendonly' });
+  pc.addTransceiver(audio, { direction: 'sendonly' });
+  const h264 = RTCRtpSender.getCapabilities('video').codecs.filter((x) => x.mimeType === 'video/H264');
+  vt.setCodecPreferences(h264);
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); setTimeout(r, 2000); });
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/sdp' }, body: pc.localDescription.sdp });
+  const answer = await res.text();
+  await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+  window.pc = pc;
+  return { status: res.status, h264: h264.length, codec: (answer.match(/a=rtpmap:\d+ (H264|VP8|VP9|AV1)\/90000/) || [])[1] };
+}
+window.go = go;
+</script>
+</body>
+</html>

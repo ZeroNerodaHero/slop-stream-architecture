@@ -100,6 +100,7 @@ import { FOLD_BUTTON, ModuleBoundary } from '@/shared-components/live/Dock';
 import { ModelDialog } from '@/shared-components/live/ModelDialog';
 import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { ChatModule, ChatWindow, Unread, useUnread } from '@/shared-components/live/modules/Chat';
+import { DestinationsModule } from '@/shared-components/live/modules/Destinations';
 import { LayoutModule } from '@/shared-components/live/modules/LayoutSwitcher';
 import { PRESET_ICONS, PresetsModule } from '@/shared-components/live/modules/Presets';
 import { SoundModule } from '@/shared-components/live/modules/Sound';
@@ -467,6 +468,9 @@ function Rail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
           <ModuleBoundary id="presets" name="presets" small>
             <PresetsModule strip />
           </ModuleBoundary>
+          <ModuleBoundary id="destinations" name="destinations" small>
+            <DestinationsModule strip />
+          </ModuleBoundary>
           <span className="flex-1" />
           <ModuleBoundary id="layout" name="layout switcher" small>
             <LayoutModule strip />
@@ -487,6 +491,9 @@ function Rail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       </ModuleBoundary>
       <ModuleBoundary id="presets" name="presets">
         <PresetsModule />
+      </ModuleBoundary>
+      <ModuleBoundary id="destinations" name="destinations">
+        <DestinationsModule />
       </ModuleBoundary>
     </Collapsible>
   );
@@ -769,6 +776,9 @@ export function LivePage() {
                   </ModuleBoundary>
                   <ModuleBoundary id="presets" name="presets">
                     <PresetsModule />
+                  </ModuleBoundary>
+                  <ModuleBoundary id="destinations" name="destinations">
+                    <DestinationsModule />
                   </ModuleBoundary>
                 </div>
               </>

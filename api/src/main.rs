@@ -11,6 +11,7 @@ mod chat_audio;
 mod chat_images;
 mod chat_videos;
 mod debug;
+mod destinations;
 mod dm_calls;
 mod dms;
 mod emotes;
@@ -103,6 +104,7 @@ pub(crate) struct AppState {
     live_cache: LiveCache,
     recent_cache: RecentCache,
     pub(crate) oauth: Arc<oauth::Config>,
+    pub(crate) destinations: Arc<destinations::Config>,
     pub(crate) turnstile: Arc<turnstile::Config>,
 }
 
@@ -832,6 +834,7 @@ fn router(state: AppState) -> Router {
     Router::new()
         .merge(auth::routes())
         .merge(oauth::routes())
+        .merge(destinations::routes())
         .merge(turnstile::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
@@ -1051,6 +1054,7 @@ async fn main() {
         live_cache: Arc::default(),
         recent_cache: Arc::default(),
         oauth: Arc::new(oauth::Config::from_env()),
+        destinations: Arc::new(destinations::Config::from_env()),
         turnstile: Arc::new(turnstile::Config::from_env()),
     };
 

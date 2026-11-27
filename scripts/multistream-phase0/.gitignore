@@ -1,0 +1,5 @@
+tls.key
+tls.crt
+.mediamtx.yml
+mediamtx.log
+sink.mp4
