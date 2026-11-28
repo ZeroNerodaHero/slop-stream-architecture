@@ -6,12 +6,17 @@ import { test } from 'node:test';
 import {
   arrange,
   clampCell,
+  copyName,
   DEFAULT_GRID,
   fits,
   freeCell,
   GRID_COLS,
   GRID_ROWS,
   LAYOUT_IDS,
+  LAYOUT_NAME_MAX,
+  layoutName,
+  nextEmptySlot,
+  OBS_GRID,
   overlaps,
   placeIn,
   placeShown,
@@ -33,7 +38,9 @@ import {
   RAIL_W_MAX,
   RAIL_W_MIN,
   readGrid,
+  readDefaultGrid,
   readLayout,
+  readLayoutNames,
   readPanels,
   readPreset,
   readPresets,
@@ -43,6 +50,8 @@ import {
   START_GRID,
   starterPresets,
   withActive,
+  withDuplicate,
+  withLayoutNamed,
   withPresetAdded,
   withPresetDeleted,
   withPresetMoved,
@@ -435,4 +444,41 @@ test('resizeCell holds min sizes and grid edges', () => {
   assert.deepEqual(resizeCell('sources', from, 'tl', -20, -20), { x: 0, y: 0, w: 8, h: 7 });
   assert.deepEqual(resizeCell('sources', from, 'br', 40, 40), { x: 4, y: 3, w: GRID_COLS - 4, h: GRID_ROWS - 3 });
   assert.deepEqual(resizeCell('chat', from, 'bl', -1, -9), { x: 3, y: 3, w: 5, h: 3 });
+});
+
+test('layouts take names, junk and blanks fall back to the old marks', () => {
+  assert.deepEqual(readLayoutNames(null), {});
+  assert.deepEqual(readLayoutNames({ obs: '  main  ', c2: '', c3: 4, c9: 'x' }), { obs: 'main' });
+  assert.equal(readLayoutNames({ c1: 'y'.repeat(50) }).c1?.length, LAYOUT_NAME_MAX);
+  assert.equal(layoutName('obs', {}), '1');
+  assert.equal(layoutName('c2', {}), 'c2');
+  assert.equal(layoutName('c2', { c2: 'gaming' }), 'gaming');
+  assert.deepEqual(withLayoutNamed({}, 'c1', ' gaming '), { c1: 'gaming' });
+  assert.deepEqual(withLayoutNamed({ c1: 'gaming' }, 'c1', '   '), {});
+  assert.deepEqual(withLayoutNamed({ c1: 'gaming' }, 'c1', 'c1'), {});
+});
+
+test('the default grid is null until it is edited, and its starting grid fits', () => {
+  assert.equal(readDefaultGrid(null), null);
+  assert.equal(readDefaultGrid([1]), null);
+  assert.deepEqual(readDefaultGrid(OBS_GRID), OBS_GRID);
+  for (const id of TILE_IDS) {
+    assert.deepEqual(clampCell(id, OBS_GRID[id]), OBS_GRID[id], id);
+    assert.ok(fits(OBS_GRID, TILE_IDS, id, OBS_GRID[id]), id);
+  }
+});
+
+test('duplicate copies into the first empty slot and names it a copy, or does nothing when full', () => {
+  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
+  const slots = { c1: custom, c2: null, c3: custom, c4: null };
+  assert.equal(nextEmptySlot(slots), 'c2');
+  assert.equal(nextEmptySlot({ c1: custom, c2: custom, c3: custom, c4: custom }), null);
+  const done = withDuplicate(slots, { c1: 'gaming' }, 'c1', custom);
+  assert.equal(done?.slot, 'c2');
+  assert.deepEqual(done?.slots, { ...slots, c2: custom });
+  assert.deepEqual(done?.names, { c1: 'gaming', c2: 'gaming copy' });
+  assert.deepEqual(withDuplicate(slots, {}, 'obs', OBS_GRID)?.names, { c2: '1 copy' });
+  assert.equal(withDuplicate({ c1: custom, c2: custom, c3: custom, c4: custom }, {}, 'c1', custom), null);
+  assert.equal(copyName('z'.repeat(40)).length, LAYOUT_NAME_MAX);
+  assert.ok(copyName('z'.repeat(40)).endsWith(' copy'));
 });
