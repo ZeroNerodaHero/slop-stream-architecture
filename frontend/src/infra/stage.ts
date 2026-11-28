@@ -157,7 +157,7 @@ export function stagedFrom(stage: Pick<Stage, 'scene' | 'images'>, now: readonly
     const match = image ? now.find((s) => s.kind === 'image' && s.asset === image.asset && !used.has(s.id)) : now.find((s) => s.id === id && s.kind !== 'image');
     if (match) {
       used.add(match.id);
-      placed.push({ ...match, box: kept.box, shown: kept.shown, fit: kept.fit, ...(match.kind === 'avatar' && { look: kept.look }) });
+      placed.push({ ...match, box: kept.box, shown: kept.shown, fit: kept.fit, ...(match.kind === 'avatar' && { look: kept.look }), ...(match.kind === 'screen' && { cap: kept.cap }) });
       continue;
     }
     if (image && library.includes(image.asset)) {
@@ -176,7 +176,7 @@ export function stagedFrom(stage: Pick<Stage, 'scene' | 'images'>, now: readonly
     const kind = stagedKind(id, stage);
     const slot = kind === 'camera' ? 0 : kind === 'screen' ? screenSlotOf(id) : null;
     if ((kind === 'camera' || kind === 'screen') && slot !== null) {
-      placed.push({ id, kind, label: kind, slot, box: kept.box, shown: kept.shown, ...(kept.fit && { fit: kept.fit }), waiting: true });
+      placed.push({ id, kind, label: kind, slot, box: kept.box, shown: kept.shown, ...(kept.fit && { fit: kept.fit }), ...(kind === 'screen' && kept.cap && { cap: kept.cap }), waiting: true });
       continue;
     }
     if (!kept.shown) continue;

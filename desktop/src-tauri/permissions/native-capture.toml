@@ -10,6 +10,7 @@ commands.allow = [
   "list_capture_sources",
   "start_screen_capture",
   "stop_screen_capture",
+  "resize_screen_capture",
   "restream_direct_ready",
   "restream_direct_start",
   "restream_direct_packet",

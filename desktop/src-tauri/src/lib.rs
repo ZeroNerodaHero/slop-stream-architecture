@@ -35,6 +35,7 @@ pub fn run() {
             capture::list_capture_sources,
             capture::start_screen_capture,
             capture::stop_screen_capture,
+            capture::resize_screen_capture,
             restream::restream_direct_ready,
             restream::restream_direct_start,
             restream::restream_direct_packet,
