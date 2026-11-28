@@ -25,7 +25,7 @@ test('rigging and model settings belong to the model source alone', () => {
     assert.equal(sections.includes('rigging'), false, kind);
     assert.equal(sections.includes('model'), false, kind);
   }
-  assert.deepEqual(sectionsOf('model'), ['fill', 'move', 'model', 'rigging']);
+  assert.deepEqual(sectionsOf('model'), ['fill', 'model', 'rigging']);
   assert.ok(sectionsOf('camera').includes('device'));
   assert.ok(sectionsOf('image').includes('fitCamera'));
   assert.deepEqual(sectionsOf('sound'), ['playback']);
