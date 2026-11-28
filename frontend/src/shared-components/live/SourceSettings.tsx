@@ -11,8 +11,10 @@ import {
   isPublishingAtom,
   modelAtom,
   refreshFaceCameras,
+  screenStreamAtom,
   selectedSourceAtom,
   setCamera,
+  setScreenCap,
   setSourceFit,
   sourcesAtom
 } from '@/infra/atoms/publish-atoms';
@@ -32,6 +34,7 @@ import {
 } from '@/infra/atoms/source-atoms';
 import { livePanelsAtom, type Place } from '@/infra/live-dock';
 import type { Source } from '@/infra/scene';
+import { capOf, SCREEN_CAP_WORDS, SCREEN_CAPS, type ScreenCap } from '@/infra/screen-cap';
 import { INPUT_WORDS, inputKindOf, SOURCE_NAME_MAX, type SoundSource, sectionsOf } from '@/infra/source-settings';
 import { Button } from '@/shared-components/Button';
 import { AvatarLookSettings } from '@/shared-components/live/AvatarLookSettings';
@@ -40,6 +43,7 @@ import { INPUT } from '@/shared-components/input';
 import { DevicePick } from '@/shared-components/live/DevicePick';
 import { ModelControls } from '@/shared-components/live/ModelControls';
 import { Rigging } from '@/shared-components/live/Rigging';
+import { Segmented } from '@/shared-components/Segmented';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -209,6 +213,52 @@ function InlineHead({ head }: { head: SourceHead }) {
 }
 
 const refreshCameras = () => void refreshFaceCameras();
+const CAP_OPTIONS = SCREEN_CAPS.map((value) => ({ value, label: SCREEN_CAP_WORDS[value] }));
+
+const SIZE_POLL_MS = 1000;
+
+function sizeOf(track: MediaStreamTrack | undefined): string {
+  const { width, height } = track?.readyState === 'live' ? track.getSettings() : {};
+  return width && height ? `${width}×${height}` : '';
+}
+
+function useScreenSize(slot: number): string {
+  const track = useAtomValue(screenStreamAtom(slot))?.getVideoTracks()[0];
+  const [seen, setSeen] = useState(() => ({ track, size: sizeOf(track) }));
+  useEffect(() => {
+    if (!track) return;
+    const read = () => setSeen({ track, size: sizeOf(track) });
+    const timer = setInterval(read, SIZE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [track]);
+  return seen.track === track ? seen.size : sizeOf(track);
+}
+
+function ScreenResolution({ source }: { source: Source }) {
+  const size = useScreenSize((source.slot ?? 0) - 1);
+  return (
+    <div id="source-resolution" className="flex min-w-0 flex-col gap-1.5">
+      <span className="flex min-w-0 items-center gap-2 text-xs">
+        <span className="flex-1 text-textSecondary">resolution</span>
+        {size && (
+          <Tooltip content="what the screen is captured at now">
+            <span id="source-resolution-size" tabIndex={0} className="tabular-nums text-textTertiary outline-none focus-visible:text-textPrimary">
+              {size}
+            </span>
+          </Tooltip>
+        )}
+      </span>
+      <Segmented<ScreenCap>
+        id="source-resolution-cap"
+        label="screen resolution cap"
+        options={CAP_OPTIONS}
+        value={capOf(source.cap)}
+        onChange={(cap) => setScreenCap(source.id, cap)}
+        className="w-full"
+      />
+    </div>
+  );
+}
 
 function CameraPick() {
   const hasCamera = useAtomValue(hasCameraAtom);
@@ -235,7 +285,7 @@ function VisualSettings({ source, place, head, onModel }: { source: Source; plac
   const input = inputKindOf(source.kind, worn);
   const sections = sectionsOf(input);
   const fits = sections.includes('fill') || (sections.includes('fitCamera') && hasCamera);
-  const top = head !== null || fits || sections.includes('device');
+  const top = head !== null || fits || sections.includes('device') || sections.includes('resolution');
   return (
     <div id="source-detail" data-source={source.id} data-input={input} className="flex min-w-0 flex-col">
       {top && (
@@ -257,6 +307,7 @@ function VisualSettings({ source, place, head, onModel }: { source: Source; plac
               )}
             </div>
           )}
+          {sections.includes('resolution') && <ScreenResolution source={source} />}
           {sections.includes('device') && <CameraPick />}
         </div>
       )}

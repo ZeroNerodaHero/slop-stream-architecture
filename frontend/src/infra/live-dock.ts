@@ -126,7 +126,71 @@ export const START_GRID: Grid = {
   preview: { x: 0, y: 4, w: 12, h: 8 }
 };
 
+export const OBS_GRID: Grid = {
+  sources: { x: 0, y: 0, w: 3, h: 4 },
+  source: { x: 0, y: 4, w: 3, h: 4 },
+  sound: { x: 0, y: 8, w: 3, h: 4 },
+  preview: { x: 3, y: 0, w: 9, h: 8 },
+  chat: { x: 3, y: 8, w: 9, h: 4 }
+};
+
 export type Slots = Record<SlotId, Grid | null>;
+
+export function readDefaultGrid(raw: unknown): Grid | null {
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? readGrid(raw) : null;
+}
+
+export function nextEmptySlot(slots: Slots): SlotId | null {
+  return SLOT_IDS.find((id) => !slots[id]) ?? null;
+}
+
+export const LAYOUT_NAME_MAX = 32;
+export type LayoutNames = Partial<Record<LayoutId, string>>;
+
+export function readLayoutName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const name = raw.trim().slice(0, LAYOUT_NAME_MAX).trim();
+  return name || undefined;
+}
+
+export function readLayoutNames(raw: unknown): LayoutNames {
+  const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const names: LayoutNames = {};
+  for (const id of LAYOUT_IDS) {
+    const name = readLayoutName(r[id]);
+    if (name) names[id] = name;
+  }
+  return names;
+}
+
+export function layoutName(id: LayoutId, names: LayoutNames): string {
+  return names[id] ?? LAYOUT_MARKS[id];
+}
+
+export function withLayoutNamed(names: LayoutNames, id: LayoutId, raw: string): LayoutNames {
+  const next = { ...names };
+  const name = readLayoutName(raw);
+  if (name && name !== LAYOUT_MARKS[id]) next[id] = name;
+  else delete next[id];
+  return next;
+}
+
+export function copyName(name: string): string {
+  const tail = ' copy';
+  return `${name.slice(0, LAYOUT_NAME_MAX - tail.length).trim()}${tail}`;
+}
+
+export interface Duplicated {
+  slot: SlotId;
+  slots: Slots;
+  names: LayoutNames;
+}
+
+export function withDuplicate(slots: Slots, names: LayoutNames, from: LayoutId, grid: Grid): Duplicated | null {
+  const slot = nextEmptySlot(slots);
+  if (!slot) return null;
+  return { slot, slots: { ...slots, [slot]: grid }, names: withLayoutNamed(names, slot, copyName(layoutName(from, names))) };
+}
 
 export function readSlots(raw: unknown): Slots {
   const s = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -454,6 +518,8 @@ const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', readPan
 const storedLayoutAtom = atomWithStorage<unknown>('settings.liveLayout', 'obs', undefined, json);
 const storedGridAtom = atomWithStorage<unknown>('settings.liveGrid', null, undefined, json);
 const storedSlotsAtom = atomWithStorage<unknown>('settings.liveSlots', null, undefined, json);
+const storedDefaultGridAtom = atomWithStorage<unknown>('settings.liveDefaultGrid', null, undefined, json);
+const storedLayoutNamesAtom = atomWithStorage<unknown>('settings.liveLayoutNames', null, undefined, json);
 const storedMineAtom = atomWithStorage<unknown>('settings.livePresetMine', null, undefined, json);
 const storedPresetAtom = atomWithStorage<unknown>('settings.livePreset', null, undefined, json);
 const storedPresetsDefaultAtom = atomWithStorage<unknown>('settings.livePresetsDefault', false, undefined, json);
@@ -464,10 +530,15 @@ const storedRailWidthAtom = atomWithStorage<unknown>('settings.liveRailWidth', n
 export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
 export const liveLayoutAtom = atom<LayoutId>((get) => readLayout(get(storedLayoutAtom)));
 export const liveSlotsAtom = atom<Slots>((get) => readSlots(get(storedSlotsAtom)));
+export const liveDefaultGridAtom = atom<Grid | null>((get) => readDefaultGrid(get(storedDefaultGridAtom)));
+export const liveLayoutNamesAtom = atom<LayoutNames>((get) => readLayoutNames(get(storedLayoutNamesAtom)));
+export const liveBuiltInAtom = atom<boolean>((get) => get(liveLayoutAtom) === 'obs' && get(liveDefaultGridAtom) === null);
 export const liveGridAtom = atom<Grid>((get) => {
   const layout = get(liveLayoutAtom);
-  return (isSlot(layout) && get(liveSlotsAtom)[layout]) || START_GRID;
+  if (layout === 'obs') return get(liveDefaultGridAtom) ?? OBS_GRID;
+  return get(liveSlotsAtom)[layout] || START_GRID;
 });
+export const liveEmptySlotAtom = atom<SlotId | null>((get) => nextEmptySlot(get(liveSlotsAtom)));
 export const livePresetsAtom = atom<Presets>((get) => readPresets(get(storedPresetsAtom)));
 export const livePresetAtom = atom<PresetId>((get) => get(livePresetsAtom).active);
 export const liveRailAtom = atom<RailState>((get) => readRail(get(storedRailAtom)));
@@ -489,8 +560,23 @@ export function setLayout(layout: LayoutId) {
 
 export function setGrid(grid: Grid) {
   const layout = store.get(liveLayoutAtom);
-  if (!isSlot(layout)) return;
-  store.set(storedSlotsAtom, { ...store.get(liveSlotsAtom), [layout]: grid });
+  if (!isSlot(layout)) store.set(storedDefaultGridAtom, grid);
+  else store.set(storedSlotsAtom, { ...store.get(liveSlotsAtom), [layout]: grid });
+}
+
+export function renameLayout(id: LayoutId, raw: string) {
+  store.set(storedLayoutNamesAtom, withLayoutNamed(store.get(liveLayoutNamesAtom), id, raw));
+}
+
+export function duplicateLayout(): SlotId | null {
+  const from = store.get(liveLayoutAtom);
+  const done = withDuplicate(store.get(liveSlotsAtom), store.get(liveLayoutNamesAtom), from, store.get(liveGridAtom));
+  if (!done) return null;
+  store.set(storedSlotsAtom, done.slots);
+  store.set(storedLayoutNamesAtom, done.names);
+  store.set(storedLayoutAtom, done.slot);
+  stopEditing();
+  return done.slot;
 }
 
 export function setRail(open: boolean) {
@@ -589,8 +675,9 @@ export function pickLayout(id: LayoutId) {
 
 export function startEditing() {
   const layout = store.get(liveLayoutAtom);
-  if (!isSlot(layout)) return;
-  if (!store.get(liveSlotsAtom)[layout]) setGrid(START_GRID);
+  if (!isSlot(layout)) {
+    if (!store.get(liveDefaultGridAtom)) setGrid(OBS_GRID);
+  } else if (!store.get(liveSlotsAtom)[layout]) setGrid(START_GRID);
   store.set(liveEditingAtom, true);
 }
 
@@ -599,7 +686,12 @@ export function stopEditing() {
 }
 
 export function resetGrid() {
-  setGrid(START_GRID);
+  if (isSlot(store.get(liveLayoutAtom))) {
+    setGrid(START_GRID);
+    return;
+  }
+  store.set(storedDefaultGridAtom, RESET);
+  stopEditing();
 }
 
 export function showInGrid(id: ModuleId): boolean {
