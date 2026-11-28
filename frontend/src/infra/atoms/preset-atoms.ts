@@ -18,7 +18,18 @@ import {
   sourcesAtom
 } from '@/infra/atoms/publish-atoms';
 import { setSoundHear, setSoundLoop, setSoundVolume, setSourceNames, soundsAtom, sourceNamesAtom } from '@/infra/atoms/source-atoms';
-import { activatePreset, addPreset, deletePreset, livePresetAtom, livePresetsAtom, PRESETS_MAX, type PresetId, presetOf, savePresetStage } from '@/infra/live-dock';
+import {
+  activatePreset,
+  addPreset,
+  deletePreset,
+  duplicatePreset,
+  livePresetAtom,
+  livePresetsAtom,
+  PRESETS_MAX,
+  type PresetId,
+  presetOf,
+  savePresetStage
+} from '@/infra/live-dock';
 import { blankStage, gapWords, type Stage, stageChanged, type StageGap, storedStage, withGoneScreens } from '@/infra/stage';
 import { store } from '@/infra/store';
 
@@ -135,6 +146,16 @@ export function newPreset(): PresetId | null {
       checkDirty();
     }
   });
+  return id;
+}
+
+export function duplicateActivePreset(): PresetId | null {
+  if (applying) return null;
+  const was = store.get(livePresetAtom);
+  const id = duplicatePreset(was, withGoneScreens(presetOf(was)?.stage, stageNow(), [...seen]));
+  store.set(presetNoticeAtom, id ? '' : `${PRESETS_MAX} presets at most`);
+  baseline = null;
+  checkDirty();
   return id;
 }
 

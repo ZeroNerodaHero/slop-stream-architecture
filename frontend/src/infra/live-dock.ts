@@ -375,6 +375,24 @@ export function withPresetAdded(presets: Presets, stage: Stage): Presets | null 
   return { list: [...presets.list, { id, name: nextPresetName(presets.list), stage }], active: id };
 }
 
+export function copyPresetName(list: readonly SavedPreset[], name: string): string {
+  const used = new Set(list.map((p) => presetName(p)));
+  const named = (tail: string) => `${name.slice(0, PRESET_NAME_MAX - tail.length).trimEnd()}${tail}`;
+  let n = 2;
+  let next = named(' copy');
+  while (used.has(next)) next = named(` copy ${n++}`);
+  return next;
+}
+
+export function withPresetDuplicated(presets: Presets, id: PresetId, stage: Stage | undefined): Presets | null {
+  const from = presets.list.find((p) => p.id === id);
+  if (!from || presets.list.length >= PRESETS_MAX) return null;
+  const copy: SavedPreset = { id: nextPresetId(presets.list), name: copyPresetName(presets.list, presetName(from)) };
+  const kept = stage ?? from.stage;
+  if (kept) copy.stage = structuredClone(kept);
+  return { list: [...presets.list, copy], active: copy.id };
+}
+
 export function withPresetRenamed(presets: Presets, id: PresetId, raw: string): Presets {
   const name = readPresetName(raw);
   return {
@@ -607,6 +625,13 @@ export function activatePreset(id: PresetId): SavedPreset | null {
 
 export function addPreset(stage: Stage): PresetId | null {
   const next = withPresetAdded(store.get(livePresetsAtom), stage);
+  if (!next) return null;
+  setPresets(next);
+  return next.active;
+}
+
+export function duplicatePreset(id: PresetId, stage: Stage | undefined): PresetId | null {
+  const next = withPresetDuplicated(store.get(livePresetsAtom), id, stage);
   if (!next) return null;
   setPresets(next);
   return next.active;
