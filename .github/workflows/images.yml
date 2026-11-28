@@ -6,6 +6,7 @@ on:
     paths:
       - api/**
       - video/**
+      - relay/**
       - frontend/**
       - random-media/gifs/**
       - '!frontend/Caddyfile'
@@ -72,6 +73,9 @@ jobs:
           - name: dummy
             context: .
             file: video/Dockerfile.dummy
+          - name: relay
+            context: .
+            file: relay/Dockerfile
     steps:
       - uses: actions/checkout@v4
 

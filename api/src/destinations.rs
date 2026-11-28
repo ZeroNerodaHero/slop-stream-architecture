@@ -399,17 +399,24 @@ fn scrub(e: reqwest::Error) -> String {
     e.without_url().to_string()
 }
 
-async fn form_post(cfg: &Config, url: &str, pairs: &[(&str, &str)]) -> Result<Value, Fail> {
+fn route(p: Platform, url: &str) -> String {
+    let path = url::Url::parse(url).map(|u| u.path().trim_end_matches('/').to_owned()).unwrap_or_default();
+    format!("{} {}", p.slug(), if path.is_empty() { "/" } else { &path })
+}
+
+async fn sent(p: Platform, method: &str, url: &str, req: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
+    crate::timings::call("dest", method, &route(p, url), req).await
+}
+
+async fn form_post(cfg: &Config, p: Platform, url: &str, pairs: &[(&str, &str)]) -> Result<Value, Fail> {
     let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(pairs.iter().copied()).finish();
-    let res = cfg
+    let req = cfg
         .http
         .post(url)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(header::ACCEPT, "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| Fail::Http(scrub(e)))?;
+        .body(body);
+    let res = sent(p, "POST", url, req).await.map_err(|e| Fail::Http(scrub(e)))?;
     let status = res.status();
     if status == StatusCode::BAD_REQUEST || status == StatusCode::UNAUTHORIZED {
         return Err(Fail::Unauthorized);
@@ -430,7 +437,8 @@ fn authed(p: Platform, app: &App, req: reqwest::RequestBuilder, access: &str) ->
 
 async fn api_get(cfg: &Config, p: Platform, app: &App, path: &str, query: &[(&str, &str)], access: &str) -> Result<Value, Fail> {
     let url = format!("{}{path}", app.spec.api_url);
-    let res = authed(p, app, cfg.http.get(url).query(query), access).send().await.map_err(|e| Fail::Http(scrub(e)))?;
+    let req = authed(p, app, cfg.http.get(&url).query(query), access);
+    let res = sent(p, "GET", &url, req).await.map_err(|e| Fail::Http(scrub(e)))?;
     let status = res.status();
     if status == StatusCode::UNAUTHORIZED {
         return Err(Fail::Unauthorized);
@@ -443,7 +451,8 @@ async fn api_get(cfg: &Config, p: Platform, app: &App, path: &str, query: &[(&st
 
 async fn api_patch(cfg: &Config, p: Platform, app: &App, path: &str, query: &[(&str, &str)], body: &Value, access: &str) -> Result<(), Fail> {
     let url = format!("{}{path}", app.spec.api_url);
-    let res = authed(p, app, cfg.http.patch(url).query(query).json(body), access).send().await.map_err(|e| Fail::Http(scrub(e)))?;
+    let req = authed(p, app, cfg.http.patch(&url).query(query).json(body), access);
+    let res = sent(p, "PATCH", &url, req).await.map_err(|e| Fail::Http(scrub(e)))?;
     let status = res.status();
     if status == StatusCode::UNAUTHORIZED {
         return Err(Fail::Unauthorized);
@@ -468,6 +477,7 @@ async fn exchange_code(cfg: &Config, p: Platform, app: &App, code: &str, verifie
     let redirect_uri = cfg.redirect_uri(p).ok_or(Fail::Shape)?;
     let v = form_post(
         cfg,
+        p,
         &app.spec.token_url,
         &[
             ("grant_type", "authorization_code"),
@@ -482,9 +492,10 @@ async fn exchange_code(cfg: &Config, p: Platform, app: &App, code: &str, verifie
     parse_tokens(&v, Utc::now()).ok_or(Fail::Shape)
 }
 
-async fn exchange_refresh(cfg: &Config, app: &App, refresh: &str) -> Result<Tokens, Fail> {
+async fn exchange_refresh(cfg: &Config, p: Platform, app: &App, refresh: &str) -> Result<Tokens, Fail> {
     let v = form_post(
         cfg,
+        p,
         &app.spec.token_url,
         &[("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", &app.id), ("client_secret", &app.secret)],
     )
@@ -494,11 +505,11 @@ async fn exchange_refresh(cfg: &Config, app: &App, refresh: &str) -> Result<Toke
 
 async fn youtube(cfg: &Config, app: &App, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>, access: &str) -> Result<Value, Fail> {
     let url = format!("{}{path}", app.spec.api_url);
-    let mut req = cfg.http.request(method, url).query(query).bearer_auth(access).header(header::ACCEPT, "application/json");
+    let mut req = cfg.http.request(method.clone(), &url).query(query).bearer_auth(access).header(header::ACCEPT, "application/json");
     if let Some(body) = body {
         req = req.json(body);
     }
-    let res = req.send().await.map_err(|e| Fail::Http(scrub(e)))?;
+    let res = sent(Platform::Youtube, method.as_str(), &url, req).await.map_err(|e| Fail::Http(scrub(e)))?;
     let status = res.status();
     if status == StatusCode::UNAUTHORIZED {
         return Err(Fail::Unauthorized);
@@ -555,10 +566,10 @@ async fn ingest_of(cfg: &Config, p: Platform, app: &App, account: &Account, acce
 
 async fn revoke(cfg: &Config, p: Platform, app: &App, token: &str) {
     let done = match p {
-        Platform::Twitch => form_post(cfg, &app.spec.revoke_url, &[("client_id", &app.id), ("token", token)]).await.map(|_| ()),
+        Platform::Twitch => form_post(cfg, p, &app.spec.revoke_url, &[("client_id", &app.id), ("token", token)]).await.map(|_| ()),
         Platform::Youtube => {
             let body = url::form_urlencoded::Serializer::new(String::new()).append_pair("token", token).finish();
-            let res = cfg.http.post(&app.spec.revoke_url).header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(body).send().await;
+            let res = sent(p, "POST", &app.spec.revoke_url, cfg.http.post(&app.spec.revoke_url).header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(body)).await;
             match res {
                 Ok(r) if r.status().is_success() => Ok(()),
                 Ok(r) => Err(Fail::Status(r.status())),
@@ -566,7 +577,7 @@ async fn revoke(cfg: &Config, p: Platform, app: &App, token: &str) {
             }
         }
         Platform::Kick => {
-            let res = cfg.http.post(&app.spec.revoke_url).query(&[("token", token), ("token_hint_type", "access_token")]).send().await;
+            let res = sent(p, "POST", &app.spec.revoke_url, cfg.http.post(&app.spec.revoke_url).query(&[("token", token), ("token_hint_type", "access_token")])).await;
             match res {
                 Ok(r) if r.status().is_success() => Ok(()),
                 Ok(r) => Err(Fail::Status(r.status())),
@@ -740,7 +751,7 @@ async fn fresh_access(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest,
         return Ok(access);
     }
     let refresh = opened(cfg, user, &d.platform, "refresh", d.refresh.as_deref()).ok_or(Fail::Unauthorized)?;
-    let tokens = exchange_refresh(cfg, app, &refresh).await?;
+    let tokens = exchange_refresh(cfg, p, app, &refresh).await?;
     let new_access = sealed(cfg, user, &d.platform, "access", Some(&tokens.access));
     let new_refresh = sealed(cfg, user, &d.platform, "refresh", tokens.refresh.as_deref()).or_else(|| d.refresh.clone());
     sqlx::query("UPDATE stream_destinations SET access_token = $3, refresh_token = $4, token_expires_at = $5, scopes = COALESCE($6, scopes), updated_at = now() WHERE id = $1 AND user_id = $2")
@@ -1602,6 +1613,36 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         format!("http://{addr}")
+    }
+
+    #[test]
+    fn call_names_are_the_route_without_host_or_query() {
+        assert_eq!(route(Platform::Twitch, "https://id.twitch.tv/oauth2/token"), "twitch /oauth2/token");
+        assert_eq!(route(Platform::Kick, "https://id.kick.com/oauth/revoke?token=s3cret"), "kick /oauth/revoke");
+        assert_eq!(route(Platform::Youtube, "https://www.googleapis.com/youtube/v3/liveBroadcasts/transition"), "youtube /youtube/v3/liveBroadcasts/transition");
+        assert_eq!(route(Platform::Twitch, "not a url"), "twitch /");
+    }
+
+    #[tokio::test]
+    async fn calls_out_are_timed_by_route_and_keep_no_secrets() {
+        let _one = ONE_MOCK_ACCOUNT.lock().await;
+        let base = mock().await;
+        let spec = Spec { authorize_url: format!("{base}/authorize"), token_url: format!("{base}/token"), revoke_url: format!("{base}/dest-test-revoke"), api_url: format!("{base}/helix") };
+        let cfg = Config::for_test("http://localhost:5173", KEY, &[(Platform::Twitch, spec.clone()), (Platform::Kick, spec)]);
+        let twitch = cfg.app(Platform::Twitch).unwrap();
+        assert_eq!(account_of(&cfg, Platform::Twitch, twitch, "acc-secret-1").await.unwrap().name, "billy");
+        assert!(ingest_of(&cfg, Platform::Twitch, twitch, &Account { id: "4242".into(), name: "billy".into() }, "acc-secret-1").await.is_ok());
+        revoke(&cfg, Platform::Kick, cfg.app(Platform::Kick).unwrap(), "tok-secret-2").await;
+        let snap = crate::timings::snapshot();
+        let rows = snap["rows"].as_array().unwrap();
+        let find = |method: &str, name: &str| rows.iter().find(|r| r["kind"] == "dest" && r["method"] == method && r["name"] == name).cloned();
+        assert!(find("GET", "twitch /helix/users").is_some_and(|r| r["n"].as_u64() >= Some(1)));
+        assert!(find("GET", "twitch /helix/streams/key").is_some());
+        assert!(find("POST", "kick /dest-test-revoke").is_some_and(|r| r["e4"].as_u64() >= Some(1)));
+        let text = serde_json::to_string(&rows.iter().filter(|r| r["kind"] == "dest").collect::<Vec<_>>()).unwrap();
+        for secret in ["acc-secret", "tok-secret", "live_4242", "127.0.0.1", "token="] {
+            assert!(!text.contains(secret), "{secret} in the timings");
+        }
     }
 
     #[tokio::test]

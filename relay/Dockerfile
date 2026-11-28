@@ -26,6 +26,7 @@ ENV BUILD=${BUILD} \
 USER app
 EXPOSE 8889/tcp
 EXPOSE 8189/udp
+EXPOSE 9300/tcp
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9998 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9300 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
 ENTRYPOINT ["/usr/local/bin/relay"]

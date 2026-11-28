@@ -495,7 +495,7 @@ pub(crate) async fn http(req: Request, next: Next) -> Response {
     res
 }
 
-pub(crate) async fn call(kind: &'static str, method: &'static str, name: &'static str, req: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
+pub(crate) async fn call(kind: &'static str, method: &str, name: &str, req: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
     let started = Instant::now();
     let res = req.send().await;
     let out = match &res {
