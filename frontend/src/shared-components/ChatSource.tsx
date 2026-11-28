@@ -2,10 +2,10 @@ import { RiKickFill, RiTwitchFill } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { api } from '@/infra/api';
-import { BADGE_WORDS, type ChatPick, type ChatPlatform, type ChatSourceLine, emoteUrlOk, pickOf, PLATFORM_WORDS, platformsOf } from '@/infra/chat-source';
+import { BADGE_WORDS, type ChatPick, type ChatPlatform, type ChatSourceLine, emoteUrlOk, picksOf, platformsOf, togglePick } from '@/infra/chat-source';
 import { Button } from '@/shared-components/Button';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -15,7 +15,8 @@ const TINTS: Record<ChatPlatform, string> = { twitch: 'text-[#9146ff]', kick: 't
 const SLOP_LOGO = '/icon-192.png?v=3';
 const SOURCES_POLL_MS = 60_000;
 
-const storedPickAtom = atomWithStorage<unknown>('settings.chatSource', 'slop', undefined, { getOnInit: true });
+const storedPickAtom = atomWithStorage<unknown>('settings.chatSource', null, undefined, { getOnInit: true });
+const PICK_WORDS: Record<ChatPick, string> = { slop: 'site chat', twitch: 'twitch chat', kick: 'kick chat' };
 
 export function useChatSources(name: string, off = false): ChatPlatform[] {
   const answer = useQuery({
@@ -29,15 +30,17 @@ export function useChatSources(name: string, off = false): ChatPlatform[] {
   return useMemo(() => platformsOf(raw), [raw]);
 }
 
-export function useChatPick(sources: readonly ChatPlatform[]): [ChatPick, (pick: ChatPick) => void] {
+export function useChatPicks(sources: readonly ChatPlatform[]): [ChatPick[], (pick: ChatPick) => void] {
   const [stored, setStored] = useAtom(storedPickAtom);
-  return [pickOf(stored, sources), setStored];
+  const picks = useMemo(() => picksOf(stored, sources), [stored, sources]);
+  const toggle = useCallback((pick: ChatPick) => setStored(togglePick(picks, pick, sources)), [picks, sources, setStored]);
+  return [picks, toggle];
 }
 
 export function ChatSourcePicker({ name, className }: { name: string; className?: string }) {
   const sources = useChatSources(name);
-  const [pick, setPick] = useChatPick(sources);
-  return <SourcePicker sources={sources} pick={pick} onPick={setPick} className={className} />;
+  const [picks, toggle] = useChatPicks(sources);
+  return <SourcePicker sources={sources} picks={picks} onToggle={toggle} className={className} />;
 }
 
 export function PlatformLogo({ platform, size = 16, className }: { platform: ChatPlatform; size?: number; className?: string }) {
@@ -105,13 +108,13 @@ function PickIcon({ pick, on }: { pick: ChatPick; on: boolean }) {
 
 export function SourcePicker({
   sources,
-  pick,
-  onPick,
+  picks,
+  onToggle,
   className
 }: {
   sources: readonly ChatPlatform[];
-  pick: ChatPick;
-  onPick: (pick: ChatPick) => void;
+  picks: readonly ChatPick[];
+  onToggle: (pick: ChatPick) => void;
   className?: string;
 }) {
   if (sources.length === 0) return null;
@@ -119,19 +122,23 @@ export function SourcePicker({
   return (
     <span role="group" aria-label="chat source" data-chat-sources className={cn('flex shrink-0 items-center gap-1', className)}>
       {options.map((option) => {
-        const on = option === pick;
-        const words = option === 'slop' ? 'chat here only' : `${PLATFORM_WORDS[option]} chat only`;
+        const on = picks.includes(option);
+        const locked = on && picks.length <= 1;
+        const words = PICK_WORDS[option];
+        const tip = locked ? `${words} · one has to stay on` : `${on ? 'hide' : 'show'} ${words}`;
         return (
-          <Tooltip key={option} content={words}>
+          <Tooltip key={option} content={tip}>
             <Button
               size="sm"
               variant="secondary"
               aria-label={words}
               aria-pressed={on}
+              aria-disabled={locked || undefined}
               data-chat-source={option}
               data-on={on || undefined}
+              data-locked={locked || undefined}
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onPick(option)}
+              onClick={() => onToggle(option)}
               className={cn('h-7 w-7 p-0 max-md:min-h-0', on && 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue hover:border-primaryBlue')}
             >
               <PickIcon pick={option} on={on} />

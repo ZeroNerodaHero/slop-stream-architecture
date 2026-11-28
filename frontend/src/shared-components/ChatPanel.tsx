@@ -32,7 +32,7 @@ import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingV
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { LinkEmbed } from '@/shared-components/LinkEmbed';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
-import { PlatformBadges, PlatformFace, PlatformMark, PlatformWords, SourcePicker, useChatPick, useChatSources } from '@/shared-components/ChatSource';
+import { PlatformBadges, PlatformFace, PlatformMark, PlatformWords, SourcePicker, useChatPicks, useChatSources } from '@/shared-components/ChatSource';
 import { bySource, type ChatSourceLine, PLATFORM_WORDS } from '@/infra/chat-source';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
@@ -1004,9 +1004,10 @@ export function ChatPanel({
   const room = chatRoomFor(name, server);
   const allLines = useAtomValue(room.visibleLinesAtom);
   const sources = useChatSources(name, server);
-  const [pick, setPick] = useChatPick(sources);
-  const lines = useMemo(() => bySource(allLines, pick, sources), [allLines, pick, sources]);
-  const picker = server || sourcesAbove ? null : <SourcePicker sources={sources} pick={pick} onPick={setPick} />;
+  const [picks, togglePick] = useChatPicks(sources);
+  const lines = useMemo(() => bySource(allLines, picks, sources), [allLines, picks, sources]);
+  const picker = server || sourcesAbove ? null : <SourcePicker sources={sources} picks={picks} onToggle={togglePick} />;
+  const elsewhere = sources.length > 0 && !picks.includes('slop') ? picks.map((p) => PLATFORM_WORDS[p]).join(' or ') : null;
   const total = useAtomValue(room.linesAtom).length;
   const loaded = useAtomValue(room.loadedAtom);
   const hiddenBots = useAtomValue(room.hiddenBotLinesAtom);
@@ -1093,8 +1094,7 @@ export function ChatPanel({
 
   const needsNick = !owner && !me && (me === null || server) && (phase === 'off' || reader);
   const waiting = !loaded && total === 0;
-  const emptyWords =
-    pick !== 'slop' ? `nothing from ${PLATFORM_WORDS[pick]} yet.` : hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.';
+  const emptyWords = elsewhere ? `nothing from ${elsewhere} yet.` : hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.';
 
   if (aside) {
     return (

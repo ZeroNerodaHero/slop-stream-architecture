@@ -9,7 +9,7 @@ import { record } from '@/infra/atoms/inspector-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { endWatch } from '@/infra/atoms/watch-atoms';
 import { pipAtom } from '@/infra/atoms/watch-state';
-import type { MicProcessing, NativeAudio, NativeMic } from '@/infra/desktop/native-audio';
+import type { MicProcessing, NativeMic } from '@/infra/desktop/native-audio';
 import {
   type FaceLines,
   type FaceMarks,
@@ -1677,7 +1677,7 @@ function keptMix(id: string): { level: number; muted: boolean } | null {
 }
 
 function rememberMix(row: MixRow) {
-  if (row.id !== 'mic' && row.id !== MASTER && row.id !== DESKTOP_AUDIO) return;
+  if (row.id !== 'mic' && row.id !== MASTER) return;
   store.set(storedMixAtom, keepLevel(store.get(storedMixAtom), row.id, row));
 }
 
@@ -1791,46 +1791,6 @@ export function mixClipping(now: number): boolean {
 }
 
 export const micLevelReader = (now: number) => readMixLevel('mic', now);
-
-export const DESKTOP_AUDIO = 'desktop';
-export const desktopAudioStatusAtom = atom('');
-export const desktopAudioBusyAtom = atom(false);
-let desktopAudio: NativeAudio | null = null;
-
-export async function addDesktopAudio(): Promise<void> {
-  if (!mixer || desktopAudio || store.get(desktopAudioBusyAtom)) return;
-  const generation = liveGeneration;
-  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
-  void ctx.resume().catch(() => undefined);
-  void resumeMixer();
-  store.set(desktopAudioBusyAtom, true);
-  store.set(desktopAudioStatusAtom, '');
-  try {
-    const { openDesktopAudio } = await import('@/infra/desktop/native-audio');
-    const opened = await openDesktopAudio(ctx);
-    if (generation !== liveGeneration || !mixer || desktopAudio) {
-      opened.stop();
-      return;
-    }
-    desktopAudio = opened;
-    addMixRow(DESKTOP_AUDIO, 'desktop audio', opened.track);
-  } catch (err) {
-    void ctx.close().catch(() => undefined);
-    store.set(desktopAudioStatusAtom, textOf(err));
-  } finally {
-    store.set(desktopAudioBusyAtom, false);
-  }
-}
-
-export function removeDesktopAudio() {
-  mixer?.remove(DESKTOP_AUDIO);
-  store.set(
-    mixRowsAtom,
-    store.get(mixRowsAtom).filter((r) => r.id !== DESKTOP_AUDIO)
-  );
-  desktopAudio?.stop();
-  desktopAudio = null;
-}
 
 export async function resumeMixer(): Promise<void> {
   await mixer?.resume().catch(() => undefined);
@@ -2026,8 +1986,6 @@ export function endLive() {
   store.set(modelLoadAtom, null);
   store.set(modelStatusAtom, '');
   unwatchMixer();
-  removeDesktopAudio();
-  store.set(desktopAudioStatusAtom, '');
   mixer?.close();
   mixer = null;
   mixedMic = null;
@@ -2129,7 +2087,7 @@ export function copyWatchUrl() {
   if (url) navigator.clipboard?.writeText(url).catch(() => undefined);
 }
 
-const KEPT_LEVELS = ['mic', MASTER, DESKTOP_AUDIO] as const;
+const KEPT_LEVELS = ['mic', MASTER] as const;
 
 function levelsNow(): Stage['levels'] {
   const levels: Stage['levels'] = {};

@@ -440,7 +440,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   );
 }
 
-const RAIL_HEAD = 'flex h-9 shrink-0 items-center gap-1.5 pl-3 pr-1 text-xs font-semibold uppercase tracking-wider text-textTertiary';
+const RAIL_HEAD = 'flex h-9 shrink-0 items-center gap-1.5 pl-3 pr-1.5 text-xs font-semibold uppercase tracking-wider text-textTertiary';
 
 const GRIP_SHOW = 'opacity-0 group-hover/edge:opacity-100 group-focus-within/edge:opacity-100';
 
@@ -524,6 +524,11 @@ function Rail({ open, width, onToggle }: { open: boolean; width: number; onToggl
       <section id="live-rail-body" aria-label="studio" className={panelClassName('flex min-h-0 flex-col overflow-hidden')} style={{ width: shown }}>
         <h2 className={RAIL_HEAD}>
           <span className="min-w-0 flex-1 truncate">studio</span>
+          <Tooltip content="collapse" at="left">
+            <button id="live-rail-toggle" type="button" aria-label="collapse" aria-expanded aria-controls="live-rail-body" onClick={onToggle} className={FOLD_BUTTON}>
+              <RiArrowRightSLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
         </h2>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain">
           <ModuleBoundary id="thumbnail" name="thumbnail">
@@ -607,24 +612,6 @@ function Rail({ open, width, onToggle }: { open: boolean; width: number; onToggl
             </span>
           </div>
         </Tooltip>
-        {!dragging && (
-          <Tooltip content="collapse" at="left">
-            <button
-              id="live-rail-toggle"
-              type="button"
-              aria-label="collapse"
-              aria-expanded
-              aria-controls="live-rail-body"
-              onClick={onToggle}
-              className={cn(
-                'absolute left-[8.5px] top-[calc(50%+1.5rem)] flex h-5 w-4 -translate-x-1/2 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textTertiary transition-[opacity,color,border-color] duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none',
-                GRIP_SHOW
-              )}
-            >
-              <RiArrowRightSLine aria-hidden size={12} />
-            </button>
-          </Tooltip>
-        )}
         {dragging && (
           <span
             id="live-rail-size"
