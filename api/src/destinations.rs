@@ -350,10 +350,25 @@ pub(crate) fn parse_ingest(p: Platform, v: &Value) -> Option<Ingest> {
         Platform::Twitch => Some(Ingest { url: TWITCH_INGEST.into(), key: text_of(first(v)?, "stream_key")? }),
         Platform::Kick => {
             let stream = first(v)?.get("stream")?;
-            Some(Ingest { url: text_of(stream, "url")?, key: text_of(stream, "key")? })
+            Some(Ingest { url: kick_ingest(&text_of(stream, "url")?), key: text_of(stream, "key")? })
         }
         Platform::Youtube => parse_youtube_stream(v).map(|(_, ingest)| ingest),
     }
+}
+
+pub(crate) fn kick_ingest(raw: &str) -> String {
+    let raw = raw.trim();
+    let Ok(mut u) = url::Url::parse(raw) else { return raw.to_owned() };
+    if !matches!(u.scheme(), "rtmp" | "rtmps") || u.host_str().is_none() {
+        return raw.to_owned();
+    }
+    if u.scheme() == "rtmps" && u.port().is_none() && u.set_port(Some(443)).is_err() {
+        return raw.to_owned();
+    }
+    if u.path().trim_matches('/').is_empty() {
+        u.set_path("/app");
+    }
+    u.to_string().trim_end_matches('/').to_owned()
 }
 
 pub(crate) fn parse_youtube_stream(v: &Value) -> Option<(String, Ingest)> {
@@ -1330,6 +1345,7 @@ pub(crate) async fn targets(cfg: &Config, db: &sqlx::PgPool, user: Uuid, refresh
             notes.push((d.id, "no stream key yet".to_owned()));
             continue;
         };
+        let url = if d.platform == "kick" { kick_ingest(&url) } else { url };
         out.push(Target { id: d.id, platform: d.platform.clone(), url, key });
     }
     Ok((out, notes))
@@ -1535,10 +1551,21 @@ mod tests {
         assert!(!format!("{ingest:?}").contains("a34ub37c8ajv98a0"));
         let channel = json!({"data": [{"slug": "billy", "stream": {"url": "rtmps://fa723fc1b171.global-contribute.live-video.net", "key": "sk_us-west-2_x"}}]});
         let ingest = parse_ingest(Platform::Kick, &channel).unwrap();
-        assert_eq!(ingest.url, "rtmps://fa723fc1b171.global-contribute.live-video.net");
+        assert_eq!(ingest.url, "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app");
         assert_eq!(ingest.key, "sk_us-west-2_x");
         assert_eq!(kick_slug(&channel).as_deref(), Some("billy"));
         assert!(parse_ingest(Platform::Kick, &json!({"data": [{"slug": "billy"}]})).is_none());
+    }
+
+    #[test]
+    fn kick_ingest_gets_its_port_and_app() {
+        let full = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app";
+        assert_eq!(kick_ingest("rtmps://fa723fc1b171.global-contribute.live-video.net"), full);
+        assert_eq!(kick_ingest("rtmps://fa723fc1b171.global-contribute.live-video.net/"), full);
+        assert_eq!(kick_ingest("rtmps://fa723fc1b171.global-contribute.live-video.net:443/app/"), full);
+        assert_eq!(kick_ingest(full), full);
+        assert_eq!(kick_ingest("rtmp://ingest.example:1935/live"), "rtmp://ingest.example:1935/live");
+        assert_eq!(kick_ingest("not a url"), "not a url");
     }
 
     #[test]
