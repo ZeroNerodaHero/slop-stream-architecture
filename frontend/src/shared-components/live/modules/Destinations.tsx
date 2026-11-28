@@ -1,15 +1,14 @@
 import {
+  RiArrowDownSLine,
   RiBroadcastLine,
   RiChat3Line,
-  RiChatOffLine,
   RiEyeLine,
   RiEyeOffLine,
-  RiGroupLine,
   RiKickLine,
+  RiLink,
   type RemixiconComponentType,
   RiServerLine,
   RiTwitchLine,
-  RiUserLine,
   RiYoutubeLine
 } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -31,9 +30,9 @@ import { restreamBlock } from '@/infra/restream-block';
 import { inTauri } from '@/infra/update-check';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
-import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
+import { Switch } from '@/shared-components/Switch';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -108,10 +107,10 @@ export function chatStateOf(c: RelayStatus | undefined): string | null {
   return null;
 }
 
-const CHAT_MODES: readonly (readonly [ExternalChat, RemixiconComponentType, string, string])[] = [
-  ['everyone', RiGroupLine, 'everyone', 'everyone: twitch and kick chat show for everyone on your page'],
-  ['studio', RiUserLine, 'just me', 'just me: twitch and kick chat only show in your studio'],
-  ['off', RiChatOffLine, 'off', 'off: twitch and kick chat are not read']
+const CHAT_MODES: readonly (readonly [ExternalChat, string])[] = [
+  ['everyone', 'everyone'],
+  ['studio', 'just me'],
+  ['off', 'off']
 ];
 
 const CHAT_KEYS: Record<string, (i: number, n: number) => number> = {
@@ -123,8 +122,9 @@ const CHAT_KEYS: Record<string, (i: number, n: number) => number> = {
   End: (_, n) => n - 1
 };
 
-const CHAT_BUTTON =
-  'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border transition-colors duration-150 focus-visible:border-primaryBlue focus-visible:outline-none max-md:min-h-0';
+const BOX_BUTTON =
+  'flex h-7 min-w-0 items-center justify-center gap-1 rounded-control border px-2 text-xs transition-colors duration-150 focus-visible:border-primaryBlue focus-visible:outline-none max-md:min-h-0';
+const QUIET = 'border-primaryStroke bg-backgroundSecondary text-textSecondary hover:border-primaryBlue hover:text-primaryBlue';
 
 function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: string) => void }) {
   const client = useQueryClient();
@@ -140,7 +140,7 @@ function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: st
     setBusy(true);
     try {
       await api.setExternalChat(next);
-      onStatus(CHAT_MODES.find(([m]) => m === next)?.[3] ?? '');
+      onStatus(`platform chat: ${CHAT_MODES.find(([m]) => m === next)?.[1] ?? next}`);
       await client.invalidateQueries({ queryKey: KEY });
       await client.invalidateQueries({ queryKey: ['chat-sources'] });
     } catch (e) {
@@ -160,40 +160,32 @@ function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: st
     void pick(option[0]);
   };
   return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <Tooltip content="platform chat">
-        <span role="img" aria-label="platform chat" className="flex h-7 w-5 shrink-0 items-center justify-center text-textTertiary">
-          <RiChat3Line aria-hidden size={14} />
-        </span>
-      </Tooltip>
-      <div id="destination-chat-mode" role="radiogroup" aria-label="platform chat" onKeyDown={onKeyDown} className="flex items-center gap-1">
-        {CHAT_MODES.map(([m, Icon, label, tip], i) => {
+    <div className="flex min-w-0 flex-col gap-1">
+      <span id="destination-chat-label" className="flex items-center gap-1 text-[11px] leading-tight text-textTertiary">
+        <RiChat3Line aria-hidden size={12} />
+        platform chat
+      </span>
+      <div id="destination-chat-mode" role="radiogroup" aria-labelledby="destination-chat-label" onKeyDown={onKeyDown} className="grid grid-cols-3 gap-1">
+        {CHAT_MODES.map(([m, label], i) => {
           const on = m === mode;
           return (
-            <Tooltip key={m} content={tip}>
-              <button
-                ref={(el) => {
-                  refs.current[i] = el;
-                }}
-                id={`destination-chat-${m}`}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                aria-label={label}
-                tabIndex={on ? 0 : -1}
-                data-mode={m}
-                aria-disabled={busy || undefined}
-                onClick={() => void pick(m)}
-                className={cn(
-                  CHAT_BUTTON,
-                  on
-                    ? 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue'
-                    : 'border-primaryStroke bg-backgroundSecondary text-textTertiary hover:border-primaryBlue hover:text-primaryBlue'
-                )}
-              >
-                <Icon aria-hidden size={14} />
-              </button>
-            </Tooltip>
+            <button
+              key={m}
+              ref={(el) => {
+                refs.current[i] = el;
+              }}
+              id={`destination-chat-${m}`}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              tabIndex={on ? 0 : -1}
+              data-mode={m}
+              aria-disabled={busy || undefined}
+              onClick={() => void pick(m)}
+              className={cn(BOX_BUTTON, on ? 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue' : QUIET)}
+            >
+              <span className="truncate">{label}</span>
+            </button>
           );
         })}
       </div>
@@ -201,127 +193,124 @@ function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: st
   );
 }
 
-const ROW_BUTTON = 'flex min-w-0 items-center gap-2 px-2 py-1.5 focus-visible:outline-none';
+type Health = 'good' | 'bad' | 'off';
 
-function pressKeys(e: KeyboardEvent<HTMLElement>, act: () => void) {
-  if (e.target !== e.currentTarget) return;
-  if (e.key !== 'Enter' && e.key !== ' ') return;
-  e.preventDefault();
-  act();
+const HEALTH_COLOUR: Record<Health, string> = {
+  good: 'text-increase',
+  bad: 'text-decrease',
+  off: 'text-textTertiary'
+};
+
+function healthOf(d: Destination | undefined, open: boolean, live: RelayStatus | undefined, blocked = false): Health {
+  if (!d) return open ? 'bad' : 'off';
+  if (!d.enabled) return 'off';
+  if (!d.has_key || live?.state === 'error' || d.chat?.state === 'error' || (blocked && !live)) return 'bad';
+  return 'good';
 }
 
-function RowShell({
+function Row({
   row,
+  name,
+  health,
   hidden,
-  wide,
-  on,
-  action,
+  open,
+  onOpen,
   children
 }: {
   row: DestinationRow;
+  name: string;
+  health: Health;
   hidden: boolean;
-  wide?: ReactNode;
-  on?: boolean;
-  action?: { label: string; pressed?: boolean; expanded?: boolean; busy?: boolean; describedBy?: string; id: string; run: () => void };
+  open: boolean;
+  onOpen: () => void;
   children: ReactNode;
 }) {
+  const Icon = ICONS[row];
   return (
     <li
       id={`destination-row-${row}`}
+      data-health={health}
       data-hidden={hidden || undefined}
-      data-on={on || undefined}
+      data-open={open || undefined}
       className={cn(
-        'relative flex min-w-0 flex-col border transition-colors duration-150',
-        wide ? 'rounded-card' : 'rounded-control',
-        on ? 'border-primaryBlue/40 bg-primaryBlue/10' : 'border-primaryStroke',
-        action && 'has-[[data-row]:focus-visible]:border-primaryBlue has-[[data-row]:hover]:border-primaryBlue'
+        'flex min-w-0 flex-col border transition-colors duration-150 has-[[data-row]:focus-visible]:border-primaryBlue has-[[data-row]:hover]:border-primaryBlue',
+        open ? 'rounded-card border-primaryBlue/40' : 'rounded-control border-primaryStroke'
       )}
     >
-      {action ? (
-        <div
-          id={action.id}
-          data-row
-          role="button"
-          tabIndex={0}
-          aria-label={action.label}
-          aria-pressed={action.pressed}
-          aria-expanded={action.expanded}
-          aria-disabled={action.busy || undefined}
-          aria-describedby={action.describedBy}
-          onClick={() => !action.busy && action.run()}
-          onKeyDown={(e) => pressKeys(e, () => !action.busy && action.run())}
-          className={cn(ROW_BUTTON, 'cursor-pointer', hidden && 'opacity-50')}
-        >
+      <button
+        id={`destination-open-${row}`}
+        data-row
+        type="button"
+        aria-expanded={open}
+        aria-controls={`destination-panel-${row}`}
+        onClick={onOpen}
+        className={cn('flex min-w-0 items-center gap-2 px-2 py-1.5 text-left focus-visible:outline-none', hidden && 'opacity-50')}
+      >
+        <span id={`destination-dot-${row}`} data-dot={health} className={cn('flex h-5 w-5 shrink-0 items-center justify-center', HEALTH_COLOUR[health])}>
+          <Icon aria-hidden size={15} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm leading-tight text-textPrimary">{name}</span>
+        <RiArrowDownSLine aria-hidden size={14} className={cn('shrink-0 text-textTertiary transition-transform duration-150', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div id={`destination-panel-${row}`} role="region" aria-labelledby={`destination-open-${row}`} className="flex min-w-0 flex-col gap-2 px-2 pb-2">
           {children}
         </div>
-      ) : (
-        <div className={cn(ROW_BUTTON, hidden && 'opacity-50')}>{children}</div>
       )}
-      {wide && <div className="px-2 pb-2">{wide}</div>}
     </li>
   );
 }
 
-function RowText({ row, title, sub, state, tip, dot }: { row: DestinationRow; title: string; sub: string; state?: string; tip?: string; dot?: 'on' | 'off' }) {
-  const Icon = ICONS[row];
-  const words = (
+function StateText({ row, words, health }: { row: DestinationRow; words: string; health: Health }) {
+  return (
     <span
       id={`destination-state-${row}`}
-      data-state={state}
-      className={cn(
-        'truncate text-[11px] leading-tight text-textTertiary focus-visible:outline-none',
-        state === 'live' && 'text-increase',
-        state === 'error' && 'text-decrease'
-      )}
+      data-state={health}
+      className={cn('min-w-0 break-words text-xs leading-tight', health === 'bad' ? 'text-decrease' : 'text-textSecondary')}
     >
-      {sub}
+      {words}
     </span>
   );
-  return (
-    <>
-      <span className="relative flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary">
-        <Icon aria-hidden size={15} />
-        {dot && (
-          <span
-            id={`destination-dot-${row}`}
-            aria-hidden
-            data-dot={dot}
-            className={cn('absolute right-0 top-0 h-2 w-2 rounded-avatar', dot === 'on' ? 'bg-increase' : 'bg-decrease')}
-          />
-        )}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm leading-tight text-textPrimary">{title}</span>
-        {tip ? <Tooltip content={tip}>{words}</Tooltip> : words}
-      </span>
-    </>
-  );
 }
 
-function Eye({ row, hidden }: { row: DestinationRow; hidden: boolean }) {
-  const Icon = hidden ? RiEyeOffLine : RiEyeLine;
+function Eye({ row, hidden, onHide }: { row: DestinationRow; hidden: boolean; onHide: () => void }) {
+  const Icon = hidden ? RiEyeLine : RiEyeOffLine;
   const words = hidden ? 'show' : 'hide';
   return (
-    <Tooltip content={words}>
-      <button
-        id={`destination-hide-${row}`}
-        type="button"
-        aria-label={`${words} ${WORDS[row]}`}
-        aria-pressed={hidden}
-        className={ICON_BUTTON}
-        onClick={(e) => {
-          e.stopPropagation();
-          setDestinationHidden(row, !hidden);
-        }}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <Icon aria-hidden size={14} />
-      </button>
-    </Tooltip>
+    <button
+      id={`destination-hide-${row}`}
+      type="button"
+      aria-label={`${words} ${WORDS[row]}`}
+      aria-pressed={hidden}
+      className={cn(BOX_BUTTON, QUIET, 'ml-auto shrink-0')}
+      onClick={() => {
+        if (!hidden) onHide();
+        setDestinationHidden(row, !hidden);
+      }}
+    >
+      <Icon aria-hidden size={13} />
+      {words}
+    </button>
   );
 }
 
-function Connected({ d, hidden, blocked, onStatus }: { d: Destination; hidden: boolean; blocked: boolean; onStatus: (words: string) => void }) {
+function Connected({
+  d,
+  hidden,
+  blocked,
+  open,
+  onOpen,
+  onClose,
+  onStatus
+}: {
+  d: Destination;
+  hidden: boolean;
+  blocked: boolean;
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onStatus: (words: string) => void;
+}) {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const live = liveOf(d, useAtomValue(directStatusAtom));
@@ -341,50 +330,59 @@ function Connected({ d, hidden, blocked, onStatus }: { d: Destination; hidden: b
   };
   const chat = d.enabled ? chatStateOf(d.chat) : null;
   const words = `${WORDS[d.platform]}, ${stateOf(d, live, blocked)}${chat ? ` · ${chat}` : ''}`;
-  const dot = d.enabled && d.has_key && live?.state !== 'error' && (!blocked || !!live) ? 'on' : 'off';
+  const health = healthOf(d, true, live, blocked);
   return (
-    <RowShell
-      row={d.platform}
-      hidden={hidden}
-      on={d.enabled}
-      action={{
-        id: `destination-toggle-${d.platform}`,
-        label: `send the stream to ${name}`,
-        pressed: d.enabled,
-        busy,
-        describedBy: `destination-state-${d.platform}`,
-        run: () => void flip(!d.enabled)
-      }}
-    >
-      <RowText row={d.platform} title={name} sub={words} tip={words} state={d.enabled ? (live?.state ?? 'idle') : 'off'} dot={dot} />
-      <Eye row={d.platform} hidden={hidden} />
-    </RowShell>
+    <Row row={d.platform} name={name} health={health} hidden={hidden} open={open} onOpen={onOpen}>
+      <StateText row={d.platform} words={words} health={health} />
+      <div className="flex min-w-0 items-center gap-2">
+        <Switch id={`destination-toggle-${d.platform}`} checked={d.enabled} disabled={busy} label={`stream to ${name}`} onChange={(on) => void flip(on)} />
+        <span aria-hidden className="truncate text-xs text-textSecondary">
+          {d.enabled ? 'streaming here' : 'not streaming here'}
+        </span>
+        <Eye row={d.platform} hidden={hidden} onHide={onClose} />
+      </div>
+    </Row>
   );
 }
 
-function Unconnected({ row, open, hidden, onStatus }: { row: DestinationRow; open: boolean; hidden: boolean; onStatus: (words: string) => void }) {
-  const [adding, setAdding] = useState(false);
+function Unconnected({
+  row,
+  available,
+  hidden,
+  open,
+  onOpen,
+  onClose,
+  onStatus
+}: {
+  row: DestinationRow;
+  available: boolean;
+  hidden: boolean;
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onStatus: (words: string) => void;
+}) {
   const custom = row === 'custom';
-  const words = custom ? 'add server' : `connect ${WORDS[row]}`;
+  const health = healthOf(undefined, available, undefined);
   return (
-    <RowShell
-      row={row}
-      hidden={hidden}
-      wide={adding && open && custom ? <CustomForm onDone={() => setAdding(false)} onStatus={onStatus} /> : null}
-      action={
-        open
-          ? {
-              id: `destination-connect-${row}`,
-              label: words,
-              expanded: custom ? adding : undefined,
-              run: () => (custom ? setAdding((a) => !a) : location.assign(destinationStartUrl(row)))
-            }
-          : undefined
-      }
-    >
-      <RowText row={row} title={WORDS[row]} sub={open ? (custom ? 'no server yet' : 'not connected') : 'not on here yet'} />
-      <Eye row={row} hidden={hidden} />
-    </RowShell>
+    <Row row={row} name={WORDS[row]} health={health} hidden={hidden} open={open} onOpen={onOpen}>
+      <StateText row={row} words={available ? (custom ? 'no server yet' : 'not connected') : 'not on here yet'} health={health} />
+      {available && custom && <CustomForm onDone={onClose} onStatus={onStatus} />}
+      <div className="flex min-w-0 items-center gap-2">
+        {available && row !== 'custom' && (
+          <button
+            id={`destination-connect-${row}`}
+            type="button"
+            onClick={() => location.assign(destinationStartUrl(row))}
+            className={cn(BOX_BUTTON, 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue hover:bg-primaryBlue/20')}
+          >
+            <RiLink aria-hidden size={13} />
+            connect {WORDS[row]}
+          </button>
+        )}
+        <Eye row={row} hidden={hidden} onHide={onClose} />
+      </div>
+    </Row>
   );
 }
 
@@ -404,7 +402,6 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
       setKey('');
       onStatus('custom rtmp added');
       await client.invalidateQueries({ queryKey: KEY });
-      onDone();
     } catch (err) {
       onStatus(err instanceof Error ? err.message : 'could not add it');
     } finally {
@@ -419,7 +416,7 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
       <input
         id="destination-custom-url"
         className={cn(INPUT, 'py-1 text-sm')}
-        placeholder="url"
+        placeholder="rtmp://server/app"
         autoComplete="off"
         spellCheck={false}
         value={url}
@@ -432,7 +429,7 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
         id="destination-custom-key"
         type="password"
         className={cn(INPUT, 'py-1 text-sm')}
-        placeholder="key"
+        placeholder="stream key"
         autoComplete="off"
         value={key}
         onChange={(e) => setKey(e.target.value)}
@@ -449,56 +446,51 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
   );
 }
 
-function ShowHidden({ count, showing, onToggle }: { count: number; showing: boolean; onToggle: () => void }) {
-  const Icon = showing ? RiEyeOffLine : RiEyeLine;
-  const words = showing ? 'hide hidden' : `show hidden (${count})`;
-  return (
-    <>
-      {count > 0 && (
-        <span id="destination-hidden-count" aria-hidden className="text-[10px] font-medium normal-case leading-none tracking-normal tabular-nums">
-          {count}
-        </span>
-      )}
-      <Tooltip content={words}>
-        <button
-          id="destination-show-hidden"
-          type="button"
-          aria-label={words}
-          aria-pressed={showing}
-          onClick={onToggle}
-          className={cn(FOLD_BUTTON, showing && 'border-primaryBlue text-primaryBlue')}
-        >
-          <Icon aria-hidden size={14} />
-        </button>
-      </Tooltip>
-    </>
-  );
-}
-
-function DestinationsBody({ reveal }: { reveal: boolean }) {
+function DestinationsBody() {
   const { data } = useDestinations();
   const [status, setStatus] = useState(readBack);
+  const [open, setOpen] = useState<DestinationRow | null>(null);
   const hidden = useAtomValue(hiddenDestinationsAtom);
+  const reveal = useAtomValue(revealHiddenDestinationsAtom);
   const relayWords = useAtomValue(restreamMessageAtom);
   const directOn = useAtomValue(restreamDirectAtom);
   if (!data) return null;
   const block = restreamBlock(!!data.relay, !!data.direct, inTauri(), directOn);
-  const showing = reveal && hidden.length > 0;
-  const rows = ROWS.filter((r) => showing || !hidden.includes(r));
+  const shown = ROWS.filter((r) => !hidden.includes(r));
+  const tucked = ROWS.filter((r) => hidden.includes(r));
+  const item = (r: DestinationRow) => {
+    const d = data.destinations.find((x) => x.platform === r);
+    const props = {
+      hidden: hidden.includes(r),
+      open: open === r,
+      onOpen: () => setOpen((o) => (o === r ? null : r)),
+      onClose: () => setOpen(null),
+      onStatus: setStatus
+    };
+    return d ? <Connected key={r} d={d} blocked={!!block} {...props} /> : <Unconnected key={r} row={r} available={data.platforms.includes(r)} {...props} />;
+  };
   return (
     <div className="flex flex-col gap-2">
-      {rows.length > 0 && (
-        <ul className="m-0 flex list-none flex-col gap-1 p-0">
-          {rows.map((r) => {
-            const d = data.destinations.find((x) => x.platform === r);
-            const off = hidden.includes(r);
-            return d ? (
-              <Connected key={r} d={d} hidden={off} blocked={!!block} onStatus={setStatus} />
-            ) : (
-              <Unconnected key={r} row={r} open={data.platforms.includes(r)} hidden={off} onStatus={setStatus} />
-            );
-          })}
-        </ul>
+      {shown.length > 0 && <ul className="m-0 flex list-none flex-col gap-1 p-0">{shown.map(item)}</ul>}
+      {tucked.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <button
+            id="destination-show-hidden"
+            type="button"
+            aria-expanded={reveal}
+            aria-controls="destination-hidden-list"
+            onClick={() => setRevealHiddenDestinations(!reveal)}
+            className="flex h-6 items-center gap-1 self-start rounded-control border border-transparent px-1 text-[11px] text-textTertiary transition-colors duration-150 hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
+          >
+            <RiArrowDownSLine aria-hidden size={13} className={cn('transition-transform duration-150', reveal && 'rotate-180')} />
+            hidden ({tucked.length})
+          </button>
+          {reveal && (
+            <ul id="destination-hidden-list" className="m-0 flex list-none flex-col gap-1 p-0">
+              {tucked.map(item)}
+            </ul>
+          )}
+        </div>
       )}
       {data.destinations.some((d) => d.platform === 'twitch' || d.platform === 'kick') && <ChatMode data={data} onStatus={setStatus} />}
       <span id="destination-status" className="min-w-0 break-words text-xs text-textSecondary empty:-mt-2" aria-live="polite">
@@ -520,8 +512,6 @@ function DestinationsBody({ reveal }: { reveal: boolean }) {
 
 export function DestinationsModule({ strip = false }: { strip?: boolean }) {
   const { data } = useDestinations();
-  const reveal = useAtomValue(revealHiddenDestinationsAtom);
-  const hidden = useAtomValue(hiddenDestinationsAtom).length;
   if (!data) return null;
   const count = data.destinations.length;
   if (strip) {
@@ -543,15 +533,8 @@ export function DestinationsModule({ strip = false }: { strip?: boolean }) {
     );
   }
   return (
-    <RailSection
-      section="destinations"
-      id="live-destinations"
-      title="destinations"
-      aside={hidden > 0 && <ShowHidden count={hidden} showing={reveal} onToggle={() => setRevealHiddenDestinations(!reveal)} />}
-      className="border-b border-primaryStroke px-3 py-2.5"
-      bodyClassName="pt-2"
-    >
-      <DestinationsBody reveal={reveal} />
+    <RailSection section="destinations" id="live-destinations" title="destinations" className="border-b border-primaryStroke px-3 py-2.5" bodyClassName="pt-2">
+      <DestinationsBody />
     </RailSection>
   );
 }
