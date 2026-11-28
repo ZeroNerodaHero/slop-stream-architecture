@@ -16,7 +16,9 @@ import {
   placeIn,
   placeShown,
   migratedPreset,
-  PRESET_IDS,
+  migratedPresets,
+  nextPresetName,
+  PRESETS_MAX,
   presetForKey,
   presetName,
   railOpen,
@@ -24,10 +26,16 @@ import {
   readLayout,
   readPanels,
   readPreset,
+  readPresets,
   readRail,
   readSlots,
   seedSlots,
   START_GRID,
+  withActive,
+  withPresetAdded,
+  withPresetDeleted,
+  withPresetRenamed,
+  withPresetStage,
   TILE_IDS,
   typingInto,
   unreadAfter,
@@ -60,8 +68,20 @@ test('the old face and rigging modules fold into source settings', () => {
   assert.equal(TILE_IDS.includes('rig' as never), false);
 });
 
-test('there is one preset, default, and it is a no op until it is saved', () => {
-  assert.deepEqual(PRESET_IDS, ['default']);
+test('default is always the first preset and stays active when nothing else is', () => {
+  assert.deepEqual(readPresets(null), { list: [{ id: 'default' }], active: 'default' });
+  assert.deepEqual(readPresets('junk'), { list: [{ id: 'default' }], active: 'default' });
+  const read = readPresets({ list: [{ id: 'p2', name: 'two' }, { id: 'default', name: 'main' }, { id: 'p2' }, { id: 'bad' }, 7], active: 'p9' });
+  assert.deepEqual(read, {
+    list: [
+      { id: 'default', name: 'main' },
+      { id: 'p2', name: 'two' }
+    ],
+    active: 'default'
+  });
+  assert.equal(readPresets({ list: [{ id: 'p2' }], active: 'p2' }).active, 'p2');
+  const many = Array.from({ length: 14 }, (_, i) => ({ id: `p${i + 2}` }));
+  assert.equal(readPresets({ list: many }).list.length, PRESETS_MAX);
   assert.equal(readPreset(null), null);
   assert.deepEqual(readPreset({}), {});
 });
@@ -159,9 +179,10 @@ test('default takes a name, trimmed, and an empty one falls back to default', ()
   assert.deepEqual(readPreset({ name: '  stream  ' }), { name: 'stream' });
   assert.deepEqual(readPreset({ name: '   ' }), {});
   assert.equal(readPreset({ name: 'x'.repeat(40) })?.name?.length, 32);
-  assert.equal(presetName('default', { name: 'stream' }), 'stream');
-  assert.equal(presetName('default', {}), 'default');
-  assert.equal(presetName('default', null), 'default');
+  assert.equal(presetName({ id: 'default', name: 'stream' }), 'stream');
+  assert.equal(presetName({ id: 'default' }), 'default');
+  assert.equal(presetName(null), 'default');
+  assert.equal(presetName({ id: 'p3' }), 'preset');
 });
 
 test('modules kept by a retired built in preset are recognised, a hand picked set is not', () => {
@@ -183,13 +204,86 @@ test('showing modules on a custom grid keeps every placed tile and only moves on
   assert.deepEqual(placeShown(DEFAULT_GRID, ['source'], []), { grid: DEFAULT_GRID, hidden: [] });
 });
 
-test('only the key 1 picks a preset', () => {
-  assert.equal(presetForKey('1'), 'default');
-  assert.equal(presetForKey('2'), null);
-  assert.equal(presetForKey('5'), null);
-  assert.equal(presetForKey('0'), null);
-  assert.equal(presetForKey('a'), null);
-  assert.equal(presetForKey('F1'), null);
+test('keys 1 to 9 pick presets in order', () => {
+  const list = [{ id: 'default' }, { id: 'p2' }, { id: 'p5' }];
+  assert.equal(presetForKey('1', list), 'default');
+  assert.equal(presetForKey('2', list), 'p2');
+  assert.equal(presetForKey('3', list), 'p5');
+  assert.equal(presetForKey('4', list), null);
+  assert.equal(presetForKey('0', list), null);
+  assert.equal(presetForKey('a', list), null);
+  assert.equal(presetForKey('F1', list), null);
+  assert.equal(presetForKey('10', list), null);
+});
+
+const stage = (x: number) => ({
+  scene: { cam: { box: { x, y: 0, w: 0.5, h: 0.5 }, shown: true } },
+  images: {},
+  levels: {},
+  sounds: {},
+  names: {},
+  camera: '',
+  mic: '',
+  mirror: true,
+  expressions: false,
+  background: '',
+  model: null,
+  solo: false
+});
+
+test('a new preset gets the next free name, becomes active, and the list stops at nine', () => {
+  let presets = readPresets(null);
+  presets = withPresetAdded(presets, stage(0.1))!;
+  assert.deepEqual(presets.list[1], { id: 'p2', name: 'preset 2', stage: stage(0.1) });
+  assert.equal(presets.active, 'p2');
+  presets = withPresetAdded(presets, stage(0.2))!;
+  assert.equal(presets.list[2]!.name, 'preset 3');
+  presets = withPresetDeleted(presets, 'p2');
+  presets = withPresetAdded(presets, stage(0.3))!;
+  assert.deepEqual(
+    presets.list.map((p) => [p.id, p.name]),
+    [
+      ['default', undefined],
+      ['p3', 'preset 3'],
+      ['p4', 'preset 2']
+    ]
+  );
+  while (presets.list.length < PRESETS_MAX) presets = withPresetAdded(presets, stage(0))!;
+  assert.equal(withPresetAdded(presets, stage(0)), null);
+  assert.equal(nextPresetName([{ id: 'default' }]), 'preset 2');
+});
+
+test('renaming, deleting and saving touch only the named preset', () => {
+  let presets = withPresetAdded(readPresets(null), stage(0.1))!;
+  presets = withPresetRenamed(presets, 'p2', '  intro  ');
+  assert.equal(presets.list[1]!.name, 'intro');
+  assert.equal(withPresetRenamed(presets, 'p2', '   ').list[1]!.name, undefined);
+  presets = withPresetStage(presets, 'default', stage(0.7));
+  assert.deepEqual(presets.list[0]!.stage, stage(0.7));
+  assert.deepEqual(presets.list[1]!.stage, stage(0.1));
+  assert.equal(withPresetDeleted(presets, 'default'), presets);
+  const gone = withPresetDeleted(presets, 'p2');
+  assert.deepEqual(
+    gone.list.map((p) => p.id),
+    ['default']
+  );
+  assert.equal(gone.active, 'default');
+  assert.equal(withActive(presets, 'default').active, 'default');
+  assert.equal(withActive(presets, 'p9').active, 'p2');
+});
+
+test('the old single default and the older mine preset move into the list without loss', () => {
+  assert.deepEqual(migratedPresets(null, { name: 'main', stage: stage(0.4) }, null), {
+    list: [{ id: 'default', name: 'main', stage: stage(0.4) }],
+    active: 'default'
+  });
+  assert.deepEqual(migratedPresets(null, null, { panels: { hidden: [] }, layout: 'c2', name: 'stream', stage: stage(0.5) }), {
+    list: [{ id: 'default', name: 'stream', stage: stage(0.5) }],
+    active: 'default'
+  });
+  assert.equal(migratedPresets({ list: [] }, { name: 'main' }, null), null);
+  assert.equal(migratedPresets(null, null, null), null);
+  assert.equal(migratedPresets(null, {}, null), null);
 });
 
 test('hotkeys stay out of the way while typing', () => {

@@ -203,6 +203,16 @@ export function readKept(raw: unknown): KeptScene | null {
   return kept;
 }
 
+export function arrivedFrom(kept: KeptScene, before: readonly Source[], next: Source[]): Source[] {
+  const came = next.some((s) => kept[s.id] && !before.some((b) => b.id === s.id));
+  if (!came) return next;
+  return next.map((s) => {
+    const was = before.find((b) => b.id === s.id);
+    const k = was ?? kept[s.id];
+    return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit } : s;
+  });
+}
+
 export function restoredFrom(kept: KeptScene, before: readonly Source[], next: readonly Source[]): Source[] {
   return next.map((s) => {
     const k = kept[s.id];

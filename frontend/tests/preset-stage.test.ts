@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { readPreset } from '../src/infra/live-dock.ts';
-import type { Source } from '../src/infra/scene.ts';
-import { gapWords, readStage, type Stage, stagedFrom, stageOf } from '../src/infra/stage.ts';
+import { arrivedFrom, keptOf, type Source } from '../src/infra/scene.ts';
+import { gapWords, readStage, type Stage, stagedFrom, stageOf, withGoneScreens } from '../src/infra/stage.ts';
 
 const cam: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: { x: 0.5, y: 0.5, w: 0.4, h: 0.4 }, shown: true, fit: 'cover' };
 const screen: Source = { id: 's1', kind: 'screen', label: 'screen', slot: 1, box: { x: 0, y: 0, w: 1, h: 1 }, shown: true };
@@ -127,4 +127,26 @@ test('stored stage values are clamped and junk entries are dropped', () => {
   assert.equal(stage.background, '');
   assert.equal(stage.model, null);
   assert.equal(stage.mirror, true);
+});
+
+test('autosave keeps a saved screen not shared yet this session, but drops one that was shared and then removed', () => {
+  const before = stageOf([screen, cam], rest);
+  const now = stageOf([cam], rest);
+  assert.deepEqual(Object.keys(withGoneScreens(before, now, []).scene), ['s1', 'cam']);
+  assert.deepEqual(withGoneScreens(before, now, []).scene.s1, before.scene.s1);
+  assert.deepEqual(Object.keys(withGoneScreens(before, now, ['s1']).scene), ['cam']);
+  assert.equal(withGoneScreens(undefined, now, []), now);
+  const withoutLogo = stageOf([screen, cam], rest);
+  assert.deepEqual(Object.keys(withGoneScreens(stageOf([screen, cam, logo], rest), withoutLogo, ['s1']).scene), ['s1', 'cam']);
+});
+
+test('a saved screen arriving lands in its saved box and the others stay where they were', () => {
+  const kept = keptOf([{ ...screen, box: { x: 0.2, y: 0.2, w: 0.5, h: 0.5 }, shown: false }, cam]);
+  const moved = { ...cam, box: { x: 0.8, y: 0.8, w: 0.2, h: 0.2 } };
+  const out = arrivedFrom(kept, [cam], [moved, screen]);
+  assert.deepEqual(out.find((s) => s.id === 'cam')?.box, cam.box);
+  assert.deepEqual(out.find((s) => s.id === 's1')?.box, { x: 0.2, y: 0.2, w: 0.5, h: 0.5 });
+  assert.equal(out.find((s) => s.id === 's1')?.shown, false);
+  const plain = [moved, logo];
+  assert.equal(arrivedFrom(kept, [cam], plain), plain);
 });

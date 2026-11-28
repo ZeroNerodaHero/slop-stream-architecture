@@ -210,20 +210,26 @@ export function freeCell(grid: Grid, shown: readonly TileId[], id: TileId): Cell
   return null;
 }
 
-export const PRESET_IDS = ['default'] as const;
-export type PresetId = (typeof PRESET_IDS)[number];
-export const HOTKEY_PRESETS: readonly PresetId[] = ['default'];
-
+export const DEFAULT_PRESET = 'default';
+export const PRESETS_MAX = 9;
 export const PRESET_NAME_MAX = 32;
+export type PresetId = string;
 
 export interface Preset {
   name?: string;
   stage?: Stage;
 }
 
-export const PRESET_WORDS: Record<PresetId, { name: string }> = {
-  default: { name: 'default' }
-};
+export interface SavedPreset extends Preset {
+  id: PresetId;
+}
+
+export interface Presets {
+  list: SavedPreset[];
+  active: PresetId;
+}
+
+const PRESET_ID = /^(default|p\d{1,6})$/;
 
 export function readPreset(raw: unknown): Preset | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -242,14 +248,84 @@ export function readPresetName(raw: unknown): string | undefined {
   return name || undefined;
 }
 
-export function presetName(id: PresetId, preset: Preset | null): string {
-  return preset?.name || PRESET_WORDS[id].name;
+export function readPresets(raw: unknown): Presets {
+  const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const list: SavedPreset[] = [];
+  for (const entry of Array.isArray(r.list) ? r.list : []) {
+    const e = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+    const id = e && typeof e.id === 'string' && PRESET_ID.test(e.id) ? e.id : null;
+    const preset = id ? readPreset(e) : null;
+    if (!id || !preset || list.some((p) => p.id === id)) continue;
+    list.push({ id, ...preset });
+  }
+  const first = list.find((p) => p.id === DEFAULT_PRESET) ?? { id: DEFAULT_PRESET };
+  const rest = list.filter((p) => p.id !== DEFAULT_PRESET).slice(0, PRESETS_MAX - 1);
+  const all = [first, ...rest];
+  const active = typeof r.active === 'string' && all.some((p) => p.id === r.active) ? r.active : DEFAULT_PRESET;
+  return { list: all, active };
+}
+
+export function presetName(preset: Pick<SavedPreset, 'id' | 'name'> | null | undefined): string {
+  return preset?.name || (preset?.id === DEFAULT_PRESET || !preset ? 'default' : 'preset');
+}
+
+export function nextPresetName(list: readonly SavedPreset[]): string {
+  const used = new Set(list.map((p) => presetName(p)));
+  let n = 2;
+  while (used.has(`preset ${n}`)) n++;
+  return `preset ${n}`;
+}
+
+function nextPresetId(list: readonly SavedPreset[]): PresetId {
+  const top = Math.max(1, ...list.map((p) => (p.id.startsWith('p') ? Number(p.id.slice(1)) : 0)));
+  return `p${top + 1}`;
+}
+
+export function withPresetAdded(presets: Presets, stage: Stage): Presets | null {
+  if (presets.list.length >= PRESETS_MAX) return null;
+  const id = nextPresetId(presets.list);
+  return { list: [...presets.list, { id, name: nextPresetName(presets.list), stage }], active: id };
+}
+
+export function withPresetRenamed(presets: Presets, id: PresetId, raw: string): Presets {
+  const name = readPresetName(raw);
+  return {
+    ...presets,
+    list: presets.list.map((p) => {
+      if (p.id !== id) return p;
+      const next: SavedPreset = { ...p };
+      if (name) next.name = name;
+      else delete next.name;
+      return next;
+    })
+  };
+}
+
+export function withPresetDeleted(presets: Presets, id: PresetId): Presets {
+  if (id === DEFAULT_PRESET) return presets;
+  const list = presets.list.filter((p) => p.id !== id);
+  return { list, active: presets.active === id ? DEFAULT_PRESET : presets.active };
+}
+
+export function withPresetStage(presets: Presets, id: PresetId, stage: Stage): Presets {
+  return { ...presets, list: presets.list.map((p) => (p.id === id ? { ...p, stage } : p)) };
+}
+
+export function withActive(presets: Presets, id: PresetId): Presets {
+  return presets.list.some((p) => p.id === id) ? { ...presets, active: id } : presets;
 }
 
 export function migratedPreset(saved: unknown, mine: unknown): Preset | null {
   if (saved !== null && saved !== undefined) return null;
   const old = readPreset(mine);
   return old && (old.stage || old.name) ? old : null;
+}
+
+export function migratedPresets(saved: unknown, single: unknown, mine: unknown): Presets | null {
+  if (saved !== null && saved !== undefined) return null;
+  const kept = readPreset(single) ?? migratedPreset(null, mine);
+  if (!kept || (!kept.stage && !kept.name)) return null;
+  return { list: [{ id: DEFAULT_PRESET, ...kept }], active: DEFAULT_PRESET };
 }
 
 const RETIRED_PRESETS: readonly (readonly string[])[] = [
@@ -267,9 +343,9 @@ export function wasRetiredPreset(raw: unknown): boolean {
   return RETIRED_PRESETS.some((ids) => ids.length === hidden.size && ids.every((id) => hidden.has(id)));
 }
 
-export function presetForKey(key: string): PresetId | null {
+export function presetForKey(key: string, list: readonly Pick<SavedPreset, 'id'>[]): PresetId | null {
   const n = Number(key);
-  return Number.isInteger(n) && n >= 1 && n <= HOTKEY_PRESETS.length && key.length === 1 ? HOTKEY_PRESETS[n - 1]! : null;
+  return Number.isInteger(n) && n >= 1 && n <= list.length && key.length === 1 ? list[n - 1]!.id : null;
 }
 
 export function typingInto(target: EventTarget | null): boolean {
@@ -316,6 +392,7 @@ const storedSlotsAtom = atomWithStorage<unknown>('settings.liveSlots', null, und
 const storedMineAtom = atomWithStorage<unknown>('settings.livePresetMine', null, undefined, json);
 const storedPresetAtom = atomWithStorage<unknown>('settings.livePreset', null, undefined, json);
 const storedPresetsDefaultAtom = atomWithStorage<unknown>('settings.livePresetsDefault', false, undefined, json);
+const storedPresetsAtom = atomWithStorage<unknown>('settings.livePresets', null, undefined, json);
 const storedRailAtom = atomWithStorage<unknown>('settings.liveRail', null, undefined, json);
 
 export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
@@ -325,8 +402,8 @@ export const liveGridAtom = atom<Grid>((get) => {
   const layout = get(liveLayoutAtom);
   return (isSlot(layout) && get(liveSlotsAtom)[layout]) || START_GRID;
 });
-export const liveDefaultAtom = atom<Preset | null>((get) => readPreset(get(storedPresetAtom)));
-export const livePresetAtom = atom<PresetId>(() => 'default');
+export const livePresetsAtom = atom<Presets>((get) => readPresets(get(storedPresetsAtom)));
+export const livePresetAtom = atom<PresetId>((get) => get(livePresetsAtom).active);
 export const liveRailAtom = atom<RailState>((get) => readRail(get(storedRailAtom)));
 export const liveEditingAtom = atom(false);
 
@@ -368,28 +445,42 @@ export function placeShown(grid: Grid, was: readonly ModuleId[], hidden: readonl
   return { grid: next, hidden: still };
 }
 
-export function applyPreset(id: PresetId): Preset | null {
-  return id === 'default' ? store.get(liveDefaultAtom) : null;
+function setPresets(next: Presets) {
+  store.set(storedPresetsAtom, next);
 }
 
-export function savePresetStage(stage: Stage) {
-  const name = store.get(liveDefaultAtom)?.name;
-  const next: Preset = { stage };
-  if (name) next.name = name;
-  store.set(storedPresetAtom, next);
+export function presetOf(id: PresetId): SavedPreset | null {
+  return store.get(livePresetsAtom).list.find((p) => p.id === id) ?? null;
 }
 
-export function renamePreset(raw: string) {
-  const next: Preset = { ...store.get(liveDefaultAtom) };
-  const name = readPresetName(raw);
-  if (name) next.name = name;
-  else delete next.name;
-  store.set(storedPresetAtom, next);
+export function activatePreset(id: PresetId): SavedPreset | null {
+  const preset = presetOf(id);
+  if (preset) setPresets(withActive(store.get(livePresetsAtom), id));
+  return preset;
+}
+
+export function addPreset(stage: Stage): PresetId | null {
+  const next = withPresetAdded(store.get(livePresetsAtom), stage);
+  if (!next) return null;
+  setPresets(next);
+  return next.active;
+}
+
+export function savePresetStage(id: PresetId, stage: Stage) {
+  setPresets(withPresetStage(store.get(livePresetsAtom), id, stage));
+}
+
+export function renamePreset(id: PresetId, raw: string) {
+  setPresets(withPresetRenamed(store.get(livePresetsAtom), id, raw));
+}
+
+export function deletePreset(id: PresetId) {
+  setPresets(withPresetDeleted(store.get(livePresetsAtom), id));
 }
 
 export function migratePresets() {
-  const moved = migratedPreset(store.get(storedPresetAtom), store.get(storedMineAtom));
-  if (moved) store.set(storedPresetAtom, moved);
+  const moved = migratedPresets(store.get(storedPresetsAtom), store.get(storedPresetAtom), store.get(storedMineAtom));
+  if (moved) setPresets(moved);
   if (store.get(storedPresetsDefaultAtom) === true) return;
   if (wasRetiredPreset(store.get(storedPanelsAtom))) store.set(storedPanelsAtom, readPanels(null));
   store.set(storedPresetsDefaultAtom, true);

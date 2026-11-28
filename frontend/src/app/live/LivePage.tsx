@@ -50,7 +50,7 @@ import {
   watchUrlAtom
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
-import { pickPreset } from '@/infra/atoms/preset-atoms';
+import { pickPreset, watchPresets } from '@/infra/atoms/preset-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { stopSounds, watchSources } from '@/infra/atoms/source-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
@@ -67,7 +67,7 @@ import {
   liveEditingAtom,
   liveGridAtom,
   liveLayoutAtom,
-  liveDefaultAtom,
+  livePresetsAtom,
   migrateLayouts,
   migratePresets,
   livePanelsAtom,
@@ -102,7 +102,7 @@ import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { ChatModule, ChatWindow, Unread, useUnread } from '@/shared-components/live/modules/Chat';
 import { DestinationsModule } from '@/shared-components/live/modules/Destinations';
 import { LayoutModule } from '@/shared-components/live/modules/LayoutSwitcher';
-import { PRESET_ICONS, PresetsModule } from '@/shared-components/live/modules/Presets';
+import { presetIcon, PresetsModule } from '@/shared-components/live/modules/Presets';
 import { SoundModule } from '@/shared-components/live/modules/Sound';
 import { SourceModule } from '@/shared-components/live/modules/Source';
 import { SourcesModule } from '@/shared-components/live/modules/Sources';
@@ -196,7 +196,7 @@ function usePresetKeys() {
       if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       if (typingInto(e.target) || typingInto(document.activeElement)) return;
       if (document.querySelector('dialog:modal')) return;
-      const id = presetForKey(e.key);
+      const id = presetForKey(e.key, store.get(livePresetsAtom).list);
       if (!id) return;
       e.preventDefault();
       void pickPreset(id);
@@ -369,9 +369,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   const order = drag ? [...shown.filter((t) => t !== drag.id), drag.id] : shown;
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-      {editing && (
-        <EditBar hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))} onAdd={showInGrid} />
-      )}
+      {editing && <EditBar hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))} onAdd={showInGrid} />}
       <div
         ref={gridRef}
         id="live-grid"
@@ -528,7 +526,7 @@ export function LivePage() {
   const layout = useAtomValue(liveLayoutAtom);
   const editing = useAtomValue(liveEditingAtom);
   const preset = useAtomValue(livePresetAtom);
-  const saved = useAtomValue(liveDefaultAtom);
+  const presets = useAtomValue(livePresetsAtom);
   const rail = useAtomValue(liveRailAtom);
   const cameraOnly = useAtomValue(cameraOnlyAtom);
   const width = useWindowWidth();
@@ -557,6 +555,8 @@ export function LivePage() {
   useEffect(() => {
     setCameraOnly(false);
   }, []);
+
+  useEffect(() => watchPresets(), []);
 
   useEffect(() => {
     void startCamera();
@@ -657,8 +657,8 @@ export function LivePage() {
     return <ChatModule place={place} className={place === 'phone' ? cn('h-full min-h-0 flex-1', CHAT_MOBILE) : undefined} />;
   };
 
-  const presetWords = presetName(preset, saved);
-  const PresetIcon = PRESET_ICONS[preset];
+  const presetWords = presetName(presets.list.find((p) => p.id === preset));
+  const PresetIcon = presetIcon(preset);
 
   if (mobile) {
     const panel = (t: PhoneTab, children: ReactNode, className?: string) => (
@@ -824,14 +824,7 @@ export function LivePage() {
               {a.under.length > 0 && <Slot hosts={hosts} ids={a.under} id="live-under" className="flex min-h-0 flex-1 flex-col" />}
             </div>
             {a.right.length > 0 && <Slot hosts={hosts} ids={a.right} id="live-right" className={column} />}
-            {a.side.length > 0 && (
-              <Slot
-                hosts={hosts}
-                ids={a.side}
-                id="live-side"
-                className="flex min-h-0 w-[340px] shrink-0 flex-col"
-              />
-            )}
+            {a.side.length > 0 && <Slot hosts={hosts} ids={a.side} id="live-side" className="flex min-h-0 w-[340px] shrink-0 flex-col" />}
           </div>
         ) : (
           <GridStage hosts={hosts} shown={gridShown} editing={editing} />

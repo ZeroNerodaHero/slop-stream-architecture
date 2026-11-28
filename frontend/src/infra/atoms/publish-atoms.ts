@@ -47,10 +47,12 @@ import { applyCopy, applyLayers, type Codec, copyEncodings, MAX_FRAMERATE, sendE
 import {
   arrangedAfterAdd,
   arrangedAfterRemove,
+  arrivedFrom,
   AVATAR_ID,
   FULL,
   imageBox,
   isVideoSource,
+  type KeptScene,
   keptOf,
   movedBox,
   presetOf,
@@ -1376,6 +1378,8 @@ function slotsChanged() {
 }
 
 function setSources(next: Source[]) {
+  const arriving = arrivals?.();
+  if (arriving) next = arrivedFrom(arriving, store.get(sourcesAtom), next);
   const kept = readKept(store.get(storedSoloAtom));
   if (kept) {
     next = restoredFrom(kept, store.get(sourcesAtom), next);
@@ -2030,31 +2034,15 @@ async function stageModel(want: ModelChoice | null, gaps: StageGap[]): Promise<v
   if (!on) gaps.push({ kind: 'model', name: want.name });
 }
 
-export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
-  const gaps: StageGap[] = [];
-  const generation = liveGeneration;
-  const wantCamera = stage.scene.cam?.shown === true;
-  if (wantCamera && !store.get(hasCameraAtom)) {
-    if (await cameraAllowed()) await cameraOn();
-    if (!store.get(hasCameraAtom)) gaps.push({ kind: 'camera' });
+async function tried(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch {
+    return;
   }
-  if (generation !== liveGeneration) return gaps;
-  if (stage.scene[AVATAR_ID]?.shown && !store.get(sourcesAtom).some((s) => s.kind === 'avatar')) ensureAvatarSource();
-  if (stage.camera && stage.camera !== store.get(cameraDeviceAtom)) {
-    if (await hasDevice('videoinput', stage.camera)) await setCamera(stage.camera);
-    else if (wantCamera) gaps.push({ kind: 'device', what: 'camera' });
-  }
-  const micNow = store.get(micDeviceAtom) || store.get(micPickAtom);
-  if (stage.mic && stage.mic !== micNow && store.get(hasMicAtom)) {
-    if (inTauri() || (await hasDevice('audioinput', stage.mic))) await setMicDevice(stage.mic);
-    else gaps.push({ kind: 'device', what: 'mic' });
-  }
-  if (generation !== liveGeneration) return gaps;
-  await stageModel(stage.model, gaps);
-  if (generation !== liveGeneration) return gaps;
-  setFaceMirror(stage.mirror);
-  setFaceExpressions(stage.expressions);
-  if (stage.background) setModelBackground(stage.background);
+}
+
+function stageScene(stage: Stage, gaps: StageGap[]) {
   if (!stage.solo) setCameraOnly(false);
   const library = store.get(libraryAtom).map((a) => a.id);
   const staged = stagedFrom(stage, store.get(sourcesAtom), library, () => `i${++imageCount}`);
@@ -2063,6 +2051,9 @@ export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
   setSources(staged.sources);
   if (stage.solo) setCameraOnly(true);
   slotsChanged();
+}
+
+function stageLevels(stage: Stage) {
   for (const [id, row] of Object.entries(stage.levels)) {
     const live = id === MASTER || store.get(mixRowsAtom).some((r) => r.id === id);
     if (live) setMixRow(id, (r) => ({ ...r, level: row.level, muted: row.muted }));
@@ -2071,5 +2062,43 @@ export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
       store.set(storedMixAtom, { ...(raw && typeof raw === 'object' ? raw : {}), [id]: row });
     }
   }
+}
+
+export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
+  const gaps: StageGap[] = [];
+  const generation = liveGeneration;
+  const wantCamera = stage.scene.cam?.shown === true;
+  if (wantCamera && !store.get(hasCameraAtom)) {
+    if (await cameraAllowed()) await tried(cameraOn);
+    if (!store.get(hasCameraAtom)) gaps.push({ kind: 'camera' });
+  }
+  if (generation !== liveGeneration) return gaps;
+  if (stage.scene[AVATAR_ID]?.shown && !store.get(sourcesAtom).some((s) => s.kind === 'avatar')) ensureAvatarSource();
+  stageScene(stage, gaps);
+  stageLevels(stage);
+  setFaceMirror(stage.mirror);
+  setFaceExpressions(stage.expressions);
+  if (stage.background) setModelBackground(stage.background);
+  if (stage.camera && stage.camera !== store.get(cameraDeviceAtom)) {
+    if (await hasDevice('videoinput', stage.camera)) await tried(() => setCamera(stage.camera));
+    else if (wantCamera) gaps.push({ kind: 'device', what: 'camera' });
+  }
+  const micNow = store.get(micDeviceAtom) || store.get(micPickAtom);
+  if (stage.mic && stage.mic !== micNow && store.get(hasMicAtom)) {
+    if (inTauri() || (await hasDevice('audioinput', stage.mic))) await tried(() => setMicDevice(stage.mic));
+    else gaps.push({ kind: 'device', what: 'mic' });
+  }
+  if (generation !== liveGeneration) return gaps;
+  const worn = modelSession ? validModelChoice(store.get(storedModelAtom)) : null;
+  if (!sameModel(stage.model, worn)) {
+    await tried(() => stageModel(stage.model, gaps));
+    if (generation === liveGeneration) stageScene(stage, []);
+  }
   return gaps;
+}
+
+let arrivals: (() => KeptScene | null) | null = null;
+
+export function placeArrivalsFrom(read: (() => KeptScene | null) | null) {
+  arrivals = read;
 }
