@@ -1,5 +1,6 @@
 import {
   RiAddLine,
+  RiChat3Line,
   RiCloseLine,
   RiComputerLine,
   RiEyeLine,
@@ -20,6 +21,7 @@ import { api } from '@/infra/api';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
   addAvatar,
+  addChat,
   addImage,
   addText,
   cameraAtom,
@@ -222,6 +224,18 @@ function AddMenu({ onModel }: { onModel: () => void }) {
               <RiText aria-hidden size={16} /> text
             </button>
             <button
+              id="add-chat"
+              role="menuitem"
+              type="button"
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                addChat();
+              }}
+            >
+              <RiChat3Line aria-hidden size={16} /> chat
+            </button>
+            <button
               id="add-image"
               role="menuitem"
               type="button"
@@ -328,6 +342,12 @@ function SourceThumb({ source }: { source: Source }) {
     return (
       <span className={cn(THUMB, 'text-textTertiary')}>
         <RiText aria-hidden size={14} />
+      </span>
+    );
+  if (source.kind === 'chat')
+    return (
+      <span className={cn(THUMB, 'text-textTertiary')}>
+        <RiChat3Line aria-hidden size={14} />
       </span>
     );
   if (source.kind === 'avatar')

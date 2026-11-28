@@ -3,11 +3,13 @@ import { type AvatarLook, centeredSquare, readAvatarLook, SQUARE, squareIn } fro
 import type { Layer, Scene } from './relay.ts';
 import { readScreenCap, type ScreenCap } from './screen-cap.ts';
 import { looseBox, visibleBox } from './model-frame.ts';
-import { cleanText, TEXT_PRESETS, type TextKind, textLabel, type TextStyle } from './text-paint.ts';
+import { CHAT_LINES_MAX, type ChatSpec, cleanText, TEXT_PRESETS, type TextKind, textLabel, type TextStyle } from './text-paint.ts';
+import { CHAT_BOX, CHAT_LINES, CHAT_STYLE, CHAT_WORD } from './chat-paint.ts';
+import type { Shape } from './shape.ts';
 
 export interface Source {
   id: string;
-  kind: 'camera' | 'screen' | 'image' | 'avatar' | 'text';
+  kind: 'camera' | 'screen' | 'image' | 'avatar' | 'text' | 'chat';
   label: string;
   slot?: number;
   asset?: number;
@@ -19,6 +21,7 @@ export interface Source {
   cap?: ScreenCap;
   text?: string;
   style?: TextStyle;
+  chat?: ChatSpec;
   waiting?: boolean;
 }
 
@@ -37,7 +40,11 @@ export const layerOf = (s: Source): Layer =>
       ? { id: s.id, kind: 'avatar', ...(s.look && { look: s.look }), ...visibleBox(s.box) }
       : s.kind === 'text'
         ? { id: s.id, kind: 'text', text: s.text ?? '', ...(s.style && { style: s.style }), ...visibleBox(s.box) }
-        : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...visibleBox(s.box) };
+        : s.kind === 'chat'
+          ? { id: s.id, kind: 'chat', chat: s.chat ?? { lines: CHAT_LINES }, ...(s.style && { style: s.style }), ...visibleBox(s.box) }
+          : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...visibleBox(s.box) };
+
+export const isOverlaySource = (s: Pick<Source, 'kind'>) => s.kind === 'text' || s.kind === 'chat';
 
 export const hasWords = (s: Source) => s.kind !== 'text' || !!s.text?.trim();
 
@@ -46,6 +53,25 @@ export function textSource(kind: TextKind, sources: readonly Source[], text = ki
   while (sources.some((s) => s.id === `t${n}`)) n++;
   const preset = TEXT_PRESETS[kind];
   return { id: `t${n}`, kind: 'text', label: textLabel(text), text, style: { ...preset.style }, box: { ...preset.box }, shown: true };
+}
+
+export function chatSource(sources: readonly Source[], shape: Shape): Source {
+  let n = 1;
+  while (sources.some((s) => s.id === `ch${n}`)) n++;
+  return { id: `ch${n}`, kind: 'chat', label: CHAT_WORD, chat: { lines: CHAT_LINES }, style: { ...CHAT_STYLE, shape }, box: { ...CHAT_BOX }, shown: true };
+}
+
+export interface ChatPatch {
+  lines?: number;
+  style?: Partial<TextStyle>;
+}
+
+export function chatPatched(s: Source, patch: ChatPatch): Source {
+  if (s.kind !== 'chat') return s;
+  const lines = Math.min(CHAT_LINES_MAX, Math.max(1, Math.round(patch.lines ?? s.chat?.lines ?? CHAT_LINES)));
+  const style = { ...CHAT_STYLE, ...s.style, ...patch.style };
+  if (patch.style && 'bg' in patch.style && !patch.style.bg) delete style.bg;
+  return { ...s, chat: { lines }, style };
 }
 
 export interface TextPatch {
@@ -200,7 +226,7 @@ const fullFor = (s: Source): Box => (s.kind === 'avatar' ? centeredSquare(FULL) 
 export function arrangedAfterAdd(sources: readonly Source[], added: Source, last: Preset | null): Source[] {
   const videos = laidOut(sources);
   if (!videos.some((v) => v.id === added.id))
-    return sources.map((s) => (s.id === added.id ? { ...s, box: s.kind === 'text' ? s.box : imageBox(SQUARE), shown: true } : s));
+    return sources.map((s) => (s.id === added.id ? { ...s, box: isOverlaySource(s) ? s.box : imageBox(SQUARE), shown: true } : s));
   if (videos.length === 1) return sources.map((s) => (s.id === added.id ? { ...s, box: fullFor(s), shown: true } : s));
   if (videos.length === 2 && added.kind === 'screen') {
     return applyPreset(sources, last && last.boxes.some((b) => b.role === 'screen1') ? last : SCREEN_AND_FACE);
@@ -262,11 +288,11 @@ export function readKept(raw: unknown): KeptScene | null {
 }
 
 export function arrivedFrom(kept: KeptScene, before: readonly Source[], next: Source[]): Source[] {
-  const came = next.some((s) => s.kind !== 'text' && kept[s.id] && !before.some((b) => b.id === s.id));
+  const came = next.some((s) => !isOverlaySource(s) && kept[s.id] && !before.some((b) => b.id === s.id));
   if (!came) return next;
   return next.map((s) => {
     const was = before.find((b) => b.id === s.id);
-    const k = was ?? (s.kind === 'text' ? undefined : kept[s.id]);
+    const k = was ?? (isOverlaySource(s) ? undefined : kept[s.id]);
     return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }), ...(k.cap && { cap: k.cap }) } : s;
   });
 }

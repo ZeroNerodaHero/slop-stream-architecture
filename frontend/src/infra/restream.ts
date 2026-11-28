@@ -9,6 +9,8 @@ import { type Box, fitOf, isOverlayLayer, isVideoLayer, type Layer, type Scene }
 import Clock from '@/infra/restream-clock.worker?worker';
 import { store } from '@/infra/store';
 import { paintText, textShape, textStyleOf } from '@/infra/text-paint';
+import { chatLinesOf, CHAT_STYLE, type OverlayLine, paintChat } from '@/infra/chat-paint';
+import { emoteImage } from '@/infra/chat-emote-images';
 import { inTauri } from '@/infra/update-check';
 import { isSpeaking, voiceOf } from '@/infra/voice-level';
 import { colorOf } from '@/shared-components/GeneratedAvatar';
@@ -40,6 +42,7 @@ export interface RestreamInputs {
   avatar: () => AvatarPaint;
   voice?: (now: number) => number;
   avatarUrl: (name: string, version: number) => string;
+  chat?: (count: number) => readonly OverlayLine[];
 }
 
 export function restreamSize(): { width: number; height: number } {
@@ -287,6 +290,10 @@ class Compositor {
     else if (layer.kind === 'text') {
       const style = textStyleOf(layer.style);
       paintText(this.ctx, box, { text: layer.text, style, shape: textShape(style, store.get(shapeAtom)) }, this.canvas.height);
+    } else if (layer.kind === 'chat') {
+      const style = layer.style ?? CHAT_STYLE;
+      const lines = this.inputs.chat?.(chatLinesOf(layer.chat)) ?? [];
+      paintChat(this.ctx, box, { lines, style, shape: textShape(style, store.get(shapeAtom)) }, this.canvas.height, emoteImage);
     }
   }
 

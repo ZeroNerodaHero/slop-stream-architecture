@@ -21,7 +21,7 @@ const lower: Source = {
   shown: true
 };
 
-const rest: Omit<Stage, 'scene' | 'images' | 'texts'> = {
+const rest: Omit<Stage, 'scene' | 'images' | 'texts' | 'chats'> = {
   levels: { mic: { level: 0.3, muted: false }, master: { level: 0.8, muted: true } },
   sounds: { aboing1: { name: 'boing', volume: 0.4, loop: true, hear: false } },
   names: { camera: 'face cam' },

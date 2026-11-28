@@ -22,6 +22,7 @@ import {
   cameraAtom,
   cameraOnlyAtom,
   chatRoomAtom,
+  ownerAtom,
   copyWatchUrl,
   enterLivePage,
   isPublishingAtom,
@@ -643,6 +644,7 @@ export function LivePage() {
   const hosts = useHosts();
   const name = useAtomValue(streamNameAtom);
   const chatRoom = useAtomValue(chatRoomAtom);
+  const owner = useAtomValue(ownerAtom);
   const publishing = useAtomValue(isPublishingAtom);
   const phase = useAtomValue(publishPhaseAtom);
   const stats = useAtomValue(publishStatsAtom);
@@ -691,7 +693,7 @@ export function LivePage() {
     onKey: (id, what) => {
       if (what === 'remove') {
         const kind = sources.find((s) => s.id === id)?.kind;
-        if (kind === 'image' || kind === 'avatar' || kind === 'text') removeSource(id);
+        if (kind === 'image' || kind === 'avatar' || kind === 'text' || kind === 'chat') removeSource(id);
         else toggleSource(id);
       } else reorderSource(id, what === 'forward' ? 'up' : 'down');
     }
@@ -740,6 +742,7 @@ export function LivePage() {
       <SceneView
         id="scene"
         className={cn('max-md:border-t-0', mobile && strip.frame)}
+        chat={{ name: chatRoom, owner }}
         layers={scene.layers}
         blank={blank}
         streamFor={sentStreamAtom}

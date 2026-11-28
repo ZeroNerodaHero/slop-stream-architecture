@@ -408,6 +408,7 @@ export function WatchPage() {
           <SceneView
             id="scene"
             className={cn('max-md:rounded-none max-md:border-t-0', mobile && strip.frame)}
+            chat={{ name }}
             layers={layers}
             blank={blank}
             streamFor={slotStreamAtom}

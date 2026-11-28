@@ -26,6 +26,8 @@ import { AVATAR_LOOK, type AvatarLook, lookOf, sameLook, SQUARE } from '@/infra/
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { faderMaster, faderRows, keepLevel, keptLevel } from '@/infra/mix-levels';
 import { startRestream, stopRestream } from '@/infra/restream';
+import { shapeAtom } from '@/infra/atoms/settings-atoms';
+import { stageChatLines } from '@/infra/chat-overlay';
 import { readModel } from '@/infra/model-file';
 import {
   forgetKept,
@@ -52,6 +54,9 @@ import {
   arrangedAfterRemove,
   arrivedFrom,
   AVATAR_ID,
+  type ChatPatch,
+  chatPatched,
+  chatSource,
   FULL,
   imageBox,
   isVideoSource,
@@ -490,6 +495,16 @@ export function addText() {
 
 export function setText(id: string, patch: TextPatch) {
   withSource(id, (s) => textPatched(s, patch));
+}
+
+export function addChat() {
+  const source = chatSource(store.get(sourcesAtom), store.get(shapeAtom));
+  setSources(arrangedAfterAdd([...store.get(sourcesAtom), source], source, null));
+  store.set(selectedSourceAtom, source.id);
+}
+
+export function setChat(id: string, patch: ChatPatch) {
+  withSource(id, (s) => chatPatched(s, patch));
 }
 
 export function addAvatar() {
@@ -1253,7 +1268,8 @@ function restreamFor(owner: Owner, sound: MediaStreamTrack | null) {
       imageUrl: (asset) => api.assetUrl(owner.name, asset),
       avatar: () => ({ name: owner.name, version: store.get(myAvatarVersionAtom), look: store.get(avatarLookAtom) }),
       voice: micLevelReader,
-      avatarUrl: (name, version) => api.avatarUrl(name, version)
+      avatarUrl: (name, version) => api.avatarUrl(name, version),
+      chat: (count) => stageChatLines(owner.name, count)
     });
   } catch {
     stopRestream({ quiet: true });
@@ -1582,7 +1598,7 @@ export function streamSourceBox(id: string, box: Box) {
 function resizeRatio(id: string, from: Box, free: boolean): number | null {
   const s = store.get(sourcesAtom).find((x) => x.id === id);
   if (s?.kind === 'avatar') return SQUARE;
-  if (s?.kind === 'text') return null;
+  if (s?.kind === 'text' || s?.kind === 'chat') return null;
   return s?.ratio ?? (free ? null : from.w / from.h);
 }
 

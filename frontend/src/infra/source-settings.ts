@@ -1,7 +1,7 @@
 import type { Source } from './scene.ts';
 
-export type InputKind = 'model' | 'camera' | 'screen' | 'image' | 'avatar' | 'text' | 'sound';
-export type InputSection = 'fill' | 'fitCamera' | 'device' | 'model' | 'rigging' | 'playback' | 'look' | 'resolution' | 'text';
+export type InputKind = 'model' | 'camera' | 'screen' | 'image' | 'avatar' | 'text' | 'chat' | 'sound';
+export type InputSection = 'fill' | 'fitCamera' | 'device' | 'model' | 'rigging' | 'playback' | 'look' | 'resolution' | 'text' | 'chat';
 
 const SECTIONS: Record<InputKind, readonly InputSection[]> = {
   model: ['model', 'rigging'],
@@ -10,6 +10,7 @@ const SECTIONS: Record<InputKind, readonly InputSection[]> = {
   image: ['fitCamera'],
   avatar: ['look'],
   text: ['text'],
+  chat: ['chat'],
   sound: ['playback']
 };
 
@@ -20,6 +21,7 @@ export const INPUT_WORDS: Record<InputKind, string> = {
   image: 'picture',
   avatar: 'avatar',
   text: 'text',
+  chat: 'chat',
   sound: 'sound'
 };
 
@@ -32,13 +34,14 @@ export const sectionsOf = (kind: InputKind): readonly InputSection[] => SECTIONS
 
 export const SOURCE_NAME_MAX = 32;
 const NAMES_MAX = 64;
-const NAME_KEY = /^(camera|model|avatar|screen\d{1,2}|image\d{1,12}|t\d{1,6})$/;
+const NAME_KEY = /^(camera|model|avatar|screen\d{1,2}|image\d{1,12}|t\d{1,6}|ch\d{1,6})$/;
 
 export function nameKey(source: Pick<Source, 'kind' | 'slot' | 'asset'> & { id?: string }, worn: boolean): string {
   if (source.kind === 'camera') return worn ? 'model' : 'camera';
   if (source.kind === 'screen') return `screen${source.slot ?? 0}`;
   if (source.kind === 'image') return `image${source.asset ?? 0}`;
   if (source.kind === 'text') return source.id ?? 'text';
+  if (source.kind === 'chat') return source.id ?? 'chat';
   return 'avatar';
 }
 

@@ -1,7 +1,8 @@
 import { AVATAR_ID, type KeptScene, type KeptSource, keptOf, readKept, type Source, squaredAvatarBox } from './scene.ts';
 import { NO_BACKING } from './model-backing.ts';
 import { cleanSourceName, readNames } from './source-settings.ts';
-import { readText, readTextStyle, TEXT_PRESETS, textLabel, type TextStyle } from './text-paint.ts';
+import { type ChatSpec, readChat, readText, readTextStyle, TEXT_PRESETS, textLabel, type TextStyle } from './text-paint.ts';
+import { CHAT_LINES, CHAT_STYLE, CHAT_WORD } from './chat-paint.ts';
 
 export interface StageImage {
   asset: number;
@@ -11,6 +12,11 @@ export interface StageImage {
 
 export interface StageText {
   text: string;
+  style: TextStyle;
+}
+
+export interface StageChat {
+  chat: ChatSpec;
   style: TextStyle;
 }
 
@@ -32,6 +38,7 @@ export interface Stage {
   scene: KeptScene;
   images: Record<string, StageImage>;
   texts: Record<string, StageText>;
+  chats: Record<string, StageChat>;
   levels: Record<string, StageLevel>;
   sounds: Record<string, StageSound>;
   names: Record<string, string>;
@@ -59,14 +66,16 @@ const unit = (v: number) => Math.min(1, Math.max(0, v));
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const record = (raw: unknown): Record<string, unknown> | null => (raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null);
 
-export function stageOf(sources: readonly Source[], rest: Omit<Stage, 'scene' | 'images' | 'texts'>): Stage {
+export function stageOf(sources: readonly Source[], rest: Omit<Stage, 'scene' | 'images' | 'texts' | 'chats'>): Stage {
   const images: Record<string, StageImage> = {};
   const texts: Record<string, StageText> = {};
+  const chats: Record<string, StageChat> = {};
   for (const s of sources) {
     if (s.kind === 'image' && s.asset !== undefined) images[s.id] = { asset: s.asset, label: s.label, ...(s.ratio !== undefined && { ratio: s.ratio }) };
     if (s.kind === 'text' && s.text?.trim()) texts[s.id] = { text: s.text, style: s.style ?? { ...TEXT_PRESETS['lower third'].style } };
+    if (s.kind === 'chat') chats[s.id] = { chat: s.chat ?? { lines: CHAT_LINES }, style: s.style ?? { ...CHAT_STYLE } };
   }
-  return { ...rest, scene: keptOf(sources.filter((s) => s.kind !== 'text' || texts[s.id])), images, texts };
+  return { ...rest, scene: keptOf(sources.filter((s) => s.kind !== 'text' || texts[s.id])), images, texts, chats };
 }
 
 export function blankStage(now: Pick<Stage, 'camera' | 'mic' | 'mirror' | 'expressions' | 'background'>): Stage {
@@ -74,6 +83,7 @@ export function blankStage(now: Pick<Stage, 'camera' | 'mic' | 'mirror' | 'expre
     scene: {},
     images: {},
     texts: {},
+    chats: {},
     levels: {},
     sounds: {},
     names: {},
@@ -120,6 +130,7 @@ export function readStage(raw: unknown): Stage | null {
     const text = readText(v.text);
     return text ? { text, style: readTextStyle(v.style) ?? { ...TEXT_PRESETS['lower third'].style } } : null;
   });
+  const chats = readEntries<StageChat>(p.chats, (v) => ({ chat: readChat(v.chat) ?? { lines: CHAT_LINES }, style: readTextStyle(v.style) ?? { ...CHAT_STYLE } }));
   const levels = readEntries<StageLevel>(p.levels, (v) => (finite(v.level) ? { level: unit(v.level), muted: v.muted === true } : null));
   const sounds = readEntries<StageSound>(p.sounds, (v) =>
     finite(v.volume)
@@ -134,6 +145,7 @@ export function readStage(raw: unknown): Stage | null {
     ),
     images,
     texts,
+    chats,
     levels,
     sounds,
     names: readNames(p.names),
@@ -147,13 +159,14 @@ export function readStage(raw: unknown): Stage | null {
   };
 }
 
-type StagedPart = Pick<Stage, 'scene' | 'images'> & Partial<Pick<Stage, 'texts'>>;
+type StagedPart = Pick<Stage, 'scene' | 'images'> & Partial<Pick<Stage, 'texts' | 'chats'>>;
 
-export function stagedKind(id: string, stage: Pick<StagedPart, 'images' | 'texts'>): Source['kind'] {
+export function stagedKind(id: string, stage: Pick<StagedPart, 'images' | 'texts' | 'chats'>): Source['kind'] {
   if (id === 'cam') return 'camera';
   if (id === AVATAR_ID) return 'avatar';
   if (stage.images[id]) return 'image';
   if (stage.texts?.[id]) return 'text';
+  if (stage.chats?.[id]) return 'chat';
   return 'screen';
 }
 
@@ -178,10 +191,16 @@ export function stagedFrom(stage: StagedPart, now: readonly Source[], library: r
       used.add(id);
       continue;
     }
+    const chat = stage.chats?.[id];
+    if (chat) {
+      placed.push({ id, kind: 'chat', label: CHAT_WORD, chat: { ...chat.chat }, style: { ...chat.style }, box: kept.box, shown: kept.shown });
+      used.add(id);
+      continue;
+    }
     const image = stage.images[id];
     const match = image
       ? now.find((s) => s.kind === 'image' && s.asset === image.asset && !used.has(s.id))
-      : now.find((s) => s.id === id && s.kind !== 'image' && s.kind !== 'text');
+      : now.find((s) => s.id === id && s.kind !== 'image' && s.kind !== 'text' && s.kind !== 'chat');
     if (match) {
       used.add(match.id);
       placed.push({
@@ -225,11 +244,11 @@ export function stagedFrom(stage: StagedPart, now: readonly Source[], library: r
     }
     if (!kept.shown) continue;
     if (kind === 'image') gaps.push({ kind: 'image', label: image?.label ?? 'picture' });
-    else if (kind === 'text') continue;
+    else if (kind === 'text' || kind === 'chat') continue;
     else if (kind === 'screen') gaps.push({ kind: 'screen', slot: screenSlotOf(id) ?? 0 });
     else gaps.push({ kind });
   }
-  const rest = now.filter((s) => !used.has(s.id) && s.kind !== 'image' && s.kind !== 'text' && !s.waiting).map((s) => ({ ...s, shown: false }));
+  const rest = now.filter((s) => !used.has(s.id) && s.kind !== 'image' && s.kind !== 'text' && s.kind !== 'chat' && !s.waiting).map((s) => ({ ...s, shown: false }));
   return { sources: [...rest, ...placed], gaps };
 }
 
