@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
+  avatarLookAtom,
   cameraAtom,
   cameraOnlyAtom,
   chatRoomAtom,
@@ -588,6 +589,7 @@ export function LivePage() {
   const selected = useAtomValue(selectedSourceAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
+  const avatarLook = useAtomValue(avatarLookAtom);
   const me = useAtomValue(meAtom);
   const panels = useAtomValue(livePanelsAtom);
   const layout = useAtomValue(liveLayoutAtom);
@@ -666,7 +668,7 @@ export function LivePage() {
         layers={scene.layers}
         streamFor={sentStreamAtom}
         imageUrl={(asset) => api.assetUrl(name, asset)}
-        avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }}
+        avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined, look: avatarLook }}
         main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
         edit={cameraOnly ? undefined : edit}
         placeholder={(layer) => {

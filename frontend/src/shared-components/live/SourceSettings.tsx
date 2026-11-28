@@ -34,6 +34,7 @@ import { livePanelsAtom, type Place } from '@/infra/live-dock';
 import type { Source } from '@/infra/scene';
 import { INPUT_WORDS, inputKindOf, SOURCE_NAME_MAX, type SoundSource, sectionsOf } from '@/infra/source-settings';
 import { Button } from '@/shared-components/Button';
+import { AvatarLookSettings } from '@/shared-components/live/AvatarLookSettings';
 import { INPUT } from '@/shared-components/input';
 import { DevicePick } from '@/shared-components/live/DevicePick';
 import { ModelControls } from '@/shared-components/live/ModelControls';
@@ -207,6 +208,12 @@ function VisualSettings({ source, place, onModel }: { source: Source; place: Pla
         {sections.includes('device') && <CameraPick />}
         {sections.includes('move') && <p className="text-xs text-textTertiary">drag it on the preview to move it</p>}
       </div>
+      {sections.includes('look') && (
+        <div id="source-look" className="border-t border-primaryStroke">
+          <p className={SECTION_HEAD}>look</p>
+          <AvatarLookSettings source={source} />
+        </div>
+      )}
       {sections.includes('model') && (
         <div id="source-model" className="border-t border-primaryStroke">
           <p className={SECTION_HEAD}>model</p>

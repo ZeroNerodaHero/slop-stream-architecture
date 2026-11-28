@@ -1,6 +1,7 @@
-import { useRef } from 'react';
+import { type CSSProperties, useRef } from 'react';
 
 import { api } from '@/infra/api';
+import { AVATAR_FILL, AVATAR_GROW, AVATAR_LIFT, type AvatarLook, radiusVar } from '@/infra/avatar-look';
 import { type VoiceDraw, type VoiceSource, useVoiceLevel } from '@/infra/use-voice-level';
 import { isSpeaking, PULSE_GROW, pulseStep, pulseTarget, voiceOf } from '@/infra/voice-level';
 import { colorOf } from '@/shared-components/GeneratedAvatar';
@@ -10,12 +11,10 @@ export interface AvatarVoice extends VoiceSource {
   name: string;
   version: number | null;
   pulse?: boolean;
+  look?: AvatarLook;
 }
 
-const FILL = 0.84;
 const PULSE_FILL = 0.96 / (1 + PULSE_GROW);
-const GROW = 0.1;
-const LIFT = 3;
 
 interface AvatarLayerProps {
   id: string;
@@ -30,15 +29,17 @@ const speakingOn = (el: HTMLElement, voice: number) => {
   else delete el.dataset.speaking;
 };
 
-function nod(el: HTMLElement, win: Window): VoiceDraw {
-  const still = stillIn(win);
+const nod = (el: HTMLElement, win: Window) => nodding(el, stillIn(win));
+const steady = (el: HTMLElement) => nodding(el, true);
+
+function nodding(el: HTMLElement, still: boolean): VoiceDraw {
   let shown = -1;
   return (level) => {
     const v = voiceOf(level);
     const pct = Math.round(v * 100);
     if (pct === shown) return;
     shown = pct;
-    if (!still) el.style.transform = `translateY(${-LIFT * v}%) scale(${1 + GROW * v})`;
+    if (!still) el.style.transform = `translateY(${-AVATAR_LIFT * 100 * v}%) scale(${1 + AVATAR_GROW * v})`;
     el.dataset.voice = String(pct);
     speakingOn(el, v);
   };
@@ -68,14 +69,24 @@ function pulse(el: HTMLElement, win: Window): VoiceDraw {
   };
 }
 
-export function AvatarLayer({ id, wide, voice }: AvatarLayerProps) {
+export function AvatarLayer(props: AvatarLayerProps) {
+  const bounce = props.voice.look?.bounce !== false;
+  return <AvatarPic key={bounce ? 'bounce' : 'still'} {...props} bounce={bounce} />;
+}
+
+function AvatarPic({ id, wide, voice, bounce }: AvatarLayerProps & { bounce: boolean }) {
   const pic = useRef<HTMLDivElement | null>(null);
-  const { name, version } = voice;
+  const { name, version, look } = voice;
   const pulsing = !!voice.pulse;
-  useVoiceLevel(pic, voice, pulsing ? pulse : nod);
+  useVoiceLevel(pic, voice, pulsing ? pulse : bounce ? nod : steady);
 
   const key = name.trim().toLowerCase();
-  const fill = (pulsing ? PULSE_FILL : FILL) * 100;
+  const fill = (pulsing ? PULSE_FILL : AVATAR_FILL) * 100;
+  const talkBorder = look?.border !== false;
+  const style: CSSProperties = {
+    ...(wide ? { height: `${fill}%` } : { width: `${fill}%` }),
+    ...({ '--r-avatar': look && radiusVar(look), '--talk-color': look?.color || undefined } as CSSProperties)
+  };
   return (
     <div className="flex h-full w-full items-center justify-center">
       <div
@@ -84,12 +95,18 @@ export function AvatarLayer({ id, wide, voice }: AvatarLayerProps) {
         aria-hidden
         data-voice="0"
         data-pulse={pulsing || undefined}
-        style={wide ? { height: `${fill}%` } : { width: `${fill}%` }}
+        data-shape={look?.shape}
+        data-bounce={look ? bounce : undefined}
+        data-talk-border={look ? talkBorder : undefined}
+        style={style}
         className={cn(
           'aspect-square overflow-hidden rounded-avatar border-2 border-primaryStroke bg-backgroundTertiary',
           pulsing
             ? '[transform:scale(var(--voice-scale,1))] data-[speaking]:outline data-[speaking]:outline-increase data-[speaking]:[outline-width:calc(2px/var(--voice-scale,1))]'
-            : 'transition-[transform,border-color] duration-75 data-[speaking]:border-primaryBlue motion-reduce:transition-none'
+            : cn(
+                'transition-[transform,border-color] duration-75 motion-reduce:transition-none',
+                talkBorder && (look?.color ? 'data-[speaking]:[border-color:var(--talk-color)]' : 'data-[speaking]:border-primaryBlue')
+              )
         )}
       >
         {version !== null ? (

@@ -2,12 +2,14 @@ import { atom } from 'jotai';
 
 import { api, ApiError, type DirectGrant, messageOf, type RelayGrant, type RelayStatus } from '@/infra/api';
 import { restreamDirectAtom } from '@/infra/atoms/settings-atoms';
+import { avatarFrame, type AvatarLook, avatarRadius } from '@/infra/avatar-look';
 import type { DirectSender, DirectStatus } from '@/infra/desktop/direct';
 import { HERE } from '@/infra/here';
 import { type Box, fitOf, isVideoLayer, type Layer, type Scene } from '@/infra/relay';
 import Clock from '@/infra/restream-clock.worker?worker';
 import { store } from '@/infra/store';
 import { inTauri } from '@/infra/update-check';
+import { isSpeaking, voiceOf } from '@/infra/voice-level';
 import { colorOf } from '@/shared-components/GeneratedAvatar';
 
 export type RestreamState = 'off' | 'starting' | 'on' | 'retrying';
@@ -25,7 +27,6 @@ const NO_H264 = `${HERE} cannot send h.264`;
 const ICE_WAIT_MS = 2000;
 const RETRY_MS = [2000, 5000, 15000, 30000];
 const LOST_MS = 8000;
-const AVATAR_FILL = 0.84;
 const IDLE_MS = 5000;
 
 export interface RestreamInputs {
@@ -35,7 +36,8 @@ export interface RestreamInputs {
   scene: () => Scene;
   streamFor: (slot: number) => MediaStream | null;
   imageUrl: (asset: number) => string;
-  avatar: () => { name: string; version: number | null };
+  avatar: () => AvatarPaint;
+  voice?: (now: number) => number;
   avatarUrl: (name: string, version: number) => string;
 }
 
@@ -69,12 +71,45 @@ export function h264First(codecs: RTCRtpCodec[]): RTCRtpCodec[] {
   return h264.length ? [...h264.sort((a, b) => rank(a) - rank(b)), ...extras] : [];
 }
 
-function radiusOf(side: number): number {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue('--r-avatar').trim();
-  const n = parseFloat(raw);
-  if (!Number.isFinite(n)) return side / 2;
-  const px = raw.endsWith('rem') ? n * parseFloat(getComputedStyle(document.documentElement).fontSize || '16') : n;
-  return Math.min(side / 2, px * (side / 48));
+export interface AvatarPaint {
+  name: string;
+  version: number | null;
+  look: AvatarLook;
+}
+
+export function paintAvatar(ctx: CanvasRenderingContext2D, box: Box, paint: AvatarPaint, level: number, img: HTMLImageElement | null) {
+  const { name, look } = paint;
+  const root = getComputedStyle(document.documentElement);
+  const voice = voiceOf(level);
+  const { x, y, side, talking } = avatarFrame(box, look, voice, isSpeaking(voice));
+  const radius = avatarRadius(look.shape, side, root.getPropertyValue('--r-avatar'), parseFloat(root.fontSize || '16'));
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, side, side, radius);
+  ctx.clip();
+  const key = name.trim().toLowerCase();
+  if (img) {
+    const [sx, sy, sw, sh, dx, dy, dw, dh] = fitRect(img.naturalWidth, img.naturalHeight, { x, y, w: side, h: side }, true);
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+  } else {
+    ctx.fillStyle = key ? colorOf(key) : '#333';
+    ctx.fillRect(x, y, side, side);
+    ctx.fillStyle = 'white';
+    ctx.font = `600 ${Math.round(side * 0.56)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(key ? [...key][0]!.toUpperCase() : '?', x + side / 2, y + side / 2);
+  }
+  ctx.restore();
+  if (!talking) return;
+  const width = Math.max(2, side / 40);
+  ctx.save();
+  ctx.lineWidth = width;
+  ctx.strokeStyle = look.color || `rgb(${root.getPropertyValue('--primary-color').trim()})`;
+  ctx.beginPath();
+  ctx.roundRect(x + width / 2, y + width / 2, side - width, side - width, Math.max(0, radius - width / 2));
+  ctx.stroke();
+  ctx.restore();
 }
 
 class Compositor {
@@ -161,30 +196,9 @@ class Compositor {
   }
 
   private drawAvatar(box: Box) {
-    const ctx = this.ctx;
-    const { name, version } = this.inputs.avatar();
-    const side = Math.min(box.w, box.h) * AVATAR_FILL;
-    const x = box.x + (box.w - side) / 2;
-    const y = box.y + (box.h - side) / 2;
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(x, y, side, side, radiusOf(side));
-    ctx.clip();
-    const img = version !== null ? this.image(this.inputs.avatarUrl(name, version)) : null;
-    const key = name.trim().toLowerCase();
-    if (img) {
-      const [sx, sy, sw, sh, dx, dy, dw, dh] = fitRect(img.naturalWidth, img.naturalHeight, { x, y, w: side, h: side }, true);
-      ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
-    } else {
-      ctx.fillStyle = key ? colorOf(key) : '#333';
-      ctx.fillRect(x, y, side, side);
-      ctx.fillStyle = 'white';
-      ctx.font = `600 ${Math.round(side * 0.56)}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(key ? [...key][0]!.toUpperCase() : '?', x + side / 2, y + side / 2);
-    }
-    ctx.restore();
+    const paint = this.inputs.avatar();
+    const img = paint.version !== null ? this.image(this.inputs.avatarUrl(paint.name, paint.version)) : null;
+    paintAvatar(this.ctx, box, paint, this.inputs.voice?.(performance.now()) ?? 0, img);
   }
 
   private drawLayer(layer: Layer) {

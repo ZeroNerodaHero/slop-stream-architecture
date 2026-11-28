@@ -22,6 +22,7 @@ import {
   warmModelFiles
 } from '@/infra/face';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
+import { AVATAR_LOOK, type AvatarLook, lookOf, sameLook } from '@/infra/avatar-look';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { faderMaster, faderRows, keepLevel, keptLevel } from '@/infra/mix-levels';
 import { startRestream, stopRestream } from '@/infra/restream';
@@ -144,6 +145,7 @@ export const selectedSourceAtom = atom<string | null>(null);
 export const libraryAtom = atom<{ id: number; mime: string }[]>([]);
 export const sourceStatusAtom = atom('');
 export const hasAvatarAtom = atom((get) => get(sourcesAtom).some((s) => s.kind === 'avatar'));
+export const avatarLookAtom = atom((get) => lookOf(get(sourcesAtom).find((s) => s.kind === 'avatar')?.look));
 const storedLastAtom = atomWithStorage<unknown>('settings.lastArrangement', null, undefined, { getOnInit: true });
 const lastArrangementAtom = atom((get) => validPreset(get(storedLastAtom)));
 
@@ -1186,7 +1188,8 @@ function restreamFor(owner: Owner, sound: MediaStreamTrack | null) {
       scene: () => store.get(sceneAtom),
       streamFor: (slot) => store.get(sentStreamAtom(slot)),
       imageUrl: (asset) => api.assetUrl(owner.name, asset),
-      avatar: () => ({ name: owner.name, version: store.get(myAvatarVersionAtom) }),
+      avatar: () => ({ name: owner.name, version: store.get(myAvatarVersionAtom), look: store.get(avatarLookAtom) }),
+      voice: micLevelReader,
       avatarUrl: (name, version) => api.avatarUrl(name, version)
     });
   } catch {
@@ -1450,11 +1453,19 @@ export function moveSource(id: string, from: Box, dx: number, dy: number) {
 }
 
 export function resizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) {
-  withSource(id, (s) => ({ ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free ? null : from.w / from.h)) }));
+  withSource(id, (s) => ({ ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free && s.kind !== 'avatar' ? null : from.w / from.h)) }));
 }
 
 export function nudgeSource(id: string, dx: number, dy: number) {
   withSource(id, (s) => ({ ...s, box: movedBox(s.box, dx, dy) }));
+}
+
+export function setAvatarLook(id: string, patch: Partial<AvatarLook>) {
+  withSource(id, (s) => {
+    if (s.kind !== 'avatar') return s;
+    const look = { ...lookOf(s.look), ...patch };
+    return sameLook(look, AVATAR_LOOK) ? { ...s, look: undefined } : { ...s, look };
+  });
 }
 
 export function toggleSource(id: string) {

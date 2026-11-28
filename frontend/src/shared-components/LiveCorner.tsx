@@ -5,6 +5,7 @@ import { useLocation } from 'react-router-dom';
 import { api } from '@/infra/api';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
+  avatarLookAtom,
   cameraAtom,
   endLive,
   isPublishingAtom,
@@ -45,6 +46,7 @@ export function LiveCorner() {
   const previewSlot = useAtomValue(previewSlotAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
+  const avatarLook = useAtomValue(avatarLookAtom);
   const storedPipChat = useAtomValue(pipChatPlaceAtom);
   const pipChat = useIsMobile() ? 'bottom' : storedPipChat;
   const cornerChat = useAtomValue(cornerChatAtom);
@@ -70,7 +72,7 @@ export function LiveCorner() {
         slot: previewSlot,
         streamFor: sentStreamAtom,
         imageUrl: (asset) => api.assetUrl(name, asset),
-        avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }
+        avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined, look: avatarLook }
       }}
       chat={{
         name,
