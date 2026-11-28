@@ -23,7 +23,7 @@ import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
-import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
+import { SHEET_CLOSE, SHEET_DIALOG, SHEET_TALL, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { OfflinePicture } from '@/shared-components/OfflinePicture';
 import { Who, Word } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -186,11 +186,12 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         'open:flex flex-col',
         'm-0 max-h-none w-full max-w-none border border-primaryStroke md:rounded-panel',
         SHEET_DIALOG,
+        SHEET_TALL,
         'md:mx-auto md:mb-auto md:mt-[8dvh] md:h-fit md:max-h-[calc(92dvh-1.5rem)] md:min-h-[min(22rem,calc(92dvh-1.5rem))] md:w-[min(720px,calc(100vw-3rem))]',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
-      <SheetGrab onDismiss={close} />
+      <SheetGrab onDismiss={close} tall />
       <header className="flex shrink-0 items-start gap-4 px-5 pt-5 max-md:pt-0">
         <Face name={name} version={avatar} className="h-14 w-14 text-2xl" />
         <div className="min-w-0 flex-1">

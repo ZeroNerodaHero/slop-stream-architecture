@@ -18,18 +18,61 @@ export const PAGE_DIALOG = 'max-md:m-0 max-md:mt-[var(--vvt,0px)] max-md:h-[var(
 
 export const SHEET_CLOSE = 'max-md:h-11 max-md:w-11';
 
-export function SheetGrab({ onDismiss, className }: { onDismiss: () => void; className?: string }) {
-  const held = useRef<{ id: number; y: number; lastY: number; lastT: number; speed: number; sheet: HTMLElement } | null>(null);
+export const SHEET_TALL = cn(
+  'max-md:h-[min(60dvh,calc(var(--vvh,100dvh)-env(safe-area-inset-top)))] max-md:max-h-[min(92dvh,calc(var(--vvh,100dvh)-env(safe-area-inset-top)))]',
+  'max-md:data-[sheet-size=tall]:h-[min(92dvh,calc(var(--vvh,100dvh)-env(safe-area-inset-top)))]'
+);
+
+interface Held {
+  id: number;
+  y: number;
+  lastY: number;
+  lastT: number;
+  speed: number;
+  sheet: HTMLElement;
+  from: number;
+  low: number;
+  high: number;
+  wasTall: boolean;
+}
+
+function sizeAt(sheet: HTMLElement, tall: boolean): number {
+  if (tall) sheet.dataset.sheetSize = 'tall';
+  else delete sheet.dataset.sheetSize;
+  return sheet.getBoundingClientRect().height;
+}
+
+export function SheetGrab({ onDismiss, tall = false, className }: { onDismiss: () => void; tall?: boolean; className?: string }) {
+  const held = useRef<Held | null>(null);
   const timer = useRef(0);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const settle = useRef(0);
+  useEffect(
+    () => () => {
+      window.clearTimeout(timer.current);
+      window.clearTimeout(settle.current);
+    },
+    []
+  );
 
   function down(e: ReactPointerEvent<HTMLDivElement>) {
     const sheet = e.currentTarget.closest<HTMLElement>('[data-sheet]');
     if (e.button !== 0 || held.current || !sheet) return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    window.clearTimeout(settle.current);
     sheet.style.animation = 'none';
     sheet.style.transition = 'none';
-    held.current = { id: e.pointerId, y: e.clientY, lastY: e.clientY, lastT: e.timeStamp, speed: 0, sheet };
+    if (tall) sheet.style.height = '';
+    const from = sheet.getBoundingClientRect().height;
+    const wasTall = sheet.dataset.sheetSize === 'tall';
+    let low = from;
+    let high = from;
+    if (tall) {
+      low = sizeAt(sheet, false);
+      high = Math.max(low, sizeAt(sheet, true));
+      sizeAt(sheet, wasTall);
+      sheet.style.height = `${from}px`;
+    }
+    held.current = { id: e.pointerId, y: e.clientY, lastY: e.clientY, lastT: e.timeStamp, speed: 0, sheet, from, low, high, wasTall };
   }
   function move(e: ReactPointerEvent<HTMLDivElement>) {
     const h = held.current;
@@ -38,18 +81,35 @@ export function SheetGrab({ onDismiss, className }: { onDismiss: () => void; cla
     if (dt > 0) h.speed = (e.clientY - h.lastY) / dt;
     h.lastY = e.clientY;
     h.lastT = e.timeStamp;
-    h.sheet.style.transform = `translateY(${Math.max(0, e.clientY - h.y)}px)`;
+    const want = h.from - (e.clientY - h.y);
+    if (tall) h.sheet.style.height = `${Math.min(h.high, Math.max(h.low, want))}px`;
+    h.sheet.style.transform = `translateY(${Math.max(0, (tall ? h.low : h.from) - want)}px)`;
   }
   function up(e: ReactPointerEvent<HTMLDivElement>, cancelled = false) {
     const h = held.current;
     if (!h || e.pointerId !== h.id) return;
     held.current = null;
-    const pulled = Math.max(0, e.clientY - h.y);
-    const gone = !cancelled && (h.speed > SHEET_FLICK || pulled > h.sheet.getBoundingClientRect().height * SHEET_SNAP);
+    const want = h.from - (e.clientY - h.y);
+    const pulled = Math.max(0, (tall ? h.low : h.from) - want);
+    const flicked = h.speed > SHEET_FLICK && (!tall || (pulled > 0 && !h.wasTall));
+    const gone = !cancelled && (flicked || pulled > (tall ? h.low : h.sheet.getBoundingClientRect().height) * SHEET_SNAP);
     const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    h.sheet.style.transition = still ? 'none' : `transform ${SHEET_MS}ms ease-out`;
+    h.sheet.style.transition = still ? 'none' : `transform ${SHEET_MS}ms ease-out, height ${SHEET_MS}ms ease-out`;
     h.sheet.style.transform = gone ? 'translateY(100%)' : '';
-    if (gone) timer.current = window.setTimeout(onDismiss, still ? 0 : SHEET_MS);
+    if (gone) {
+      timer.current = window.setTimeout(onDismiss, still ? 0 : SHEET_MS);
+      return;
+    }
+    if (!tall) return;
+    const now = Math.min(h.high, Math.max(h.low, want));
+    const toTall = cancelled ? h.wasTall : h.speed < -SHEET_FLICK ? true : h.speed > SHEET_FLICK ? false : now > (h.low + h.high) / 2;
+    if (toTall) h.sheet.dataset.sheetSize = 'tall';
+    else delete h.sheet.dataset.sheetSize;
+    h.sheet.style.height = `${toTall ? h.high : h.low}px`;
+    const sheet = h.sheet;
+    settle.current = window.setTimeout(() => {
+      sheet.style.height = '';
+    }, still ? 0 : SHEET_MS);
   }
 
   return (
