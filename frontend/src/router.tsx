@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-dom';
 
 import { CrashPage } from '@/app/CrashPage';
@@ -198,6 +198,13 @@ const AdminPage = lazy(() => import('@/app/admin/AdminPage').then((m) => ({ defa
 
 function ServerRoute() {
   const { server } = useParams<{ server: string }>();
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.scrollSnapType = 'y mandatory';
+    return () => {
+      root.style.scrollSnapType = '';
+    };
+  }, []);
   return <ServerPage key={server} />;
 }
 
