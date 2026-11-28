@@ -1,13 +1,15 @@
-import { RiAddLine, RiBroadcastLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
+import { RiBroadcastLine, RiEyeLine, RiEyeOffLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 
+import { type DestinationRow, hiddenDestinationsAtom, setDestinationHidden } from '@/infra/atoms/settings-atoms';
 import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl, type RelayStatus } from '@/infra/api';
 import { setRail } from '@/infra/live-dock';
 import { directStatusAtom, restreamAtom, restreamMessageAtom } from '@/infra/restream';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
+import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
 import { Switch } from '@/shared-components/Switch';
@@ -31,6 +33,7 @@ export const DESTINATION_WORDS: Record<DestinationPlatform, string> = {
   custom: 'custom rtmp'
 };
 const WORDS = DESTINATION_WORDS;
+const ROWS: DestinationRow[] = ['twitch', 'kick', 'youtube', 'custom'];
 
 const SMALL = 'h-7 gap-1 px-2.5 py-0 text-xs max-md:min-h-0';
 
@@ -75,11 +78,71 @@ export function stateOf(d: Destination, r: RelayStatus | undefined = d.relay): s
   return d.has_key ? 'ready' : 'no key yet';
 }
 
-function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => void }) {
+function RowShell({ row, hidden, wide, children }: { row: DestinationRow; hidden: boolean; wide?: ReactNode; children: ReactNode }) {
+  return (
+    <li
+      id={`destination-row-${row}`}
+      data-hidden={hidden || undefined}
+      className={cn('relative flex min-w-0 flex-col gap-1.5 border border-primaryStroke px-2 py-1.5', wide ? 'rounded-card pb-2' : 'rounded-control')}
+    >
+      <div className={cn('flex min-w-0 items-center gap-2', hidden && 'opacity-50')}>{children}</div>
+      {wide}
+    </li>
+  );
+}
+
+function RowText({ row, title, sub, state, tip }: { row: DestinationRow; title: string; sub: string; state?: string; tip?: string }) {
+  const Icon = ICONS[row];
+  const words = (
+    <span
+      id={`destination-state-${row}`}
+      tabIndex={tip ? 0 : undefined}
+      data-state={state}
+      className={cn(
+        'truncate text-[11px] leading-tight text-textTertiary focus-visible:outline-none',
+        state === 'live' && 'text-increase',
+        state === 'error' && 'text-decrease'
+      )}
+    >
+      {sub}
+    </span>
+  );
+  return (
+    <>
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary">
+        <Icon aria-hidden size={15} />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-sm leading-tight text-textPrimary">{title}</span>
+        {tip ? <Tooltip content={tip}>{words}</Tooltip> : words}
+      </span>
+    </>
+  );
+}
+
+function Eye({ row, hidden }: { row: DestinationRow; hidden: boolean }) {
+  const Icon = hidden ? RiEyeOffLine : RiEyeLine;
+  const words = hidden ? 'show' : 'hide';
+  return (
+    <Tooltip content={words}>
+      <button
+        id={`destination-hide-${row}`}
+        type="button"
+        aria-label={`${words} ${WORDS[row]}`}
+        aria-pressed={hidden}
+        className={cn(ICON_BUTTON, 'h-6 w-6')}
+        onClick={() => setDestinationHidden(row, !hidden)}
+      >
+        <Icon aria-hidden size={14} />
+      </button>
+    </Tooltip>
+  );
+}
+
+function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; onStatus: (words: string) => void }) {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const live = liveOf(d, useAtomValue(directStatusAtom));
-  const Icon = ICONS[d.platform];
   const name = d.name || WORDS[d.platform];
   const flip = async (enabled: boolean) => {
     setBusy(true);
@@ -93,32 +156,40 @@ function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => voi
       setBusy(false);
     }
   };
+  const words = `${WORDS[d.platform]}, ${stateOf(d, live)}`;
   return (
-    <li id={`destination-${d.id}`} className="relative flex min-w-0 items-center gap-2 rounded-control border border-primaryStroke px-2 py-1.5">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary">
-        <Icon aria-hidden size={15} />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm leading-tight text-textPrimary">{name}</span>
-        <Tooltip content={`${WORDS[d.platform]}, ${stateOf(d, live)}`}>
-          <span
-            id={`destination-state-${d.id}`}
-            tabIndex={0}
-            data-state={live?.state ?? (d.enabled ? 'idle' : 'off')}
-            className={cn(
-              'truncate text-[11px] leading-tight text-textTertiary focus-visible:outline-none',
-              d.enabled && live?.state === 'live' && 'text-increase',
-              d.enabled && live?.state === 'error' && 'text-decrease'
-            )}
-          >
-            {WORDS[d.platform]}, {stateOf(d, live)}
-          </span>
-        </Tooltip>
-      </span>
+    <RowShell row={d.platform} hidden={hidden}>
+      <RowText row={d.platform} title={name} sub={words} tip={words} state={d.enabled ? (live?.state ?? 'idle') : 'off'} />
+      <Eye row={d.platform} hidden={hidden} />
       <Tooltip content={d.enabled ? `${name} gets the stream: switch off to skip it` : `${name} is off: switch on to send it the stream`}>
         <Switch id={`destination-switch-${d.id}`} checked={d.enabled} disabled={busy} label={`send the stream to ${name}`} onChange={(on) => void flip(on)} />
       </Tooltip>
-    </li>
+    </RowShell>
+  );
+}
+
+function Unconnected({ row, open, hidden, onStatus }: { row: DestinationRow; open: boolean; hidden: boolean; onStatus: (words: string) => void }) {
+  const [adding, setAdding] = useState(false);
+  const custom = row === 'custom';
+  const action = !open ? null : custom ? (
+    <Tooltip content="add any rtmp server">
+      <Button id="destination-connect-custom" size="sm" variant="outline" className={SMALL} disabled={adding} onClick={() => setAdding(true)}>
+        add
+      </Button>
+    </Tooltip>
+  ) : (
+    <Tooltip content={`connect ${WORDS[row]}`}>
+      <Button id={`destination-connect-${row}`} size="sm" variant="outline" className={SMALL} onClick={() => location.assign(destinationStartUrl(row))}>
+        connect
+      </Button>
+    </Tooltip>
+  );
+  return (
+    <RowShell row={row} hidden={hidden} wide={adding && open && custom ? <CustomForm onDone={() => setAdding(false)} onStatus={onStatus} /> : null}>
+      <RowText row={row} title={WORDS[row]} sub={open ? (custom ? 'no server yet' : 'not connected') : 'not on here yet'} />
+      <Eye row={row} hidden={hidden} />
+      {action}
+    </RowShell>
   );
 }
 
@@ -153,7 +224,7 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
       <input
         id="destination-custom-url"
         className={cn(INPUT, 'py-1 text-sm')}
-        placeholder="rtmps://server/app"
+        placeholder="url"
         autoComplete="off"
         spellCheck={false}
         value={url}
@@ -186,49 +257,38 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
 export function DestinationsBody() {
   const { data } = useDestinations();
   const [status, setStatus] = useState(readBack);
-  const [custom, setCustom] = useState(false);
+  const [reveal, setReveal] = useState(false);
+  const hidden = useAtomValue(hiddenDestinationsAtom);
   const relayWords = useAtomValue(restreamMessageAtom);
   if (!data) return null;
-  const taken = new Set(data.destinations.map((d) => d.platform));
-  const oauth = data.platforms.filter((p): p is Exclude<DestinationPlatform, 'custom'> => p !== 'custom' && !taken.has(p));
-  const canCustom = data.platforms.includes('custom') && !taken.has('custom');
+  const showing = reveal && hidden.length > 0;
+  const rows = ROWS.filter((r) => showing || !hidden.includes(r));
   return (
     <div className="flex flex-col gap-2">
-      {data.destinations.length > 0 ? (
-        <ul className="m-0 flex list-none flex-col gap-1 p-0">
-          {data.destinations.map((d) => (
-            <Row key={d.id} d={d} onStatus={setStatus} />
-          ))}
-        </ul>
-      ) : (
-        <p className="flex h-12 items-center justify-center rounded-card border border-dashed border-secondaryStroke px-3 text-center text-xs text-textTertiary">
-          none yet: only slop gets the stream
-        </p>
+      {hidden.length > 0 && (
+        <button
+          id="destination-show-hidden"
+          type="button"
+          aria-pressed={showing}
+          onClick={() => setReveal(!showing)}
+          className="flex items-center gap-1 self-start rounded-control text-xs text-textTertiary transition-colors duration-150 hover:text-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none"
+        >
+          {showing ? <RiEyeOffLine aria-hidden size={13} /> : <RiEyeLine aria-hidden size={13} />}
+          {showing ? 'hide hidden' : `show hidden (${hidden.length})`}
+        </button>
       )}
-      {custom && canCustom ? (
-        <CustomForm onDone={() => setCustom(false)} onStatus={setStatus} />
-      ) : oauth.length === 0 && !canCustom ? null : (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {oauth.map((p) => {
-            const Icon = ICONS[p];
-            return (
-              <Tooltip key={p} content={`connect ${WORDS[p]}`}>
-                <Button id={`destination-connect-${p}`} size="sm" variant="outline" className={SMALL} onClick={() => location.assign(destinationStartUrl(p))}>
-                  <Icon aria-hidden size={14} />
-                  {WORDS[p]}
-                </Button>
-              </Tooltip>
+      {rows.length > 0 && (
+        <ul className="m-0 flex list-none flex-col gap-1 p-0">
+          {rows.map((r) => {
+            const d = data.destinations.find((x) => x.platform === r);
+            const off = hidden.includes(r);
+            return d ? (
+              <Connected key={r} d={d} hidden={off} onStatus={setStatus} />
+            ) : (
+              <Unconnected key={r} row={r} open={data.platforms.includes(r)} hidden={off} onStatus={setStatus} />
             );
           })}
-          {canCustom && (
-            <Tooltip content="add any rtmp server">
-              <Button id="destination-connect-custom" size="sm" className={SMALL} onClick={() => setCustom(true)}>
-                <RiAddLine aria-hidden size={14} />
-                rtmp
-              </Button>
-            </Tooltip>
-          )}
-        </div>
+        </ul>
       )}
       <span id="destination-status" className="min-w-0 break-words text-xs text-textSecondary empty:-mt-2" aria-live="polite">
         {status}
