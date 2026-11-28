@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { AVATAR_LOOK, avatarFrame, avatarRadius, readAvatarLook, sameLook, squareIn } from '../src/infra/avatar-look.ts';
-import { arrangedAfterAdd, arrangedAfterRemove, AVATAR_ID, CORNER, FULL, keptOf, readKept, resizedBox, sceneOf, soloed, type Source } from '../src/infra/scene.ts';
+import { arrangedAfterAdd, arrangedAfterRemove, AVATAR_ID, CORNER, FULL, keptOf, readKept, resizedBox, sceneOf, soloed, type Source, squaredAvatarBox, squaredAvatars } from '../src/infra/scene.ts';
 import { sectionsOf } from '../src/infra/source-settings.ts';
-import { readStage, type Stage, stagedFrom, stageOf } from '../src/infra/stage.ts';
+import { readStage, type Stage, stageChanged, stagedFrom, stageOf } from '../src/infra/stage.ts';
 
 const square = (b: { w: number; h: number }) => Math.abs(b.w * 16 - b.h * 9) < 0.02;
 const avatar: Source = { id: AVATAR_ID, kind: 'avatar', label: 'avatar', box: FULL, shown: true };
@@ -42,6 +42,31 @@ test('pulling a corner of a square avatar keeps it square', () => {
   const next = resizedBox(box, -1, -1, -0.1, -0.02, box.w / box.h);
   assert.ok(square(next));
   assert.ok(next.w > box.w);
+});
+
+test('a wide avatar tile from an old preset becomes a square around the drawn avatar', () => {
+  const wide = { x: 0.3, y: 0.4, w: 0.6, h: 0.5 };
+  const box = squaredAvatarBox(wide);
+  assert.ok(square(box), JSON.stringify(box));
+  const px = (b: typeof wide) => ({ cx: (b.x + b.w / 2) * 1600, cy: (b.y + b.h / 2) * 900, side: Math.min(b.w * 1600, b.h * 900) });
+  const before = px(wide);
+  const after = px(box);
+  assert.ok(Math.abs(before.cx - after.cx) < 2 && Math.abs(before.cy - after.cy) < 2, JSON.stringify({ before, after }));
+  assert.ok(Math.abs(before.side - after.side) < 2, JSON.stringify({ before, after }));
+  assert.deepEqual(squaredAvatarBox(box), box);
+  const tall = squaredAvatarBox({ x: 0.1, y: 0.1, w: 0.2, h: 0.8 });
+  assert.ok(square(tall), JSON.stringify(tall));
+  const fixed = squaredAvatars([{ ...avatar, box: wide }, { ...screen, box: wide }]);
+  assert.deepEqual(fixed[0]!.box, box);
+  assert.deepEqual(fixed[1]!.box, wide);
+  const again = squaredAvatars(fixed);
+  assert.equal(again[0], fixed[0]);
+  const rest = { levels: {}, sounds: {}, names: {}, camera: '', mic: '', mirror: true, expressions: true, background: '', model: null, solo: false };
+  const stage = readStage(JSON.parse(JSON.stringify(stageOf([{ ...avatar, box: wide }, { ...screen, box: wide }], rest))))!;
+  assert.deepEqual(stage.scene[AVATAR_ID]!.box, box);
+  assert.deepEqual(stage.scene.s1!.box, wide);
+  const { sources: back } = stagedFrom(stage, [avatar, screen], [], () => 'i1');
+  assert.ok(!stageChanged(stage, stageOf(back, rest), []));
 });
 
 test('the look rides with the source through kept scenes and presets', () => {

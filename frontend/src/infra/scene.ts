@@ -32,6 +32,13 @@ export const layerOf = (s: Source): Layer =>
       ? { id: s.id, kind: 'avatar', ...(s.look && { look: s.look }), ...visibleBox(s.box) }
       : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...visibleBox(s.box) };
 
+const isSquare = (box: Box) => Math.abs(box.w - box.h * SQUARE) < 0.002;
+
+export const squaredAvatarBox = (box: Box): Box => (isSquare(box) ? box : clampBox(centeredSquare(box)));
+
+export const squaredAvatars = (sources: readonly Source[]): Source[] =>
+  sources.map((s) => (s.kind === 'avatar' && !isSquare(s.box) ? { ...s, box: squaredAvatarBox(s.box) } : s));
+
 export const isVideoSource = (s: Source) => s.kind === 'camera' || s.kind === 'screen';
 
 export const sceneOf = (sources: readonly Source[]): Scene => ({ layers: sources.filter((s) => s.shown).map(layerOf) });

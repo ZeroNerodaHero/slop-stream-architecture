@@ -22,7 +22,7 @@ import {
   warmModelFiles
 } from '@/infra/face';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
-import { AVATAR_LOOK, type AvatarLook, lookOf, sameLook } from '@/infra/avatar-look';
+import { AVATAR_LOOK, type AvatarLook, lookOf, sameLook, SQUARE } from '@/infra/avatar-look';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { faderMaster, faderRows, keepLevel, keptLevel } from '@/infra/mix-levels';
 import { startRestream, stopRestream } from '@/infra/restream';
@@ -66,6 +66,7 @@ import {
   roleOf,
   sceneOf,
   soloed,
+  squaredAvatars,
   type Source,
   validPreset
 } from '@/infra/scene';
@@ -1463,9 +1464,9 @@ function setSources(next: Source[]) {
   if (arriving) next = arrivedFrom(arriving, store.get(sourcesAtom), next);
   const kept = readKept(store.get(storedSoloAtom));
   if (kept) {
-    next = restoredFrom(kept, store.get(sourcesAtom), next);
+    next = squaredAvatars(restoredFrom(kept, store.get(sourcesAtom), next));
     store.set(storedSoloAtom, { ...kept, ...keptOf(next) });
-  }
+  } else next = squaredAvatars(next);
   store.set(sourcesAtom, next);
   dragScene = null;
   sceneSend.schedule();
@@ -1528,12 +1529,13 @@ export function streamSourceBox(id: string, box: Box) {
 
 function resizeRatio(id: string, from: Box, free: boolean): number | null {
   const s = store.get(sourcesAtom).find((x) => x.id === id);
-  return s?.ratio ?? (free && s?.kind !== 'avatar' ? null : from.w / from.h);
+  if (s?.kind === 'avatar') return SQUARE;
+  return s?.ratio ?? (free ? null : from.w / from.h);
 }
 
 export function resizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) {
   withSource(id, (s) => {
-    if (!isModelSource(s)) return { ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free && s.kind !== 'avatar' ? null : from.w / from.h)) };
+    if (!isModelSource(s)) return { ...s, box: resizedBox(from, sx, sy, dx, dy, resizeRatio(id, from, free)) };
     return { ...s, box: resizedLoose(from, sx, sy, dx, dy, from.w / from.h) };
   });
 }
