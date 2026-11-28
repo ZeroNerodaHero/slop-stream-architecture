@@ -1,15 +1,4 @@
-import {
-  RiAddLine,
-  RiCloseLine,
-  RiComputerLine,
-  RiEyeLine,
-  RiEyeOffLine,
-  RiImageLine,
-  RiMusic2Line,
-  RiUserSmileLine,
-  RiUserVoiceLine,
-  RiVidiconLine
-} from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiComputerLine, RiEyeLine, RiEyeOffLine, RiMusic2Line, RiUserSmileLine, RiUserVoiceLine, RiVidiconLine } from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -18,18 +7,14 @@ import { api } from '@/infra/api';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
   addAvatar,
-  addImage,
   cameraAtom,
   cameraOn,
   canShareScreenAtom,
-  deleteImage,
   hasAvatarAtom,
   hasCameraAtom,
-  libraryAtom,
   modelAtom,
   modelLoadingAtom,
   moveSourceTo,
-  placeImage,
   publishPhaseAtom,
   removeSource,
   screenShareSupported,
@@ -43,21 +28,11 @@ import {
   streamNameAtom,
   toggleSource
 } from '@/infra/atoms/publish-atoms';
-import {
-  addSound,
-  removeSound,
-  renameSound,
-  renameSource,
-  soundPlayingAtom,
-  soundsAtom,
-  soundStatusAtom,
-  sourceNamesAtom,
-  sourceNameOf
-} from '@/infra/atoms/source-atoms';
+import { removeSound, renameSound, renameSource, soundPlayingAtom, soundsAtom, soundStatusAtom, sourceNamesAtom, sourceNameOf } from '@/infra/atoms/source-atoms';
 import { livePanelsAtom, type Place } from '@/infra/live-dock';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import type { Source } from '@/infra/scene';
-import { SOUND_MAX_BYTES, SOUNDS_MAX, type SoundSource } from '@/infra/source-settings';
+import { type SoundSource } from '@/infra/source-settings';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
@@ -86,14 +61,9 @@ function AddMenu({ onModel }: { onModel: () => void }) {
   const root = useRef<HTMLDivElement | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  const soundRef = useRef<HTMLInputElement | null>(null);
-  const soundCount = useAtomValue(soundsAtom).length;
   const canShare = useAtomValue(canShareScreenAtom);
   const hasCamera = useAtomValue(hasCameraAtom);
   const hasAvatar = useAtomValue(hasAvatarAtom);
-  const library = useAtomValue(libraryAtom);
-  const name = useAtomValue(streamNameAtom);
 
   useEffect(() => {
     if (!open) return;
@@ -128,7 +98,7 @@ function AddMenu({ onModel }: { onModel: () => void }) {
     const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
     const below = window.innerHeight - r.bottom - 4;
     setPlace(below >= h || below >= r.top ? { left, top: r.bottom + 4 } : { left, top: Math.max(8, r.top - 4 - h) });
-  }, [open, library.length]);
+  }, [open]);
 
   return (
     <div ref={root} className="px-2 py-2">
@@ -210,94 +180,9 @@ function AddMenu({ onModel }: { onModel: () => void }) {
                 {!canShare && <span className="ml-auto text-xs text-textTertiary">{SCREEN_SLOTS} at most</span>}
               </button>
             )}
-            <button
-              id="add-image"
-              role="menuitem"
-              type="button"
-              className={MENU_ITEM}
-              onClick={() => {
-                setOpen(false);
-                fileRef.current?.click();
-              }}
-            >
-              <RiImageLine aria-hidden size={16} /> image or gif
-            </button>
-            <button
-              id="add-sound"
-              role="menuitem"
-              type="button"
-              disabled={soundCount >= SOUNDS_MAX}
-              className={MENU_ITEM}
-              onClick={() => {
-                setOpen(false);
-                soundRef.current?.click();
-              }}
-            >
-              <RiMusic2Line aria-hidden size={16} /> custom sound
-              {soundCount >= SOUNDS_MAX && <span className="ml-auto text-xs text-textTertiary">{SOUNDS_MAX} at most</span>}
-            </button>
-            {library.length > 0 && (
-              <div className="border-t border-primaryStroke px-3 pb-1 pt-2">
-                <p className="mb-1.5 text-xs text-textTertiary">your pictures</p>
-                <ul className="flex list-none flex-wrap gap-1.5 p-0">
-                  {library.map((asset) => (
-                    <li key={asset.id} className="group/pic relative">
-                      <button
-                        id={`library-${asset.id}`}
-                        type="button"
-                        aria-label="put this picture on the stream"
-                        className="block h-10 w-14 overflow-hidden rounded-control border border-primaryStroke bg-black transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
-                        onClick={() => {
-                          setOpen(false);
-                          void placeImage(asset.id, 'picture');
-                        }}
-                      >
-                        <img src={api.assetUrl(name, asset.id)} alt="" draggable={false} className="h-full w-full object-contain" />
-                      </button>
-                      <Tooltip content="delete this picture">
-                        <button
-                          id={`library-delete-${asset.id}`}
-                          type="button"
-                          aria-label="delete this picture"
-                          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-avatar border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/pic:opacity-100"
-                          onClick={() => void deleteImage(asset.id)}
-                        >
-                          <RiCloseLine aria-hidden size={10} />
-                        </button>
-                      </Tooltip>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>,
           document.body
         )}
-      <input
-        ref={fileRef}
-        id="image-file"
-        type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = '';
-          if (file) void addImage(file);
-        }}
-      />
-      <input
-        ref={soundRef}
-        id="sound-file"
-        type="file"
-        accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.m4a,.aac,.flac,.webm"
-        aria-label={`a sound file, ${SOUND_MAX_BYTES / (1024 * 1024)} MB at most`}
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = '';
-          if (file) void addSound(file);
-        }}
-      />
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { readPreset } from '../src/infra/live-dock.ts';
+import { readPreset, readPresets } from '../src/infra/live-dock.ts';
 import { arrivedFrom, keptOf, type Source } from '../src/infra/scene.ts';
+import { readSounds } from '../src/infra/source-settings.ts';
 import { gapWords, readStage, sameStage, type Stage, stageChanged, stagedFrom, stageOf, storedStage, withGoneScreens } from '../src/infra/stage.ts';
 
 const cam: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: { x: 0.5, y: 0.5, w: 0.4, h: 0.4 }, shown: true, fit: 'cover' };
@@ -203,4 +204,26 @@ test('dirty ignores what a reload changes on its own: picture ids, key order, a 
   const moved = { ...rest, levels: { ...rest.levels, desktop: { level: 0.5, muted: false } } };
   assert.equal(stageChanged(saved, stageOf([cam, screen, logo], moved), []), true);
   assert.equal(sameStage(saved, saved), true);
+});
+
+test('a stored preset with a picture and a sound still loads with the + menu entries gone: the picture comes back from the library, the sound stays', () => {
+  const stored = JSON.parse(
+    JSON.stringify({
+      list: [{ id: 'p1', name: 'show', stage: stageOf([screen, cam, logo], rest) }],
+      active: 'p1'
+    })
+  );
+  const presets = readPresets(stored);
+  const stage = presets.list[0]?.stage;
+  assert.ok(stage);
+  assert.deepEqual(stage.images.i1, { asset: 7, label: 'logo', ratio: 0.5 });
+  assert.deepEqual(stage.sounds.aboing1, { name: 'boing', volume: 0.4, loop: true, hear: false });
+  const { sources, gaps } = stagedFrom(stage, [], [7], newId);
+  assert.deepEqual(gaps, []);
+  const picture = sources.find((s) => s.kind === 'image');
+  assert.equal(picture?.asset, 7);
+  assert.deepEqual(picture?.box, logo.box);
+  assert.deepEqual(readSounds([{ id: 'aboing1', name: 'boing', volume: 0.4, loop: true, hear: false }]), [
+    { id: 'aboing1', name: 'boing', volume: 0.4, loop: true, hear: false }
+  ]);
 });

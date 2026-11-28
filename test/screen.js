@@ -123,22 +123,6 @@ async function flowingVideos(p) {
   const b = await sample();
   return Object.keys(b).filter((k) => b[k] > (a[k] || 0)).length;
 }
-const makePng = (p) =>
-  p.evaluate(() => {
-    const c = document.createElement('canvas');
-    c.width = 60;
-    c.height = 40;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#39d2c0';
-    ctx.fillRect(0, 0, 60, 40);
-    ctx.clearRect(10, 10, 40, 20);
-    return c.toDataURL('image/png');
-  });
-const imageLoaded = (p, id) => p.waitForFunction((sel) => {
-  const i = document.querySelector(sel);
-  return !!i && i.complete && i.naturalWidth > 0;
-}, `#layer-${id}-img`, { timeout: 10000 });
-
 const CAMERA = { id: 'tile-0', label: 'camera' };
 const SCREEN2 = { id: 'tile-2', label: 'screen 2' };
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
@@ -265,49 +249,28 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     return `mine ${fmt(mine)} · theirs ${fmt(theirs)}`;
   });
 
-  await step('a picture added from the +: up to the api, a layer on both sides with its own 3:2 shape, no new stream', async () => {
-    const png = await makePng(pub);
-    await pub.click('#add-source');
-    await pub.click('#add-image');
-    await pub.setInputFiles('#image-file', { name: 'border.png', mimeType: 'image/png', buffer: Buffer.from(png.split(',')[1], 'base64') });
-    await pub.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
-    const goes = ((await pub.textContent('#crop-size')) || '').trim();
-    expect(goes === 'goes up as it is: 60×40 png', `the dialog says "${goes}"`);
-    await pub.click('#crop-use');
-    await pub.waitForSelector('#source-i1', { timeout: 15000 });
-    const mine = await waitBox(pub, 'i1', { x: 0.35, y: 0.322, w: 0.3, h: 0.356 }, 5000);
-    expect(mine.kind === 'image', `the picture layer is a ${mine.kind}`);
-    expect(Math.abs(mine.h / mine.w - 1.185) < 0.05, `the picture's box is ${fmt(mine)}, not 3:2`);
-    await imageLoaded(pub, 'i1');
-    const theirs = await waitBox(w, 'i1', mine, 5000);
-    await imageLoaded(w, 'i1');
-    const n = await flowingVideos(w);
-    expect(n === 2, `${n} video streams flowing, not 2: a picture is not a stream`);
-    return `mine ${fmt(mine)} · theirs ${fmt(theirs)}`;
-  });
-
-  await step("the order follows the sidebar: the picture's row dragged down by its handle goes under the camera on both sides, dragged back up it is over it again, and the handle's arrow keys do the same", async () => {
-    await dragRow(pub, 'i1', 1);
-    await waitOrder(pub, ['s1', 'i1', 'cam']);
-    await waitOrder(w, ['s1', 'i1', 'cam']);
-    await dragRow(pub, 'i1', -1);
-    await waitOrder(pub, ['s1', 'cam', 'i1']);
-    await waitOrder(w, ['s1', 'cam', 'i1']);
-    await pub.focus('#source-drag-i1');
+  await step("the order follows the sidebar: the camera's row dragged down by its handle goes under the screen on both sides, dragged back up it is over it again, and the handle's arrow keys do the same", async () => {
+    await dragRow(pub, 'cam', 1);
+    await waitOrder(pub, ['cam', 's1']);
+    await waitOrder(w, ['cam', 's1']);
+    await dragRow(pub, 'cam', -1);
+    await waitOrder(pub, ['s1', 'cam']);
+    await waitOrder(w, ['s1', 'cam']);
+    await pub.focus('#source-drag-cam');
     await pub.keyboard.press('Space');
     await pub.keyboard.press('ArrowDown');
     await pub.keyboard.press('Space');
-    await waitOrder(pub, ['s1', 'i1', 'cam']);
-    await waitOrder(w, ['s1', 'i1', 'cam']);
+    await waitOrder(pub, ['cam', 's1']);
+    await waitOrder(w, ['cam', 's1']);
     await pub.keyboard.press('Space');
     await pub.keyboard.press('ArrowUp');
     await pub.keyboard.press('Space');
-    await waitOrder(pub, ['s1', 'cam', 'i1']);
-    await waitOrder(w, ['s1', 'cam', 'i1']);
+    await waitOrder(pub, ['s1', 'cam']);
+    await waitOrder(w, ['s1', 'cam']);
     await pub.keyboard.press('Space');
     await pub.keyboard.press('ArrowDown');
     await pub.keyboard.press('Escape');
-    await waitOrder(pub, ['s1', 'cam', 'i1']);
+    await waitOrder(pub, ['s1', 'cam']);
     return 'dragged down and up, then the keys, then escape';
   });
 
@@ -368,14 +331,12 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     return 'a corner, then a tile';
   });
 
-  await step('a watcher arriving now gets the whole frame at once: the screen big, the camera and the picture over it, the second screen a tile', async () => {
+  await step('a watcher arriving now gets the whole frame at once: the screen big, the camera over it, the second screen a tile', async () => {
     const late = await newWatcher();
     await late.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded' });
     await waitStatus(late, /^watching$/);
     await waitBox(late, 's1', FULL);
     await waitBox(late, 'cam', SIZED);
-    await waitBox(late, 'i1', { x: 0.35, y: 0.322, w: 0.3, h: 0.356 });
-    await imageLoaded(late, 'i1');
     await waitTiles(late, [SCREEN2]);
     const ids = [await trackId(late, '#video'), await trackId(late, '#layer-cam-video'), await trackId(late, '#tile-2-video')];
     expect(ids.every(Boolean) && new Set(ids).size === 3, `the three videos do not play three tracks: ${JSON.stringify(ids)}`);
