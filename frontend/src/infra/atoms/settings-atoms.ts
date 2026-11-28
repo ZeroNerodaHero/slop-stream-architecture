@@ -178,6 +178,13 @@ export function setDestinationHidden(row: DestinationRow, hidden: boolean) {
   store.set(storedHiddenDestinationsAtom, hidden ? [...rest, row] : rest);
 }
 
+const storedRevealHiddenDestinationsAtom = atomWithStorage<unknown>('settings.revealHiddenDestinations', false, undefined, { getOnInit: true });
+export const revealHiddenDestinationsAtom = atom((get) => get(storedRevealHiddenDestinationsAtom) === true);
+
+export function setRevealHiddenDestinations(on: boolean) {
+  store.set(storedRevealHiddenDestinationsAtom, on);
+}
+
 try {
   migrateDebugSettings(localStorage);
 } catch {

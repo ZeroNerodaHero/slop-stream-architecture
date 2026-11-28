@@ -3,7 +3,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, type ReactNode, useState } from 'react';
 
-import { type DestinationRow, hiddenDestinationsAtom, setDestinationHidden } from '@/infra/atoms/settings-atoms';
+import {
+  type DestinationRow,
+  hiddenDestinationsAtom,
+  revealHiddenDestinationsAtom,
+  setDestinationHidden,
+  setRevealHiddenDestinations
+} from '@/infra/atoms/settings-atoms';
 import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl, type RelayStatus } from '@/infra/api';
 import { setRail } from '@/infra/live-dock';
 import { directStatusAtom, restreamAtom, restreamMessageAtom } from '@/infra/restream';
@@ -321,7 +327,7 @@ function DestinationsBody({ reveal }: { reveal: boolean }) {
 
 export function DestinationsModule({ strip = false }: { strip?: boolean }) {
   const { data } = useDestinations();
-  const [reveal, setReveal] = useState(false);
+  const reveal = useAtomValue(revealHiddenDestinationsAtom);
   const hidden = useAtomValue(hiddenDestinationsAtom).length;
   if (!data) return null;
   const count = data.destinations.length;
@@ -348,7 +354,7 @@ export function DestinationsModule({ strip = false }: { strip?: boolean }) {
       section="destinations"
       id="live-destinations"
       title="destinations"
-      aside={hidden > 0 && <ShowHidden count={hidden} showing={reveal} onToggle={() => setReveal(!reveal)} />}
+      aside={hidden > 0 && <ShowHidden count={hidden} showing={reveal} onToggle={() => setRevealHiddenDestinations(!reveal)} />}
       className="border-b border-primaryStroke px-3 py-2.5"
       bodyClassName="pt-2"
     >
