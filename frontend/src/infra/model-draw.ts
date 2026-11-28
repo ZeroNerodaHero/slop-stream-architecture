@@ -5,6 +5,7 @@ import type { RigInfo } from '@/infra/face-wire';
 import { loadModel } from '@/infra/model-load';
 import { buildRig } from '@/infra/model-rig';
 import { type Pose, SHAPE_COUNT } from '@/infra/pose';
+import { HERE } from '@/infra/here';
 
 export interface ModelScene {
   readonly rig: RigInfo;
@@ -55,7 +56,7 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
     renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
   } catch {
     VRMUtils.deepDispose(vrm.scene);
-    throw new Error('this browser will not draw 3d here (no webgl), so it cannot show a model');
+    throw new Error(`${HERE} will not draw 3d here (no webgl), so it cannot show a model`);
   }
   renderer.setSize(canvas.width, canvas.height, false);
   const scene = new Scene();

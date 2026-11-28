@@ -18,6 +18,7 @@ import { Button } from '@/shared-components/Button';
 import { Select, type SelectOption } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { HERE } from '@/infra/here';
 
 const EVENTS: readonly { event: SoundEvent; label: string; id: string }[] = [
   { event: 'notification', label: 'notifications', id: 'notification' },
@@ -66,7 +67,7 @@ function SoundRow({ event, label, id }: { event: SoundEvent; label: string; id: 
       if (refusal) return setNote(refusal);
       await keepCustom(event, chosen, chosen.name);
     } catch {
-      setNote('not saved: this browser would not keep the file');
+      setNote(`not saved: ${HERE} would not keep the file`);
     } finally {
       setBusy(false);
     }
@@ -77,7 +78,7 @@ function SoundRow({ event, label, id }: { event: SoundEvent; label: string; id: 
     try {
       await dropCustom(event);
     } catch {
-      setNote('not removed: this browser would not let go of the file');
+      setNote(`not removed: ${HERE} would not let go of the file`);
     }
   }
 

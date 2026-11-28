@@ -35,6 +35,7 @@ import { StreamStill } from '@/shared-components/StreamStill';
 import { INPUT } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { HERE } from '@/infra/here';
 
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 rounded-control border border-transparent p-0.5 bubble:p-px text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
@@ -665,7 +666,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
         </p>
       );
     } else if (!me || choices.some((c) => c.on && c.list !== 'groups')) {
-      words = <p className={NOTE}>nobody yet. find someone above.{!me && ' who you follow is kept in this browser.'}</p>;
+      words = <p className={NOTE}>nobody yet. find someone above.{!me && ` who you follow is kept in ${HERE}.`}</p>;
     } else {
       words = (
         <p className={NOTE}>

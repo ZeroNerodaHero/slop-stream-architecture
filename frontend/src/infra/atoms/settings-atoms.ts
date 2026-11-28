@@ -19,6 +19,9 @@ import {
   toCssVars
 } from '@/infra/theme';
 
+export const restreamDirectAtom = atomWithStorage<boolean>('settings.restreamDirect', true, undefined, { getOnInit: true });
+export const setRestreamDirect = (on: boolean) => store.set(restreamDirectAtom, on);
+
 export type ChatSide = 'left' | 'right' | 'modal';
 
 export const CHAT_SIDES: readonly ChatSide[] = ['left', 'right', 'modal'];

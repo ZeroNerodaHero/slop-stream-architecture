@@ -13,6 +13,7 @@ import { PageFrame } from '@/shared-components/PageFrame';
 import { useTurnstile } from '@/shared-components/Turnstile';
 import { INPUT } from '@/shared-components/input';
 import { BUTTON, Field, Status } from '@/shared-components/user-modal/parts';
+import { HERE } from '@/infra/here';
 
 const label = providerLabel;
 
@@ -125,7 +126,7 @@ function PickName() {
 
   return (
     <PageFrame title="pick your name">
-      {me && <p className="mb-4 text-sm text-textTertiary">you are logged in as {me} in this browser; this makes a second account.</p>}
+      {me && <p className="mb-4 text-sm text-textTertiary">you are logged in as {me} in {HERE}; this makes a second account.</p>}
       <p className="mb-4 text-textSecondary">
         {provider ? `${label(provider)} is new here.` : ''} your name is yours alone: your page is /watch/&lt;name&gt;, and it can change once every 30 days.
       </p>

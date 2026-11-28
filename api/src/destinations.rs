@@ -1067,7 +1067,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
             v
         })
         .collect();
-    Ok(Json(json!({ "platforms": platforms, "relay": s.relay.on(), "destinations": list })))
+    Ok(Json(json!({ "platforms": platforms, "relay": s.relay.on(), "direct": s.relay.direct(), "destinations": list })))
 }
 
 #[derive(Deserialize)]

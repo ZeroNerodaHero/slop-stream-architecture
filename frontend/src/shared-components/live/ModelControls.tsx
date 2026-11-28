@@ -30,6 +30,7 @@ import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
 import { Select } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { HERE } from '@/infra/here';
 
 const READING: Record<FaceReading, { said: string; more: string }> = {
   idle: { said: '', more: '' },
@@ -42,7 +43,7 @@ const READING: Record<FaceReading, { said: string; more: string }> = {
 };
 type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
-const HIDDEN_TAB = 'in this browser the model stops moving while this tab is hidden';
+const HIDDEN_TAB = `in ${HERE} the model stops moving while this tab is hidden`;
 const WELL = cn(ICON_BUTTON, 'relative cursor-pointer flex-col gap-0.5 has-[:focus-visible]:border-primaryBlue');
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 

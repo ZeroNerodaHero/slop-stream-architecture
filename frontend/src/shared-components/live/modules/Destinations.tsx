@@ -3,9 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, useState } from 'react';
 
-import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl } from '@/infra/api';
+import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl, type RelayStatus } from '@/infra/api';
 import { setRail } from '@/infra/live-dock';
-import { restreamAtom, restreamMessageAtom } from '@/infra/restream';
+import { directStatusAtom, restreamAtom, restreamMessageAtom } from '@/infra/restream';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
@@ -60,9 +60,15 @@ function readBack(): string {
   return back;
 }
 
-export function stateOf(d: Destination): string {
+export function liveOf(d: Destination, direct: Record<string, RelayStatus>): RelayStatus | undefined {
+  const mine = direct[d.id];
+  if (!mine) return d.relay;
+  const said = d.relay?.state === 'error' ? d.relay.message : d.relay?.note;
+  return said && mine.state !== 'error' ? { ...mine, note: said } : mine;
+}
+
+export function stateOf(d: Destination, r: RelayStatus | undefined = d.relay): string {
   if (!d.enabled) return 'off';
-  const r = d.relay;
   if (r?.state === 'live') return r.note ? `live, ${r.note}` : 'live';
   if (r?.state === 'connecting') return 'connecting';
   if (r?.state === 'error') return r.message ? `error: ${r.message}` : 'error';
@@ -72,6 +78,7 @@ export function stateOf(d: Destination): string {
 function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => void }) {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
+  const live = liveOf(d, useAtomValue(directStatusAtom));
   const Icon = ICONS[d.platform];
   const name = d.name || WORDS[d.platform];
   const flip = async (enabled: boolean) => {
@@ -93,18 +100,18 @@ function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => voi
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm leading-tight text-textPrimary">{name}</span>
-        <Tooltip content={`${WORDS[d.platform]}, ${stateOf(d)}`}>
+        <Tooltip content={`${WORDS[d.platform]}, ${stateOf(d, live)}`}>
           <span
             id={`destination-state-${d.id}`}
             tabIndex={0}
-            data-state={d.relay?.state ?? (d.enabled ? 'idle' : 'off')}
+            data-state={live?.state ?? (d.enabled ? 'idle' : 'off')}
             className={cn(
               'truncate text-[11px] leading-tight text-textTertiary focus-visible:outline-none',
-              d.enabled && d.relay?.state === 'live' && 'text-increase',
-              d.enabled && d.relay?.state === 'error' && 'text-decrease'
+              d.enabled && live?.state === 'live' && 'text-increase',
+              d.enabled && live?.state === 'error' && 'text-decrease'
             )}
           >
-            {WORDS[d.platform]}, {stateOf(d)}
+            {WORDS[d.platform]}, {stateOf(d, live)}
           </span>
         </Tooltip>
       </span>

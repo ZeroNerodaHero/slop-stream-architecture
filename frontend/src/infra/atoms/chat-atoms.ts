@@ -19,6 +19,7 @@ import { store } from '@/infra/store';
 import { fromWire, picturesOf } from '@/infra/chat-wire';
 import { type LinkEmbed, linkEmbedOf } from '@/infra/link-embed';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
+import { HERE } from '@/infra/here';
 
 export interface ChatLine {
   id: string;
@@ -173,7 +174,7 @@ interface RtHold {
   synced: boolean;
 }
 
-const EVICTED_WORDS = 'too many chats are open in this browser, close one to bring this back';
+const EVICTED_WORDS = `too many chats are open in ${HERE}, close one to bring this back`;
 
 export function isValidNick(nick: string): boolean {
   return NICK_RE.test(nick.trim());

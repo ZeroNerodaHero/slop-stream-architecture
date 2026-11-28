@@ -68,6 +68,7 @@ import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import { inTauri } from '@/infra/update-check';
 import type { Tone } from '@/shared-components/StatusLine';
+import { HERE } from '@/infra/here';
 
 export type PublishPhase =
   | 'camera-off'
@@ -668,7 +669,7 @@ async function downloadDemo(choice: ModelChoice & { kind: 'demo' }, bytes: numbe
 async function modelFile(choice: ModelChoice, bytes = 0): Promise<ArrayBuffer> {
   if (choice.kind === 'kept') {
     const file = await keptFile(choice.id);
-    if (!file) throw new ModelGone('that model is not kept in this browser any more. pick the file again');
+    if (!file) throw new ModelGone(`that model is not kept in ${HERE} any more. pick the file again`);
     return file;
   }
   const kept = await keptDemoFile(choice.id, choice.v);

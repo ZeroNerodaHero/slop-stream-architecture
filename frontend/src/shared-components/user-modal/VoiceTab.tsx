@@ -45,6 +45,7 @@ import { Select } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Block, CHECKBOX, Info, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
+import { HERE } from '@/infra/here';
 
 const optionsOf = (list: readonly VoiceDevice[]) => [{ value: DEFAULT_DEVICE, label: 'default' }, ...list.map((d) => ({ value: d.id, label: d.label }))];
 
@@ -142,7 +143,7 @@ export function VoiceTab() {
                 speakers
               </span>
               <div className="flex items-center gap-2">
-                <Tooltip content={SINK_SUPPORTED ? null : 'not supported in this browser'}>
+                <Tooltip content={SINK_SUPPORTED ? null : `not supported in ${HERE}`}>
                   <Select
                     id="voice-output"
                     label="speakers"
@@ -256,7 +257,7 @@ function InputProcessing() {
           onChange={setVoiceIsolation}
         />
         {isolation && failed && (
-          <Status id="voice-isolation-note" text="voice isolation could not start in this browser: the browser's noise suppression is used" quiet />
+          <Status id="voice-isolation-note" text={`voice isolation could not start in ${HERE}: the built in noise suppression is used`} quiet />
         )}
         <Toggle
           id="voice-echo"

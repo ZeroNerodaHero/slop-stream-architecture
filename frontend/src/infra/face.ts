@@ -2,6 +2,7 @@ import weights from '@/assets/face_landmarker.task?url';
 import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelStats, RigInfo, ToFaceWorker } from '@/infra/face-wire';
 import FaceWorker from '@/infra/face.worker?worker';
 import faceWorkerUrl from '@/infra/face.worker?worker&url';
+import { HERE } from '@/infra/here';
 
 export type { FaceLines, FaceMarks, FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
@@ -101,7 +102,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     canvas.width = WIDTH;
     canvas.height = HEIGHT;
     const ctx = canvas.getContext('bitmaprenderer');
-    if (!ctx) throw new Error('this browser cannot draw a model');
+    if (!ctx) throw new Error(`${HERE} cannot draw a model`);
     track = canvas.captureStream(FPS).getVideoTracks()[0]!;
     paint = (bitmap) => ctx.transferFromImageBitmap(bitmap);
   }

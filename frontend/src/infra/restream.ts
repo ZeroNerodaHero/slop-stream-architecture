@@ -1,20 +1,27 @@
 import { atom } from 'jotai';
 
-import { api, ApiError, messageOf, type RelayGrant } from '@/infra/api';
+import { api, ApiError, type DirectGrant, messageOf, type RelayGrant, type RelayStatus } from '@/infra/api';
+import { restreamDirectAtom } from '@/infra/atoms/settings-atoms';
+import type { DirectSender, DirectStatus } from '@/infra/desktop/direct';
+import { HERE } from '@/infra/here';
 import { type Box, fitOf, isVideoLayer, type Layer, type Scene } from '@/infra/relay';
 import Clock from '@/infra/restream-clock.worker?worker';
 import { store } from '@/infra/store';
+import { inTauri } from '@/infra/update-check';
 import { colorOf } from '@/shared-components/GeneratedAvatar';
 
 export type RestreamState = 'off' | 'starting' | 'on' | 'retrying';
 export const restreamAtom = atom<RestreamState>('off');
 export const restreamMessageAtom = atom('');
+export const directStatusAtom = atom<Record<string, RelayStatus>>({});
 
 const FPS = 30;
 const VIDEO_BITRATE = 4_500_000;
 const START_KBPS = 2500;
 const MIN_KBPS = 1500;
 const AUDIO_BITRATE = 128_000;
+const DIRECT_AUDIO_KBPS = 160;
+const NO_H264 = `${HERE} cannot send h.264`;
 const ICE_WAIT_MS = 2000;
 const RETRY_MS = [2000, 5000, 15000, 30000];
 const LOST_MS = 8000;
@@ -78,6 +85,7 @@ class Compositor {
   private readonly images = new Map<string, HTMLImageElement>();
   private readonly clock: Worker;
   private readonly inputs: RestreamInputs;
+  onDraw: ((canvas: HTMLCanvasElement) => void) | null = null;
 
   constructor(inputs: RestreamInputs, width: number, height: number) {
     this.inputs = inputs;
@@ -208,6 +216,7 @@ class Compositor {
     }
     const t = this.track as MediaStreamTrack & { requestFrame?: () => void };
     t.requestFrame?.();
+    this.onDraw?.(this.canvas);
   }
 }
 
@@ -240,7 +249,7 @@ async function iceDone(pc: RTCPeerConnection): Promise<void> {
 
 async function whip(grant: RelayGrant, video: MediaStreamTrack, audio: MediaStreamTrack | null): Promise<{ pc: RTCPeerConnection; resource: string | null }> {
   const codecs = h264First(RTCRtpSender.getCapabilities('video')?.codecs ?? []);
-  if (!codecs.length) throw new Error('this browser cannot send h.264');
+  if (!codecs.length) throw new Error(NO_H264);
   const pc = new RTCPeerConnection();
   try {
     const v = pc.addTransceiver(video, { direction: 'sendonly', sendEncodings: [{ maxBitrate: VIDEO_BITRATE, maxFramerate: FPS }] });
@@ -279,6 +288,8 @@ interface Running {
   tries: number;
   timer: ReturnType<typeof setTimeout> | null;
   lostAt: number;
+  direct: DirectSender | null;
+  note: string;
 }
 
 let running: Running | null = null;
@@ -319,7 +330,9 @@ async function connect(r: Running): Promise<void> {
   } catch (err) {
     if (running !== r) return;
     if (err instanceof ApiError && (err.status === 404 || err.status === 409 || err.status === 401 || err.status === 403)) {
+      const note = err.status === 404 ? r.note : '';
       stopRestream({ quiet: true });
+      if (note) say('off', note);
       return;
     }
     later(r, `could not start the relay: ${messageOf(err)}`);
@@ -359,9 +372,9 @@ async function connect(r: Running): Promise<void> {
     };
   } catch (err) {
     if (running !== r) return;
-    if (messageOf(err) === 'this browser cannot send h.264') {
+    if (messageOf(err) === NO_H264) {
       stopRestream({ quiet: true });
-      say('off', 'this browser cannot send h.264, so only slop gets the stream');
+      say('off', `${NO_H264}, so only slop gets the stream`);
       return;
     }
     later(r, messageOf(err));
@@ -371,10 +384,88 @@ async function connect(r: Running): Promise<void> {
 export function startRestream(inputs: RestreamInputs) {
   stopRestream({ quiet: true });
   if (typeof RTCPeerConnection === 'undefined' || typeof HTMLCanvasElement.prototype.captureStream !== 'function') return;
-  const r: Running = { inputs, compositor: null, pc: null, resource: null, token: null, silent: null, tries: 0, timer: null, lostAt: 0 };
+  const r: Running = { inputs, compositor: null, pc: null, resource: null, token: null, silent: null, tries: 0, timer: null, lostAt: 0, direct: null, note: '' };
   running = r;
-  say('starting', 'starting the relay');
+  say('starting', directWanted() ? `starting to send from ${HERE}` : 'starting the relay');
+  void begin(r);
+}
+
+export function directWanted(): boolean {
+  return inTauri() && store.get(restreamDirectAtom);
+}
+
+async function begin(r: Running) {
+  const handled = directWanted() ? await connectDirect(r).catch((err: unknown) => directFailed(r, messageOf(err))) : false;
+  if (handled || running !== r) return;
+  if (r.note) say('starting', r.note);
   void connect(r).catch((err: unknown) => later(r, messageOf(err)));
+}
+
+function directFailed(r: Running, why: string): boolean {
+  r.direct?.stop();
+  r.direct = null;
+  r.note = `${HERE} could not send straight to your destinations (${why}), so it goes through the relay`;
+  return false;
+}
+
+function statusesOf(list: DirectStatus[]): Record<string, RelayStatus> {
+  const out: Record<string, RelayStatus> = {};
+  for (const s of list) out[s.id] = { state: s.state, message: s.message };
+  return out;
+}
+
+async function connectDirect(r: Running): Promise<boolean> {
+  const { width, height } = restreamSize();
+  const shape = { width, height, fps: FPS, videoKbps: Math.round(VIDEO_BITRATE / 1000), audioKbps: DIRECT_AUDIO_KBPS };
+  const direct = await import('@/infra/desktop/direct');
+  const config = await direct.directVideoConfig(shape);
+  if (running !== r) return true;
+  if (!config) {
+    r.note = `${HERE} cannot encode h.264 and aac here (it needs macOS with Safari 26 or newer, or the latest app), so it goes through the relay`;
+    return false;
+  }
+  let grant: DirectGrant;
+  try {
+    grant = await api.relayDirect(r.inputs.name, r.inputs.owner.session, r.inputs.owner.token, r.inputs.name);
+  } catch (err) {
+    if (running !== r) return true;
+    if (err instanceof ApiError && err.status === 404) return false;
+    if (err instanceof ApiError && (err.status === 409 || err.status === 401 || err.status === 403)) {
+      stopRestream({ quiet: true });
+      return true;
+    }
+    throw err;
+  }
+  if (running !== r) return true;
+  if (!grant.targets.length) {
+    say('off', 'none of your destinations could be reached');
+    return true;
+  }
+  if (!r.compositor) r.compositor = new Compositor(r.inputs, width, height);
+  const sender = await direct.DirectSender.open(
+    grant.targets,
+    shape,
+    config,
+    r.inputs.sound,
+    (list) => {
+      if (running === r) store.set(directStatusAtom, statusesOf(list));
+    },
+    (why) => {
+      if (running !== r) return;
+      directFailed(r, why);
+      if (r.compositor) r.compositor.onDraw = null;
+      say('retrying', r.note);
+      void connect(r).catch((err: unknown) => later(r, messageOf(err)));
+    }
+  );
+  if (running !== r) {
+    sender.stop();
+    return true;
+  }
+  r.direct = sender;
+  r.compositor.onDraw = (canvas) => r.direct?.frame(canvas);
+  say('on', '');
+  return true;
 }
 
 export function stopRestream({ quiet = false }: { quiet?: boolean } = {}) {
@@ -383,10 +474,13 @@ export function stopRestream({ quiet = false }: { quiet?: boolean } = {}) {
   if (r) {
     if (r.timer) clearTimeout(r.timer);
     dropPeer(r);
+    r.direct?.stop();
+    r.direct = null;
     r.compositor?.stop();
     r.silent?.stop();
     if (!quiet) void api.relayStop().catch(() => undefined);
   }
+  store.set(directStatusAtom, {});
   say('off', '');
 }
 

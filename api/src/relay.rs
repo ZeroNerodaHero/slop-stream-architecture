@@ -24,6 +24,7 @@ const SECRET_MIN: usize = 16;
 pub(crate) struct Config {
     url: Option<String>,
     secret: Option<String>,
+    direct: bool,
 }
 
 impl Config {
@@ -33,6 +34,9 @@ impl Config {
             log::info!("relay: on, publishing to {}", cfg.url.as_deref().unwrap_or_default());
         } else {
             log::info!("relay: off (needs RELAY_URL and RELAY_SECRET, 16 characters or more)");
+        }
+        if cfg.direct {
+            log::info!("relay: the desktop app may send straight to destinations (RESTREAM_DIRECT)");
         }
         cfg
     }
@@ -44,11 +48,20 @@ impl Config {
             matches!(u.scheme(), "https" | "http").then(|| raw.trim_end_matches('/').to_owned())
         });
         let secret = val("RELAY_SECRET").filter(|s| s.len() >= SECRET_MIN);
-        Config { url, secret }
+        let direct = val("RESTREAM_DIRECT").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"));
+        Config { url, secret, direct }
     }
 
     pub(crate) fn on(&self) -> bool {
         self.url.is_some() && self.secret.is_some()
+    }
+
+    pub(crate) fn direct(&self) -> bool {
+        self.direct
+    }
+
+    fn any(&self) -> bool {
+        self.on() || self.direct
     }
 }
 
@@ -99,6 +112,24 @@ fn gate(s: &AppState) -> Result<(&Config, &crate::destinations::Config), ApiErro
     }
 }
 
+fn gate_any(s: &AppState) -> Result<&crate::destinations::Config, ApiError> {
+    let dest = s.destinations.as_ref();
+    if s.relay.any() && dest.on() {
+        Ok(dest)
+    } else {
+        Err(ApiError::new(StatusCode::NOT_FOUND, "not found"))
+    }
+}
+
+fn gate_direct(s: &AppState) -> Result<&crate::destinations::Config, ApiError> {
+    let dest = s.destinations.as_ref();
+    if s.relay.direct && dest.on() {
+        Ok(dest)
+    } else {
+        Err(ApiError::new(StatusCode::NOT_FOUND, "not found"))
+    }
+}
+
 fn inside(s: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     let (relay, _) = gate(s)?;
     let given = headers.get("x-relay-secret").and_then(|v| v.to_str().ok()).unwrap_or_default();
@@ -130,7 +161,7 @@ async fn drop_session(s: &AppState, id: &str, user: Uuid) -> Result<(), ApiError
 
 pub(crate) async fn statuses(s: &AppState, user: Uuid) -> HashMap<Uuid, Value> {
     let mut out = HashMap::new();
-    if !s.relay.on() {
+    if !s.relay.any() {
         return out;
     }
     let mut r = s.redis.clone();
@@ -166,8 +197,42 @@ struct StartBody {
 
 async fn start(State(s): State<AppState>, Me(me): Me, body: Result<Json<StartBody>, JsonRejection>) -> ApiResult {
     let (relay, dest) = gate(&s)?;
-    let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     let Json(body) = body?;
+    let (me, id) = begin(&s, dest, me, &body).await?;
+    let token = random_hex();
+    let _: () = redis::cmd("SET").arg(token_key(&token)).arg(&id).arg("EX").arg(TOKEN_SECS).query_async(&mut s.redis.clone()).await?;
+    log::info!("{}: relay session started for live session {}", me.name, body.session);
+    let whip = format!("{}/{id}/whip", relay.url.as_deref().unwrap_or_default());
+    Ok(Json(json!({ "session": id, "token": token, "whip": whip })))
+}
+
+async fn direct(State(s): State<AppState>, Me(me): Me, body: Result<Json<StartBody>, JsonRejection>) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let dest = gate_direct(&s)?;
+    let Json(body) = body?;
+    let (me, id) = begin(&s, dest, me, &body).await?;
+    let (found, notes) = crate::destinations::targets(dest, &s.db, me.id, None).await?;
+    note(&s, &id, &notes).await?;
+    let list: Vec<Value> = found.iter().map(|t| json!({ "id": t.id, "platform": t.platform, "url": t.url, "key": t.key })).collect();
+    log::info!("{}: sending straight from the app to {} destinations for live session {}", me.name, list.len(), body.session);
+    let mut headers = HeaderMap::new();
+    headers.insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+    Ok((headers, Json(json!({ "session": id, "targets": list }))))
+}
+
+async fn note(s: &AppState, id: &str, notes: &[(Uuid, String)]) -> Result<(), ApiError> {
+    let mut r = s.redis.clone();
+    for (dest, words) in notes {
+        let _: () = redis::pipe()
+            .cmd("HSET").arg(note_key(id)).arg(dest.to_string()).arg(words).ignore()
+            .cmd("EXPIRE").arg(note_key(id)).arg(SESSION_SECS).ignore()
+            .query_async(&mut r)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn begin(s: &AppState, dest: &crate::destinations::Config, me: Option<auth::Account>, body: &StartBody) -> Result<(auth::Account, String), ApiError> {
+    let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     if body.name != me.name || !crate::owns_session(&s.db, &body.name, &Owner { session: body.session, token: body.token }).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "that live session is not yours"));
     }
@@ -175,22 +240,20 @@ async fn start(State(s): State<AppState>, Me(me): Me, body: Result<Json<StartBod
     if !matches!(row, Some((true, Some(u))) if u == me.id) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "only a logged-in streamer can send their stream on"));
     }
-    auth::limit(&s, &format!("relay:start:{}", me.id), 60, 10, "slow down").await?;
+    auth::limit(s, &format!("relay:start:{}", me.id), 60, 10, "slow down").await?;
     if crate::destinations::usable_count(dest, &s.db, me.id).await? == 0 {
         return Err(ApiError::new(StatusCode::CONFLICT, "no destination is on"));
     }
     let mut r = s.redis.clone();
     let before: Option<String> = redis::cmd("GET").arg(mine_key(me.id)).query_async(&mut r).await?;
     if let Some(old) = before {
-        drop_session(&s, &old, me.id).await?;
+        drop_session(s, &old, me.id).await?;
     }
     let id = random_hex()[..32].to_owned();
-    let token = random_hex();
     let session = Session { user: me.id, name: me.name.clone(), live: body.session };
     let raw = serde_json::to_string(&session).map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not start"))?;
     let _: () = redis::pipe()
         .cmd("SET").arg(session_key(&id)).arg(raw).arg("EX").arg(SESSION_SECS).ignore()
-        .cmd("SET").arg(token_key(&token)).arg(&id).arg("EX").arg(TOKEN_SECS).ignore()
         .cmd("SET").arg(mine_key(me.id)).arg(&id).arg("EX").arg(SESSION_SECS).ignore()
         .query_async(&mut r)
         .await?;
@@ -216,13 +279,11 @@ async fn start(State(s): State<AppState>, Me(me): Me, body: Result<Json<StartBod
                 .await;
         }
     });
-    log::info!("{}: relay session started for live session {}", me.name, body.session);
-    let whip = format!("{}/{id}/whip", relay.url.as_deref().unwrap_or_default());
-    Ok(Json(json!({ "session": id, "token": token, "whip": whip })))
+    Ok((me, id))
 }
 
 async fn stop(State(s): State<AppState>, Me(me): Me) -> ApiResult {
-    gate(&s)?;
+    gate_any(&s)?;
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     let id: Option<String> = redis::cmd("GET").arg(mine_key(me.id)).query_async(&mut s.redis.clone()).await?;
     let Some(id) = id else {
@@ -273,14 +334,7 @@ async fn targets(State(s): State<AppState>, headers: HeaderMap, Query(q): Query<
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such relay session"));
     };
     let (found, notes) = crate::destinations::targets(&s.destinations, &s.db, session.user, q.refresh).await?;
-    let mut r = s.redis.clone();
-    for (dest, words) in &notes {
-        let _: () = redis::pipe()
-            .cmd("HSET").arg(note_key(&q.session)).arg(dest.to_string()).arg(words).ignore()
-            .cmd("EXPIRE").arg(note_key(&q.session)).arg(SESSION_SECS).ignore()
-            .query_async(&mut r)
-            .await?;
-    }
+    note(&s, &q.session, &notes).await?;
     let list: Vec<Value> = found.iter().map(|t| json!({ "id": t.id, "platform": t.platform, "url": t.url, "key": t.key })).collect();
     Ok(Json(json!({ "name": session.name, "targets": list })))
 }
@@ -316,6 +370,7 @@ async fn status(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/relay/start", post(start))
+        .route("/api/relay/direct", post(direct))
         .route("/api/relay/stop", post(stop))
         .route("/internal/relay/auth", post(check))
         .route("/internal/relay/targets", get(targets))
@@ -341,6 +396,17 @@ mod tests {
         let on = vars(&[("RELAY_URL", "https://relay.nodentity.xyz/"), ("RELAY_SECRET", "0123456789abcdef0123")]);
         assert!(on.on());
         assert_eq!(on.url.as_deref(), Some("https://relay.nodentity.xyz"));
+        assert!(!on.direct());
+    }
+
+    #[test]
+    fn the_app_sends_straight_only_when_asked() {
+        assert!(!vars(&[]).direct());
+        assert!(!vars(&[("RESTREAM_DIRECT", "no")]).direct());
+        for on in ["1", "true", "ON", "yes"] {
+            let cfg = vars(&[("RESTREAM_DIRECT", on)]);
+            assert!(cfg.direct() && cfg.any() && !cfg.on(), "{on}");
+        }
     }
 
     #[test]

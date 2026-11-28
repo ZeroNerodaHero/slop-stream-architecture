@@ -14,6 +14,19 @@ The relay takes one extra WebRTC (WHIP) publish from the go live page and pushes
 
 `/internal/relay/*` is outside `/api`, so Caddy never serves it; only containers on the compose network reach it.
 
+## Straight from the desktop app
+
+In the desktop app, going live sends the stream to each destination from the streamer's own machine instead of through the relay. This is the setting **send to destinations from this app** under settings, this app, advanced, which is on by default there and is not shown on the web.
+
+1. The page asks `POST /api/relay/direct` (the same checks as `/api/relay/start`). It sets titles and binds YouTube as usual and answers with the streamer's own targets (url and key, `Cache-Control: no-store`).
+2. The same scene canvas is encoded in the page with WebCodecs: H.264 Constrained Baseline at 4.5 Mbps with a keyframe every 2 s, and AAC-LC 160 kbps at 48 kHz stereo from the mixed sound.
+3. Each encoded frame goes to the native shell (`restream_direct_packet`, raw bytes). The shell's `rtmp.rs` publishes one RTMP or RTMPS connection per destination, checking certificates against the webpki roots. Each connection restarts on its own with the same 1 to 30 s backoff, and keys never appear in a status.
+4. The rail reads `restream_direct_status` every second, so rows show `live`, `connecting` or `error: ...` exactly as with the relay.
+
+The page falls back to the relay (when the relay is set up) if the app is too old to have the `restream_direct_*` commands, if the webview cannot encode H.264 and AAC (WebKit added AAC encoding in Safari 26, which macOS Sonoma and newer can install), or if the native side fails.
+
+It costs the streamer's machine one H.264 encode plus one upload per destination, about 4.7 Mbps each.
+
 ## Off by default
 
 Nothing changes until both are set on the api:
@@ -22,6 +35,7 @@ Nothing changes until both are set on the api:
 | --- | --- | --- |
 | `RELAY_URL` | api | public base of the relay's WHIP, e.g. `https://relay.nodentity.xyz` |
 | `RELAY_SECRET` | api and relay | at least 16 characters, the same on both, e.g. `openssl rand -hex 32` |
+| `RESTREAM_DIRECT` | api | `1` lets the desktop app fetch its targets and send straight to them; it needs no relay |
 | `RELAY_PUBLIC_IP` | relay | public ipv4 that ICE should advertise (falls back to `PUBLIC_IP`) |
 | `RELAY_API_URL` | relay | only when the relay runs on another machine: a private address of the prod api, since the public site does not serve `/internal/relay/*` |
 

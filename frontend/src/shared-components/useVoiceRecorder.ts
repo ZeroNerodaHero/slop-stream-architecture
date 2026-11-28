@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AUDIO_BITS_PER_SECOND, MAX_AUDIO_BYTES, MAX_AUDIO_MS, micRefusal, peaksFrom, pickRecorderType, VOICE_CONSTRAINTS } from '@/infra/chat-audio';
 import { type MicLevel, openMicLevel } from '@/infra/mic-level';
+import { HERE } from '@/infra/here';
 
 export type RecorderPhase = 'idle' | 'asking' | 'recording' | 'stopped';
 
@@ -119,7 +120,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
     if (take.current || phase === 'asking') return;
     keepClip(null);
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      fail('this browser cannot record');
+      fail(`${HERE} cannot record`);
       return;
     }
     const ask = ++asking.current;
@@ -139,7 +140,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
         } catch {
           release(stream);
           setPhase('idle');
-          fail('this browser cannot record');
+          fail(`${HERE} cannot record`);
           return;
         }
         const now: Take = { stream, recorder, chunks: [], bytes: 0, startedAt: Date.now(), dropped: false, after: null, meter: meterOf(stream), heard: [] };
@@ -194,7 +195,7 @@ export function useVoiceRecorder(onError: (words: string) => void): VoiceRecorde
           release(stream);
           take.current = null;
           setPhase('idle');
-          fail('this browser cannot record');
+          fail(`${HERE} cannot record`);
           return;
         }
         setPhase('recording');
