@@ -68,6 +68,7 @@ import {
   type Source,
   validPreset
 } from '@/infra/scene';
+import { askAfter, type PickOutcome, type ScreenAsk, type ScreenAsks, withAsk } from '@/infra/screen-ask';
 import { readModelChoice, type Stage, type StageGap, stagedFrom, stageOf } from '@/infra/stage';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
@@ -121,6 +122,7 @@ export interface SharedScreen {
 }
 export const screensAtom = atom<SharedScreen[]>([]);
 const screenPickingAtom = atom(false);
+export const screenAsksAtom = atom<ScreenAsks>({});
 export const screenMaySeePageAtom = atom((get) => get(screenPickingAtom) || get(screensAtom).length > 0);
 const screenStreamAtoms = Array.from({ length: SCREEN_SLOTS }, () => atom<MediaStream | null>(null));
 const spareStreamAtom = atom<MediaStream | null>(null);
@@ -1317,27 +1319,42 @@ async function pickBrowserDisplay(): Promise<MediaStream | null> {
 }
 
 let screenPicks = 0;
+const screenTurns: number[] = [];
+
+function setScreenAsk(slot: number, ask: ScreenAsk | null) {
+  store.set(screenAsksAtom, withAsk(store.get(screenAsksAtom), slot, ask));
+}
+
+export function cancelScreenPick(slot: number) {
+  screenTurns[slot] = (screenTurns[slot] ?? 0) + 1;
+  setScreenAsk(slot, null);
+}
 
 export async function shareScreen(into?: number): Promise<void> {
   if (!store.get(canShareScreenAtom)) return;
+  const turn = into === undefined ? 0 : (screenTurns[into] = (screenTurns[into] ?? 0) + 1);
+  const current = () => into === undefined || screenTurns[into] === turn;
+  if (into !== undefined) setScreenAsk(into, 'picking');
   store.set(screenPickingAtom, ++screenPicks > 0);
+  let outcome: PickOutcome = 'none';
   try {
-    await sharePicked(into);
+    outcome = await sharePicked(into, current);
   } finally {
+    if (into !== undefined && current()) setScreenAsk(into, askAfter(outcome));
     store.set(screenPickingAtom, --screenPicks > 0);
   }
 }
 
-async function sharePicked(into?: number): Promise<void> {
+async function sharePicked(into: number | undefined, current: () => boolean): Promise<PickOutcome> {
   const generation = liveGeneration;
   const display = await pickDisplay();
-  if (!display) return;
+  if (!display) return 'none';
   const track = display.getVideoTracks()[0];
   const free = (i: number) => i >= 0 && i < screenStreamAtoms.length && store.get(screenStreamAtoms[i]!) === null;
   const slot = into !== undefined && free(into) ? into : screenStreamAtoms.findIndex((streamAtom) => store.get(streamAtom) === null);
-  if (generation !== liveGeneration || !track || slot < 0) {
+  if (!current() || generation !== liveGeneration || !track || slot < 0) {
     display.getTracks().forEach((t) => t.stop());
-    return;
+    return 'dropped';
   }
   track.contentHint = 'detail';
   const sender = screenSenders[slot];
@@ -1346,7 +1363,7 @@ async function sharePicked(into?: number): Promise<void> {
       await sender.replaceTrack(track);
     } catch {
       display.getTracks().forEach((t) => t.stop());
-      return;
+      return 'dropped';
     }
   }
   track.addEventListener('ended', () => stopScreen(slot));
@@ -1364,7 +1381,9 @@ async function sharePicked(into?: number): Promise<void> {
     setSources(arrangedAfterAdd([...sources, source], source, store.get(lastArrangementAtom)));
   }
   store.set(selectedSourceAtom, id);
+  setScreenAsk(slot, null);
   slotsChanged();
+  return 'shared';
 }
 
 export function stopScreen(slot: number) {
@@ -1515,8 +1534,10 @@ export function wakeSource(id: string) {
 export function removeSource(id: string) {
   const source = store.get(sourcesAtom).find((s) => s.id === id);
   if (!source) return;
-  if (source.waiting) dropSource(id);
-  else if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
+  if (source.waiting) {
+    if (source.kind === 'screen' && source.slot !== undefined) cancelScreenPick(source.slot - 1);
+    dropSource(id);
+  } else if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
   else if (source.kind === 'camera') cameraOff();
   else dropSource(id);
 }
