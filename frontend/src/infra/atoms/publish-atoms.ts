@@ -131,8 +131,11 @@ export const screenShareSupported = typeof navigator !== 'undefined' && typeof n
 export const sourcesAtom = atom<Source[]>([]);
 const storedSoloAtom = atomWithStorage<unknown>('settings.liveCameraOnly', null, undefined, { getOnInit: true });
 export const cameraOnlyAtom = atom((get) => readKept(get(storedSoloAtom)) !== null);
-const sentSourcesAtom = atom((get) => (get(cameraOnlyAtom) ? soloed(get(sourcesAtom)) : get(sourcesAtom)));
+const stagedSourcesAtom = atom((get) => (get(cameraOnlyAtom) ? soloed(get(sourcesAtom)) : get(sourcesAtom)));
+const sentSourcesAtom = atom((get) => get(stagedSourcesAtom).filter((s) => !s.waiting));
 export const sceneAtom = atom((get) => sceneOf(get(sentSourcesAtom)));
+export const previewSceneAtom = atom((get) => sceneOf(get(stagedSourcesAtom)));
+export const waitingSourcesAtom = atom((get) => get(sourcesAtom).filter((s) => s.waiting));
 export const previewSlotAtom = atom((get) => get(sceneAtom).layers.find(isVideoLayer)?.slot ?? null);
 export const previewStreamAtom = atom((get) => {
   const slot = get(previewSlotAtom);
@@ -415,6 +418,10 @@ export async function cameraOn(): Promise<void> {
 
 function ensureCameraSource() {
   const sources = store.get(sourcesAtom);
+  if (sources.some((s) => s.kind === 'camera' && s.waiting)) {
+    setSources(sources.map((s) => (s.kind === 'camera' && s.waiting ? { ...s, waiting: undefined } : s)));
+    return;
+  }
   if (sources.some((s) => s.kind === 'camera')) return;
   const camera: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: FULL, shown: true };
   setSources(arrangedAfterAdd([camera, ...sources], camera, store.get(lastArrangementAtom)));
@@ -1311,22 +1318,23 @@ async function pickBrowserDisplay(): Promise<MediaStream | null> {
 
 let screenPicks = 0;
 
-export async function shareScreen(): Promise<void> {
+export async function shareScreen(into?: number): Promise<void> {
   if (!store.get(canShareScreenAtom)) return;
   store.set(screenPickingAtom, ++screenPicks > 0);
   try {
-    await sharePicked();
+    await sharePicked(into);
   } finally {
     store.set(screenPickingAtom, --screenPicks > 0);
   }
 }
 
-async function sharePicked(): Promise<void> {
+async function sharePicked(into?: number): Promise<void> {
   const generation = liveGeneration;
   const display = await pickDisplay();
   if (!display) return;
   const track = display.getVideoTracks()[0];
-  const slot = screenStreamAtoms.findIndex((streamAtom) => store.get(streamAtom) === null);
+  const free = (i: number) => i >= 0 && i < screenStreamAtoms.length && store.get(screenStreamAtoms[i]!) === null;
+  const slot = into !== undefined && free(into) ? into : screenStreamAtoms.findIndex((streamAtom) => store.get(streamAtom) === null);
   if (generation !== liveGeneration || !track || slot < 0) {
     display.getTracks().forEach((t) => t.stop());
     return;
@@ -1349,8 +1357,12 @@ async function sharePicked(): Promise<void> {
   store.set(screenStreamAtom(slot), display);
   store.set(screensAtom, [...store.get(screensAtom), { slot, label }]);
   const id = `s${slot + 1}`;
-  const source: Source = { id, kind: 'screen', label, slot: slot + 1, box: FULL, shown: true };
-  setSources(arrangedAfterAdd([...store.get(sourcesAtom), source], source, store.get(lastArrangementAtom)));
+  const sources = store.get(sourcesAtom);
+  if (sources.some((s) => s.id === id && s.waiting)) setSources(sources.map((s) => (s.id === id ? { ...s, label, slot: slot + 1, waiting: undefined } : s)));
+  else {
+    const source: Source = { id, kind: 'screen', label, slot: slot + 1, box: FULL, shown: true };
+    setSources(arrangedAfterAdd([...sources, source], source, store.get(lastArrangementAtom)));
+  }
   store.set(selectedSourceAtom, id);
   slotsChanged();
 }
@@ -1490,10 +1502,17 @@ export function fitSourceTo(id: string, targetId: string) {
   setSources(sources);
 }
 
+export function wakeSource(id: string) {
+  const source = store.get(sourcesAtom).find((s) => s.id === id && s.waiting);
+  if (source?.kind === 'camera') void cameraOn();
+  else if (source?.kind === 'screen') void shareScreen((source.slot ?? 1) - 1);
+}
+
 export function removeSource(id: string) {
   const source = store.get(sourcesAtom).find((s) => s.id === id);
   if (!source) return;
-  if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
+  if (source.waiting) dropSource(id);
+  else if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
   else if (source.kind === 'camera') cameraOff();
   else dropSource(id);
 }
@@ -2121,7 +2140,6 @@ export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
   const wantCamera = stage.scene.cam?.shown === true;
   if (wantCamera && !store.get(hasCameraAtom)) {
     if (await cameraAllowed()) await tried(cameraOn);
-    if (!store.get(hasCameraAtom)) gaps.push({ kind: 'camera' });
   }
   if (generation !== liveGeneration) return gaps;
   if (stage.scene[AVATAR_ID]?.shown && !store.get(sourcesAtom).some((s) => s.kind === 'avatar')) ensureAvatarSource();

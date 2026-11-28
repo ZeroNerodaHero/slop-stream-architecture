@@ -1,5 +1,5 @@
 import { RiDraggable } from '@remixicon/react';
-import { type FocusEvent, type KeyboardEvent, type PointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -23,6 +23,16 @@ interface Box {
   bottom: number;
 }
 
+export const HOLD_SLOP_PX = 8;
+
+interface Wait<K> {
+  key: K;
+  pointerId: number;
+  x: number;
+  y: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface Grab<K> {
   key: K;
   start: K[];
@@ -39,9 +49,10 @@ export interface ReorderOptions<K extends string> {
   live?: boolean;
   keyedByIndex?: boolean;
   onPickUp?: (key: K) => void;
+  hold?: number;
 }
 
-export function useReorder<K extends string>({ keys, name, onMove, live = false, keyedByIndex = false, onPickUp }: ReorderOptions<K>) {
+export function useReorder<K extends string>({ keys, name, onMove, live = false, keyedByIndex = false, onPickUp, hold = 0 }: ReorderOptions<K>) {
   const [draft, setDraft] = useState<K[] | null>(null);
   const [held, setHeld] = useState<K | null>(null);
   const [byPointer, setByPointer] = useState(false);
@@ -49,6 +60,7 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
   const listEl = useRef<HTMLElement | null>(null);
   const handles = useRef(new Map<K, HTMLButtonElement>());
   const grab = useRef<Grab<K> | null>(null);
+  const wait = useRef<Wait<K> | null>(null);
   const refocus = useRef<{ key: K; at: number } | null>(null);
   const latest = useRef({ keys, name, onMove, live, keyedByIndex, onPickUp });
   useLayoutEffect(() => {
@@ -102,9 +114,26 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
       e.stopPropagation();
       finishRef.current(false);
     };
+    const onTouch = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+    };
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    window.addEventListener('touchmove', onTouch, { passive: false });
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('touchmove', onTouch);
+    };
   }, [byPointer]);
+
+  const stopWait = () => {
+    if (wait.current) clearTimeout(wait.current.timer);
+    wait.current = null;
+  };
+  const stopWaitRef = useRef(stopWait);
+  useLayoutEffect(() => {
+    stopWaitRef.current = stopWait;
+  });
+  useEffect(() => () => stopWaitRef.current(), []);
 
   const pickUp = (key: K, pointer: { id: number; y: number; boxes: Map<K, Box> } | null) => {
     grab.current = { key, start: order, now: order, pointerId: pointer?.id ?? null, y: pointer?.y ?? 0, boxes: pointer?.boxes ?? new Map() };
@@ -114,22 +143,51 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
     latest.current.onPickUp?.(key);
   };
 
-  const onPointerDown = (e: PointerEvent<HTMLButtonElement>, key: K) => {
-    if (e.button !== 0 || grab.current) return;
+  const begin = (key: K, pointerId: number, y: number) => {
     const el = listEl.current;
-    if (!el) return;
-    e.preventDefault();
+    if (!el || grab.current) return;
     const boxes = new Map<K, Box>();
     for (const row of Array.from(el.querySelectorAll<HTMLElement>(':scope > [data-reorder-item]'))) {
       const r = row.getBoundingClientRect();
       boxes.set(row.dataset.reorderItem as K, { top: r.top, bottom: r.bottom });
     }
     if (!boxes.has(key)) return;
-    el.setPointerCapture(e.pointerId);
-    pickUp(key, { id: e.pointerId, y: e.clientY, boxes });
+    try {
+      el.setPointerCapture(pointerId);
+    } catch {
+      return;
+    }
+    pickUp(key, { id: pointerId, y, boxes });
+  };
+  const beginRef = useRef(begin);
+  useLayoutEffect(() => {
+    beginRef.current = begin;
+  });
+
+  const onPointerDown = (e: PointerEvent<HTMLButtonElement>, key: K) => {
+    if (e.button !== 0 || grab.current || !listEl.current) return;
+    if (hold > 0 && e.pointerType === 'touch') {
+      stopWait();
+      const { pointerId, clientX: x, clientY: y } = e;
+      wait.current = {
+        key,
+        pointerId,
+        x,
+        y,
+        timer: setTimeout(() => {
+          wait.current = null;
+          beginRef.current(key, pointerId, y);
+        }, hold)
+      };
+      return;
+    }
+    e.preventDefault();
+    begin(key, e.pointerId, e.clientY);
   };
 
   const onPointerMove = (e: PointerEvent<HTMLElement>) => {
+    const w = wait.current;
+    if (w && e.pointerId === w.pointerId && Math.hypot(e.clientX - w.x, e.clientY - w.y) > HOLD_SLOP_PX) stopWait();
     const g = grab.current;
     if (!g || e.pointerId !== g.pointerId) return;
     const own = g.boxes.get(g.key);
@@ -147,6 +205,7 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
   };
 
   const onPointerEnd = (e: PointerEvent<HTMLElement>) => {
+    if (wait.current?.pointerId === e.pointerId) stopWait();
     const g = grab.current;
     if (!g || e.pointerId !== g.pointerId) return;
     finish(true);
@@ -187,11 +246,20 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
   return {
     order,
     held,
-    list: { ref: setList, onPointerMove, onPointerUp: onPointerEnd, onPointerCancel: onPointerEnd, onLostPointerCapture: onPointerEnd },
+    list: {
+      ref: setList,
+      onPointerMove,
+      onPointerUp: onPointerEnd,
+      onPointerCancel: onPointerEnd,
+      onLostPointerCapture: (e: PointerEvent<HTMLElement>) => {
+        if (e.target === e.currentTarget) onPointerEnd(e);
+      }
+    },
     item: (key: K) => ({ 'data-reorder-item': key }),
     handle: (key: K) => ({
       label: name(key),
       held: held === key,
+      hold: hold > 0,
       handleRef: (el: HTMLButtonElement | null) => {
         if (el) handles.current.set(key, el);
         else handles.current.delete(key);
@@ -212,6 +280,7 @@ export interface DragHandleProps {
   id?: string;
   label: string;
   held: boolean;
+  hold?: boolean;
   handleRef: (el: HTMLButtonElement | null) => void;
   onPointerDown: (e: PointerEvent<HTMLButtonElement>) => void;
   onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => void;
@@ -219,7 +288,9 @@ export interface DragHandleProps {
   className?: string;
 }
 
-export function DragHandle({ id, label, held, handleRef, onPointerDown, onKeyDown, onBlur, className }: DragHandleProps) {
+const noMenu = (e: MouseEvent<HTMLButtonElement>) => e.preventDefault();
+
+export function DragHandle({ id, label, held, hold = false, handleRef, onPointerDown, onKeyDown, onBlur, className }: DragHandleProps) {
   return (
     <Tooltip content={held ? null : 'drag to move'}>
       <button
@@ -233,8 +304,10 @@ export function DragHandle({ id, label, held, handleRef, onPointerDown, onKeyDow
         onPointerDown={onPointerDown}
         onKeyDown={onKeyDown}
         onBlur={onBlur}
+        onContextMenu={hold ? noMenu : undefined}
         className={cn(
-          'flex shrink-0 touch-none select-none items-center justify-center rounded-control border border-transparent p-0.5 text-textTertiary transition-colors duration-150 hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
+          'flex shrink-0 select-none items-center justify-center rounded-control border border-transparent p-0.5 text-textTertiary transition-colors duration-150 hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
+          hold ? 'touch-manipulation [-webkit-touch-callout:none]' : 'touch-none',
           held ? 'cursor-grabbing border-primaryBlue text-primaryBlue' : 'cursor-grab active:cursor-grabbing',
           className
         )}

@@ -1119,6 +1119,24 @@ do not fold: a preset or edit mode shows or hides them. Start stays out of the s
 
 `export const ICON_BUTTON`: A small icon-only button in a panel's header or row: a square that gets the blue stroke on hover.
 
+## `frontend/src/shared-components/live/modules/Presets.tsx`
+
+`export function PresetsModule`: The go live page's presets: up to nine, each a saved stream setup (the sources, their
+order, boxes, shown and fit, the levels, the sounds and the source settings; never the layout or the shown modules),
+kept per browser in `settings.livePresets` (`infra/live-dock.ts`). Nothing is saved on its own: the header's save icon
+(`#live-preset-save`, tooltip `save to <name>`) writes the current setup over the active preset, and its dot
+(`#live-preset-dirty`) shows while the setup differs from it (`stageChanged` in `infra/stage.ts`, which ignores what a
+reload changes by itself, and reads the levels where they live, the mixer or the kept mixer settings before it opens).
+The `+` (`#live-preset-new`) makes a new preset from the current setup and opens its rename. The active preset is put
+back on load. Rows reorder by their grip (`useReorder` with `hold`, so a touch needs a 300ms press and a quick swipe
+still scrolls); keys 1 to 9 follow the order. Any preset deletes, default too; with none left, one `default` starter
+stands in, drawn with the streamer's avatar (`Face`) and built from whatever is on the stage.
+
+A saved screen share, or a saved camera the browser has not been allowed to open, cannot start without a click, so a
+preset puts it back as a waiting source (`waiting` on `Source`): it keeps its place, size, order and settings, is never
+sent to watchers, and draws as `live/WaitingLayer.tsx` in its slot, a `share` (or `camera`) button that opens it into
+that slot.
+
 ## `frontend/src/shared-components/live/modules/Sound.tsx`
 
 `export function MixerBody`: The sound panel, before going live and while live (docs/audio.md): a row for the mic (and

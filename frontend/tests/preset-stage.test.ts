@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { readPreset } from '../src/infra/live-dock.ts';
 import { arrivedFrom, keptOf, type Source } from '../src/infra/scene.ts';
-import { gapWords, readStage, type Stage, stagedFrom, stageOf, withGoneScreens } from '../src/infra/stage.ts';
+import { gapWords, readStage, sameStage, type Stage, stageChanged, stagedFrom, stageOf, storedStage, withGoneScreens } from '../src/infra/stage.ts';
 
 const cam: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: { x: 0.5, y: 0.5, w: 0.4, h: 0.4 }, shown: true, fit: 'cover' };
 const screen: Source = { id: 's1', kind: 'screen', label: 'screen', slot: 1, box: { x: 0, y: 0, w: 1, h: 1 }, shown: true };
@@ -84,13 +84,39 @@ test('a picture already in the scene is reused by its asset, not added twice', (
   assert.deepEqual(sources[1]!.box, logo.box);
 });
 
-test('a saved screen, picture or camera that is not here is skipped and named in the notice', () => {
-  const stage = saved([screen, cam, logo]);
+test('a saved screen or camera that is not here waits in its saved place, and a missing picture is named in the notice', () => {
+  const stage = saved([screen, { ...cam, shown: false }, logo]);
   const { sources, gaps } = stagedFrom(stage, [], [], newId);
-  assert.deepEqual(sources, []);
-  assert.deepEqual(gaps, [{ kind: 'screen', slot: 1 }, { kind: 'camera' }, { kind: 'image', label: 'logo' }]);
-  assert.equal(gapWords(gaps), 'skipped screen 1, camera, logo: not here now');
+  assert.deepEqual(sources, [
+    { id: 's1', kind: 'screen', label: 'screen', slot: 1, box: screen.box, shown: true, waiting: true },
+    { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: cam.box, shown: false, fit: 'cover', waiting: true }
+  ]);
+  assert.deepEqual(gaps, [{ kind: 'image', label: 'logo' }]);
+  assert.equal(gapWords(gaps), 'skipped logo: not here now');
   assert.equal(gapWords([]), '');
+  assert.deepEqual(keptOf(sources), { s1: stage.scene.s1, cam: stage.scene.cam });
+});
+
+test('a waiting screen is kept by the next preset that has it, dropped by one that does not, and counts for dirty', () => {
+  const stage = saved([cam, screen]);
+  const first = stagedFrom(stage, [cam], [], newId).sources;
+  assert.deepEqual(
+    first.map((s) => [s.id, s.waiting === true]),
+    [
+      ['cam', false],
+      ['s1', true]
+    ]
+  );
+  const again = stagedFrom(stage, first, [], newId).sources;
+  assert.deepEqual(JSON.parse(JSON.stringify(again)), JSON.parse(JSON.stringify(first)));
+  const without = stagedFrom(saved([cam]), first, [], newId).sources;
+  assert.deepEqual(
+    without.map((s) => s.id),
+    ['cam']
+  );
+  const saving = storedStage(stageOf(first, rest))!;
+  assert.equal(stageChanged(saving, stageOf(first, rest), ['cam', 's1']), false);
+  assert.equal(stageChanged(saving, stageOf([cam], rest), ['cam', 's1']), true);
 });
 
 test('a hidden saved source that is gone is skipped quietly', () => {
@@ -149,4 +175,32 @@ test('a saved screen arriving lands in its saved box and the others stay where t
   assert.equal(out.find((s) => s.id === 's1')?.shown, false);
   const plain = [moved, logo];
   assert.equal(arrivedFrom(kept, [cam], plain), plain);
+});
+
+test('a stage just saved is clean, and a move, a hidden source, a level, a sound or a setting makes it dirty', () => {
+  const saved = storedStage(stageOf([cam, screen, logo], rest))!;
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], rest), []), false);
+  assert.equal(stageChanged(saved, stageOf([{ ...cam, box: { ...cam.box, x: 0.1 } }, screen, logo], rest), []), true);
+  assert.equal(stageChanged(saved, stageOf([cam, { ...screen, shown: false }, logo], rest), []), true);
+  assert.equal(stageChanged(saved, stageOf([screen, cam, logo], rest), []), true);
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], { ...rest, levels: { ...rest.levels, mic: { level: 0.9, muted: false } } }), []), true);
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], { ...rest, sounds: {} }), []), true);
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], { ...rest, mirror: true }), []), true);
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], { ...rest, names: { camera: 'other' } }), []), true);
+});
+
+test('dirty ignores what a reload changes on its own: picture ids, key order, a screen not shared yet, a hidden extra, a fresh level row', () => {
+  const saved = storedStage(stageOf([cam, screen, logo], rest))!;
+  assert.equal(stageChanged(saved, stageOf([cam, screen, { ...logo, id: 'i7' }], rest), []), false);
+  const shuffled = { ...rest, levels: { master: rest.levels.master!, mic: rest.levels.mic! } };
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], shuffled), []), false);
+  assert.equal(stageChanged(saved, stageOf([cam, logo], rest), []), false);
+  assert.equal(stageChanged(saved, stageOf([cam, logo], rest), ['s1']), true);
+  assert.equal(stageChanged(saved, stageOf([{ ...sticker, shown: false }, cam, screen, logo], rest), []), false);
+  assert.equal(stageChanged(saved, stageOf([sticker, cam, screen, logo], rest), []), true);
+  const fresh = { ...rest, levels: { ...rest.levels, desktop: { level: 1, muted: false } } };
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], fresh), []), false);
+  const moved = { ...rest, levels: { ...rest.levels, desktop: { level: 0.5, muted: false } } };
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], moved), []), true);
+  assert.equal(sameStage(saved, saved), true);
 });
