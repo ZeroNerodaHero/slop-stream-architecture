@@ -143,6 +143,7 @@ interface CornerPlayerProps {
     imageUrl: (asset: number) => string;
     avatar: AvatarVoice;
     onPick?: (slot: number) => void;
+    blank?: boolean;
   };
   badge?: ReactNode;
   bar?: ReactNode;
@@ -404,6 +405,7 @@ export function CornerPlayer({
             avatar={scene.avatar}
             main={{ id: `${prefix}-video`, streamAtom, videoRef, slot: scene.slot, muted, volume, onPlaying, onAutoplayBlocked }}
             onPick={scene.onPick}
+            blank={scene.blank}
             className="min-w-0 rounded-none border-0 border-b"
           />
         ) : (

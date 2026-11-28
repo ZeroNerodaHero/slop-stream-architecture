@@ -66,6 +66,7 @@ interface SceneViewProps {
   edit?: SceneEdit;
   placeholder?: (layer: Layer) => ReactNode;
   clearSlot?: number | null;
+  blank?: boolean;
   className?: string;
   children?: ReactNode;
 }
@@ -108,7 +109,21 @@ interface Gesture {
   moved: boolean;
 }
 
-export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, placeholder, clearSlot = null, className, children }: SceneViewProps) {
+export function SceneView({
+  id,
+  layers,
+  streamFor,
+  imageUrl,
+  avatar,
+  main,
+  onPick,
+  edit,
+  placeholder,
+  clearSlot = null,
+  blank = false,
+  className,
+  children
+}: SceneViewProps) {
   const frame = useRef<HTMLDivElement | null>(null);
   const probe = useRef<Probe>({ ctx: null, at: 0 });
   const clearBox = () => (clearSlot === null ? null : (frame.current?.querySelector<HTMLElement>(`[data-slot="${clearSlot}"]`) ?? null));
@@ -148,7 +163,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
       onPointerMove={clearSlot === null ? undefined : passThrough}
       onPointerLeave={clearSlot === null ? undefined : () => clearBox()?.removeAttribute('data-through')}
     >
-      {layers.length === 0 && <div className="absolute inset-0">{mainVideo}</div>}
+      {layers.length === 0 && !blank && <div className="absolute inset-0">{mainVideo}</div>}
       {layers.map((layer, i) => (
         <LayerBox key={layer.id} layer={layer} frame={frame} edit={edit} onPick={onPick} clear={clearOf(layer)}>
           {held[i] !== null ? (
@@ -171,7 +186,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
           )}
         </LayerBox>
       ))}
-      {layers.length > 0 && hostIndex < 0 && <div className="pointer-events-none absolute left-0 top-0 h-px w-px opacity-0">{mainVideo}</div>}
+      {(layers.length > 0 || blank) && hostIndex < 0 && <div className="pointer-events-none absolute left-0 top-0 h-px w-px opacity-0">{mainVideo}</div>}
       {children}
     </div>
   );

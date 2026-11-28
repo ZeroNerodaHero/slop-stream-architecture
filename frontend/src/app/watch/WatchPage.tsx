@@ -29,6 +29,7 @@ import {
   slotStreamAtom,
   startPip,
   tilesAtom,
+  watchBlankAtom,
   watchLayersAtom,
   unmuteVideo,
   verifiedAtom,
@@ -224,6 +225,7 @@ export function WatchPage() {
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
   const layers = useAtomValue(watchLayersAtom);
+  const blank = useAtomValue(watchBlankAtom);
   const primary = useAtomValue(primarySlotAtom);
   const sceneTile = useAtomValue(sceneTileAtom);
   const renamedTo = useAtomValue(watchRenamedToAtom);
@@ -408,6 +410,7 @@ export function WatchPage() {
             id="scene"
             className={cn('max-md:rounded-none max-md:border-t-0', mobile && strip.frame)}
             layers={layers}
+            blank={blank}
             streamFor={slotStreamAtom}
             imageUrl={(asset) => api.assetUrl(name, asset)}
             avatar={{ name, version: avatar, streamAtom: remoteStreamAtom, pulse: true }}
