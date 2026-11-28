@@ -32,6 +32,9 @@ import {
   modelSeeThroughAtom,
   moveSource,
   nudgeSource,
+  previewMoveSource,
+  previewResizeSource,
+  streamSourceBox,
   previewSlotAtom,
   previewStreamAtom,
   publishPhaseAtom,
@@ -704,6 +707,9 @@ export function LivePage() {
     boxOf: (id) => sources.find((s) => s.id === id)?.box,
     onMove: moveSource,
     onResize: resizeSource,
+    previewMove: previewMoveSource,
+    previewResize: previewResizeSource,
+    onStream: streamSourceBox,
     onNudge: nudgeSource,
     onKey: (id, what) => {
       if (what === 'remove') {

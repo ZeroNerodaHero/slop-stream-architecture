@@ -42,7 +42,8 @@ import {
 } from '@/infra/model-store';
 import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
-import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
+import { type Box, connectRelay, type Fit, isVideoLayer, type Scene, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
+import { sceneSendScheduler } from '@/infra/scene-send';
 import { reportPeerFailure } from '@/infra/report';
 import { cameraCodec, vp8Only, vp9First } from '@/infra/camera-codec';
 import { applyCopy, applyLayers, type Codec, copyEncodings, MAX_FRAMERATE, sendEncodings, SINGLE_BITRATE, SINGLE_HEIGHT, type Top } from '@/infra/simulcast';
@@ -243,7 +244,17 @@ let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let abort: AbortController | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
-let sceneTimer: ReturnType<typeof setTimeout> | null = null;
+let dragScene: Scene | null = null;
+const sceneSend = sceneSendScheduler(SCENE_SEND_MS, () => {
+  const drag = dragScene;
+  dragScene = null;
+  if (drag) {
+    announceSlots(drag);
+    return;
+  }
+  announceSlots();
+  rememberArrangement();
+});
 let tuneTimer: ReturnType<typeof setTimeout> | null = null;
 let cameraSender: RTCRtpSender | null = null;
 let copySender: RTCRtpSender | null = null;
@@ -1455,13 +1466,8 @@ function setSources(next: Source[]) {
     store.set(storedSoloAtom, { ...kept, ...keptOf(next) });
   }
   store.set(sourcesAtom, next);
-  if (!sceneTimer) {
-    sceneTimer = setTimeout(() => {
-      sceneTimer = null;
-      announceSlots();
-      rememberArrangement();
-    }, SCENE_SEND_MS);
-  }
+  dragScene = null;
+  sceneSend.schedule();
   if (!tuneTimer) {
     tuneTimer = setTimeout(() => {
       tuneTimer = null;
@@ -1509,11 +1515,30 @@ export function moveSource(id: string, from: Box, dx: number, dy: number) {
   withSource(id, (s) => ({ ...s, box: isModelSource(s) ? movedLoose(from, dx, dy) : movedBox(from, dx, dy) }));
 }
 
+export function previewMoveSource(_id: string, from: Box, dx: number, dy: number): Box {
+  return movedBox(from, dx, dy);
+}
+
+export function streamSourceBox(id: string, box: Box) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  dragScene = sceneOf(store.get(sentSourcesAtom).map((s) => (s.id === id ? { ...s, box } : s)));
+  sceneSend.schedule();
+}
+
+function resizeRatio(id: string, from: Box, free: boolean): number | null {
+  const s = store.get(sourcesAtom).find((x) => x.id === id);
+  return s?.ratio ?? (free && s?.kind !== 'avatar' ? null : from.w / from.h);
+}
+
 export function resizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) {
   withSource(id, (s) => {
     if (!isModelSource(s)) return { ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free && s.kind !== 'avatar' ? null : from.w / from.h)) };
     return { ...s, box: resizedLoose(from, sx, sy, dx, dy, from.w / from.h) };
   });
+}
+
+export function previewResizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean): Box {
+  return resizedBox(from, sx, sy, dx, dy, resizeRatio(id, from, free));
 }
 
 export function nudgeSource(id: string, dx: number, dy: number) {
@@ -1834,11 +1859,10 @@ function unwatchMixer() {
   document.removeEventListener('keydown', wakeMixer, true);
 }
 
-function announceSlots() {
+function announceSlots(scene: Scene = store.get(sceneAtom)) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const screens: SlotInfo[] = store.get(screensAtom).map((s) => ({ slot: s.slot + 1, kind: 'screen', label: s.label }));
   const slots: SlotInfo[] = store.get(hasCameraAtom) ? [{ slot: 0, kind: 'camera' }, ...screens] : screens;
-  const scene = store.get(sceneAtom);
   record('/ws', 'out', { slots, scene });
   ws.send(JSON.stringify({ slots, scene }));
 }
@@ -1922,10 +1946,8 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
     clearInterval(heartbeat);
     heartbeat = null;
   }
-  if (sceneTimer) {
-    clearTimeout(sceneTimer);
-    sceneTimer = null;
-  }
+  sceneSend.cancel();
+  dragScene = null;
   if (tuneTimer) {
     clearTimeout(tuneTimer);
     tuneTimer = null;
