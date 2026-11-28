@@ -1,7 +1,20 @@
-import { RiBroadcastLine, RiEyeLine, RiEyeOffLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiServerLine, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
+import {
+  RiBroadcastLine,
+  RiChat3Line,
+  RiChatOffLine,
+  RiEyeLine,
+  RiEyeOffLine,
+  RiGroupLine,
+  RiKickLine,
+  type RemixiconComponentType,
+  RiServerLine,
+  RiTwitchLine,
+  RiUserLine,
+  RiYoutubeLine
+} from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, type ReactNode, useRef, useState } from 'react';
 
 import {
   type DestinationRow,
@@ -18,7 +31,6 @@ import { INPUT } from '@/shared-components/input';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
-import { Switch } from '@/shared-components/Switch';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -42,7 +54,6 @@ const WORDS = DESTINATION_WORDS;
 const ROWS: DestinationRow[] = ['twitch', 'kick', 'youtube', 'custom'];
 
 const SMALL = 'h-7 gap-1 px-2.5 py-0 text-xs max-md:min-h-0';
-const LINK = 'h-7 w-7 shrink-0 p-0 max-md:min-h-0';
 
 export function useDestinations() {
   const relaying = useAtomValue(restreamAtom) !== 'off';
@@ -93,22 +104,39 @@ export function chatStateOf(c: RelayStatus | undefined): string | null {
   return null;
 }
 
-const CHAT_MODES: readonly (readonly [ExternalChat, string, string])[] = [
-  ['everyone', 'everyone', 'twitch and kick chat show for everyone on your page'],
-  ['studio', 'just me', 'twitch and kick chat only show in your studio'],
-  ['off', 'off', 'twitch and kick chat are not read']
+const CHAT_MODES: readonly (readonly [ExternalChat, RemixiconComponentType, string, string])[] = [
+  ['everyone', RiGroupLine, 'everyone', 'everyone: twitch and kick chat show for everyone on your page'],
+  ['studio', RiUserLine, 'just me', 'just me: twitch and kick chat only show in your studio'],
+  ['off', RiChatOffLine, 'off', 'off: twitch and kick chat are not read']
 ];
+
+const CHAT_KEYS: Record<string, (i: number, n: number) => number> = {
+  ArrowLeft: (i, n) => (i - 1 + n) % n,
+  ArrowUp: (i, n) => (i - 1 + n) % n,
+  ArrowRight: (i, n) => (i + 1) % n,
+  ArrowDown: (i, n) => (i + 1) % n,
+  Home: () => 0,
+  End: (_, n) => n - 1
+};
+
+const CHAT_BUTTON =
+  'flex h-7 w-7 shrink-0 items-center justify-center rounded-control border transition-colors duration-150 focus-visible:border-primaryBlue focus-visible:outline-none max-md:min-h-0';
 
 function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: string) => void }) {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const mode = data.external_chat ?? 'everyone';
+  const index = Math.max(
+    0,
+    CHAT_MODES.findIndex(([m]) => m === mode)
+  );
   const pick = async (next: ExternalChat) => {
-    if (next === mode) return;
+    if (next === mode || busy) return;
     setBusy(true);
     try {
       await api.setExternalChat(next);
-      onStatus(CHAT_MODES.find(([m]) => m === next)?.[2] ?? '');
+      onStatus(CHAT_MODES.find(([m]) => m === next)?.[3] ?? '');
       await client.invalidateQueries({ queryKey: KEY });
       await client.invalidateQueries({ queryKey: ['chat-sources'] });
     } catch (e) {
@@ -117,47 +145,124 @@ function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: st
       setBusy(false);
     }
   };
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const move = CHAT_KEYS[e.key];
+    if (!move || busy) return;
+    e.preventDefault();
+    const next = move(index, CHAT_MODES.length);
+    const option = CHAT_MODES[next];
+    if (!option) return;
+    refs.current[next]?.focus();
+    void pick(option[0]);
+  };
   return (
-    <div id="destination-chat-mode" role="group" aria-label="twitch and kick chat" className="flex min-w-0 flex-wrap items-center gap-1">
-      <span className="mr-1 text-xs text-textTertiary">platform chat</span>
-      {CHAT_MODES.map(([m, label, tip]) => (
-        <Tooltip key={m} content={tip}>
-          <Button
-            size="sm"
-            variant="secondary"
-            aria-pressed={m === mode}
-            data-mode={m}
-            disabled={busy}
-            onClick={() => void pick(m)}
-            className={cn(SMALL, m === mode ? 'border-primaryBlue text-primaryBlue hover:border-primaryBlue' : 'text-textTertiary')}
-          >
-            {label}
-          </Button>
-        </Tooltip>
-      ))}
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Tooltip content="platform chat">
+        <span role="img" aria-label="platform chat" className="flex h-7 w-5 shrink-0 items-center justify-center text-textTertiary">
+          <RiChat3Line aria-hidden size={14} />
+        </span>
+      </Tooltip>
+      <div id="destination-chat-mode" role="radiogroup" aria-label="platform chat" onKeyDown={onKeyDown} className="flex items-center gap-1">
+        {CHAT_MODES.map(([m, Icon, label, tip], i) => {
+          const on = m === mode;
+          return (
+            <Tooltip key={m} content={tip}>
+              <button
+                ref={(el) => {
+                  refs.current[i] = el;
+                }}
+                id={`destination-chat-${m}`}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={label}
+                tabIndex={on ? 0 : -1}
+                data-mode={m}
+                aria-disabled={busy || undefined}
+                onClick={() => void pick(m)}
+                className={cn(
+                  CHAT_BUTTON,
+                  on
+                    ? 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue'
+                    : 'border-primaryStroke bg-backgroundSecondary text-textTertiary hover:border-primaryBlue hover:text-primaryBlue'
+                )}
+              >
+                <Icon aria-hidden size={14} />
+              </button>
+            </Tooltip>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function RowShell({ row, hidden, wide, children }: { row: DestinationRow; hidden: boolean; wide?: ReactNode; children: ReactNode }) {
+const ROW_BUTTON = 'flex min-w-0 items-center gap-2 px-2 py-1.5 focus-visible:outline-none';
+
+function pressKeys(e: KeyboardEvent<HTMLElement>, act: () => void) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  act();
+}
+
+function RowShell({
+  row,
+  hidden,
+  wide,
+  on,
+  action,
+  children
+}: {
+  row: DestinationRow;
+  hidden: boolean;
+  wide?: ReactNode;
+  on?: boolean;
+  action?: { label: string; pressed?: boolean; expanded?: boolean; busy?: boolean; describedBy?: string; id: string; run: () => void };
+  children: ReactNode;
+}) {
   return (
     <li
       id={`destination-row-${row}`}
       data-hidden={hidden || undefined}
-      className={cn('relative flex min-w-0 flex-col gap-1.5 border border-primaryStroke px-2 py-1.5', wide ? 'rounded-card pb-2' : 'rounded-control')}
+      data-on={on || undefined}
+      className={cn(
+        'relative flex min-w-0 flex-col border transition-colors duration-150',
+        wide ? 'rounded-card' : 'rounded-control',
+        on ? 'border-primaryBlue/40 bg-primaryBlue/10' : 'border-primaryStroke',
+        action && 'has-[[data-row]:focus-visible]:border-primaryBlue has-[[data-row]:hover]:border-primaryBlue'
+      )}
     >
-      <div className={cn('flex min-w-0 items-center gap-2', hidden && 'opacity-50')}>{children}</div>
-      {wide}
+      {action ? (
+        <div
+          id={action.id}
+          data-row
+          role="button"
+          tabIndex={0}
+          aria-label={action.label}
+          aria-pressed={action.pressed}
+          aria-expanded={action.expanded}
+          aria-disabled={action.busy || undefined}
+          aria-describedby={action.describedBy}
+          onClick={() => !action.busy && action.run()}
+          onKeyDown={(e) => pressKeys(e, () => !action.busy && action.run())}
+          className={cn(ROW_BUTTON, 'cursor-pointer', hidden && 'opacity-50')}
+        >
+          {children}
+        </div>
+      ) : (
+        <div className={cn(ROW_BUTTON, hidden && 'opacity-50')}>{children}</div>
+      )}
+      {wide && <div className="px-2 pb-2">{wide}</div>}
     </li>
   );
 }
 
-function RowText({ row, title, sub, state, tip }: { row: DestinationRow; title: string; sub: string; state?: string; tip?: string }) {
+function RowText({ row, title, sub, state, tip, dot }: { row: DestinationRow; title: string; sub: string; state?: string; tip?: string; dot?: 'on' | 'off' }) {
   const Icon = ICONS[row];
   const words = (
     <span
       id={`destination-state-${row}`}
-      tabIndex={tip ? 0 : undefined}
       data-state={state}
       className={cn(
         'truncate text-[11px] leading-tight text-textTertiary focus-visible:outline-none',
@@ -170,8 +275,16 @@ function RowText({ row, title, sub, state, tip }: { row: DestinationRow; title: 
   );
   return (
     <>
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary">
+      <span className="relative flex h-6 w-6 shrink-0 items-center justify-center text-textSecondary">
         <Icon aria-hidden size={15} />
+        {dot && (
+          <span
+            id={`destination-dot-${row}`}
+            aria-hidden
+            data-dot={dot}
+            className={cn('absolute right-0 top-0 h-2 w-2 rounded-avatar', dot === 'on' ? 'bg-increase' : 'bg-decrease')}
+          />
+        )}
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm leading-tight text-textPrimary">{title}</span>
@@ -192,7 +305,11 @@ function Eye({ row, hidden }: { row: DestinationRow; hidden: boolean }) {
         aria-label={`${words} ${WORDS[row]}`}
         aria-pressed={hidden}
         className={ICON_BUTTON}
-        onClick={() => setDestinationHidden(row, !hidden)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setDestinationHidden(row, !hidden);
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
       >
         <Icon aria-hidden size={14} />
       </button>
@@ -206,6 +323,7 @@ function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; o
   const live = liveOf(d, useAtomValue(directStatusAtom));
   const name = d.name || WORDS[d.platform];
   const flip = async (enabled: boolean) => {
+    if (busy) return;
     setBusy(true);
     try {
       await api.setDestinationEnabled(d.id, enabled);
@@ -219,13 +337,23 @@ function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; o
   };
   const chat = d.enabled ? chatStateOf(d.chat) : null;
   const words = `${WORDS[d.platform]}, ${stateOf(d, live)}${chat ? ` · ${chat}` : ''}`;
+  const dot = d.enabled && d.has_key && live?.state !== 'error' ? 'on' : 'off';
   return (
-    <RowShell row={d.platform} hidden={hidden}>
-      <RowText row={d.platform} title={name} sub={words} tip={words} state={d.enabled ? (live?.state ?? 'idle') : 'off'} />
+    <RowShell
+      row={d.platform}
+      hidden={hidden}
+      on={d.enabled}
+      action={{
+        id: `destination-toggle-${d.platform}`,
+        label: `send the stream to ${name}`,
+        pressed: d.enabled,
+        busy,
+        describedBy: `destination-state-${d.platform}`,
+        run: () => void flip(!d.enabled)
+      }}
+    >
+      <RowText row={d.platform} title={name} sub={words} tip={words} state={d.enabled ? (live?.state ?? 'idle') : 'off'} dot={dot} />
       <Eye row={d.platform} hidden={hidden} />
-      <Tooltip content={d.enabled ? `${name} gets the stream: switch off to skip it` : `${name} is off: switch on to send it the stream`}>
-        <Switch id={`destination-switch-${d.id}`} checked={d.enabled} disabled={busy} label={`send the stream to ${name}`} onChange={(on) => void flip(on)} />
-      </Tooltip>
     </RowShell>
   );
 }
@@ -234,26 +362,24 @@ function Unconnected({ row, open, hidden, onStatus }: { row: DestinationRow; ope
   const [adding, setAdding] = useState(false);
   const custom = row === 'custom';
   const words = custom ? 'add server' : `connect ${WORDS[row]}`;
-  const action = open && (
-    <Tooltip content={words}>
-      <Button
-        id={`destination-connect-${row}`}
-        size="sm"
-        variant="outline"
-        aria-label={words}
-        className={LINK}
-        disabled={adding}
-        onClick={() => (custom ? setAdding(true) : location.assign(destinationStartUrl(row)))}
-      >
-        <RiLinkM aria-hidden size={14} />
-      </Button>
-    </Tooltip>
-  );
   return (
-    <RowShell row={row} hidden={hidden} wide={adding && open && custom ? <CustomForm onDone={() => setAdding(false)} onStatus={onStatus} /> : null}>
+    <RowShell
+      row={row}
+      hidden={hidden}
+      wide={adding && open && custom ? <CustomForm onDone={() => setAdding(false)} onStatus={onStatus} /> : null}
+      action={
+        open
+          ? {
+              id: `destination-connect-${row}`,
+              label: words,
+              expanded: custom ? adding : undefined,
+              run: () => (custom ? setAdding((a) => !a) : location.assign(destinationStartUrl(row)))
+            }
+          : undefined
+      }
+    >
       <RowText row={row} title={WORDS[row]} sub={open ? (custom ? 'no server yet' : 'not connected') : 'not on here yet'} />
       <Eye row={row} hidden={hidden} />
-      {action}
     </RowShell>
   );
 }
