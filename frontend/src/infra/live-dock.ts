@@ -248,21 +248,24 @@ export function readPresetName(raw: unknown): string | undefined {
   return name || undefined;
 }
 
+export function starterPresets(): Presets {
+  return { list: [{ id: DEFAULT_PRESET }], active: DEFAULT_PRESET };
+}
+
 export function readPresets(raw: unknown): Presets {
   const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const list: SavedPreset[] = [];
   for (const entry of Array.isArray(r.list) ? r.list : []) {
+    if (list.length >= PRESETS_MAX) break;
     const e = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
     const id = e && typeof e.id === 'string' && PRESET_ID.test(e.id) ? e.id : null;
     const preset = id ? readPreset(e) : null;
     if (!id || !preset || list.some((p) => p.id === id)) continue;
     list.push({ id, ...preset });
   }
-  const first = list.find((p) => p.id === DEFAULT_PRESET) ?? { id: DEFAULT_PRESET };
-  const rest = list.filter((p) => p.id !== DEFAULT_PRESET).slice(0, PRESETS_MAX - 1);
-  const all = [first, ...rest];
-  const active = typeof r.active === 'string' && all.some((p) => p.id === r.active) ? r.active : DEFAULT_PRESET;
-  return { list: all, active };
+  if (!list.length) return starterPresets();
+  const active = typeof r.active === 'string' && list.some((p) => p.id === r.active) ? r.active : list[0]!.id;
+  return { list, active };
 }
 
 export function presetName(preset: Pick<SavedPreset, 'id' | 'name'> | null | undefined): string {
@@ -302,9 +305,20 @@ export function withPresetRenamed(presets: Presets, id: PresetId, raw: string): 
 }
 
 export function withPresetDeleted(presets: Presets, id: PresetId): Presets {
-  if (id === DEFAULT_PRESET) return presets;
   const list = presets.list.filter((p) => p.id !== id);
-  return { list, active: presets.active === id ? DEFAULT_PRESET : presets.active };
+  if (list.length === presets.list.length) return presets;
+  if (!list.length) return starterPresets();
+  return { list, active: presets.active === id ? list[0]!.id : presets.active };
+}
+
+export function withPresetMoved(presets: Presets, id: PresetId, to: number): Presets {
+  const from = presets.list.findIndex((p) => p.id === id);
+  if (from < 0) return presets;
+  const at = Math.max(0, Math.min(presets.list.length - 1, to));
+  if (at === from) return presets;
+  const list = presets.list.filter((p) => p.id !== id);
+  list.splice(at, 0, presets.list[from]!);
+  return { ...presets, list };
 }
 
 export function withPresetStage(presets: Presets, id: PresetId, stage: Stage): Presets {
@@ -476,6 +490,10 @@ export function renamePreset(id: PresetId, raw: string) {
 
 export function deletePreset(id: PresetId) {
   setPresets(withPresetDeleted(store.get(livePresetsAtom), id));
+}
+
+export function movePreset(id: PresetId, to: number) {
+  setPresets(withPresetMoved(store.get(livePresetsAtom), id, to));
 }
 
 export function migratePresets() {

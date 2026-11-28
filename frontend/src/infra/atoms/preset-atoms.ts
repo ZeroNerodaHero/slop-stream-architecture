@@ -16,31 +16,22 @@ import {
   sourcesAtom
 } from '@/infra/atoms/publish-atoms';
 import { setSoundHear, setSoundLoop, setSoundVolume, setSourceNames, soundsAtom, sourceNamesAtom } from '@/infra/atoms/source-atoms';
-import {
-  activatePreset,
-  addPreset,
-  DEFAULT_PRESET,
-  deletePreset,
-  livePresetAtom,
-  livePresetsAtom,
-  PRESETS_MAX,
-  type PresetId,
-  presetOf,
-  savePresetStage
-} from '@/infra/live-dock';
-import { gapWords, type Stage, type StageGap, withGoneScreens } from '@/infra/stage';
+import { activatePreset, addPreset, deletePreset, livePresetAtom, livePresetsAtom, PRESETS_MAX, type PresetId, presetOf, savePresetStage } from '@/infra/live-dock';
+import { gapWords, type Stage, stageChanged, type StageGap, storedStage, withGoneScreens } from '@/infra/stage';
 import { store } from '@/infra/store';
 
 export const presetNoticeAtom = atom('');
 export const presetBusyAtom = atom(false);
+export const presetDirtyAtom = atom(false);
 export const presetsFullAtom = atom((get) => get(livePresetsAtom).list.length >= PRESETS_MAX);
 
-export const AUTOSAVE_MS = 500;
+export const DIRTY_MS = 120;
 
 let turn = 0;
 let ready = false;
 let applying = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let baseline: Stage | null = null;
 const seen = new Set<string>();
 
 export function stageNow(): Stage {
@@ -50,18 +41,22 @@ export function stageNow(): Stage {
   return stage;
 }
 
-function saveActive() {
+function checkDirty() {
   if (timer) clearTimeout(timer);
   timer = null;
-  if (!ready || applying) return;
-  const id = store.get(livePresetAtom);
-  savePresetStage(id, withGoneScreens(presetOf(id)?.stage, stageNow(), [...seen]));
+  const saved = ready && !applying ? (presetOf(store.get(livePresetAtom))?.stage ?? baseline) : null;
+  store.set(presetDirtyAtom, saved ? stageChanged(saved, stageNow(), [...seen]) : false);
 }
 
-function saveSoon() {
+function checkSoon() {
   if (!ready || applying) return;
   if (timer) clearTimeout(timer);
-  timer = setTimeout(saveActive, AUTOSAVE_MS);
+  timer = setTimeout(checkDirty, DIRTY_MS);
+}
+
+function settled() {
+  baseline = presetOf(store.get(livePresetAtom))?.stage ? null : storedStage(stageNow());
+  checkDirty();
 }
 
 function stageSounds(stage: Stage, gaps: StageGap[]) {
@@ -81,7 +76,12 @@ function stageSounds(stage: Stage, gaps: StageGap[]) {
 async function applyStage(stage: Stage | undefined): Promise<void> {
   const mine = ++turn;
   store.set(presetNoticeAtom, '');
-  if (!stage) return;
+  if (!stage) {
+    applying = false;
+    store.set(presetBusyAtom, false);
+    settled();
+    return;
+  }
   applying = true;
   store.set(presetBusyAtom, true);
   try {
@@ -96,30 +96,38 @@ async function applyStage(stage: Stage | undefined): Promise<void> {
     if (mine === turn) {
       applying = false;
       store.set(presetBusyAtom, false);
-      saveSoon();
+      settled();
     }
   }
 }
 
 export async function pickPreset(id: PresetId): Promise<void> {
-  if (!presetOf(id)) return;
-  if (id !== store.get(livePresetAtom)) saveActive();
   const preset = activatePreset(id);
-  await applyStage(preset?.stage);
+  if (preset) await applyStage(preset.stage);
 }
 
-export function savePreset() {
-  saveActive();
+export function saveActivePreset() {
+  if (applying) return;
+  const id = store.get(livePresetAtom);
+  savePresetStage(id, withGoneScreens(presetOf(id)?.stage, stageNow(), [...seen]));
+  baseline = null;
+  checkDirty();
+}
+
+export function newPreset(): PresetId | null {
+  if (applying) return null;
   const id = addPreset(stageNow());
   store.set(presetNoticeAtom, id ? '' : `${PRESETS_MAX} presets at most`);
+  if (id) baseline = null;
+  checkDirty();
+  return id;
 }
 
 export async function removePreset(id: PresetId): Promise<void> {
-  if (id === DEFAULT_PRESET) return;
   const was = store.get(livePresetAtom) === id;
-  if (timer && was) clearTimeout(timer);
   deletePreset(id);
-  if (was) await applyStage(presetOf(DEFAULT_PRESET)?.stage);
+  if (was) await applyStage(presetOf(store.get(livePresetAtom))?.stage);
+  else checkDirty();
 }
 
 const WATCHED = [
@@ -134,13 +142,16 @@ const WATCHED = [
   modelAtom,
   cameraOnlyAtom,
   cameraDeviceAtom,
-  micDeviceAtom
+  micDeviceAtom,
+  livePresetsAtom
 ] as const;
 
 export function watchPresets(): () => void {
   ready = false;
   applying = false;
+  baseline = null;
   seen.clear();
+  store.set(presetDirtyAtom, false);
   placeArrivalsFrom(() => presetOf(store.get(livePresetAtom))?.stage?.scene ?? null);
   let restoring = false;
   const restore = () => {
@@ -148,25 +159,26 @@ export function watchPresets(): () => void {
     restoring = true;
     void applyStage(presetOf(store.get(livePresetAtom))?.stage).finally(() => {
       ready = true;
-      saveSoon();
+      settled();
     });
   };
   const look = () => store.get(sourcesAtom).forEach((s) => seen.add(s.id));
   const stops = WATCHED.map((a) =>
     store.sub(a, () => {
       look();
-      if (ready) saveSoon();
+      if (ready) checkSoon();
       else restore();
     })
   );
   look();
   restore();
   return () => {
-    if (ready) saveActive();
     stops.forEach((stop) => stop());
     if (timer) clearTimeout(timer);
     timer = null;
     ready = false;
+    baseline = null;
+    store.set(presetDirtyAtom, false);
     placeArrivalsFrom(null);
   };
 }

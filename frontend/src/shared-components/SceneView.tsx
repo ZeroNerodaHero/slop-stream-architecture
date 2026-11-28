@@ -57,6 +57,7 @@ interface SceneViewProps {
   main: MainVideo;
   onPick?: (slot: number) => void;
   edit?: SceneEdit;
+  placeholder?: (layer: Layer) => ReactNode;
   className?: string;
   children?: ReactNode;
 }
@@ -74,9 +75,10 @@ interface Gesture {
   moved: boolean;
 }
 
-export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, className, children }: SceneViewProps) {
+export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, placeholder, className, children }: SceneViewProps) {
   const frame = useRef<HTMLDivElement | null>(null);
-  const hostIndex = main.slot === null ? -1 : layers.findIndex((l) => isVideoLayer(l) && l.slot === main.slot);
+  const held = layers.map((l) => placeholder?.(l) ?? null);
+  const hostIndex = main.slot === null ? -1 : layers.findIndex((l, i) => isVideoLayer(l) && l.slot === main.slot && held[i] === null);
   const host = layers[hostIndex];
   const mainVideo = (
     <VideoFrame
@@ -100,7 +102,9 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
       {layers.length === 0 && <div className="absolute inset-0">{mainVideo}</div>}
       {layers.map((layer, i) => (
         <LayerBox key={layer.id} layer={layer} frame={frame} edit={edit} onPick={onPick}>
-          {i === hostIndex ? (
+          {held[i] !== null ? (
+            held[i]
+          ) : i === hostIndex ? (
             mainVideo
           ) : layer.kind === 'avatar' ? (
             avatar && <AvatarLayer key={avatar.read ? 'mixer' : 'own'} id={`layer-${layer.id}-avatar`} wide={layer.w * 16 >= layer.h * 9} voice={avatar} />

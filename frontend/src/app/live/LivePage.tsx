@@ -37,7 +37,8 @@ import {
   removeSource,
   reorderSource,
   resizeSource,
-  sceneAtom,
+  previewSceneAtom,
+  waitingSourcesAtom,
   selectedSourceAtom,
   selectSource,
   sentStreamAtom,
@@ -102,7 +103,8 @@ import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { ChatModule, ChatWindow, Unread, useUnread } from '@/shared-components/live/modules/Chat';
 import { DestinationsModule } from '@/shared-components/live/modules/Destinations';
 import { LayoutModule } from '@/shared-components/live/modules/LayoutSwitcher';
-import { presetIcon, PresetsModule } from '@/shared-components/live/modules/Presets';
+import { PresetIcon, PresetsModule } from '@/shared-components/live/modules/Presets';
+import { WaitingLayer } from '@/shared-components/live/WaitingLayer';
 import { SoundModule } from '@/shared-components/live/modules/Sound';
 import { SourceModule } from '@/shared-components/live/modules/Source';
 import { SourcesModule } from '@/shared-components/live/modules/Sources';
@@ -515,7 +517,8 @@ export function LivePage() {
   const viewers = useAtomValue(liveViewersAtom);
   const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
-  const scene = useAtomValue(sceneAtom);
+  const scene = useAtomValue(previewSceneAtom);
+  const waiting = useAtomValue(waitingSourcesAtom);
   const sources = useAtomValue(sourcesAtom);
   const previewSlot = useAtomValue(previewSlotAtom);
   const selected = useAtomValue(selectedSourceAtom);
@@ -601,6 +604,10 @@ export function LivePage() {
         avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }}
         main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
         edit={cameraOnly ? undefined : edit}
+        placeholder={(layer) => {
+          const source = waiting.find((s) => s.id === layer.id);
+          return source ? <WaitingLayer source={source} /> : null;
+        }}
       />
       <ModelLoading />
       {publishing && (
@@ -658,7 +665,6 @@ export function LivePage() {
   };
 
   const presetWords = presetName(presets.list.find((p) => p.id === preset));
-  const PresetIcon = presetIcon(preset);
 
   if (mobile) {
     const panel = (t: PhoneTab, children: ReactNode, className?: string) => (
@@ -749,7 +755,7 @@ export function LivePage() {
               className="h-12 max-w-[42%] shrink-0 gap-1.5 px-3"
               onClick={() => setDrawer(true)}
             >
-              <PresetIcon aria-hidden size={16} className="shrink-0" />
+              <PresetIcon id={preset} size={16} className="shrink-0" />
               <span className="truncate">{presetWords}</span>
             </Button>
           </div>
