@@ -44,7 +44,7 @@ type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
 const HIDDEN_TAB = `in ${HERE} the model stops moving while this tab is hidden`;
 const WELL = cn(ICON_BUTTON, 'cursor-pointer flex-col gap-0.5');
-const PILL = 'px-2 py-0.5 text-[11px] max-md:min-h-0';
+const PILL = 'px-1.5 py-0.5 text-[10px] max-md:min-h-0';
 const CHECKS = 'repeating-conic-gradient(rgb(var(--text-tertiary)) 0% 25%, transparent 0% 50%) 0 0 / 4px 4px';
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 
