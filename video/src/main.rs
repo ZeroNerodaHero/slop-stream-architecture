@@ -66,6 +66,9 @@ const MAX_KIND_BYTES: usize = 16;
 const MAX_LABEL_BYTES: usize = 64;
 const MAX_LAYERS: usize = 16;
 const MAX_LAYER_ID_BYTES: usize = 16;
+const MAX_TEXT_CHARS: usize = 120;
+const MAX_CHAT_LINES: u8 = 20;
+const LATEST_EPOCH_MS: i64 = 4_102_444_800_000;
 const UDP_BUFFER_BYTES: usize = 4 << 20;
 const MAX_WATCHERS_PER_IP_ROOM: usize = 4;
 const MAX_WATCHERS_PER_IP: usize = 16;
@@ -309,6 +312,14 @@ struct Layer {
     fit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     look: Option<AvatarLook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    style: Option<TextStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timer: Option<TimerSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chat: Option<ChatSpec>,
     x: f64,
     y: f64,
     w: f64,
@@ -323,12 +334,78 @@ struct AvatarLook {
     bounce: bool,
 }
 
+fn hex_color(c: &str) -> bool {
+    c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn known_shape(shape: &str) -> bool {
+    matches!(shape, "default" | "block" | "soft" | "bubble")
+}
+
 impl AvatarLook {
     fn well_formed(&self) -> bool {
-        let shape = matches!(self.shape.as_str(), "default" | "block" | "soft" | "bubble");
-        let color = self.color.is_empty() || (self.color.len() == 7 && self.color.starts_with('#') && self.color[1..].bytes().all(|b| b.is_ascii_hexdigit()));
-        shape && color
+        known_shape(&self.shape) && (self.color.is_empty() || hex_color(&self.color))
     }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct TextStyle {
+    size: f64,
+    color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    align: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shape: Option<String>,
+}
+
+impl TextStyle {
+    fn well_formed(&self) -> bool {
+        (0.01..=0.5).contains(&self.size)
+            && hex_color(&self.color)
+            && self.bg.as_deref().is_none_or(hex_color)
+            && self.align.as_deref().is_none_or(|a| matches!(a, "left" | "center" | "right"))
+            && self.shape.as_deref().is_none_or(known_shape)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct TimerSpec {
+    mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    end: Option<i64>,
+}
+
+impl TimerSpec {
+    fn well_formed(&self) -> bool {
+        let epoch = |t: Option<i64>| t.is_none_or(|t| (0..=LATEST_EPOCH_MS).contains(&t));
+        let mode = match self.mode.as_str() {
+            "clock" => true,
+            "countdown" => self.end.is_some(),
+            "uptime" => self.start.is_some(),
+            _ => false,
+        };
+        mode && epoch(self.start) && epoch(self.end)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ChatSpec {
+    lines: u8,
+}
+
+impl ChatSpec {
+    fn well_formed(&self) -> bool {
+        (1..=MAX_CHAT_LINES).contains(&self.lines)
+    }
+}
+
+fn shown_text(text: &str) -> bool {
+    let chars = text.chars().count();
+    (1..=MAX_TEXT_CHARS).contains(&chars) && !text.trim().is_empty() && text.chars().all(|c| c == '\n' || !c.is_control())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -348,10 +425,17 @@ impl Scene {
                     "camera" | "screen" => layer.slot.is_some_and(|slot| slot < video_slots),
                     "image" => layer.asset.is_some_and(|asset| asset > 0),
                     "avatar" => true,
+                    "text" => layer.text.as_deref().is_some_and(shown_text),
+                    "timer" => layer.timer.is_some(),
+                    "chat" => true,
                     _ => false,
                 };
                 let look = layer.look.as_ref().is_none_or(|l| layer.kind == "avatar" && l.well_formed());
-                id && placed && fit && named && look
+                let text = layer.text.is_none() || layer.kind == "text";
+                let style = layer.style.as_ref().is_none_or(|s| matches!(layer.kind.as_str(), "text" | "timer" | "chat") && s.well_formed());
+                let timer = layer.timer.as_ref().is_none_or(|t| layer.kind == "timer" && t.well_formed());
+                let chat = layer.chat.as_ref().is_none_or(|c| layer.kind == "chat" && c.well_formed());
+                id && placed && fit && named && look && text && style && timer && chat
             })
     }
 }
@@ -1891,6 +1975,62 @@ mod tests {
         assert!(!scene(r##"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"star","border":true,"color":"","bounce":true}}"##).well_formed(0));
         assert!(!scene(r##"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"soft","border":true,"color":"red","bounce":true}}"##).well_formed(0));
         assert!(!scene(r##"{"id":"i1","kind":"image","asset":3,"x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"soft","border":true,"color":"","bounce":true}}"##).well_formed(0), "only the avatar has a look");
+    }
+
+    #[test]
+    fn a_text_layer_rides_the_scene_with_its_style_and_bad_ones_are_refused() {
+        let scene = |layer: &str| serde_json::from_str::<Scene>(&format!(r#"{{"layers":[{layer}]}}"#)).expect("a scene");
+        let title = scene(r##"{"id":"t1","kind":"text","text":"brb\nback soon","style":{"size":0.08,"color":"#ffffff","bg":"#000000","align":"center","shape":"bubble"},"x":0.1,"y":0.7,"w":0.5,"h":0.2}"##);
+        assert!(title.well_formed(0));
+        let out = serde_json::to_value(&title).unwrap();
+        assert_eq!(out["layers"][0]["text"], "brb\nback soon", "the words pass through");
+        assert_eq!(out["layers"][0]["style"], serde_json::json!({ "size": 0.08, "color": "#ffffff", "bg": "#000000", "align": "center", "shape": "bubble" }), "the style passes through");
+        let plain = scene(r##"{"id":"t1","kind":"text","text":"hi","style":{"size":0.05,"color":"#ffffff"},"x":0,"y":0,"w":0.3,"h":0.1}"##);
+        assert!(plain.well_formed(0));
+        assert!(!serde_json::to_string(&plain).unwrap().contains("bg"), "no bg is not sent");
+        assert!(scene(r#"{"id":"t1","kind":"text","text":"hi","x":0,"y":0,"w":0.3,"h":0.1}"#).well_formed(0), "no style is fine");
+        let long = "a".repeat(MAX_TEXT_CHARS);
+        assert!(scene(&format!(r#"{{"id":"t1","kind":"text","text":"{long}","x":0,"y":0,"w":0.3,"h":0.1}}"#)).well_formed(0));
+        let longer = "a".repeat(MAX_TEXT_CHARS + 1);
+        assert!(!scene(&format!(r#"{{"id":"t1","kind":"text","text":"{longer}","x":0,"y":0,"w":0.3,"h":0.1}}"#)).well_formed(0), "the words are capped");
+        let wide = "é".repeat(MAX_TEXT_CHARS);
+        assert!(scene(&format!(r#"{{"id":"t1","kind":"text","text":"{wide}","x":0,"y":0,"w":0.3,"h":0.1}}"#)).well_formed(0), "the cap counts letters, not bytes");
+        assert!(!scene(r#"{"id":"t1","kind":"text","x":0,"y":0,"w":0.3,"h":0.1}"#).well_formed(0), "a text layer needs words");
+        assert!(!scene(r#"{"id":"t1","kind":"text","text":"   ","x":0,"y":0,"w":0.3,"h":0.1}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"t1","kind":"text","text":"a\u0007b","x":0,"y":0,"w":0.3,"h":0.1}"#).well_formed(0));
+        assert!(!scene(r##"{"id":"t1","kind":"text","text":"hi","style":{"size":0.9,"color":"#ffffff"},"x":0,"y":0,"w":0.3,"h":0.1}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"t1","kind":"text","text":"hi","style":{"size":0.05,"color":"white"},"x":0,"y":0,"w":0.3,"h":0.1}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"t1","kind":"text","text":"hi","style":{"size":0.05,"color":"#ffffff","bg":"#12"},"x":0,"y":0,"w":0.3,"h":0.1}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"t1","kind":"text","text":"hi","style":{"size":0.05,"color":"#ffffff","align":"justify"},"x":0,"y":0,"w":0.3,"h":0.1}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"t1","kind":"text","text":"hi","style":{"size":0.05,"color":"#ffffff","shape":"star"},"x":0,"y":0,"w":0.3,"h":0.1}"##).well_formed(0));
+        assert!(!scene(r#"{"id":"me","kind":"avatar","text":"hi","x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0), "only text layers carry words");
+        assert!(!scene(r##"{"id":"i1","kind":"image","asset":3,"style":{"size":0.05,"color":"#ffffff"},"x":0,"y":0,"w":0.3,"h":0.5}"##).well_formed(0), "a picture has no text style");
+    }
+
+    #[test]
+    fn timer_and_chat_layers_are_known_kinds_with_their_own_fields() {
+        let scene = |layer: &str| serde_json::from_str::<Scene>(&format!(r#"{{"layers":[{layer}]}}"#)).expect("a scene");
+        let clock = scene(r##"{"id":"c1","kind":"timer","timer":{"mode":"clock"},"style":{"size":0.06,"color":"#ffffff"},"x":0.8,"y":0,"w":0.2,"h":0.1}"##);
+        assert!(clock.well_formed(0));
+        let countdown = scene(r#"{"id":"c2","kind":"timer","timer":{"mode":"countdown","end":1800000000000},"x":0.8,"y":0,"w":0.2,"h":0.1}"#);
+        assert!(countdown.well_formed(0));
+        assert_eq!(serde_json::to_value(&countdown).unwrap()["layers"][0]["timer"], serde_json::json!({ "mode": "countdown", "end": 1800000000000_i64 }), "the timer passes through");
+        assert!(scene(r#"{"id":"c3","kind":"timer","timer":{"mode":"uptime","start":1700000000000},"x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"c3","kind":"timer","x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0), "a timer needs a mode");
+        assert!(!scene(r#"{"id":"c3","kind":"timer","timer":{"mode":"lap"},"x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"c3","kind":"timer","timer":{"mode":"countdown"},"x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0), "a countdown needs an end");
+        assert!(!scene(r#"{"id":"c3","kind":"timer","timer":{"mode":"uptime"},"x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0), "uptime needs a start");
+        assert!(!scene(r#"{"id":"c3","kind":"timer","timer":{"mode":"countdown","end":-5},"x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"c3","kind":"timer","timer":{"mode":"countdown","end":99999999999999},"x":0,"y":0,"w":0.2,"h":0.1}"#).well_formed(0));
+        let chat = scene(r##"{"id":"ch","kind":"chat","chat":{"lines":8},"style":{"size":0.03,"color":"#ffffff","bg":"#000000"},"x":0,"y":0.4,"w":0.3,"h":0.5}"##);
+        assert!(chat.well_formed(0));
+        assert_eq!(serde_json::to_value(&chat).unwrap()["layers"][0]["chat"], serde_json::json!({ "lines": 8 }), "the chat settings pass through");
+        assert!(scene(r#"{"id":"ch","kind":"chat","x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"ch","kind":"chat","chat":{"lines":0},"x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"ch","kind":"chat","chat":{"lines":21},"x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0));
+        assert!(!scene(r#"{"id":"ch","kind":"chat","timer":{"mode":"clock"},"x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0), "only a timer has a timer");
+        assert!(!scene(r#"{"id":"c1","kind":"timer","timer":{"mode":"clock"},"chat":{"lines":3},"x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0), "only chat has chat settings");
+        assert!(!scene(r#"{"id":"x1","kind":"poll","x":0,"y":0,"w":0.3,"h":0.5}"#).well_formed(0), "an unknown kind is still refused");
     }
 
     fn ip(last: u8) -> IpAddr {

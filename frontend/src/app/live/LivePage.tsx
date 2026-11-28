@@ -691,7 +691,7 @@ export function LivePage() {
     onKey: (id, what) => {
       if (what === 'remove') {
         const kind = sources.find((s) => s.id === id)?.kind;
-        if (kind === 'image' || kind === 'avatar') removeSource(id);
+        if (kind === 'image' || kind === 'avatar' || kind === 'text') removeSource(id);
         else toggleSource(id);
       } else reorderSource(id, what === 'forward' ? 'up' : 'down');
     }

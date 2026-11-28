@@ -3,10 +3,11 @@ import { type AvatarLook, centeredSquare, readAvatarLook, SQUARE, squareIn } fro
 import type { Layer, Scene } from './relay.ts';
 import { readScreenCap, type ScreenCap } from './screen-cap.ts';
 import { looseBox, visibleBox } from './model-frame.ts';
+import { cleanText, TEXT_PRESETS, type TextKind, textLabel, type TextStyle } from './text-paint.ts';
 
 export interface Source {
   id: string;
-  kind: 'camera' | 'screen' | 'image' | 'avatar';
+  kind: 'camera' | 'screen' | 'image' | 'avatar' | 'text';
   label: string;
   slot?: number;
   asset?: number;
@@ -16,6 +17,8 @@ export interface Source {
   fit?: Fit;
   look?: AvatarLook;
   cap?: ScreenCap;
+  text?: string;
+  style?: TextStyle;
   waiting?: boolean;
 }
 
@@ -32,7 +35,34 @@ export const layerOf = (s: Source): Layer =>
     ? { id: s.id, kind: 'image', asset: s.asset ?? 0, ...visibleBox(s.box) }
     : s.kind === 'avatar'
       ? { id: s.id, kind: 'avatar', ...(s.look && { look: s.look }), ...visibleBox(s.box) }
-      : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...visibleBox(s.box) };
+      : s.kind === 'text'
+        ? { id: s.id, kind: 'text', text: s.text ?? '', ...(s.style && { style: s.style }), ...visibleBox(s.box) }
+        : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...visibleBox(s.box) };
+
+export const hasWords = (s: Source) => s.kind !== 'text' || !!s.text?.trim();
+
+export function textSource(kind: TextKind, sources: readonly Source[], text = kind): Source {
+  let n = 1;
+  while (sources.some((s) => s.id === `t${n}`)) n++;
+  const preset = TEXT_PRESETS[kind];
+  return { id: `t${n}`, kind: 'text', label: textLabel(text), text, style: { ...preset.style }, box: { ...preset.box }, shown: true };
+}
+
+export interface TextPatch {
+  text?: string;
+  style?: Partial<TextStyle>;
+  kind?: TextKind;
+}
+
+export function textPatched(s: Source, patch: TextPatch): Source {
+  if (s.kind !== 'text') return s;
+  const preset = patch.kind ? TEXT_PRESETS[patch.kind] : null;
+  const text = patch.text === undefined ? (s.text ?? '') : cleanText(patch.text);
+  const style = { ...TEXT_PRESETS['lower third'].style, ...s.style, ...preset?.style, ...patch.style };
+  if (preset && !preset.style.bg) delete style.bg;
+  if (patch.style && 'bg' in patch.style && !patch.style.bg) delete style.bg;
+  return { ...s, text, label: textLabel(text), style, ...(preset && { box: { ...preset.box } }) };
+}
 
 const isSquare = (box: Box) => Math.abs(box.w - box.h * SQUARE) < 0.002;
 
@@ -43,7 +73,7 @@ export const squaredAvatars = (sources: readonly Source[]): Source[] =>
 
 export const isVideoSource = (s: Source) => s.kind === 'camera' || s.kind === 'screen';
 
-export const sceneOf = (sources: readonly Source[]): Scene => ({ layers: sources.filter((s) => s.shown).map(layerOf) });
+export const sceneOf = (sources: readonly Source[]): Scene => ({ layers: sources.filter((s) => s.shown && hasWords(s)).map(layerOf) });
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -169,7 +199,8 @@ const fullFor = (s: Source): Box => (s.kind === 'avatar' ? centeredSquare(FULL) 
 
 export function arrangedAfterAdd(sources: readonly Source[], added: Source, last: Preset | null): Source[] {
   const videos = laidOut(sources);
-  if (!videos.some((v) => v.id === added.id)) return sources.map((s) => (s.id === added.id ? { ...s, box: imageBox(SQUARE), shown: true } : s));
+  if (!videos.some((v) => v.id === added.id))
+    return sources.map((s) => (s.id === added.id ? { ...s, box: s.kind === 'text' ? s.box : imageBox(SQUARE), shown: true } : s));
   if (videos.length === 1) return sources.map((s) => (s.id === added.id ? { ...s, box: fullFor(s), shown: true } : s));
   if (videos.length === 2 && added.kind === 'screen') {
     return applyPreset(sources, last && last.boxes.some((b) => b.role === 'screen1') ? last : SCREEN_AND_FACE);
@@ -205,7 +236,9 @@ export interface KeptSource {
 export type KeptScene = Record<string, KeptSource>;
 
 export function keptOf(sources: readonly Source[]): KeptScene {
-  return Object.fromEntries(sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }), ...(s.look && { look: s.look }), ...(s.cap && { cap: s.cap }) }]));
+  return Object.fromEntries(
+    sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }), ...(s.look && { look: s.look }), ...(s.cap && { cap: s.cap }) }])
+  );
 }
 
 export function readKept(raw: unknown): KeptScene | null {
@@ -217,17 +250,23 @@ export function readKept(raw: unknown): KeptScene | null {
     if (!k || !b || ![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue;
     const look = readAvatarLook(k.look);
     const cap = readScreenCap(k.cap);
-    kept[id] = { box: looseBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }), ...(look && { look }), ...(cap && { cap }) };
+    kept[id] = {
+      box: looseBox(b as Box),
+      shown: k.shown !== false,
+      ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }),
+      ...(look && { look }),
+      ...(cap && { cap })
+    };
   }
   return kept;
 }
 
 export function arrivedFrom(kept: KeptScene, before: readonly Source[], next: Source[]): Source[] {
-  const came = next.some((s) => kept[s.id] && !before.some((b) => b.id === s.id));
+  const came = next.some((s) => s.kind !== 'text' && kept[s.id] && !before.some((b) => b.id === s.id));
   if (!came) return next;
   return next.map((s) => {
     const was = before.find((b) => b.id === s.id);
-    const k = was ?? kept[s.id];
+    const k = was ?? (s.kind === 'text' ? undefined : kept[s.id]);
     return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }), ...(k.cap && { cap: k.cap }) } : s;
   });
 }

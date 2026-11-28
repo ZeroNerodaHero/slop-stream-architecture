@@ -7,6 +7,7 @@ import {
   RiFileGifLine,
   RiImageLine,
   RiMusic2Line,
+  RiText,
   RiUserSmileLine,
   RiUserVoiceLine,
   RiVidiconLine
@@ -20,6 +21,7 @@ import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
   addAvatar,
   addImage,
+  addText,
   cameraAtom,
   cameraOn,
   canShareScreenAtom,
@@ -208,6 +210,18 @@ function AddMenu({ onModel }: { onModel: () => void }) {
               </button>
             )}
             <button
+              id="add-text"
+              role="menuitem"
+              type="button"
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                addText();
+              }}
+            >
+              <RiText aria-hidden size={16} /> text
+            </button>
+            <button
               id="add-image"
               role="menuitem"
               type="button"
@@ -309,6 +323,12 @@ function SourceThumb({ source }: { source: Source }) {
         draggable={false}
         className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-black object-contain"
       />
+    );
+  if (source.kind === 'text')
+    return (
+      <span className={cn(THUMB, 'text-textTertiary')}>
+        <RiText aria-hidden size={14} />
+      </span>
     );
   if (source.kind === 'avatar')
     return <Face name={name} version={avatar} className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-backgroundSecondary object-cover text-xs" />;

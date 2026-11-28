@@ -1,4 +1,4 @@
-import type { Atom } from 'jotai';
+import { type Atom, useAtomValue } from 'jotai';
 import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -9,7 +9,9 @@ import {
   useRef
 } from 'react';
 
-import { type Box, fitOf, isVideoLayer, type Layer } from '@/infra/relay';
+import { shapeAtom } from '@/infra/atoms/settings-atoms';
+import { type Box, fitOf, isOverlayLayer, isVideoLayer, type Layer, type TextLayer as TextLayerData } from '@/infra/relay';
+import { paintText, textShape, textStyleOf } from '@/infra/text-paint';
 import { AvatarLayer, type AvatarVoice } from '@/shared-components/AvatarLayer';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
@@ -181,15 +183,55 @@ export function SceneView({
             )
           ) : isVideoLayer(layer) ? (
             <LayerVideo id={`layer-${layer.id}-video`} streamAtom={streamFor(layer.slot)} cover={fitOf(layer) === 'cover'} clear={clearOf(layer)} />
-          ) : (
+          ) : layer.kind === 'image' ? (
             <img id={`layer-${layer.id}-img`} src={imageUrl(layer.asset)} alt="" draggable={false} className="block h-full w-full object-fill" />
-          )}
+          ) : layer.kind === 'text' ? (
+            <TextLayer id={`layer-${layer.id}-text`} layer={layer} frame={frame} />
+          ) : null}
         </LayerBox>
       ))}
       {(layers.length > 0 || blank) && hostIndex < 0 && <div className="pointer-events-none absolute left-0 top-0 h-px w-px opacity-0">{mainVideo}</div>}
       {children}
     </div>
   );
+}
+
+function TextLayer({ id, layer, frame }: { id: string; layer: TextLayerData; frame: RefObject<HTMLDivElement | null> }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  const site = useAtomValue(shapeAtom);
+  const { text } = layer;
+  const style = textStyleOf(layer.style);
+  const { size, color, bg, align } = style;
+  const shape = textShape(style, site);
+  useEffect(() => {
+    const canvas = ref.current;
+    const scene = frame.current;
+    if (!canvas || !scene) return;
+    const draw = () => {
+      const ctx = canvas.getContext('2d');
+      const r = canvas.getBoundingClientRect();
+      const fh = scene.getBoundingClientRect().height;
+      if (!ctx || r.width === 0 || r.height === 0 || fh === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.round(r.width * dpr);
+      const h = Math.round(r.height * dpr);
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      ctx.clearRect(0, 0, w, h);
+      paintText(ctx, { x: 0, y: 0, w, h }, { text, style: { size, color, bg, align }, shape }, fh * dpr);
+    };
+    draw();
+    const watch = new ResizeObserver(draw);
+    watch.observe(canvas);
+    watch.observe(scene);
+    let on = true;
+    void document.fonts?.ready.then(() => on && draw());
+    return () => {
+      on = false;
+      watch.disconnect();
+    };
+  }, [frame, text, size, color, bg, align, shape]);
+  return <canvas ref={ref} id={id} aria-hidden data-text={text} className="block h-full w-full" />;
 }
 
 function LayerVideo({ id, streamAtom, cover, clear }: { id: string; streamAtom: Atom<MediaStream | null>; cover: boolean; clear: boolean }) {
@@ -332,7 +374,7 @@ function LayerBox({ layer, frame, edit, onPick, clear = false, children }: Layer
   };
 
   const name = layer.kind === 'image' ? 'picture' : layer.kind;
-  const bare = layer.kind === 'avatar';
+  const bare = layer.kind === 'avatar' || isOverlayLayer(layer);
   return (
     <div
       ref={el}

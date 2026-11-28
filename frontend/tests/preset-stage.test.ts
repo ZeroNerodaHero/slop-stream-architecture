@@ -4,14 +4,24 @@ import { test } from 'node:test';
 import { readPreset, readPresets } from '../src/infra/live-dock.ts';
 import { arrivedFrom, keptOf, type Source } from '../src/infra/scene.ts';
 import { readSounds } from '../src/infra/source-settings.ts';
-import { blankStage, gapWords, readStage, sameStage, type Stage, stageChanged, stagedFrom, stageOf, storedStage, withGoneScreens } from '../src/infra/stage.ts';
+import { blankStage, gapWords, readStage, sameStage, type Stage, stageChanged, stagedFrom, stagedKind, stageOf, storedStage, withGoneScreens } from '../src/infra/stage.ts';
 
 const cam: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: { x: 0.5, y: 0.5, w: 0.4, h: 0.4 }, shown: true, fit: 'cover' };
 const screen: Source = { id: 's1', kind: 'screen', label: 'screen', slot: 1, box: { x: 0, y: 0, w: 1, h: 1 }, shown: true };
 const logo: Source = { id: 'i1', kind: 'image', label: 'logo', asset: 7, ratio: 0.5, box: { x: 0.1, y: 0.1, w: 0.2, h: 0.3 }, shown: true };
 const sticker: Source = { id: 'i2', kind: 'image', label: 'sticker', asset: 9, ratio: 1, box: { x: 0.6, y: 0.1, w: 0.2, h: 0.2 }, shown: true };
 
-const rest: Omit<Stage, 'scene' | 'images'> = {
+const lower: Source = {
+  id: 't1',
+  kind: 'text',
+  label: 'billy is live',
+  text: 'billy is live',
+  style: { size: 0.05, color: '#ffffff', bg: '#000000', align: 'left', shape: 'bubble' },
+  box: { x: 0.04, y: 0.78, w: 0.5, h: 0.12 },
+  shown: true
+};
+
+const rest: Omit<Stage, 'scene' | 'images' | 'texts'> = {
   levels: { mic: { level: 0.3, muted: false }, master: { level: 0.8, muted: true } },
   sounds: { aboing1: { name: 'boing', volume: 0.4, loop: true, hear: false } },
   names: { camera: 'face cam' },
@@ -248,4 +258,64 @@ test('a new preset starts blank: nothing on stage, devices kept, and it survives
   assert.equal(staged.sources.some((s) => s.shown), false);
   assert.equal(staged.sources.some((s) => s.kind === 'image'), false);
   assert.deepEqual(staged.gaps, []);
+  assert.deepEqual(blank.texts, {});
+  assert.equal(stagedFrom(blank, [cam, lower], [], newId).sources.some((s) => s.kind === 'text'), false);
+});
+
+test('a saved preset keeps its text: the words, the style, the box and where it sits, and puts it back on load', () => {
+  const stage = saved([screen, cam, lower]);
+  assert.deepEqual(Object.keys(stage.scene), ['s1', 'cam', 't1']);
+  assert.deepEqual(stage.texts.t1, { text: 'billy is live', style: lower.style });
+  assert.equal(stagedKind('t1', stage), 'text');
+  const { sources, gaps } = stagedFrom(stage, [cam, screen], [], newId);
+  assert.deepEqual(gaps, []);
+  assert.deepEqual(
+    sources.map((s) => s.id),
+    ['s1', 'cam', 't1']
+  );
+  const back = sources.find((s) => s.id === 't1');
+  assert.deepEqual(back, lower);
+  const edited = stagedFrom(stage, [cam, screen, { ...lower, text: 'changed', box: { x: 0, y: 0, w: 0.2, h: 0.1 } }], [], newId).sources.find((s) => s.id === 't1');
+  assert.equal(edited?.text, 'billy is live');
+  assert.deepEqual(edited?.box, lower.box);
+});
+
+test('a saved text is never mistaken for a screen, and text not in the preset is dropped like a picture', () => {
+  const stage = saved([cam, lower]);
+  const { sources } = stagedFrom(stage, [], [], newId);
+  assert.deepEqual(
+    sources.map((s) => [s.id, s.kind, s.waiting === true]),
+    [
+      ['cam', 'camera', true],
+      ['t1', 'text', false]
+    ]
+  );
+  const other = stagedFrom(saved([cam]), [cam, lower, { ...lower, id: 't2' }], [], newId).sources;
+  assert.deepEqual(
+    other.map((s) => s.id),
+    ['cam']
+  );
+});
+
+test('text dirties the preset when its words, style or box change, and empty text is not saved', () => {
+  const stage = storedStage(stageOf([cam, lower], rest))!;
+  assert.equal(stageChanged(stage, stageOf([cam, lower], rest), []), false);
+  assert.equal(stageChanged(stage, stageOf([cam, { ...lower, text: 'brb' }], rest), []), true);
+  assert.equal(stageChanged(stage, stageOf([cam, { ...lower, style: { ...lower.style!, color: '#ff0000' } }], rest), []), true);
+  assert.equal(stageChanged(stage, stageOf([cam, { ...lower, box: { ...lower.box, y: 0.1 } }], rest), []), true);
+  const empty = stageOf([cam, { ...lower, text: '  ' }], rest);
+  assert.deepEqual(empty.texts, {});
+  assert.deepEqual(Object.keys(empty.scene), ['cam']);
+});
+
+test('stored text is cleaned on read: capped words, a clamped style, and junk dropped', () => {
+  const stage = readStage({
+    scene: { t1: { box: { x: 0, y: 0, w: 0.5, h: 0.1 }, shown: true }, t2: { box: { x: 0, y: 0, w: 0.5, h: 0.1 }, shown: true } },
+    texts: { t1: { text: 'x'.repeat(500), style: { size: 4, color: 'red', bg: 'nope' } }, t2: { text: '   ' }, 'Bad Id': { text: 'hi' } }
+  });
+  assert.ok(stage);
+  assert.deepEqual(Object.keys(stage.texts), ['t1']);
+  assert.equal(stage.texts.t1!.text.length, 120);
+  assert.deepEqual(stage.texts.t1!.style, { size: 0.5, color: '#ffffff' });
+  assert.equal(stagedKind('t2', stage), 'screen');
 });
