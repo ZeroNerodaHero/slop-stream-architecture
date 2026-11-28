@@ -1,5 +1,6 @@
 api
 video
+relay
 frontend
 random-media/gifs
 :(exclude)frontend/Caddyfile
