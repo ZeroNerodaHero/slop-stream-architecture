@@ -1,4 +1,4 @@
-import { RiEmotionHappyLine, RiEmotionNormalLine, RiFlipHorizontalLine, RiInformationLine, RiPaintLine } from '@remixicon/react';
+import { RiEmotionHappyLine, RiEmotionNormalLine, RiFlipHorizontalLine, RiInformationLine, RiPaintLine, RiResetLeftLine, RiSwapBoxLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
@@ -22,7 +22,6 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { modelSurvivesHiddenTab, type RigInfo, type RigPart } from '@/infra/face';
 import { ColorPick } from '@/shared-components/about/ColorPick';
-import { Button } from '@/shared-components/Button';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
 import { Select } from '@/shared-components/Select';
@@ -44,7 +43,6 @@ type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
 const HIDDEN_TAB = `in ${HERE} the model stops moving while this tab is hidden`;
 const WELL = cn(ICON_BUTTON, 'cursor-pointer flex-col gap-0.5');
-const PILL = 'px-1.5 py-0.5 text-[10px] max-md:min-h-0';
 const CHECKS = 'repeating-conic-gradient(rgb(var(--text-tertiary)) 0% 25%, transparent 0% 50%) 0 0 / 4px 4px';
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 
@@ -182,12 +180,16 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
             />
           </button>
         </Tooltip>
-        <Button id="model-change" size="sm" className={PILL} onClick={onChange}>
-          another model
-        </Button>
-        <Button id="face-rest" size="sm" className={PILL} onClick={restFace}>
-          rest face
-        </Button>
+        <Tooltip content="another model">
+          <button id="model-change" type="button" aria-label="another model" onClick={onChange} className={ICON_BUTTON}>
+            <RiSwapBoxLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
+        <Tooltip content="rest face">
+          <button id="face-rest" type="button" aria-label="rest face" onClick={restFace} className={ICON_BUTTON}>
+            <RiResetLeftLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
       </div>
       {picking && (
         <ColorPick

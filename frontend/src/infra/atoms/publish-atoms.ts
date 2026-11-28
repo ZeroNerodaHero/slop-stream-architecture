@@ -69,7 +69,7 @@ import {
   validPreset
 } from '@/infra/scene';
 import { isSeeThrough, isStoredBacking, NO_BACKING, readModelBacking } from '@/infra/model-backing';
-import { fittedModelBox, type ModelFrame, modelFrameOf, movedLoose, resizedLoose, sameFrame, STAGE_ASPECT, WIDE_FRAME, wideModelBox } from '@/infra/model-frame';
+import { fittedModelBox, type ModelFrame, modelFrameOf, movedLoose, resizedLoose, sameFrame, WIDE_FRAME, wideModelBox } from '@/infra/model-frame';
 import { clampBox } from '@/infra/box';
 import { askAfter, type PickOutcome, type ScreenAsk, type ScreenAsks, withAsk } from '@/infra/screen-ask';
 import { readModelChoice, type Stage, type StageGap, stagedFrom, stageOf } from '@/infra/stage';
@@ -199,7 +199,6 @@ const storedFaceMirrorAtom = atomWithStorage<unknown>('settings.faceMirror', tru
 const storedFaceExpressionsAtom = atomWithStorage<unknown>('settings.faceExpressions', true, undefined, { getOnInit: true });
 const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', NO_BACKING, undefined, { getOnInit: true });
 const storedRigPictureAtom = atomWithStorage<unknown>('settings.rigPicture', true, undefined, { getOnInit: true });
-const storedModelFitAtom = atomWithStorage<unknown>('settings.modelFit', true, undefined, { getOnInit: true });
 export const faceCameraAtom = atom((get) => {
   const id = get(storedFaceCameraAtom);
   return typeof id === 'string' ? id : '';
@@ -212,7 +211,6 @@ export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false)
 export const faceExpressionsAtom = atom((get) => get(storedFaceExpressionsAtom) !== false);
 export const rigPictureAtom = atom(() => true);
 export const modelBackgroundAtom = atom((get) => readModelBacking(get(storedModelBackgroundAtom)));
-export const modelFitAtom = atom((get) => get(storedModelFitAtom) !== false);
 export const modelSeeThroughAtom = atom((get) => get(modelAtom) !== null && isSeeThrough(get(modelBackgroundAtom)));
 const validModelChoice = (raw: unknown): ModelChoice | null => readModelChoice(raw);
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
@@ -281,11 +279,6 @@ store.sub(stagedSourcesAtom, frameModel);
 function fitModel(aspect: number) {
   const cam = camOf(store.get(sourcesAtom));
   if (cam) withSource(cam.id, (s) => ({ ...s, box: fittedModelBox(s.box, aspect) }));
-}
-
-export function setModelFit(on: boolean) {
-  store.set(storedModelFitAtom, on);
-  if (modelSession) fitModel(on ? modelSession.fitAspect : STAGE_ASPECT);
 }
 let cameraCap = SINGLE_BITRATE;
 let imageCount = 0;
@@ -733,7 +726,7 @@ function dropModel() {
   modelSession = null;
   modelFrame = null;
   const cam = camOf(store.get(sourcesAtom));
-  if (had && cam) withSource(cam.id, (s) => ({ ...s, box: clampBox(store.get(modelFitAtom) ? wideModelBox(s.box) : s.box) }));
+  if (had && cam) withSource(cam.id, (s) => ({ ...s, box: clampBox(wideModelBox(s.box)) }));
   faceCamera?.stop();
   faceCamera = null;
   store.set(readerCameraAtom, null);
@@ -851,7 +844,7 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   store.set(sourceStatusAtom, '');
   setSources(store.get(sourcesAtom).map((s) => (s.kind === 'avatar' ? { ...s, shown: false } : s)));
   ensureCameraSource();
-  if (store.get(modelFitAtom)) fitModel(session.fitAspect);
+  fitModel(session.fitAspect);
   frameModel();
   if (!store.get(isPublishingAtom)) setPhase('camera-ready', sound.length ? 'model ready' : 'model ready, no mic');
   slotsChanged();
@@ -1519,7 +1512,7 @@ export function moveSource(id: string, from: Box, dx: number, dy: number) {
 export function resizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) {
   withSource(id, (s) => {
     if (!isModelSource(s)) return { ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free && s.kind !== 'avatar' ? null : from.w / from.h)) };
-    return { ...s, box: resizedLoose(from, sx, sy, dx, dy, free && !store.get(modelFitAtom) ? null : from.w / from.h) };
+    return { ...s, box: resizedLoose(from, sx, sy, dx, dy, from.w / from.h) };
   });
 }
 
@@ -2236,6 +2229,7 @@ export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
     await tried(() => stageModel(stage.model, gaps));
     if (generation === liveGeneration) stageScene(stage, []);
   }
+  if (modelSession && generation === liveGeneration) fitModel(modelSession.fitAspect);
   return gaps;
 }
 
