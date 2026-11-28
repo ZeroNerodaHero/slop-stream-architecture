@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["video", "api"]
+exclude = ["relay"]
 
 [profile.release]
 strip = true

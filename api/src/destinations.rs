@@ -1056,7 +1056,18 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let dests = dests_of(&s.db, me.id).await?;
     let mut platforms: Vec<&str> = cfg.platforms().into_iter().map(Platform::slug).collect();
     platforms.push("custom");
-    Ok(Json(json!({ "platforms": platforms, "destinations": dests.iter().map(Dest::summary).collect::<Vec<_>>() })))
+    let relayed = crate::relay::statuses(&s, me.id).await;
+    let list: Vec<Value> = dests
+        .iter()
+        .map(|d| {
+            let mut v = d.summary();
+            if let Some(status) = relayed.get(&d.id) {
+                v["relay"] = status.clone();
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "platforms": platforms, "relay": s.relay.on(), "destinations": list })))
 }
 
 #[derive(Deserialize)]
@@ -1200,13 +1211,18 @@ async fn go_live(State(s): State<AppState>, Me(me): Me, body: Result<Json<LiveBo
         Some(p) => PRIVACY.into_iter().find(|k| *k == p).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "privacy is unlisted, public or private"))?,
     };
     auth::limit(&s, &format!("dest:live:{}", me.id), 60, 10, "slow down").await?;
+    let out = announce(cfg, &s.db, me.id, &title, category.as_deref(), privacy).await?;
+    Ok(Json(json!({ "results": out })))
+}
+
+pub(crate) async fn announce(cfg: &Config, db: &sqlx::PgPool, user: Uuid, title: &str, category: Option<&str>, privacy: &str) -> Result<Vec<Value>, sqlx::Error> {
     let mut out = Vec::new();
-    for mut d in dests_of(&s.db, me.id).await? {
+    for mut d in dests_of(db, user).await? {
         let Some(p) = Platform::from_slug(&d.platform) else { continue };
         if !d.enabled || cfg.app(p).is_none() {
             continue;
         }
-        match set_channel(cfg, &s.db, me.id, &mut d, &title, category.as_deref(), privacy).await {
+        match set_channel(cfg, db, user, &mut d, title, category, privacy).await {
             Ok(()) => out.push(json!({ "id": d.id, "platform": d.platform, "ok": true })),
             Err(f) => {
                 warn(p, "title", &f);
@@ -1214,19 +1230,24 @@ async fn go_live(State(s): State<AppState>, Me(me): Me, body: Result<Json<LiveBo
             }
         }
     }
-    Ok(Json(json!({ "results": out })))
+    Ok(out)
 }
 
 async fn stop_live(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let cfg = gate(&s)?;
     let me = signed_in(me)?;
     auth::limit(&s, &format!("dest:stop:{}", me.id), 60, 10, "slow down").await?;
+    let out = stop_youtube(cfg, &s.db, me.id).await?;
+    Ok(Json(json!({ "results": out })))
+}
+
+pub(crate) async fn stop_youtube(cfg: &Config, db: &sqlx::PgPool, user: Uuid) -> Result<Vec<Value>, sqlx::Error> {
     let mut out = Vec::new();
-    for mut d in dests_of(&s.db, me.id).await? {
+    for mut d in dests_of(db, user).await? {
         if d.platform != Platform::Youtube.slug() || cfg.app(Platform::Youtube).is_none() {
             continue;
         }
-        match youtube_stop(cfg, &s.db, me.id, &mut d).await {
+        match youtube_stop(cfg, db, user, &mut d).await {
             Ok(ended) => out.push(json!({ "id": d.id, "platform": d.platform, "ok": true, "ended": ended })),
             Err(f) => {
                 warn(Platform::Youtube, "stop", &f);
@@ -1234,7 +1255,68 @@ async fn stop_live(State(s): State<AppState>, Me(me): Me) -> ApiResult {
             }
         }
     }
-    Ok(Json(json!({ "results": out })))
+    Ok(out)
+}
+
+pub(crate) struct Target {
+    pub(crate) id: Uuid,
+    pub(crate) platform: String,
+    pub(crate) url: String,
+    pub(crate) key: String,
+}
+
+impl std::fmt::Debug for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Target").field("id", &self.id).field("platform", &self.platform).field("key", &"<sealed>").finish()
+    }
+}
+
+fn usable(cfg: &Config, d: &Dest) -> bool {
+    d.enabled && (d.platform == "custom" || Platform::from_slug(&d.platform).is_some_and(|p| cfg.app(p).is_some()))
+}
+
+pub(crate) async fn usable_count(cfg: &Config, db: &sqlx::PgPool, user: Uuid) -> Result<usize, sqlx::Error> {
+    Ok(dests_of(db, user).await?.iter().filter(|d| usable(cfg, d)).count())
+}
+
+async fn fresh_ingest(cfg: &Config, db: &sqlx::PgPool, user: Uuid, d: &mut Dest) -> Result<(), Fail> {
+    match Platform::from_slug(&d.platform) {
+        Some(Platform::Youtube) => {
+            let app = cfg.app(Platform::Youtube).ok_or(Fail::Shape)?.clone();
+            let access = fresh_access(cfg, db, user, d, false).await?;
+            let stream = youtube_stream(cfg, &app, &access, true).await?.ok_or(Fail::Shape)?;
+            let (_, ingest) = parse_youtube_stream(&stream).ok_or(Fail::Shape)?;
+            keep_ingest(cfg, db, user, d, &ingest).await
+        }
+        Some(_) => refresh_key(cfg, db, user, d).await,
+        None => Ok(()),
+    }
+}
+
+pub(crate) async fn targets(cfg: &Config, db: &sqlx::PgPool, user: Uuid, refresh: Option<Uuid>) -> Result<(Vec<Target>, Vec<(Uuid, String)>), sqlx::Error> {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for mut d in dests_of(db, user).await? {
+        if !usable(cfg, &d) {
+            continue;
+        }
+        let missing = opened(cfg, user, &d.platform, "key", d.key.as_deref()).is_none() || opened(cfg, user, &d.platform, "url", d.url.as_deref()).is_none();
+        if let Some(p) = Platform::from_slug(&d.platform).filter(|_| missing || refresh == Some(d.id)) {
+            if let Err(f) = fresh_ingest(cfg, db, user, &mut d).await {
+                warn(p, "relay key", &f);
+                notes.push((d.id, f.words(p)));
+                if missing {
+                    continue;
+                }
+            }
+        }
+        let (Some(url), Some(key)) = (opened(cfg, user, &d.platform, "url", d.url.as_deref()), opened(cfg, user, &d.platform, "key", d.key.as_deref())) else {
+            notes.push((d.id, "no stream key yet".to_owned()));
+            continue;
+        };
+        out.push(Target { id: d.id, platform: d.platform.clone(), url, key });
+    }
+    Ok((out, notes))
 }
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -1491,6 +1573,36 @@ mod tests {
         assert_eq!(opened(&cfg, user, "twitch", "key", d.key.as_deref()).as_deref(), Some("live_4242_acc-3"));
         sqlx::query("DELETE FROM streamers WHERE id = $1").bind(user).execute(&pool).await.unwrap();
         assert!(dest_of(&pool, user, id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn the_relay_gets_only_enabled_targets_with_fresh_keys() {
+        let _one = ONE_MOCK_ACCOUNT.lock().await;
+        let pool = crate::auth::tests::test_db().await;
+        let base = mock().await;
+        let spec = Spec { authorize_url: format!("{base}/authorize"), token_url: format!("{base}/token"), revoke_url: format!("{base}/revoke"), api_url: format!("{base}/helix") };
+        let cfg = Config::for_test("http://localhost:5173", KEY, &[(Platform::Twitch, spec)]);
+        sqlx::query("DELETE FROM stream_destinations WHERE platform = 'twitch' AND external_id IN ('4242', '5151')").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM oauth_identities WHERE provider = 'twitch' AND provider_user_id IN ('4242', '5151')").execute(&pool).await.unwrap();
+        let user = crate::auth::tests::row(&pool, &format!("dest-relay-{}", std::process::id()), Some("hash")).await;
+        assert_eq!(usable_count(&cfg, &pool, user).await.unwrap(), 0);
+        let tw = connect(&cfg, &pool, user, Platform::Twitch, "good", &random_hex()).await.unwrap().0;
+        let custom = put_custom(&cfg, &pool, user, "sink", "rtmps://sink.example/live", "sink-key").await.unwrap().0;
+        assert_eq!(usable_count(&cfg, &pool, user).await.unwrap(), 2);
+        let (list, notes) = targets(&cfg, &pool, user, None).await.unwrap();
+        assert!(notes.is_empty());
+        let mut got: Vec<(Uuid, String, String, String)> = list.iter().map(|t| (t.id, t.platform.clone(), t.url.clone(), t.key.clone())).collect();
+        got.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(got, vec![(custom, "custom".into(), "rtmps://sink.example/live".into(), "sink-key".into()), (tw, "twitch".into(), TWITCH_INGEST.into(), "live_4242_acc-1".into())]);
+        assert!(!format!("{:?}", list).contains("sink-key"));
+        let (list, _) = targets(&cfg, &pool, user, Some(tw)).await.unwrap();
+        assert_eq!(list.iter().find(|t| t.id == tw).map(|t| t.key.as_str()), Some("live_4242_acc-2"));
+        switch(&pool, user, custom, false).await.unwrap().unwrap();
+        let (list, _) = targets(&cfg, &pool, user, None).await.unwrap();
+        assert_eq!(list.iter().map(|t| t.id).collect::<Vec<_>>(), vec![tw]);
+        assert_eq!(usable_count(&cfg, &pool, user).await.unwrap(), 1);
+        sqlx::query("DELETE FROM streamers WHERE id = $1").bind(user).execute(&pool).await.unwrap();
     }
 
     #[tokio::test]

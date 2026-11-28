@@ -1,9 +1,11 @@
 import { RiAddLine, RiBroadcastLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAtomValue } from 'jotai';
 import { type FormEvent, useState } from 'react';
 
 import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl } from '@/infra/api';
 import { setRail } from '@/infra/live-dock';
+import { restreamAtom, restreamMessageAtom } from '@/infra/restream';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
@@ -33,7 +35,9 @@ const WORDS = DESTINATION_WORDS;
 const SMALL = 'h-7 gap-1 px-2.5 py-0 text-xs max-md:min-h-0';
 
 export function useDestinations() {
+  const relaying = useAtomValue(restreamAtom) !== 'off';
   return useQuery({
+    refetchInterval: relaying ? 3000 : false,
     queryKey: KEY,
     queryFn: api.destinations,
     retry: (count, e) => !(e instanceof ApiError && (e.status === 404 || e.status === 401)) && count < 1,
@@ -56,8 +60,12 @@ function readBack(): string {
   return back;
 }
 
-function stateOf(d: Destination): string {
+export function stateOf(d: Destination): string {
   if (!d.enabled) return 'off';
+  const r = d.relay;
+  if (r?.state === 'live') return r.note ? `live, ${r.note}` : 'live';
+  if (r?.state === 'connecting') return 'connecting';
+  if (r?.state === 'error') return r.message ? `error: ${r.message}` : 'error';
   return d.has_key ? 'ready' : 'no key yet';
 }
 
@@ -85,9 +93,20 @@ function Row({ d, onStatus }: { d: Destination; onStatus: (words: string) => voi
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm leading-tight text-textPrimary">{name}</span>
-        <span className="truncate text-[11px] leading-tight text-textTertiary">
-          {WORDS[d.platform]}, {stateOf(d)}
-        </span>
+        <Tooltip content={`${WORDS[d.platform]}, ${stateOf(d)}`}>
+          <span
+            id={`destination-state-${d.id}`}
+            tabIndex={0}
+            data-state={d.relay?.state ?? (d.enabled ? 'idle' : 'off')}
+            className={cn(
+              'truncate text-[11px] leading-tight text-textTertiary focus-visible:outline-none',
+              d.enabled && d.relay?.state === 'live' && 'text-increase',
+              d.enabled && d.relay?.state === 'error' && 'text-decrease'
+            )}
+          >
+            {WORDS[d.platform]}, {stateOf(d)}
+          </span>
+        </Tooltip>
       </span>
       <Tooltip content={d.enabled ? `${name} gets the stream: switch off to skip it` : `${name} is off: switch on to send it the stream`}>
         <Switch id={`destination-switch-${d.id}`} checked={d.enabled} disabled={busy} label={`send the stream to ${name}`} onChange={(on) => void flip(on)} />
@@ -161,6 +180,7 @@ export function DestinationsBody() {
   const { data } = useDestinations();
   const [status, setStatus] = useState(readBack);
   const [custom, setCustom] = useState(false);
+  const relayWords = useAtomValue(restreamMessageAtom);
   if (!data) return null;
   const taken = new Set(data.destinations.map((d) => d.platform));
   const oauth = data.platforms.filter((p): p is Exclude<DestinationPlatform, 'custom'> => p !== 'custom' && !taken.has(p));
@@ -206,6 +226,11 @@ export function DestinationsBody() {
       <span id="destination-status" className="min-w-0 break-words text-xs text-textSecondary empty:-mt-2" aria-live="polite">
         {status}
       </span>
+      {relayWords && (
+        <span id="destination-relay" className="min-w-0 break-words text-xs text-textTertiary" aria-live="polite">
+          {relayWords}
+        </span>
+      )}
     </div>
   );
 }
