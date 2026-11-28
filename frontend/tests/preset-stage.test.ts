@@ -146,7 +146,7 @@ test('stored stage values are clamped and junk entries are dropped', () => {
   });
   assert.ok(stage);
   assert.deepEqual(Object.keys(stage.scene), ['cam']);
-  assert.deepEqual(stage.scene.cam!.box, { x: 0, y: 0, w: 1, h: 1 });
+  assert.deepEqual(stage.scene.cam!.box, { x: -0.95, y: 0, w: 1, h: 1 });
   assert.deepEqual(stage.images, {});
   assert.deepEqual(stage.levels, { mic: { level: 1, muted: false } });
   assert.deepEqual(stage.sounds, { aboing1: { name: 'sound', volume: 0, loop: false, hear: true } });

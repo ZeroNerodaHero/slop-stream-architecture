@@ -10,9 +10,11 @@ import {
   hasMicAtom,
   isPublishingAtom,
   modelAtom,
+  modelFitAtom,
   refreshFaceCameras,
   selectedSourceAtom,
   setCamera,
+  setModelFit,
   setSourceFit,
   sourcesAtom
 } from '@/infra/atoms/publish-atoms';
@@ -181,6 +183,7 @@ function VisualSettings({ source, place, onModel }: { source: Source; place: Pla
   const model = useAtomValue(modelAtom);
   const names = useAtomValue(sourceNamesAtom);
   const hasCamera = useAtomValue(sourcesAtom).some((s) => s.kind === 'camera');
+  const hug = useAtomValue(modelFitAtom);
   const label = sourceNameOf(source, model, names);
   const { worn, fill } = useSourceFacts(source);
   const input = inputKindOf(source.kind, worn);
@@ -189,12 +192,19 @@ function VisualSettings({ source, place, onModel }: { source: Source; place: Pla
     <div id="source-detail" data-source={source.id} data-input={input} className="flex min-w-0 flex-col">
       <div className="flex min-w-0 flex-col gap-2 px-3 py-2.5">
         <Header id={source.id} name={label.name} kind={INPUT_WORDS[input]} onRename={(next) => renameSource(label, next)} />
-        {(sections.includes('fill') || (sections.includes('fitCamera') && hasCamera)) && (
+        {(sections.includes('fill') || sections.includes('hug') || (sections.includes('fitCamera') && hasCamera)) && (
           <div className="flex flex-wrap gap-1.5">
             {sections.includes('fill') && (
               <Button id="source-detail-fit" size="sm" onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}>
                 {fill ? 'whole picture' : 'fill box'}
               </Button>
+            )}
+            {sections.includes('hug') && (
+              <Tooltip content={hug ? 'the box hugs the model. click to give it room on the sides' : 'the box has room on the sides. click to hug the model'}>
+                <Button id="source-detail-model-fit" size="sm" aria-pressed={hug} onClick={() => setModelFit(!hug)}>
+                  {hug ? 'room around it' : 'hug the model'}
+                </Button>
+              </Tooltip>
             )}
             {sections.includes('fitCamera') && hasCamera && (
               <Tooltip content="the same box as the camera, just over it (a border)">

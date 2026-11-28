@@ -1,3 +1,5 @@
+import type { ModelFrame } from '@/infra/model-frame';
+
 export type FaceState = 'starting' | 'on' | 'lost' | 'off';
 
 export type RigKind = 'arkit' | 'shapes' | 'presets' | 'none';
@@ -48,6 +50,7 @@ export type ToFaceWorker =
       height: number;
       fps: number;
       background: string;
+      frame: ModelFrame;
       mirror: boolean;
       expressions: boolean;
       wasm: FaceWasm;
@@ -58,13 +61,13 @@ export type ToFaceWorker =
     }
   | { type: 'frames'; frames: ReadableStream<VideoFrame> | null }
   | { type: 'frame'; bitmap: ImageBitmap }
-  | { type: 'set'; mirror?: boolean; background?: string; expressions?: boolean; marks?: boolean }
+  | { type: 'set'; mirror?: boolean; background?: string; expressions?: boolean; marks?: boolean; frame?: ModelFrame }
   | { type: 'rest' }
   | { type: 'stop' };
 
 export type FromFaceWorker =
   | { type: 'loading'; step: LoadStep; loaded: number; total: number }
-  | { type: 'ready'; rig: RigInfo }
+  | { type: 'ready'; rig: RigInfo; fitAspect: number }
   | { type: 'failed'; why: string }
   | { type: 'state'; face: FaceState; why?: string }
   | { type: 'stats'; stats: ModelStats }

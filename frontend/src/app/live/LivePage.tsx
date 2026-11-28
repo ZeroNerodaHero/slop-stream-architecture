@@ -701,6 +701,7 @@ export function LivePage() {
   const edit: SceneEdit = {
     selectedId: selected,
     onSelect: selectSource,
+    boxOf: (id) => sources.find((s) => s.id === id)?.box,
     onMove: moveSource,
     onResize: resizeSource,
     onNudge: nudgeSource,
