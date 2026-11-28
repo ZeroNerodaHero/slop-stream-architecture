@@ -9,7 +9,6 @@ import { installMobileKeyboard } from '@/infra/keyboard';
 import { installPrefetch, loadFirstPage, warmOverlays } from '@/infra/prefetch';
 import { queryClient } from '@/infra/query-client';
 import { installReporting, report } from '@/infra/report';
-import { installSounds } from '@/infra/sound-triggers';
 import { router } from '@/router';
 
 import '@/infra/atoms/home-atoms';
@@ -32,7 +31,12 @@ installPrefetch();
 
 installMobileKeyboard();
 
-installSounds();
+function startSounds() {
+  void import('@/infra/sound-triggers').then((m) => m.installSounds());
+}
+const idle = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+if (idle) idle(startSounds, { timeout: 2000 });
+else setTimeout(startSounds, 500);
 
 document.addEventListener('dragstart', (e) => {
   if (e.target instanceof HTMLImageElement) e.preventDefault();
