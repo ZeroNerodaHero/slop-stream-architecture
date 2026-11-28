@@ -22,6 +22,7 @@ import { useKeyboard } from '@/infra/keyboard';
 import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
+import { HERE } from '@/infra/here';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -35,11 +36,11 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
   groups: { label: 'groups', group: 'you', icon: <RiGroupLine aria-hidden size={18} /> },
   security: { label: 'security', group: 'you', icon: <RiShieldKeyholeLine aria-hidden size={18} /> },
   notifications: { label: 'notifications', group: 'you', icon: <RiNotification3Line aria-hidden size={18} /> },
-  appearance: { label: 'appearance', group: 'this browser', icon: <RiPaletteLine aria-hidden size={18} /> },
-  chat: { label: 'chat', group: 'this browser', icon: <RiChat1Line aria-hidden size={18} /> },
-  voice: { label: 'voice', group: 'this browser', icon: <RiMicLine aria-hidden size={18} /> },
-  sidebar: { label: 'sidebar', group: 'this browser', icon: <RiSideBarLine aria-hidden size={18} /> },
-  advanced: { label: 'advanced', group: 'this browser', icon: <RiToolsLine aria-hidden size={18} /> }
+  appearance: { label: 'appearance', group: HERE, icon: <RiPaletteLine aria-hidden size={18} /> },
+  chat: { label: 'chat', group: HERE, icon: <RiChat1Line aria-hidden size={18} /> },
+  voice: { label: 'voice', group: HERE, icon: <RiMicLine aria-hidden size={18} /> },
+  sidebar: { label: 'sidebar', group: HERE, icon: <RiSideBarLine aria-hidden size={18} /> },
+  advanced: { label: 'advanced', group: HERE, icon: <RiToolsLine aria-hidden size={18} /> }
 };
 
 const GROUP_LABEL = 'hidden px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';

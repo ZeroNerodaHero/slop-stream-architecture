@@ -37,6 +37,7 @@ mod presence;
 mod profile;
 mod ratelimit;
 mod reactions;
+mod relay;
 mod release;
 mod rt;
 mod s3;
@@ -105,6 +106,7 @@ pub(crate) struct AppState {
     recent_cache: RecentCache,
     pub(crate) oauth: Arc<oauth::Config>,
     pub(crate) destinations: Arc<destinations::Config>,
+    pub(crate) relay: Arc<relay::Config>,
     pub(crate) turnstile: Arc<turnstile::Config>,
 }
 
@@ -835,6 +837,7 @@ fn router(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(oauth::routes())
         .merge(destinations::routes())
+        .merge(relay::routes())
         .merge(turnstile::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
@@ -1055,6 +1058,7 @@ async fn main() {
         recent_cache: Arc::default(),
         oauth: Arc::new(oauth::Config::from_env()),
         destinations: Arc::new(destinations::Config::from_env()),
+        relay: Arc::new(relay::Config::from_env()),
         turnstile: Arc::new(turnstile::Config::from_env()),
     };
 

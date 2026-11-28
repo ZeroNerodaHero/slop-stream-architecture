@@ -21,7 +21,9 @@ import {
   startModel,
   warmModelFiles
 } from '@/infra/face';
+import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { type Mixer, openMixer } from '@/infra/mixer';
+import { startRestream, stopRestream } from '@/infra/restream';
 import { readModel } from '@/infra/model-file';
 import {
   forgetKept,
@@ -66,6 +68,7 @@ import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import { inTauri } from '@/infra/update-check';
 import type { Tone } from '@/shared-components/StatusLine';
+import { HERE } from '@/infra/here';
 
 export type PublishPhase =
   | 'camera-off'
@@ -666,7 +669,7 @@ async function downloadDemo(choice: ModelChoice & { kind: 'demo' }, bytes: numbe
 async function modelFile(choice: ModelChoice, bytes = 0): Promise<ArrayBuffer> {
   if (choice.kind === 'kept') {
     const file = await keptFile(choice.id);
-    if (!file) throw new ModelGone('that model is not kept in this browser any more. pick the file again');
+    if (!file) throw new ModelGone(`that model is not kept in ${HERE} any more. pick the file again`);
     return file;
   }
   const kept = await keptDemoFile(choice.id, choice.v);
@@ -1171,6 +1174,25 @@ export async function goLive(): Promise<void> {
   announceSlots();
   settleCodec();
   void tuneSenders();
+  const owner = store.get(ownerAtom);
+  if (owner) restreamFor(owner, sound ?? null);
+}
+
+function restreamFor(owner: Owner, sound: MediaStreamTrack | null) {
+  try {
+    startRestream({
+      name: owner.name,
+      owner: { session: owner.session, token: owner.token },
+      sound,
+      scene: () => store.get(sceneAtom),
+      streamFor: (slot) => store.get(sentStreamAtom(slot)),
+      imageUrl: (asset) => api.assetUrl(owner.name, asset),
+      avatar: () => ({ name: owner.name, version: store.get(myAvatarVersionAtom) }),
+      avatarUrl: (name, version) => api.avatarUrl(name, version)
+    });
+  } catch {
+    stopRestream({ quiet: true });
+  }
 }
 
 function steer(transceiver: RTCRtpTransceiver, order: (codecs: RTCRtpCodec[]) => RTCRtpCodec[]): boolean {
@@ -1761,6 +1783,7 @@ async function tune(sender: RTCRtpSender | null, { maxBitrate, scale = 1, maxFra
 
 export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', { report = phase === 'failed' }: { report?: boolean } = {}) {
   stopPublishStats();
+  stopRestream();
   if (report) void reportPeerFailure('publish', store.get(streamNameAtom), message, pc);
   removeEventListener('pagehide', stopOnLeave);
   if (heartbeat) {

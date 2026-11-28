@@ -1,6 +1,6 @@
 [[permission]]
 identifier = "native-capture"
-description = "Capture desktop audio, native mics and macOS screens and windows for the go live page"
+description = "Capture desktop audio, native mics and macOS screens and windows for the go live page, and send the stream straight to destinations"
 commands.allow = [
   "start_desktop_audio",
   "stop_desktop_audio",
@@ -9,5 +9,10 @@ commands.allow = [
   "stop_mic",
   "list_capture_sources",
   "start_screen_capture",
-  "stop_screen_capture"
+  "stop_screen_capture",
+  "restream_direct_ready",
+  "restream_direct_start",
+  "restream_direct_packet",
+  "restream_direct_status",
+  "restream_direct_stop"
 ]

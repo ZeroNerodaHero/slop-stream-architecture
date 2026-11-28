@@ -6,6 +6,7 @@ import { gainOf } from '@/infra/mixer';
 import type { Source } from '@/infra/scene';
 import { cleanSourceName, nameKey, readNames, readSounds, renamed, SOUND_VOLUME, type SoundSource, soundNameOf, soundRefusal } from '@/infra/source-settings';
 import { store } from '@/infra/store';
+import { HERE } from '@/infra/here';
 
 const json = { getOnInit: true } as const;
 const storedNamesAtom = atomWithStorage<unknown>('settings.sourceNames', {}, undefined, json);
@@ -114,11 +115,11 @@ async function openVoice(sound: SoundSource): Promise<Voice | null> {
     blob = undefined;
   }
   if (!blob) {
-    store.set(soundStatusAtom, 'that sound is gone from this browser. remove it and add it again');
+    store.set(soundStatusAtom, `that sound is gone from ${HERE}. remove it and add it again`);
     return null;
   }
   if (typeof AudioContext === 'undefined') {
-    store.set(soundStatusAtom, 'this browser has no web audio');
+    store.set(soundStatusAtom, `${HERE} has no web audio`);
     return null;
   }
   const kept = store.get(soundsAtom).find((s) => s.id === sound.id);
@@ -168,7 +169,7 @@ export async function addSound(file: File): Promise<void> {
   try {
     await withFiles('readwrite', (files) => files.put(file, id));
   } catch {
-    store.set(soundStatusAtom, 'this browser would not keep the sound');
+    store.set(soundStatusAtom, `${HERE} would not keep the sound`);
     return;
   }
   writeSounds([...store.get(soundsAtom), { id, name: soundNameOf(file.name), loop: false, volume: SOUND_VOLUME, hear: true }]);

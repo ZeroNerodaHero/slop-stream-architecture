@@ -1,3 +1,5 @@
+import { HERE } from '@/infra/here';
+
 export interface ChatVideo {
   id: string;
   poster: string;
@@ -68,7 +70,7 @@ function once(video: HTMLVideoElement, event: string, ms = READ_MS): Promise<voi
     };
     const bad = () => {
       done();
-      reject(new Error('this browser cannot play that video. send an mp4 (H.264) or a webm (VP8, VP9)'));
+      reject(new Error(`${HERE} cannot play that video. send an mp4 (H.264) or a webm (VP8, VP9)`));
     };
     const timer = setTimeout(() => {
       done();

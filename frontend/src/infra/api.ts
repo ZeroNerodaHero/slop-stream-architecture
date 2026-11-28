@@ -648,11 +648,31 @@ export interface Destination {
   enabled: boolean;
   has_key: boolean;
   connected_at: string;
+  relay?: RelayStatus;
+}
+
+export interface RelayStatus {
+  state: 'connecting' | 'live' | 'error' | 'off';
+  message?: string | null;
+  note?: string | null;
 }
 
 export interface Destinations {
   platforms: DestinationPlatform[];
+  relay?: boolean;
+  direct?: boolean;
   destinations: Destination[];
+}
+
+export interface DirectGrant {
+  session: string;
+  targets: { id: string; platform: DestinationPlatform; url: string; key: string }[];
+}
+
+export interface RelayGrant {
+  session: string;
+  token: string;
+  whip: string;
 }
 
 export const destinationStartUrl = (platform: Exclude<DestinationPlatform, 'custom'>) => `/api/auth/${platform}/start`;
@@ -666,6 +686,11 @@ export const api = {
   refreshDestination: (id: string) => request<Destination>('POST', `/api/destinations/${encodeURIComponent(id)}/refresh`),
   goLiveDestinations: (title: string, category?: string, privacy?: 'unlisted' | 'public' | 'private') =>
     request<{ results: { id: string; platform: DestinationPlatform; ok: boolean; error?: string }[] }>('POST', '/api/destinations/live', { title, category, privacy }),
+  relayStart: (name: string, session: number, token: number, title?: string) =>
+    request<RelayGrant>('POST', '/api/relay/start', { name, session, token, title }, { report: false }),
+  relayDirect: (name: string, session: number, token: number, title?: string) =>
+    request<DirectGrant>('POST', '/api/relay/direct', { name, session, token, title }, { report: false }),
+  relayStop: () => request<{ ok: boolean }>('POST', '/api/relay/stop', undefined, { report: false }),
   stopDestinations: () => request<{ results: { id: string; platform: DestinationPlatform; ok: boolean; ended?: number; error?: string }[] }>('POST', '/api/destinations/stop'),
   meAsked: (response: Promise<Response>) => answerOf<MeInfo>('GET', '/api/me', response),
   signup: (name: string, password: string, turnstile_token?: string) =>

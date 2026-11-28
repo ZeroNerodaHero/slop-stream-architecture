@@ -37,6 +37,7 @@ import { DevicePick } from '@/shared-components/live/DevicePick';
 import { DockPanel } from '@/shared-components/live/Dock';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { HERE } from '@/infra/here';
 
 const DESKTOP = inTauri();
 
@@ -208,7 +209,7 @@ export function MixerBody() {
   const master = useAtomValue(masterRowAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const running = useAtomValue(mixerRunningAtom);
-  if (!mixerOpen) return <p className="px-3 py-3 text-sm text-textTertiary">this browser has no web audio: the mic goes out as it is</p>;
+  if (!mixerOpen) return <p className="px-3 py-3 text-sm text-textTertiary">{HERE} has no web audio: the mic goes out as it is</p>;
   return (
     <>
       {!running && (

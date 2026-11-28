@@ -1,3 +1,5 @@
+import { HERE } from '@/infra/here';
+
 export type SoundEvent = 'notification' | 'voiceJoin' | 'voiceLeave';
 
 export const SOUND_EVENTS: readonly SoundEvent[] = ['notification', 'voiceJoin', 'voiceLeave'];
@@ -50,7 +52,7 @@ export function bellUrl(id: BellId): string {
 
 export function customRefusal(bytes: number, seconds: number | null): string {
   if (bytes > CUSTOM_MAX_BYTES) return 'too big: 1 MB at most';
-  if (seconds === null || !Number.isFinite(seconds)) return 'not a sound this browser can play';
+  if (seconds === null || !Number.isFinite(seconds)) return `not a sound ${HERE} can play`;
   if (seconds > CUSTOM_MAX_SECONDS) return 'too long: 5 seconds at most';
   return '';
 }

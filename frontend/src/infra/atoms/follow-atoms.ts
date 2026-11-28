@@ -8,6 +8,7 @@ import { recount } from '@/infra/follower-count';
 import { isValidName } from '@/infra/names';
 import { queryClient } from '@/infra/query-client';
 import { store } from '@/infra/store';
+import { HERE } from '@/infra/here';
 
 const loginFollowingAtom = atom<Followed[] | undefined>(undefined);
 export const followingAtom = atom((get) => {
@@ -268,7 +269,7 @@ function followAsGuest(name: string): boolean {
   const kept = store.get(guestFollowsAtom);
   if (kept.some((f) => f.name === name)) return true;
   if (kept.length >= GUEST_FOLLOWS_MAX) {
-    store.set(followNoteAtom, `not followed: this browser follows ${GUEST_FOLLOWS_MAX} names already. unfollow one first`);
+    store.set(followNoteAtom, `not followed: ${HERE} follows ${GUEST_FOLLOWS_MAX} names already. unfollow one first`);
     return false;
   }
   store.set(storedGuestFollowsAtom, [{ name, at: new Date().toISOString() }, ...kept]);
