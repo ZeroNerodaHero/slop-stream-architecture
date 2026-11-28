@@ -166,8 +166,7 @@ function StripViewers({ headline }: { headline: string | null }) {
 }
 
 function WatchHeaderSub({ followers }: { followers: number | null }) {
-  const viewers = useAtomValue(watchViewersAtom);
-  return <>{streamNumbers(followers, viewers)}</>;
+  return <>{streamNumbers(followers, null)}</>;
 }
 
 export function WatchPage() {
