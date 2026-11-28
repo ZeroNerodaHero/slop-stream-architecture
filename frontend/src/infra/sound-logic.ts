@@ -1,4 +1,4 @@
-import { HERE } from '@/infra/here';
+import { HERE } from './here.ts';
 
 export type SoundEvent = 'notification' | 'voiceJoin' | 'voiceLeave';
 
