@@ -1057,6 +1057,8 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let mut platforms: Vec<&str> = cfg.platforms().into_iter().map(Platform::slug).collect();
     platforms.push("custom");
     let relayed = crate::relay::statuses(&s, me.id).await;
+    let chats = crate::multichat::statuses(&s, me.id).await;
+    let mode = crate::multichat::mode_of(&s.db, me.id).await?;
     let list: Vec<Value> = dests
         .iter()
         .map(|d| {
@@ -1064,10 +1066,13 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
             if let Some(status) = relayed.get(&d.id) {
                 v["relay"] = status.clone();
             }
+            if let Some(status) = chats.get(&d.id) {
+                v["chat"] = status.clone();
+            }
             v
         })
         .collect();
-    Ok(Json(json!({ "platforms": platforms, "relay": s.relay.on(), "direct": s.relay.direct(), "destinations": list })))
+    Ok(Json(json!({ "platforms": platforms, "relay": s.relay.on(), "direct": s.relay.direct(), "external_chat": mode, "destinations": list })))
 }
 
 #[derive(Deserialize)]
@@ -1319,6 +1324,61 @@ pub(crate) async fn targets(cfg: &Config, db: &sqlx::PgPool, user: Uuid, refresh
     Ok((out, notes))
 }
 
+pub(crate) struct ChatSource {
+    pub(crate) id: Uuid,
+    pub(crate) platform: &'static str,
+    pub(crate) external_id: String,
+}
+
+pub(crate) fn chat_platform(slug: &str) -> Option<&'static str> {
+    match Platform::from_slug(slug)? {
+        Platform::Twitch => Some("twitch"),
+        Platform::Kick => Some("kick"),
+        Platform::Youtube => None,
+    }
+}
+
+pub(crate) async fn chat_sources(cfg: &Config, db: &sqlx::PgPool, user: Uuid) -> Result<Vec<ChatSource>, sqlx::Error> {
+    let mut out = Vec::new();
+    for d in dests_of(db, user).await? {
+        let Some(platform) = chat_platform(&d.platform) else { continue };
+        let Some(external_id) = d.external_id.clone() else { continue };
+        if !d.enabled || Platform::from_slug(&d.platform).and_then(|p| cfg.app(p)).is_none() {
+            continue;
+        }
+        out.push(ChatSource { id: d.id, platform, external_id });
+    }
+    Ok(out)
+}
+
+pub(crate) async fn chat_access(cfg: &Config, db: &sqlx::PgPool, user: Uuid, id: Uuid, force: bool) -> Result<String, String> {
+    let mut d = dest_of(db, user, id).await.map_err(|e| format!("postgres: {e}"))?.ok_or_else(|| "that destination is gone".to_owned())?;
+    let p = Platform::from_slug(&d.platform).ok_or_else(|| "not a chat platform".to_owned())?;
+    fresh_access(cfg, db, user, &mut d, force).await.map_err(|f| f.words(p))
+}
+
+pub(crate) fn twitch_client_id(cfg: &Config) -> Option<String> {
+    cfg.app(Platform::Twitch).map(|a| a.id.clone())
+}
+
+pub(crate) fn chat_http(cfg: &Config) -> reqwest::Client {
+    cfg.http.clone()
+}
+
+pub(crate) fn chat_api_url(cfg: &Config, slug: &str) -> Option<String> {
+    Platform::from_slug(slug).and_then(|p| cfg.app(p)).map(|a| a.spec.api_url.clone())
+}
+
+pub(crate) async fn kick_owner(db: &sqlx::PgPool, external_id: &str) -> Result<Option<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT d.user_id, s.name FROM stream_destinations d JOIN streamers s ON s.id = d.user_id
+         WHERE d.platform = 'kick' AND d.external_id = $1 AND d.enabled",
+    )
+    .bind(external_id)
+    .fetch_optional(db)
+    .await
+}
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/destinations", get(list))
@@ -1328,6 +1388,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/destinations/{id}", delete(remove))
         .route("/api/destinations/{id}/enabled", post(set_enabled))
         .route("/api/destinations/{id}/refresh", post(refresh_route))
+        .route("/api/destinations/external-chat", axum::routing::put(crate::multichat::put_mode))
         .route("/api/auth/{platform}/start", get(start))
         .route("/api/auth/{platform}/callback", get(callback))
 }

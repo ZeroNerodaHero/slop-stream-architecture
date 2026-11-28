@@ -83,6 +83,7 @@ export interface ChatLineShapeProps extends Place {
   reactions?: ReactNode;
   flash?: boolean;
   side?: ReactNode;
+  tail?: ReactNode;
   pending?: 'sending' | 'failed';
   bare?: boolean;
   firstInList?: boolean;
@@ -340,6 +341,11 @@ function Side({ side }: { side?: ReactNode }) {
   return <span className="flex shrink-0 flex-col self-start overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary">{side}</span>;
 }
 
+function Tail({ tail }: { tail?: ReactNode }) {
+  if (!tail) return null;
+  return <span className="flex shrink-0 self-start pt-0.5">{tail}</span>;
+}
+
 export function ChatLineShape({
   shape,
   mine,
@@ -360,6 +366,7 @@ export function ChatLineShape({
   reactions,
   flash = false,
   side,
+  tail,
   pending,
   bare = false,
   firstInList
@@ -409,6 +416,7 @@ export function ChatLineShape({
             {reactions}
           </span>
           <Side side={side} />
+          <Tail tail={tail} />
         </>
       )
     );
@@ -436,6 +444,7 @@ export function ChatLineShape({
             {reactions}
           </span>
           <Side side={side} />
+          <Tail tail={tail} />
         </>
       )
     );
@@ -477,6 +486,7 @@ export function ChatLineShape({
         {reactions}
       </span>
       <Side side={side} />
+      <Tail tail={tail} />
     </>
   );
 }

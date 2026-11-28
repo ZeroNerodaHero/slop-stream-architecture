@@ -32,6 +32,8 @@ import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingV
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { LinkEmbed } from '@/shared-components/LinkEmbed';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { PlatformBadges, PlatformFace, PlatformMark, PlatformWords, SourcePicker, useChatPick, useChatSources } from '@/shared-components/ChatSource';
+import { bySource, type ChatSourceLine, PLATFORM_WORDS } from '@/infra/chat-source';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
@@ -554,6 +556,42 @@ interface ChatRowProps {
   firstInList?: boolean;
 }
 
+type ExternalRowProps = { line: ChatLine; source: ChatSourceLine } & Pick<ChatRowProps, 'shape' | 'first' | 'bucket' | 'flashed' | 'bare' | 'firstInList'>;
+
+function ExternalRow({ line, source, shape, first, bucket, flashed, bare, firstInList }: ExternalRowProps) {
+  return (
+    <ChatLineShape
+      shape={shape}
+      mine={false}
+      at={line.at}
+      name={line.from}
+      crowd
+      who={
+        <>
+          <span data-from={line.from} className={cn('font-semibold', !source.color && 'text-textPrimary')} style={source.color ? { color: source.color } : undefined}>
+            {line.from}
+          </span>
+          {source.badges.length > 0 && (
+            <span className="ml-1 inline-flex items-center gap-1 align-middle">
+              <PlatformBadges badges={source.badges} />
+            </span>
+          )}
+        </>
+      }
+      face={<PlatformFace platform={source.platform} />}
+      words={line.text ? <PlatformWords source={source} text={line.text} /> : null}
+      tail={<PlatformMark platform={source.platform} />}
+      actions={<LineActions reactions={[]} me={null} text={line.text} />}
+      flash={flashed}
+      attrs={{ 'data-id': line.id, 'data-platform': source.platform }}
+      first={first}
+      bucket={bucket}
+      bare={bare}
+      firstInList={firstInList}
+    />
+  );
+}
+
 const ChatRow = memo(function ChatRow({
   line,
   room,
@@ -575,6 +613,9 @@ const ChatRow = memo(function ChatRow({
   bare,
   firstInList
 }: ChatRowProps) {
+  if (line.source) {
+    return <ExternalRow line={line} source={line.source} shape={shape} first={first} bucket={bucket} flashed={flashed} bare={bare} firstInList={firstInList} />;
+  }
   return (
     <ChatLineShape
       shape={shape}
@@ -695,7 +736,13 @@ interface RowCtx {
 function samePrev(lines: readonly ChatLine[], i: number): boolean {
   const line = lines[i]!;
   const prev = lines[i - 1];
-  return prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
+  return (
+    prev !== undefined &&
+    prev.from === line.from &&
+    prev.verified === line.verified &&
+    prev.streamer === line.streamer &&
+    prev.source?.platform === line.source?.platform
+  );
 }
 
 function rowNode(lines: readonly ChatLine[], i: number, ctx: RowCtx): ReactNode {
@@ -951,7 +998,11 @@ export function ChatPanel({
   const textRef = useRef<HTMLInputElement | null>(null);
   const sendKeepsFocus = useRef(false);
   const room = chatRoomFor(name, server);
-  const lines = useAtomValue(room.visibleLinesAtom);
+  const allLines = useAtomValue(room.visibleLinesAtom);
+  const sources = useChatSources(name, server);
+  const [pick, setPick] = useChatPick(sources);
+  const lines = useMemo(() => bySource(allLines, pick, sources), [allLines, pick, sources]);
+  const picker = server ? null : <SourcePicker sources={sources} pick={pick} onPick={setPick} />;
   const total = useAtomValue(room.linesAtom).length;
   const loaded = useAtomValue(room.loadedAtom);
   const hiddenBots = useAtomValue(room.hiddenBotLinesAtom);
@@ -1038,6 +1089,8 @@ export function ChatPanel({
 
   const needsNick = !owner && !me && (me === null || server) && (phase === 'off' || reader);
   const waiting = !loaded && total === 0;
+  const emptyWords =
+    pick !== 'slop' ? `nothing from ${PLATFORM_WORDS[pick]} yet.` : hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.';
 
   if (aside) {
     return (
@@ -1088,6 +1141,7 @@ export function ChatPanel({
             {server ? `#${channel}` : 'chat'}
           </span>
           <span className="flex min-w-0 items-center gap-3">
+            {picker && <span className="flex max-md:hidden">{picker}</span>}
             {headerEnd}
             <span id="chat-count" className="sr-only">
               {count} here · {phase === 'open' ? 'live' : phase}
@@ -1100,6 +1154,15 @@ export function ChatPanel({
             )}
           </span>
         </header>
+      )}
+
+      {picker && (
+        <div
+          data-chat-source-bar
+          className={cn('flex shrink-0 items-center justify-end border-b border-primaryStroke px-2 py-1 bubble:border-transparent', !embedded && 'md:hidden')}
+        >
+          {picker}
+        </div>
       )}
 
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -1126,7 +1189,7 @@ export function ChatPanel({
             {!waiting && lines.length === 0 && (
               <div className={cn('flex flex-1 flex-col', shape === 'log' ? 'gap-1' : shape === 'bubbles' ? 'gap-px' : 'gap-0.5')}>
                 {!server && welcome && <WelcomeLine key={room.key} welcome={welcome} />}
-                <ChatEmpty>{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</ChatEmpty>
+                <ChatEmpty>{emptyWords}</ChatEmpty>
               </div>
             )}
             {!waiting && lines.length > 0 && (

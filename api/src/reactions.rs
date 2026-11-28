@@ -286,6 +286,7 @@ mod tests {
             mentions: Vec::new(),
             reactions: Vec::new(),
             embed: None,
+            source: None,
         }];
         with_reactions(&pool, Some(bob), lines.iter_mut().map(|l| (room.as_str(), l))).await;
         let first = &lines[0].reactions[0];

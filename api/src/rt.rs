@@ -510,11 +510,21 @@ impl Drop for Forward {
     }
 }
 
-fn forward(topic: Arc<str>, mut rx: broadcast::Receiver<Event>, out: Outbox) -> Forward {
+fn forward(topic: Arc<str>, mut rx: broadcast::Receiver<Event>, out: Outbox, gate: Option<crate::multichat::Gate>) -> Forward {
     Forward(tokio::spawn(async move {
         loop {
             let f = match rx.recv().await {
-                Ok(Event::Line(.., f) | Event::React(.., f) | Event::Delete(.., f) | Event::Embed(.., f)) => f,
+                Ok(Event::Line(line, _, f)) => {
+                    if line.source.is_some() {
+                        if let Some(gate) = &gate {
+                            if !gate.allows().await {
+                                continue;
+                            }
+                        }
+                    }
+                    f
+                }
+                Ok(Event::React(.., f) | Event::Delete(.., f) | Event::Embed(.., f)) => f,
                 Ok(Event::Count(count, _)) => frame_of(&RtOut::Count { topic: &topic, count }),
                 Err(broadcast::error::RecvError::Lagged(n)) => frame_of(&RtOut::Gap { topic: &topic, missed: Some(n) }),
                 Err(broadcast::error::RecvError::Closed) => return,
@@ -800,7 +810,8 @@ impl Conn {
             }
             let Some(Joined { rx, lease }) = self.s.join_as(&r.room, &self.ip, peek).await else { return Err(TOO_MANY_TABS) };
             let topic: Arc<str> = chat_topic(&r.room).into();
-            self.rooms.insert(r.room.clone(), Held { _forward: forward(topic, rx, self.out.clone()), lease });
+            let gate = r.server.is_none().then(|| crate::multichat::Gate::new(self.s.db.clone(), &r.room, self.viewer().0));
+            self.rooms.insert(r.room.clone(), Held { _forward: forward(topic, rx, self.out.clone(), gate), lease });
         }
         Ok(())
     }
@@ -1246,7 +1257,7 @@ mod tests {
         let mut outs = Vec::new();
         for _ in 0..3 {
             let (out, rx) = Outbox::new();
-            held.push(forward("chat:a".into(), tx.subscribe(), out));
+            held.push(forward("chat:a".into(), tx.subscribe(), out, None));
             outs.push(rx);
         }
         let f: Frame = frame_of(&RtOut::Delete { topic: "chat:a", id: "1-0" });
@@ -1266,7 +1277,7 @@ mod tests {
         let mut handles = Vec::new();
         for room in ["a", "b", "c"] {
             let Joined { rx, lease } = rooms.enter_for_test(room, "1.1.1.1");
-            let f = forward(chat_topic(room).into(), rx, out.clone());
+            let f = forward(chat_topic(room).into(), rx, out.clone(), None);
             handles.push(f.0.abort_handle());
             held.insert(room.to_owned(), Held { _forward: f, lease });
         }
@@ -1351,7 +1362,7 @@ mod tests {
         for i in 0..10 {
             assert!(tx.send(Event::count(i)).is_ok());
         }
-        let _held = forward("chat:a".into(), sub, out);
+        let _held = forward("chat:a".into(), sub, out, None);
         let first = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap().unwrap();
         let v: serde_json::Value = serde_json::from_str(&first).unwrap();
         assert_eq!(v["type"], "gap");

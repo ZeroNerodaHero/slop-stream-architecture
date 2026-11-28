@@ -18,6 +18,7 @@ the database is one file, `api/schema.sql`, applied by the api at boot to an emp
 - `architecture-picture.md` — the repo as pictures. what runs, what talks to what, what builds into what. no new rules, just diagrams of what is already here.
 - `accounts.md` — username + password, optional: argon2id on the api, hashed login tokens in a cookie, what an account protects, what a breach gets.
 - `destinations.md` — twitch, kick and custom rtmp: connecting accounts, sealed stream keys, the routes, and the phase 0 relay test.
+- `multichat.md` — twitch and kick chat read into slop chat: the kick webhook, the twitch eventsub socket, who sees it, and the picker.
 
 ## topics
 

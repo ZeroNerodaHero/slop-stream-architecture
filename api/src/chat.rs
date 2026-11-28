@@ -30,10 +30,10 @@ use crate::socket::{first_text, frame_of, id_parts, locked, ping, send, send_fra
 use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
-const KEEP_LINES: usize = 500;
+pub(crate) const KEEP_LINES: usize = 500;
 pub(crate) const MAX_TEXT_CHARS: usize = 500;
 const MAX_NICK_CHARS: usize = 24;
-const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
+pub(crate) const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
 const ANON_TIER: Tier = Tier { burst: 2.0, window: Duration::from_secs(60) };
 const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
 const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
@@ -273,6 +273,8 @@ pub(crate) struct Line {
     pub(crate) reactions: Vec<Reaction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) embed: Option<crate::unfurl::Embed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<crate::multichat::External>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -908,6 +910,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     let id = id_parts(&line.id);
                     if id <= last_seen { continue; }
                     last_seen = id;
+                    if line.source.is_some() && !crate::multichat::shows(&s.db, &name, who.as_ref().is_some_and(|w| w.streamer), viewer_of(&who)).await { continue; }
                     if send_frame(&mut socket, frame).await.is_err() { break; }
                 }
                 Ok(Event::Count(_, frame) | Event::React(_, frame, _) | Event::Delete(_, frame, _) | Event::Embed(_, frame, _)) => {
@@ -1667,6 +1670,7 @@ pub(crate) async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uu
     match reply {
         Ok(reply) => {
             let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
+            crate::multichat::keep_visible(&s.db, room, viewer, &mut lines).await;
             with_faces(&s.db, &mut lines).await;
             reactions::with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
             crate::unfurl::with_embeds(&s.db, lines.iter_mut().map(|l| (room, l))).await;
@@ -2088,6 +2092,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let audio = Audio::parse(entry.get::<String>("aud").as_deref());
     let reply: Option<Reply> = entry.get::<String>("r").and_then(|r| serde_json::from_str(&r).ok());
     let mentions = crate::mentions::from_field(entry.get::<String>("m"));
+    let source = crate::multichat::external_from(&entry);
     Some(Line {
         at: id_parts(&entry.id).0,
         id: entry.id,
@@ -2107,6 +2112,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         mentions,
         reactions: Vec::new(),
         embed: None,
+        source,
     })
 }
 
@@ -2210,6 +2216,7 @@ mod tests {
             mentions: Vec::new(),
             reactions: Vec::new(),
             embed: None,
+            source: None,
         };
         let text = serde_json::to_string(&Out::ChannelMessage { channel: "general", line: &line }).unwrap();
         let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -2245,6 +2252,7 @@ mod tests {
             mentions: Vec::new(),
             reactions: Vec::new(),
             embed: None,
+            source: None,
         };
         let quote = Reply::of(&line);
         assert_eq!(quote.text.chars().count(), REPLY_QUOTE_CHARS);
@@ -2825,6 +2833,7 @@ mod tests {
             mentions: Vec::new(),
             reactions: Vec::new(),
             embed: None,
+            source: None,
         }];
         let started = Instant::now();
         with_faces(&pool, &mut lines).await;
@@ -2863,6 +2872,7 @@ mod tests {
             mentions: Vec::new(),
             reactions: Vec::new(),
             embed: None,
+            source: None,
         }];
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, Some(1690000000));
@@ -2936,6 +2946,7 @@ mod tests {
             mentions: Vec::new(),
             reactions: Vec::new(),
             embed: None,
+            source: None,
         };
         let written = serde_json::to_string(&Out::Message(&line)).unwrap();
         let (tx, mut a) = broadcast::channel(4);

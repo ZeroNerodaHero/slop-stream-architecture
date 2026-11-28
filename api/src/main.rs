@@ -25,6 +25,7 @@ mod home;
 mod janny;
 mod media;
 mod mentions;
+mod multichat;
 mod schema;
 mod models;
 mod moderate;
@@ -838,6 +839,7 @@ fn router(state: AppState) -> Router {
         .merge(oauth::routes())
         .merge(destinations::routes())
         .merge(relay::routes())
+        .merge(multichat::routes())
         .merge(turnstile::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
@@ -1070,6 +1072,7 @@ async fn main() {
     tokio::spawn(sweep_sessions(state.clone()));
     tokio::spawn(voice::sweep(state.clone()));
     tokio::spawn(analytics::sampler(state.clone()));
+    multichat::spawn(state.clone());
     unfurl::spawn_worker(state.clone(), redis_url.clone());
     axum::serve(listener, router(state))
         .with_graceful_shutdown(wait_for_signal())

@@ -1,5 +1,6 @@
 import { audioOf } from './chat-audio.ts';
 import { videoOf } from './chat-video.ts';
+import { sourceOf } from './chat-source.ts';
 import { linkEmbedOf } from './link-embed.ts';
 import { reactionsOf } from '../shared-components/reaction-list.ts';
 
@@ -21,6 +22,7 @@ export interface WireLine {
   reply?: unknown;
   reactions?: unknown;
   embed?: unknown;
+  source?: unknown;
 }
 
 export function fromWire<T extends WireLine>(line: T): T {
@@ -35,6 +37,7 @@ export function fromWire<T extends WireLine>(line: T): T {
     audio: audioOf(line.audio),
     reply: line.reply && typeof line.reply === 'object' && typeof (line.reply as { id?: unknown }).id === 'string' ? line.reply : undefined,
     reactions: reactionsOf(line.reactions),
-    embed: linkEmbedOf(line.embed)
+    embed: linkEmbedOf(line.embed),
+    source: sourceOf(line.source)
   };
 }

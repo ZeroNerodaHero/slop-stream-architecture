@@ -649,6 +649,7 @@ export interface Destination {
   has_key: boolean;
   connected_at: string;
   relay?: RelayStatus;
+  chat?: RelayStatus;
 }
 
 export interface RelayStatus {
@@ -661,7 +662,15 @@ export interface Destinations {
   platforms: DestinationPlatform[];
   relay?: boolean;
   direct?: boolean;
+  external_chat?: ExternalChat;
   destinations: Destination[];
+}
+
+export type ExternalChat = 'off' | 'studio' | 'everyone';
+
+export interface ChatSources {
+  sources: unknown;
+  external_chat?: ExternalChat | null;
 }
 
 export interface DirectGrant {
@@ -680,6 +689,8 @@ export const destinationStartUrl = (platform: Exclude<DestinationPlatform, 'cust
 export const api = {
   me: () => request<MeInfo>('GET', '/api/me'),
   destinations: () => request<Destinations>('GET', '/api/destinations', undefined, { report: false }),
+  setExternalChat: (mode: ExternalChat) => request<{ external_chat: ExternalChat }>('PUT', '/api/destinations/external-chat', { mode }),
+  chatSources: (name: string) => request<ChatSources>('GET', `/api/streamers/${encodeURIComponent(name)}/chat-sources`, undefined, { report: false }),
   addCustomDestination: (url: string, key: string, name?: string) => request<Destination>('POST', '/api/destinations/custom', { url, key, name }),
   removeDestination: (id: string) => request<null>('DELETE', `/api/destinations/${encodeURIComponent(id)}`),
   setDestinationEnabled: (id: string, enabled: boolean) => request<Destination>('POST', `/api/destinations/${encodeURIComponent(id)}/enabled`, { enabled }),
