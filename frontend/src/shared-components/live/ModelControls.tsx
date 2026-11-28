@@ -1,5 +1,6 @@
-import { RiEmotionHappyLine, RiEmotionNormalLine, RiFlipHorizontalLine, RiForbidLine, RiInformationLine, RiPaintLine } from '@remixicon/react';
+import { RiEmotionHappyLine, RiEmotionNormalLine, RiFlipHorizontalLine, RiInformationLine, RiPaintLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
+import { useState } from 'react';
 
 import {
   faceAtom,
@@ -20,6 +21,7 @@ import {
   setModelBackground
 } from '@/infra/atoms/publish-atoms';
 import { modelSurvivesHiddenTab, type RigInfo, type RigPart } from '@/infra/face';
+import { ColorPick } from '@/shared-components/about/ColorPick';
 import { Button } from '@/shared-components/Button';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
@@ -41,8 +43,8 @@ const READING: Record<FaceReading, { said: string; more: string }> = {
 type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
 const HIDDEN_TAB = `in ${HERE} the model stops moving while this tab is hidden`;
-const WELL = cn(ICON_BUTTON, 'relative cursor-pointer flex-col gap-0.5 has-[:focus-visible]:border-primaryBlue');
-const PILL = 'ml-0.5 px-2.5 py-1 text-xs max-md:min-h-0';
+const WELL = cn(ICON_BUTTON, 'cursor-pointer flex-col gap-0.5');
+const PILL = 'px-2 py-0.5 text-[11px] max-md:min-h-0';
 const CHECKS = 'repeating-conic-gradient(rgb(var(--text-tertiary)) 0% 25%, transparent 0% 50%) 0 0 / 4px 4px';
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 
@@ -63,6 +65,7 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
   const expressions = useAtomValue(faceExpressionsAtom);
   const background = useAtomValue(modelBackgroundAtom);
   const clear = isSeeThrough(background);
+  const [picking, setPicking] = useState(false);
   const cameras = useAtomValue(faceCamerasAtom);
   const camera = useAtomValue(faceCameraAtom);
   if (!model) return null;
@@ -162,34 +165,21 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
             </button>
           </Tooltip>
         )}
-        <Tooltip content="the colour behind the model">
-          <label className={WELL}>
+        <Tooltip content={picking ? null : clear ? 'nothing behind the model. click for a colour' : 'the colour behind the model'}>
+          <button
+            id="model-background-chip"
+            type="button"
+            aria-label={clear ? 'the colour behind the model, none' : `the colour behind the model, ${background}`}
+            aria-expanded={picking}
+            onClick={() => setPicking(!picking)}
+            className={cn(WELL, picking && 'border-primaryBlue text-primaryBlue')}
+          >
             <RiPaintLine aria-hidden size={14} />
             <span
               aria-hidden
               className="block h-1.5 w-4 rounded-control border border-primaryStroke"
               style={clear ? { backgroundImage: CHECKS } : { backgroundColor: background }}
             />
-            <input
-              id="model-background"
-              type="color"
-              aria-label="the colour behind the model"
-              value={clear ? WIRE_BACKING : background}
-              onChange={(e) => setModelBackground(e.target.value)}
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-            />
-          </label>
-        </Tooltip>
-        <Tooltip content="nothing behind the model">
-          <button
-            id="model-background-none"
-            type="button"
-            aria-label="nothing behind the model"
-            aria-pressed={clear}
-            onClick={() => setModelBackground(NO_BACKING)}
-            className={cn(ICON_BUTTON, clear && 'text-primaryBlue')}
-          >
-            <RiForbidLine aria-hidden size={16} />
           </button>
         </Tooltip>
         <Button id="model-change" size="sm" className={PILL} onClick={onChange}>
@@ -199,6 +189,16 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
           rest face
         </Button>
       </div>
+      {picking && (
+        <ColorPick
+          id="model-background"
+          label="model background"
+          value={clear ? '' : background}
+          fallback={WIRE_BACKING}
+          reset={{ word: 'none', tip: 'nothing behind the model' }}
+          onChange={(hex) => setModelBackground(hex || NO_BACKING)}
+        />
+      )}
       {cameras.length > 1 && (
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-textSecondary">
           <span className="shrink-0">reads</span>

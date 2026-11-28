@@ -36,7 +36,28 @@ function arrows(e: KeyboardEvent, step: number): [number, number] | null {
   return hit;
 }
 
-export function ColorPick({ id, label, value, fallback, onChange }: { id: string; label: string; value: string; fallback: string; onChange: (hex: string) => void }) {
+interface ColorReset {
+  word: string;
+  tip: string;
+}
+
+const THEME_RESET: ColorReset = { word: 'theme', tip: 'use the theme color' };
+
+export function ColorPick({
+  id,
+  label,
+  value,
+  fallback,
+  reset = THEME_RESET,
+  onChange
+}: {
+  id: string;
+  label: string;
+  value: string;
+  fallback: string;
+  reset?: ColorReset;
+  onChange: (hex: string) => void;
+}) {
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value || fallback));
   const [text, setText] = useState(value);
   const [seen, setSeen] = useState(value);
@@ -115,7 +136,7 @@ export function ColorPick({ id, label, value, fallback, onChange }: { id: string
           onBlur={() => setText(value)}
           className={cn(INPUT, 'py-1 font-mono text-xs', bad && 'border-decrease focus:border-decrease')}
         />
-        <Tooltip content="use the theme color">
+        <Tooltip content={reset.tip}>
           <button
             id={`${id}-reset`}
             type="button"
@@ -126,7 +147,7 @@ export function ColorPick({ id, label, value, fallback, onChange }: { id: string
             }}
             className="shrink-0 rounded-control border border-primaryStroke bg-backgroundSecondary px-2 py-1 text-xs text-textSecondary transition-colors hover:border-primaryBlue hover:text-textPrimary disabled:opacity-40"
           >
-            theme
+            {reset.word}
           </button>
         </Tooltip>
       </div>
