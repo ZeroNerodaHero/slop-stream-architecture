@@ -19,6 +19,9 @@ const CLICK_SLOP = 4;
 const NUDGE = 0.01;
 const ARROWS: Record<string, readonly [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
+const SEE_THROUGH_ALPHA = 24;
+const HANDLE_ROOM = 20;
+const PROBE_MS = 32;
 const CORNERS = [
   { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
   { id: 'ne', sx: 1, sy: -1, className: '-right-px -top-px cursor-nesw-resize border-r-2 border-t-2' },
@@ -31,6 +34,7 @@ export type LayerKey = 'remove' | 'back' | 'forward';
 export interface SceneEdit {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  boxOf?: (id: string) => Box | undefined;
   onMove: (id: string, from: Box, dx: number, dy: number) => void;
   onResize: (id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) => void;
   onNudge: (id: string, dx: number, dy: number) => void;
@@ -63,6 +67,31 @@ interface SceneViewProps {
   children?: ReactNode;
 }
 
+interface Probe {
+  ctx: CanvasRenderingContext2D | null;
+  at: number;
+}
+
+function clearAt(box: HTMLElement, cx: number, cy: number, probe: Probe): boolean {
+  const r = box.getBoundingClientRect();
+  const x = cx - r.left;
+  const y = cy - r.top;
+  if (x < 0 || y < 0 || x > r.width || y > r.height) return false;
+  if (box.getAttribute('aria-pressed') === 'true' && Math.min(x, r.width - x) < HANDLE_ROOM && Math.min(y, r.height - y) < HANDLE_ROOM) return false;
+  const video = box.querySelector('video');
+  if (!video || video.videoWidth === 0 || video.videoHeight === 0) return false;
+  const fill = video.classList.contains('object-cover') ? Math.max : Math.min;
+  const scale = fill(r.width / video.videoWidth, r.height / video.videoHeight);
+  const vx = (x - (r.width - video.videoWidth * scale) / 2) / scale;
+  const vy = (y - (r.height - video.videoHeight * scale) / 2) / scale;
+  if (vx < 0 || vy < 0 || vx >= video.videoWidth || vy >= video.videoHeight) return true;
+  probe.ctx ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  if (!probe.ctx) return false;
+  probe.ctx.clearRect(0, 0, 1, 1);
+  probe.ctx.drawImage(video, Math.floor(vx), Math.floor(vy), 1, 1, 0, 0, 1, 1);
+  return probe.ctx.getImageData(0, 0, 1, 1).data[3]! < SEE_THROUGH_ALPHA;
+}
+
 interface Gesture {
   kind: 'move' | 'resize';
   sx: number;
@@ -78,6 +107,15 @@ interface Gesture {
 
 export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, placeholder, clearSlot = null, className, children }: SceneViewProps) {
   const frame = useRef<HTMLDivElement | null>(null);
+  const probe = useRef<Probe>({ ctx: null, at: 0 });
+  const clearBox = () => (clearSlot === null ? null : (frame.current?.querySelector<HTMLElement>(`[data-slot="${clearSlot}"]`) ?? null));
+  const passThrough = (e: ReactPointerEvent) => {
+    const box = clearBox();
+    const now = performance.now();
+    if (!box || e.buttons !== 0 || now - probe.current.at < PROBE_MS) return;
+    probe.current.at = now;
+    box.toggleAttribute('data-through', clearAt(box, e.clientX, e.clientY, probe.current));
+  };
   const clearOf = (layer: Layer) => clearSlot !== null && isVideoLayer(layer) && layer.slot === clearSlot;
   const held = layers.map((l) => placeholder?.(l) ?? null);
   const hostIndex = main.slot === null ? -1 : layers.findIndex((l, i) => isVideoLayer(l) && l.slot === main.slot && held[i] === null);
@@ -104,6 +142,8 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
       id={id}
       className={cn('relative isolate aspect-video w-full overflow-hidden rounded-panel border border-primaryStroke bg-black bubble:border-transparent', className)}
       onPointerDown={edit ? (e) => e.target === e.currentTarget && edit.onSelect(null) : undefined}
+      onPointerMove={clearSlot === null ? undefined : passThrough}
+      onPointerLeave={clearSlot === null ? undefined : () => clearBox()?.removeAttribute('data-through')}
     >
       {layers.length === 0 && <div className="absolute inset-0">{mainVideo}</div>}
       {layers.map((layer, i) => (
@@ -178,7 +218,7 @@ function LayerBox({ layer, frame, edit, onPick, clear = false, children }: Layer
       pointerId: e.pointerId,
       startX: e.clientX,
       startY: e.clientY,
-      box: { x: layer.x, y: layer.y, w: layer.w, h: layer.h },
+      box: edit.boxOf?.(layer.id) ?? { x: layer.x, y: layer.y, w: layer.w, h: layer.h },
       frame: rect,
       shift: e.shiftKey,
       moved: false
@@ -271,6 +311,7 @@ function LayerBox({ layer, frame, edit, onPick, clear = false, children }: Layer
       className={cn(
         'absolute isolate overflow-hidden outline transition-[outline-color] duration-150',
         !bare && !clear && 'bg-black',
+        clear && 'data-[through]:pointer-events-none',
         edit && cn('cursor-move', GRIP),
         pickable && 'cursor-pointer hover:outline-primaryBlue',
         selected

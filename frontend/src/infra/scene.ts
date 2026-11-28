@@ -1,6 +1,7 @@
 import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from './box.ts';
 import { type AvatarLook, centeredSquare, readAvatarLook, SQUARE, squareIn } from './avatar-look.ts';
 import type { Layer, Scene } from './relay.ts';
+import { looseBox, visibleBox } from './model-frame.ts';
 
 export interface Source {
   id: string;
@@ -26,10 +27,10 @@ const IMAGE_MAX_H = 0.6;
 
 export const layerOf = (s: Source): Layer =>
   s.kind === 'image'
-    ? { id: s.id, kind: 'image', asset: s.asset ?? 0, ...s.box }
+    ? { id: s.id, kind: 'image', asset: s.asset ?? 0, ...visibleBox(s.box) }
     : s.kind === 'avatar'
-      ? { id: s.id, kind: 'avatar', ...(s.look && { look: s.look }), ...s.box }
-      : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...s.box };
+      ? { id: s.id, kind: 'avatar', ...(s.look && { look: s.look }), ...visibleBox(s.box) }
+      : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...visibleBox(s.box) };
 
 export const isVideoSource = (s: Source) => s.kind === 'camera' || s.kind === 'screen';
 
@@ -205,7 +206,7 @@ export function readKept(raw: unknown): KeptScene | null {
     const b = k?.box as Partial<Box> | undefined;
     if (!k || !b || ![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue;
     const look = readAvatarLook(k.look);
-    kept[id] = { box: clampBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }), ...(look && { look }) };
+    kept[id] = { box: looseBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }), ...(look && { look }) };
   }
   return kept;
 }

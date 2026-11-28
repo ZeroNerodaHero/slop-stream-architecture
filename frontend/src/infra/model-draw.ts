@@ -7,9 +7,12 @@ import { buildRig } from '@/infra/model-rig';
 import { type Pose, SHAPE_COUNT } from '@/infra/pose';
 import { HERE } from '@/infra/here';
 import { isSeeThrough } from '@/infra/model-backing';
+import { frameSizeOf, type ModelFrame, modelWidthAspect, WIDE_FRAME } from '@/infra/model-frame';
 
 export interface ModelScene {
   readonly rig: RigInfo;
+  readonly fitAspect: number;
+  setFrame(frame: ModelFrame): void;
   draw(pose: Pose, dt: number): void;
   setBackground(css: string): void;
   setExpressions(on: boolean): void;
@@ -30,6 +33,9 @@ const EASE_S = 0.06;
 const HOME_S = 0.35;
 const BREATH_S = 4.2;
 const BREATH = 0.012;
+const MEASURE_WIDTH = 320;
+const MEASURE_HEIGHT = 180;
+const ALPHA_SEEN = 24;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -42,7 +48,17 @@ function letDown(upper: Object3D | null, lower: Object3D | null, out: number) {
   upper.quaternion.setFromUnitVectors(rest, down);
 }
 
-export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffer, background: string): Promise<ModelScene> {
+function halfWidthSeen(renderer: WebGLRenderer, width: number, height: number): number {
+  const gl = renderer.getContext();
+  const pixels = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  let half = 0;
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) if (pixels[(y * width + x) * 4 + 3]! > ALPHA_SEEN) half = Math.max(half, Math.abs(x + 0.5 - width / 2));
+  return half;
+}
+
+export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffer, background: string, frame: ModelFrame): Promise<ModelScene> {
   const { vrm, targets } = await loadModel(file);
   const rig = buildRig(vrm, targets);
   VRMUtils.combineMorphs(vrm);
@@ -83,10 +99,28 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
   const headHeight = clamp(top - at.y, 0.12, 0.7);
   const low = at.y - headHeight;
   const high = top + headHeight * 0.25;
-  const camera = new PerspectiveCamera(FOV, canvas.width / canvas.height, 0.05, 30);
+  const camera = new PerspectiveCamera(FOV, WIDE_FRAME.aspect, 0.05, 30);
   const centre = (low + high) / 2;
   camera.position.set(at.x, centre, at.z + (high - low) / 2 / Math.tan((FOV * Math.PI) / 360));
   camera.lookAt(at.x, centre, at.z);
+  const frameTo = (next: ModelFrame) => {
+    const size = frameSizeOf(next);
+    if (canvas.width !== size.width || canvas.height !== size.height) renderer.setSize(size.width, size.height, false);
+    camera.aspect = next.aspect;
+    const { view } = next;
+    if (view.x === 0 && view.y === 0 && view.w === 1 && view.h === 1) camera.clearViewOffset();
+    else camera.setViewOffset(size.fullWidth, size.fullHeight, view.x * size.fullWidth, view.y * size.fullHeight, view.w * size.fullWidth, view.h * size.fullHeight);
+    camera.updateProjectionMatrix();
+  };
+  vrm.update(0);
+  renderer.setSize(MEASURE_WIDTH, MEASURE_HEIGHT, false);
+  camera.updateProjectionMatrix();
+  const behind = scene.background;
+  scene.background = null;
+  renderer.render(scene, camera);
+  const fitAspect = modelWidthAspect(halfWidthSeen(renderer, MEASURE_WIDTH, MEASURE_HEIGHT), MEASURE_HEIGHT);
+  scene.background = behind;
+  frameTo(frame);
 
   const now = { yaw: 0, pitch: 0, roll: 0, x: 0, z: 0, shapes: new Float32Array(SHAPE_COUNT) };
   let clock = 0;
@@ -98,6 +132,8 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
 
   return {
     rig: rig.info,
+    fitAspect,
+    setFrame: frameTo,
     draw(pose, dt) {
       clock += dt;
       const k = 1 - Math.exp(-dt / (pose.face ? EASE_S : HOME_S));

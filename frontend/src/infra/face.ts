@@ -4,11 +4,10 @@ import FaceWorker from '@/infra/face.worker?worker';
 import faceWorkerUrl from '@/infra/face.worker?worker&url';
 import { HERE } from '@/infra/here';
 import { wireBackingOf } from '@/infra/model-backing';
+import { frameSizeOf, type ModelFrame, STAGE_ASPECT } from '@/infra/model-frame';
 
 export type { FaceLines, FaceMarks, FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
-const WIDTH = 1280;
-const HEIGHT = 720;
 const FPS = 30;
 const LOAD_TIMEOUT_MS = 30_000;
 
@@ -29,6 +28,7 @@ export interface ModelOptions {
   mirror: boolean;
   expressions: boolean;
   background: string;
+  frame: ModelFrame;
   onLoading: (step: LoadStep, loaded: number, total: number) => void;
   onState: (face: FaceState, why?: string) => void;
   onStats: (stats: ModelStats) => void;
@@ -42,10 +42,12 @@ export interface ModelSession {
   readonly wireTrack: MediaStreamTrack;
   readonly path: 'worker' | 'page';
   readonly rig: RigInfo;
+  readonly fitAspect: number;
   setCamera(camera: MediaStreamTrack | null): void;
   setMirror(mirror: boolean): void;
   setBackground(css: string): void;
   setExpressions(on: boolean): void;
+  setFrame(frame: ModelFrame): void;
   setMarks(on: boolean): void;
   rest(): void;
   stop(): void;
@@ -98,6 +100,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
   let wire: WritableStream<VideoFrame> | null = null;
   let paint: ((bitmap: ImageBitmap) => void) | null = null;
   let backing = options.background;
+  const first = frameSizeOf(options.frame);
   if (path === 'worker') {
     const generator = new window.MediaStreamTrackGenerator!({ kind: 'video' });
     const wireGenerator = new window.MediaStreamTrackGenerator!({ kind: 'video' });
@@ -107,19 +110,23 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     wire = wireGenerator.writable;
   } else {
     const canvas = document.createElement('canvas');
-    canvas.width = WIDTH;
-    canvas.height = HEIGHT;
+    canvas.width = first.width;
+    canvas.height = first.height;
     const ctx = canvas.getContext('bitmaprenderer');
     const flat = document.createElement('canvas');
-    flat.width = WIDTH;
-    flat.height = HEIGHT;
+    flat.width = first.width;
+    flat.height = first.height;
     const flatCtx = flat.getContext('2d', { alpha: false });
     if (!ctx || !flatCtx) throw new Error(`${HERE} cannot draw a model`);
     track = canvas.captureStream(FPS).getVideoTracks()[0]!;
     wireTrack = flat.captureStream(FPS).getVideoTracks()[0]!;
     paint = (bitmap) => {
+      for (const c of [canvas, flat]) {
+        if (c.width !== bitmap.width) c.width = bitmap.width;
+        if (c.height !== bitmap.height) c.height = bitmap.height;
+      }
       flatCtx.fillStyle = wireBackingOf(backing);
-      flatCtx.fillRect(0, 0, WIDTH, HEIGHT);
+      flatCtx.fillRect(0, 0, bitmap.width, bitmap.height);
       flatCtx.drawImage(bitmap, 0, 0);
       ctx.transferFromImageBitmap(bitmap);
     };
@@ -173,11 +180,12 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     wireTrack.stop();
   };
 
-  const session: ModelSession & { rig: RigInfo } = {
+  const session: ModelSession & { rig: RigInfo; fitAspect: number } = {
     track,
     wireTrack,
     path,
     rig: { kind: 'none', parts: [] },
+    fitAspect: STAGE_ASPECT,
     setCamera(camera) {
       if (stopped) return;
       const frames = framesOf(camera);
@@ -191,6 +199,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     },
     setExpressions: (expressions) => void (!stopped && send({ type: 'set', expressions })),
     setMarks: (marks) => void (!stopped && send({ type: 'set', marks })),
+    setFrame: (frame) => void (!stopped && send({ type: 'set', frame })),
     rest: () => void (!stopped && send({ type: 'rest' })),
     stop
   };
@@ -214,6 +223,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
         ready = true;
         clearTimeout(timeout);
         session.rig = msg.rig;
+        session.fitAspect = msg.fitAspect;
         resolve(session);
       } else if (msg.type === 'loading') options.onLoading(msg.step, msg.loaded, msg.total);
       else if (msg.type === 'failed') {
@@ -241,10 +251,11 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
       {
         type: 'start',
         model: options.model,
-        width: WIDTH,
-        height: HEIGHT,
+        width: first.width,
+        height: first.height,
         fps: FPS,
         background: options.background,
+        frame: options.frame,
         mirror: options.mirror,
         expressions: options.expressions,
         wasm,

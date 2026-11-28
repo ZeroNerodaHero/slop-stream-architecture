@@ -397,7 +397,7 @@ async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
     canvas = new OffscreenCanvas(msg.width, msg.height);
     canvas.addEventListener('webglcontextlost', () => fail('the drawing was lost (the gpu let go of it)'));
     backing = msg.background;
-    scene = await createModelScene(canvas, msg.model, msg.background);
+    scene = await createModelScene(canvas, msg.model, msg.background, msg.frame);
     if (stopped) {
       scene.dispose();
       scene = null;
@@ -417,7 +417,7 @@ async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
   const reader = loadReader(msg, files);
   await Promise.race([reader, new Promise((resolve) => setTimeout(resolve, READER_WAIT_MS))]);
   if (stopped || !scene) return;
-  post({ type: 'ready', rig: scene.rig });
+  post({ type: 'ready', rig: scene.rig, fitAspect: scene.fitAspect });
   lastDraw = nextDraw = counts.since = performance.now();
   nextDraw += interval;
   timer = setTimeout(tick, interval);
@@ -443,6 +443,7 @@ scope.onmessage = (e: MessageEvent<ToFaceWorker>) => {
       scene?.setBackground(msg.background);
     }
     if (msg.expressions !== undefined) scene?.setExpressions(msg.expressions);
+    if (msg.frame !== undefined) scene?.setFrame(msg.frame);
     if (msg.marks !== undefined) {
       marksWanted = msg.marks;
       if (marksWanted && !linesTold) {
