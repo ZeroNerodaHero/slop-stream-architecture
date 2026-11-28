@@ -1,4 +1,16 @@
-import { RiAddLine, RiCloseLine, RiComputerLine, RiEyeLine, RiEyeOffLine, RiMusic2Line, RiUserSmileLine, RiUserVoiceLine, RiVidiconLine } from '@remixicon/react';
+import {
+  RiAddLine,
+  RiCloseLine,
+  RiComputerLine,
+  RiEyeLine,
+  RiEyeOffLine,
+  RiFileGifLine,
+  RiImageLine,
+  RiMusic2Line,
+  RiUserSmileLine,
+  RiUserVoiceLine,
+  RiVidiconLine
+} from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -7,6 +19,7 @@ import { api } from '@/infra/api';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
   addAvatar,
+  addImage,
   cameraAtom,
   cameraOn,
   canShareScreenAtom,
@@ -28,11 +41,21 @@ import {
   streamNameAtom,
   toggleSource
 } from '@/infra/atoms/publish-atoms';
-import { removeSound, renameSound, renameSource, soundPlayingAtom, soundsAtom, soundStatusAtom, sourceNamesAtom, sourceNameOf } from '@/infra/atoms/source-atoms';
+import {
+  addSound,
+  removeSound,
+  renameSound,
+  renameSource,
+  soundPlayingAtom,
+  soundsAtom,
+  soundStatusAtom,
+  sourceNamesAtom,
+  sourceNameOf
+} from '@/infra/atoms/source-atoms';
 import { livePanelsAtom, type Place } from '@/infra/live-dock';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import type { Source } from '@/infra/scene';
-import { type SoundSource } from '@/infra/source-settings';
+import { SOUND_MAX_BYTES, SOUNDS_MAX, type SoundSource } from '@/infra/source-settings';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
@@ -61,6 +84,10 @@ function AddMenu({ onModel }: { onModel: () => void }) {
   const root = useRef<HTMLDivElement | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLInputElement | null>(null);
+  const gifRef = useRef<HTMLInputElement | null>(null);
+  const soundRef = useRef<HTMLInputElement | null>(null);
+  const soundCount = useAtomValue(soundsAtom).length;
   const canShare = useAtomValue(canShareScreenAtom);
   const hasCamera = useAtomValue(hasCameraAtom);
   const hasAvatar = useAtomValue(hasAvatarAtom);
@@ -180,9 +207,86 @@ function AddMenu({ onModel }: { onModel: () => void }) {
                 {!canShare && <span className="ml-auto text-xs text-textTertiary">{SCREEN_SLOTS} at most</span>}
               </button>
             )}
+            <button
+              id="add-image"
+              role="menuitem"
+              type="button"
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                imageRef.current?.click();
+              }}
+            >
+              <RiImageLine aria-hidden size={16} /> image
+            </button>
+            <button
+              id="add-gif"
+              role="menuitem"
+              type="button"
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                gifRef.current?.click();
+              }}
+            >
+              <RiFileGifLine aria-hidden size={16} /> gif
+            </button>
+            <button
+              id="add-sound"
+              role="menuitem"
+              type="button"
+              disabled={soundCount >= SOUNDS_MAX}
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                soundRef.current?.click();
+              }}
+            >
+              <RiMusic2Line aria-hidden size={16} /> sound
+              {soundCount >= SOUNDS_MAX && <span className="ml-auto text-xs text-textTertiary">{SOUNDS_MAX} at most</span>}
+            </button>
           </div>,
           document.body
         )}
+      <input
+        ref={imageRef}
+        id="image-file"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        aria-label="an image file"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void addImage(file);
+        }}
+      />
+      <input
+        ref={gifRef}
+        id="gif-file"
+        type="file"
+        accept="image/gif"
+        aria-label="a gif file"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void addImage(file);
+        }}
+      />
+      <input
+        ref={soundRef}
+        id="sound-file"
+        type="file"
+        accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.m4a,.aac,.flac,.webm"
+        aria-label={`a sound file, ${SOUND_MAX_BYTES / (1024 * 1024)} MB at most`}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void addSound(file);
+        }}
+      />
     </div>
   );
 }
