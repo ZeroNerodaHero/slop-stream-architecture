@@ -160,6 +160,27 @@ export function clampCell(id: TileId, cell: Cell): Cell {
   return { x, y, w, h };
 }
 
+export type Corner = 'tl' | 'tr' | 'bl' | 'br';
+
+export const CORNERS: readonly Corner[] = ['tl', 'tr', 'bl', 'br'];
+
+function stretch(start: number, size: number, delta: number, fromStart: boolean, min: number, max: number): [number, number] {
+  if (!fromStart) {
+    const len = Math.max(min, Math.min(max - start, Math.round(size + delta)));
+    return [start, len];
+  }
+  const end = start + size;
+  const at = Math.max(0, Math.min(end - min, Math.round(start + delta)));
+  return [at, end - at];
+}
+
+export function resizeCell(id: TileId, from: Cell, corner: Corner, dx: number, dy: number): Cell {
+  const min = MIN_CELL[id];
+  const [x, w] = stretch(from.x, from.w, dx, corner[1] === 'l', min.w, GRID_COLS);
+  const [y, h] = stretch(from.y, from.h, dy, corner[0] === 't', min.h, GRID_ROWS);
+  return { x, y, w, h };
+}
+
 export function overlaps(a: Cell, b: Cell): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }

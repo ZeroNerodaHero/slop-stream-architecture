@@ -2,6 +2,7 @@ import { RiAddLine, RiCheckLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
 import {
+  DOCK_WORDS,
   type Grid,
   isSlot,
   LAYOUT_IDS,
@@ -10,10 +11,13 @@ import {
   type LayoutId,
   liveEditingAtom,
   liveLayoutAtom,
+  livePanelsAtom,
   liveSlotsAtom,
+  MODULE_IDS,
   openRailAt,
   pickLayout,
   resetGrid,
+  showInGrid,
   type Slots,
   startEditing,
   stopEditing,
@@ -77,6 +81,8 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
   const layout = useAtomValue(liveLayoutAtom);
   const editing = useAtomValue(liveEditingAtom);
   const slots = useAtomValue(liveSlotsAtom);
+  const panels = useAtomValue(livePanelsAtom);
+  const closed = MODULE_IDS.filter((id) => panels.hidden.includes(id));
   const custom = isSlot(layout);
   if (strip && editing)
     return (
@@ -159,6 +165,16 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
           );
         })}
       </div>
+      {editing && closed.length > 0 && (
+        <div id="live-edit-closed" role="group" aria-label="closed panels" className="mt-2 flex flex-wrap items-center gap-1.5">
+          {closed.map((id) => (
+            <Button key={id} id={`live-edit-add-${id}`} size="sm" className="h-7 shrink-0 gap-1 px-2.5 py-0 text-xs" onClick={() => showInGrid(id)}>
+              <RiAddLine aria-hidden size={14} />
+              {DOCK_WORDS[id]}
+            </Button>
+          ))}
+        </div>
+      )}
     </RailSection>
   );
 }

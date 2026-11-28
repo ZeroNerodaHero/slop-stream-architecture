@@ -1,4 +1,4 @@
-import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiDraggable, RiLinkM } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiDraggable, RiLinkM } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -66,6 +66,8 @@ import {
   arrange,
   type Cell,
   clampCell,
+  type Corner,
+  CORNERS,
   DOCK_WORDS,
   fits,
   GRID_COLS,
@@ -93,10 +95,10 @@ import {
   RAIL_W_STEP,
   railFocusAtom,
   railOpen,
+  resizeCell,
   setGrid,
   setRail,
   setRailWidth,
-  showInGrid,
   TILE_IDS,
   type TileId,
   typingInto
@@ -276,37 +278,24 @@ function reserveFor(below: boolean, rowH: string, under: boolean): string {
 
 interface Drag {
   id: TileId;
-  kind: 'move' | 'size';
+  kind: 'move' | Corner;
   from: Cell;
   x: number;
   y: number;
   pointer: number;
 }
 
-function EditBar({ hidden, onAdd }: { hidden: ModuleId[]; onAdd: (id: ModuleId) => void }) {
-  return (
-    <div
-      id="live-edit-bar"
-      role="toolbar"
-      aria-label="edit layout"
-      className="flex h-10 shrink-0 items-center gap-2 rounded-panel border border-primaryBlue/70 bg-backgroundSecondary px-2"
-    >
-      <span className="shrink-0 px-1 text-sm font-semibold text-primaryBlue">edit layout</span>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
-        {hidden.map((id) => (
-          <Button key={id} id={`live-edit-add-${id}`} size="sm" className="h-7 shrink-0 gap-1 px-2.5 py-0 text-xs" onClick={() => onAdd(id)}>
-            <RiAddLine aria-hidden size={14} />
-            {DOCK_WORDS[id]}
-          </Button>
-        ))}
-      </div>
-    </div>
-  );
-}
+const SIZE_GRIP = 'absolute h-3.5 w-3.5 touch-none border-primaryBlue';
+
+const SIZE_CORNER: Record<Corner, string> = {
+  tl: 'left-0.5 top-0.5 cursor-nwse-resize border-l-2 border-t-2',
+  tr: 'right-0.5 top-0.5 cursor-nesw-resize border-r-2 border-t-2',
+  bl: 'bottom-0.5 left-0.5 cursor-nesw-resize border-b-2 border-l-2',
+  br: 'bottom-0.5 right-0.5 cursor-nwse-resize border-b-2 border-r-2'
+};
 
 function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; editing: boolean }) {
   const grid = useAtomValue(liveGridAtom);
-  const panels = useAtomValue(livePanelsAtom);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [draft, setDraft] = useState<Cell | null>(null);
@@ -331,10 +320,11 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
     const grip = target.closest<HTMLElement>('[data-grip]');
     const size = target.closest<HTMLElement>('[data-size]');
     const id = (grip?.dataset.grip ?? size?.dataset.size) as TileId | undefined;
+    const corner = (size?.dataset.corner ?? 'br') as Corner;
     if (!id) return;
     e.preventDefault();
     gridRef.current?.setPointerCapture(e.pointerId);
-    setDrag({ id, kind: grip ? 'move' : 'size', from: grid[id], x: e.clientX, y: e.clientY, pointer: e.pointerId });
+    setDrag({ id, kind: grip && !size ? 'move' : corner, from: grid[id], x: e.clientX, y: e.clientY, pointer: e.pointerId });
     setDraft(grid[id]);
   };
   const move = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -343,7 +333,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
     const dx = (e.clientX - drag.x) / u.w;
     const dy = (e.clientY - drag.y) / u.h;
     const f = drag.from;
-    setDraft(clampCell(drag.id, drag.kind === 'move' ? { ...f, x: f.x + dx, y: f.y + dy } : { ...f, w: f.w + dx, h: f.h + dy }));
+    setDraft(drag.kind === 'move' ? clampCell(drag.id, { ...f, x: f.x + dx, y: f.y + dy }) : resizeCell(drag.id, f, drag.kind, dx, dy));
   };
   const up = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!drag || e.pointerId !== drag.pointer) return;
@@ -383,7 +373,6 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   const order = drag ? [...shown.filter((t) => t !== drag.id), drag.id] : shown;
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-      {editing && <EditBar hidden={MODULE_IDS.filter((id) => panels.hidden.includes(id))} onAdd={showInGrid} />}
       <div
         ref={gridRef}
         id="live-grid"
@@ -413,7 +402,7 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
                   )}
                 >
                   {editing && (
-                    <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-primaryStroke pl-1 pr-1 text-xs font-semibold uppercase tracking-wider text-textSecondary">
+                    <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-primaryStroke pl-3 pr-1 text-xs font-semibold uppercase tracking-wider text-textSecondary">
                       <Tooltip content="drag to move. arrows move it, shift and arrows size it" hideOnPress>
                         <button
                           id="live-preview-grip"
@@ -436,15 +425,12 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
               ) : (
                 <Slot hosts={hosts} ids={[id]} className="flex min-h-0 flex-1 flex-col" />
               )}
-              {editing && (
-                <Tooltip content="drag to size" hideOnPress>
-                  <span
-                    data-size={id}
-                    aria-hidden
-                    className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 cursor-nwse-resize touch-none border-b-2 border-r-2 border-primaryBlue"
-                  />
-                </Tooltip>
-              )}
+              {editing &&
+                CORNERS.map((corner) => (
+                  <Tooltip key={corner} content="drag to size" hideOnPress>
+                    <span data-size={id} data-corner={corner} aria-hidden className={cn(SIZE_GRIP, SIZE_CORNER[corner])} />
+                  </Tooltip>
+                ))}
             </div>
           );
         })}

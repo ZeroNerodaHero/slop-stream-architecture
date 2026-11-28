@@ -71,7 +71,7 @@ export function DockPanel({ tab, place, count, title, aside, children }: DockPan
               data-grip={tab}
               aria-label={`move ${word}`}
               aria-roledescription="drag handle"
-              className="-ml-2 flex h-7 w-5 shrink-0 cursor-grab touch-none items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none active:cursor-grabbing"
+              className="flex h-7 w-5 shrink-0 cursor-grab touch-none items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none active:cursor-grabbing"
             >
               <RiDraggable aria-hidden size={16} />
             </button>

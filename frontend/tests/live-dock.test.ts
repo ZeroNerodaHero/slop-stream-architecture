@@ -27,6 +27,7 @@ import {
   railOpen,
   setRail,
   readRailWidth,
+  resizeCell,
   fitRailWidth,
   RAIL_W_DEFAULT,
   RAIL_W_MAX,
@@ -418,4 +419,20 @@ test('a preset moved by drag keeps its place through storage and the hotkeys fol
   );
   assert.equal(presetForKey('1', stored.list), 'p3');
   assert.equal(presetForKey('3', stored.list), 'default');
+});
+
+test('resizeCell keeps the opposite corner fixed', () => {
+  const from = { x: 4, y: 3, w: 4, h: 4 };
+  assert.deepEqual(resizeCell('sources', from, 'br', 1.4, 2.2), { x: 4, y: 3, w: 5, h: 6 });
+  assert.deepEqual(resizeCell('sources', from, 'tl', -2, -1), { x: 2, y: 2, w: 6, h: 5 });
+  assert.deepEqual(resizeCell('sources', from, 'tr', 2, 1), { x: 4, y: 4, w: 6, h: 3 });
+  assert.deepEqual(resizeCell('sources', from, 'bl', 1, -1), { x: 5, y: 3, w: 3, h: 3 });
+});
+
+test('resizeCell holds min sizes and grid edges', () => {
+  const from = { x: 4, y: 3, w: 4, h: 4 };
+  assert.deepEqual(resizeCell('sources', from, 'tl', 9, 9), { x: 6, y: 5, w: 2, h: 2 });
+  assert.deepEqual(resizeCell('sources', from, 'tl', -20, -20), { x: 0, y: 0, w: 8, h: 7 });
+  assert.deepEqual(resizeCell('sources', from, 'br', 40, 40), { x: 4, y: 3, w: GRID_COLS - 4, h: GRID_ROWS - 3 });
+  assert.deepEqual(resizeCell('chat', from, 'bl', -1, -9), { x: 3, y: 3, w: 5, h: 3 });
 });
