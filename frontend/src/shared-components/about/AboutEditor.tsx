@@ -31,6 +31,9 @@ import {
   kindWord,
   moved,
   newId,
+  placed,
+  slotAt,
+  slotIn,
   starterBlock,
   wireBlock
 } from '@/infra/about-blocks';
@@ -68,6 +71,11 @@ const TOOL =
   'flex size-6 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors hover:border-primaryBlue hover:text-textPrimary disabled:opacity-40 disabled:hover:border-primaryStroke';
 
 type View = 'desktop' | 'phone';
+type Drag = { id: string; at: number; add?: AboutBlock };
+type Press = { id: string; x: number; y: number; pointer: number; live: boolean; end: (commit: boolean) => void };
+
+const NO_GRAB = 'input, textarea, select, button, a, [contenteditable], [role=slider], [role=toolbar]';
+const LONG_PRESS = 300;
 
 function agoWord(at: number, now: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
@@ -151,6 +159,10 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
   const timer = useRef<number | null>(null);
   const saving = useRef<Promise<void>>(Promise.resolve());
   const latest = useRef(blocks);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const press = useRef<Press | null>(null);
+  const adding = useRef<AboutBlock | null>(null);
   useLayoutEffect(() => {
     latest.current = blocks;
   }, [blocks]);
@@ -212,7 +224,7 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
   };
   const patch = (id: string, part: Partial<AboutBlock>) => touch((list) => list.map((b) => (b.id === id ? { ...b, ...part, html: undefined } : b)));
 
-  const add = (kind: BlockKind, after?: string) => {
+  const add = (kind: BlockKind, after?: string, slot?: number) => {
     if (blocks.length >= BLOCKS_MAX) {
       setStatus(`${BLOCKS_MAX} blocks at most`);
       return;
@@ -222,7 +234,7 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
     touch((list) => {
       const at = anchor ? list.findIndex((b) => b.id === anchor) : -1;
       const next = [...list];
-      next.splice(at < 0 ? next.length : at + 1, 0, block);
+      next.splice(slot ?? (at < 0 ? next.length : at + 1), 0, block);
       return next;
     });
     setSel(block.id);
@@ -278,17 +290,130 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
   const small = width > 0 && width < PHONE_AT;
   const phone = view === 'phone' || small;
 
-  const dropOn = (after: string | undefined) => ({
+  const show = (next: Drag | null) => {
+    dragRef.current = next;
+    setDrag(next);
+  };
+
+  const slotFor = (x: number, y: number, id: string): number | undefined => {
+    const now = dragRef.current?.at;
+    const grid = gridRef.current;
+    if (!grid) return now;
+    const cells = [...grid.querySelectorAll<HTMLElement>('[data-block]')];
+    const ghost = cells.find((c) => c.dataset.block === id);
+    if (ghost && now !== undefined) {
+      const r = ghost.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return now;
+    }
+    const others = cells.filter((c) => c.dataset.block !== id);
+    const rest = latest.current.filter((b) => b.id !== id).map((b) => b.id);
+    return slotIn(
+      rest,
+      others.map((c) => c.dataset.block ?? ''),
+      slotAt(
+        others.map((c) => c.getBoundingClientRect()),
+        x,
+        y
+      )
+    );
+  };
+
+  const grab = (e: PointerEvent<HTMLDivElement>, id: string) => {
+    if (press.current || adding.current) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target instanceof Element && e.target.closest(NO_GRAB)) return;
+    const grid = gridRef.current;
+    if (!grid) return;
+    const touchy = e.pointerType === 'touch';
+    let timer: number | null = null;
+    const lift = () => {
+      if (press.current !== p) return;
+      p.live = true;
+      try {
+        grid.setPointerCapture(p.pointer);
+      } catch {
+        return;
+      }
+      show({ id, at: latest.current.findIndex((b) => b.id === id) });
+    };
+    const onMove = (ev: globalThis.PointerEvent) => {
+      if (ev.pointerId !== p.pointer) return;
+      if (!p.live) {
+        const far = Math.hypot(ev.clientX - p.x, ev.clientY - p.y);
+        if (touchy) {
+          if (far > 8) end(false);
+          return;
+        }
+        if (far < 4) return;
+        lift();
+      }
+      const at = slotFor(ev.clientX, ev.clientY, id);
+      if (at !== undefined && at !== dragRef.current?.at) show({ id, at });
+    };
+    const onUp = (ev: globalThis.PointerEvent) => {
+      if (ev.pointerId === p.pointer) end(p.live && ev.type === 'pointerup');
+    };
+    const onKey = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      end(false);
+    };
+    const onTouch = (ev: TouchEvent) => {
+      if (p.live) ev.preventDefault();
+    };
+    const end = (commit: boolean) => {
+      if (press.current !== p) return;
+      press.current = null;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('touchmove', onTouch);
+      if (grid.hasPointerCapture(p.pointer)) grid.releasePointerCapture(p.pointer);
+      const d = dragRef.current;
+      show(null);
+      if (!commit || !d) return;
+      if (latest.current.findIndex((b) => b.id === d.id) !== d.at) move(d.id, d.at);
+      setSel(d.id);
+    };
+    const p: Press = { id, x: e.clientX, y: e.clientY, pointer: e.pointerId, live: false, end };
+    press.current = p;
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('touchmove', onTouch, { passive: false });
+    if (touchy) timer = window.setTimeout(lift, LONG_PRESS);
+  };
+
+  const dropZone = {
+    onDragEnter: (e: DragEvent) => {
+      if (adding.current && e.dataTransfer.types.includes(DRAG_TYPE)) e.preventDefault();
+    },
     onDragOver: (e: DragEvent) => {
-      if (e.dataTransfer.types.includes(DRAG_TYPE)) e.preventDefault();
+      const ghost = adding.current;
+      if (!ghost || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
+      e.preventDefault();
+      const at = slotFor(e.clientX, e.clientY, ghost.id) ?? blocks.length;
+      if (at !== dragRef.current?.at || !dragRef.current?.add) show({ id: ghost.id, at, add: ghost });
+    },
+    onDragLeave: (e: DragEvent) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      if (e.clientX <= r.left || e.clientX >= r.right || e.clientY <= r.top || e.clientY >= r.bottom) show(null);
     },
     onDrop: (e: DragEvent) => {
       const kind = kindOf(e);
       if (!kind) return;
       e.preventDefault();
-      add(kind, after ?? blocks[blocks.length - 1]?.id);
+      const at = dragRef.current?.add ? dragRef.current.at : blocks.length;
+      adding.current = null;
+      show(null);
+      add(kind, undefined, at);
     }
-  });
+  };
+  const shown = drag ? placed(blocks, drag.id, drag.at, drag.add) : blocks;
 
   const palette = (
     <div className="flex flex-col gap-1.5">
@@ -303,6 +428,11 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
             onDragStart={(e) => {
               e.dataTransfer.setData(DRAG_TYPE, kind);
               e.dataTransfer.effectAllowed = 'copy';
+              adding.current = starterBlock(kind);
+            }}
+            onDragEnd={() => {
+              adding.current = null;
+              if (dragRef.current?.add) show(null);
             }}
             onClick={() => add(kind)}
             className="flex h-7 items-center gap-2 rounded-control border border-primaryStroke bg-backgroundSecondary px-2 text-xs text-textPrimary transition-colors hover:border-primaryBlue"
@@ -353,7 +483,7 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
       </div>
     ) : (
       <div className={cn(phone && 'mx-auto w-[390px] max-w-full rounded-panel border border-primaryStroke bg-background p-2')}>
-        <div ref={gridRef} className="relative">
+        <div ref={gridRef} className={cn('relative', drag && !drag.add && 'cursor-grabbing [&_*]:cursor-grabbing')} {...dropZone}>
           {!phone && (
             <div aria-hidden className="pointer-events-none absolute inset-0 grid grid-cols-12 gap-2">
               {Array.from({ length: GRID }, (_, i) => (
@@ -362,16 +492,29 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
             </div>
           )}
           <GridFrame phone={phone}>
-            {blocks.map((b, i) => {
+            {shown.map((b) => {
               if (!shownOn(b, phone)) return null;
-              const on = b.id === sel;
+              const i = blocks.indexOf(b);
+              const ghost = drag?.id === b.id;
+              const on = b.id === sel && !ghost;
               return (
-                <div key={b.id} data-block={b.id} data-kind={b.kind} style={cellStyle(b, phone)} className="relative min-w-0" {...dropOn(b.id)}>
+                <div
+                  key={b.id}
+                  data-block={b.id}
+                  data-kind={b.kind}
+                  data-ghost={ghost || undefined}
+                  style={cellStyle(b, phone)}
+                  className={cn('relative min-w-0', ghost && 'opacity-50')}
+                >
                   <div
                     role="button"
                     tabIndex={0}
                     aria-label={`select ${blockWord(b)}`}
                     aria-pressed={on}
+                    onPointerDown={(e) => grab(e, b.id)}
+                    onContextMenu={(e) => {
+                      if (press.current) e.preventDefault();
+                    }}
                     onClick={() => setSel(b.id)}
                     onKeyDown={(e) => {
                       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -379,8 +522,12 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
                       setSel(b.id);
                     }}
                     className={cn(
-                      'h-full cursor-pointer rounded-card outline-offset-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
-                      on ? 'outline outline-2 outline-primaryBlue' : 'hover:outline hover:outline-1 hover:outline-secondaryStroke'
+                      'h-full cursor-grab select-none rounded-card outline-offset-2 [-webkit-touch-callout:none] focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
+                      ghost
+                        ? 'cursor-grabbing outline-dashed outline-1 outline-primaryBlue'
+                        : on
+                          ? 'outline outline-2 outline-primaryBlue'
+                          : 'hover:outline hover:outline-1 hover:outline-secondaryStroke'
                     )}
                   >
                     <div className="pointer-events-none h-full">
@@ -436,7 +583,6 @@ export function AboutEditor({ name, start, meta, onClose }: { name: string; star
                 type="button"
                 style={{ gridColumn: phone ? 'span 2 / span 2' : 'span 3 / span 3' }}
                 onClick={() => add('text', blocks[blocks.length - 1]?.id)}
-                {...dropOn(undefined)}
                 className="flex min-h-10 items-center justify-center gap-1 rounded-card border border-dashed border-secondaryStroke text-xs text-textTertiary transition-colors hover:border-primaryBlue hover:text-textPrimary"
               >
                 + drop here

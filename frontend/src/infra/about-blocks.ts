@@ -510,3 +510,43 @@ export function blockWord(b: AboutBlock): string {
   const word = b.title || first || b.items.find((i) => i.label)?.label || '';
   return word ? `${kindWord(b.kind)} · ${word.slice(0, 40)}` : kindWord(b.kind);
 }
+
+export interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export function placed<T extends { id: string }>(list: readonly T[], id: string, at: number, extra?: T): T[] {
+  const item = extra ?? list.find((b) => b.id === id);
+  if (!item) return [...list];
+  const rest = list.filter((b) => b.id !== item.id);
+  rest.splice(Math.max(0, Math.min(rest.length, at)), 0, item);
+  return rest;
+}
+
+export function slotAt(cells: readonly Box[], x: number, y: number): number {
+  let best = -1;
+  let far = Infinity;
+  cells.forEach((c, i) => {
+    const dx = x < c.left ? c.left - x : x > c.right ? x - c.right : 0;
+    const dy = y < c.top ? c.top - y : y > c.bottom ? y - c.bottom : 0;
+    const d = dx * dx + dy * dy;
+    if (d < far) {
+      far = d;
+      best = i;
+    }
+  });
+  const c = cells[best];
+  if (!c) return 0;
+  const level = y >= c.top && y <= c.bottom;
+  const after = level ? x > (c.left + c.right) / 2 : y > (c.top + c.bottom) / 2;
+  return best + (after ? 1 : 0);
+}
+
+export function slotIn(rest: readonly string[], shown: readonly string[], slot: number): number {
+  if (shown.length === 0) return rest.length;
+  if (slot < shown.length) return Math.max(0, rest.indexOf(shown[slot] as string));
+  return rest.indexOf(shown[shown.length - 1] as string) + 1;
+}
