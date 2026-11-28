@@ -376,14 +376,26 @@ export function typingInto(target: EventTarget | null): boolean {
 }
 
 export type RailState = 'open' | 'shut' | null;
-export const RAIL_OPEN_MIN = 1200;
 
 export function readRail(raw: unknown): RailState {
   return raw === 'open' || raw === 'shut' ? raw : null;
 }
 
-export function railOpen(state: RailState, width: number): boolean {
-  return state === null ? width >= RAIL_OPEN_MIN : state === 'open';
+export function railOpen(state: RailState): boolean {
+  return state !== 'shut';
+}
+
+export const RAIL_W_MIN = 220;
+export const RAIL_W_MAX = 480;
+export const RAIL_W_DEFAULT = 244;
+export const RAIL_W_STEP = 16;
+
+export function fitRailWidth(width: number): number {
+  return Math.round(Math.min(RAIL_W_MAX, Math.max(RAIL_W_MIN, width)));
+}
+
+export function readRailWidth(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) ? fitRailWidth(raw) : RAIL_W_DEFAULT;
 }
 
 export function unreadAfter(lines: readonly { id: string; from: string }[], seen: string | null, me: string | null): number {
@@ -408,6 +420,7 @@ const storedPresetAtom = atomWithStorage<unknown>('settings.livePreset', null, u
 const storedPresetsDefaultAtom = atomWithStorage<unknown>('settings.livePresetsDefault', false, undefined, json);
 const storedPresetsAtom = atomWithStorage<unknown>('settings.livePresets', null, undefined, json);
 const storedRailAtom = atomWithStorage<unknown>('settings.liveRail', null, undefined, json);
+const storedRailWidthAtom = atomWithStorage<unknown>('settings.liveRailWidth', null, undefined, json);
 
 export const livePanelsAtom = atom<LivePanels>((get) => readPanels(get(storedPanelsAtom)));
 export const liveLayoutAtom = atom<LayoutId>((get) => readLayout(get(storedLayoutAtom)));
@@ -419,6 +432,7 @@ export const liveGridAtom = atom<Grid>((get) => {
 export const livePresetsAtom = atom<Presets>((get) => readPresets(get(storedPresetsAtom)));
 export const livePresetAtom = atom<PresetId>((get) => get(livePresetsAtom).active);
 export const liveRailAtom = atom<RailState>((get) => readRail(get(storedRailAtom)));
+export const liveRailWidthAtom = atom<number>((get) => readRailWidth(get(storedRailWidthAtom)));
 export const liveEditingAtom = atom(false);
 
 function setPanels(panels: LivePanels) {
@@ -442,6 +456,10 @@ export function setGrid(grid: Grid) {
 
 export function setRail(open: boolean) {
   store.set(storedRailAtom, open ? 'open' : 'shut');
+}
+
+export function setRailWidth(width: number | null) {
+  store.set(storedRailWidthAtom, width === null ? null : fitRailWidth(width));
 }
 
 export function placeShown(grid: Grid, was: readonly ModuleId[], hidden: readonly ModuleId[]): { grid: Grid; hidden: ModuleId[] } {

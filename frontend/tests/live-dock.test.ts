@@ -22,6 +22,11 @@ import {
   presetForKey,
   presetName,
   railOpen,
+  readRailWidth,
+  fitRailWidth,
+  RAIL_W_DEFAULT,
+  RAIL_W_MAX,
+  RAIL_W_MIN,
   readGrid,
   readLayout,
   readPanels,
@@ -300,13 +305,23 @@ test('hotkeys stay out of the way while typing', () => {
   assert.equal(typingInto(null), false);
 });
 
-test('the rail opens by itself only with room, and a choice sticks', () => {
+test('the rail is open until it is collapsed, and a choice sticks', () => {
   assert.equal(readRail('open'), 'open');
   assert.equal(readRail('x'), null);
-  assert.equal(railOpen(null, 1024), false);
-  assert.equal(railOpen(null, 1366), true);
-  assert.equal(railOpen('open', 1024), true);
-  assert.equal(railOpen('shut', 1920), false);
+  assert.equal(railOpen(null), true);
+  assert.equal(railOpen('open'), true);
+  assert.equal(railOpen('shut'), false);
+});
+
+test('the rail width stays in its clamps and falls back to the default', () => {
+  assert.equal(readRailWidth(null), RAIL_W_DEFAULT);
+  assert.equal(readRailWidth('300'), RAIL_W_DEFAULT);
+  assert.equal(readRailWidth(Number.NaN), RAIL_W_DEFAULT);
+  assert.equal(readRailWidth(300.4), 300);
+  assert.equal(readRailWidth(10), RAIL_W_MIN);
+  assert.equal(readRailWidth(9000), RAIL_W_MAX);
+  assert.equal(fitRailWidth(219), RAIL_W_MIN);
+  assert.equal(fitRailWidth(481), RAIL_W_MAX);
 });
 
 test('unread counts lines after the last one seen, not your own', () => {

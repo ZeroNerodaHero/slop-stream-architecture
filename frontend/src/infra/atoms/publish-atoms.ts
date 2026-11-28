@@ -23,6 +23,7 @@ import {
 } from '@/infra/face';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { type Mixer, openMixer } from '@/infra/mixer';
+import { faderMaster, faderRows, keepLevel, keptLevel } from '@/infra/mix-levels';
 import { startRestream, stopRestream } from '@/infra/restream';
 import { readModel } from '@/infra/model-file';
 import {
@@ -158,6 +159,9 @@ export const masterRowAtom = atom<MixRow>({ id: MASTER, label: 'everyone hears',
 const storedMixAtom = atomWithStorage<unknown>('settings.mixer', null, undefined, { getOnInit: true });
 export const mixerOpenAtom = atom(false);
 export const mixerRunningAtom = atom(true);
+export const faderRowsAtom = atom((get) => faderRows(get(mixerOpenAtom), get(mixRowsAtom), get(storedMixAtom)));
+export const faderMasterAtom = atom((get) => faderMaster(get(mixerOpenAtom), get(masterRowAtom), get(storedMixAtom)));
+export const webAudio = typeof AudioContext !== 'undefined';
 
 export type ModelChoice = { kind: 'demo'; id: string; v: string; name: string } | { kind: 'kept'; id: number; name: string };
 export const modelAtom = atom<ModelChoice | null>(null);
@@ -243,6 +247,7 @@ let sendingCodec: Codec = 'vp8';
 let copyUpper = false;
 let screenSenders: RTCRtpSender[] = [];
 let mixer: Mixer | null = null;
+let mixedMic: MediaStreamTrack | null = null;
 let modelSession: ModelSession | null = null;
 let faceCamera: MediaStreamTrack | null = null;
 const marksListeners = new Set<(marks: FaceMarks) => void>();
@@ -298,6 +303,7 @@ export function commitStreamName(): Promise<void> {
 
 export async function enterLivePage(): Promise<void> {
   warmModelFiles();
+  watchMicMix();
   if (store.get(isPublishingAtom)) return;
   const generation = liveGeneration;
   await loadMe();
@@ -603,9 +609,8 @@ async function swapMicTrack(had: MediaStream, track: MediaStreamTrack): Promise<
   had.getAudioTracks().forEach((t) => t.stop());
   store.set(cameraAtom, new MediaStream([track, ...had.getVideoTracks()]));
   store.set(sourceStatusAtom, '');
-  if (mixer?.has('mic')) {
-    const row = store.get(mixRowsAtom).find((r) => r.id === 'mic');
-    mixer.add('mic', track, row?.level ?? 1, row?.muted ?? false);
+  if (mixer) {
+    syncMicMix();
   } else if (pc) {
     const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
     await sender?.replaceTrack(track).catch(() => undefined);
@@ -1096,16 +1101,8 @@ export async function goLive(): Promise<void> {
   store.set(chatRoomAtom, name);
 
   const mic = camera.getAudioTracks()[0];
-  if (!mixer) {
-    mixer = openMixer();
-    const kept = keptMix(MASTER);
-    if (kept) store.set(masterRowAtom, { ...store.get(masterRowAtom), ...kept });
-    const master = store.get(masterRowAtom);
-    mixer?.setMaster(master.level, master.muted);
-    store.set(mixerOpenAtom, mixer !== null);
-  }
-  if (mixer && mic && !mixer.has('mic')) addMixRow('mic', 'mic', mic);
-  watchMixer();
+  openLocalMixer();
+  void resumeMixer();
   setPhase('starting', 'starting');
 
   const myPc = new RTCPeerConnection();
@@ -1575,17 +1572,52 @@ export async function deleteImage(asset: number): Promise<void> {
 }
 
 function keptMix(id: string): { level: number; muted: boolean } | null {
-  const raw = store.get(storedMixAtom);
-  const row = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[id] : null;
-  if (!row || typeof row !== 'object') return null;
-  const { level, muted } = row as Record<string, unknown>;
-  return typeof level === 'number' && Number.isFinite(level) ? { level: Math.min(1, Math.max(0, level)), muted: muted === true } : null;
+  return keptLevel(store.get(storedMixAtom), id);
 }
 
 function rememberMix(row: MixRow) {
   if (row.id !== 'mic' && row.id !== MASTER && row.id !== DESKTOP_AUDIO) return;
-  const raw = store.get(storedMixAtom);
-  store.set(storedMixAtom, { ...(raw && typeof raw === 'object' ? raw : {}), [row.id]: { level: row.level, muted: row.muted } });
+  store.set(storedMixAtom, keepLevel(store.get(storedMixAtom), row.id, row));
+}
+
+function openLocalMixer() {
+  if (!mixer) {
+    mixer = openMixer();
+    const kept = keptMix(MASTER);
+    if (kept) store.set(masterRowAtom, { ...store.get(masterRowAtom), ...kept });
+    const master = store.get(masterRowAtom);
+    mixer?.setMaster(master.level, master.muted);
+    store.set(mixerOpenAtom, mixer !== null);
+  }
+  syncMicMix();
+  watchMixer();
+}
+
+function syncMicMix() {
+  if (!mixer) return;
+  const mic = store.get(cameraAtom)?.getAudioTracks()[0] ?? null;
+  if (mic === mixedMic && (!mic || mixer.has('mic'))) return;
+  mixedMic = mic;
+  if (!mic) {
+    unmixSound('mic');
+    return;
+  }
+  const row = store.get(mixRowsAtom).find((r) => r.id === 'mic');
+  if (row) mixer.add('mic', mic, row.level, row.muted);
+  else addMixRow('mic', 'mic', mic);
+}
+
+let micMixWatched = false;
+
+function watchMicMix() {
+  if (micMixWatched) return;
+  micMixWatched = true;
+  const sync = () => {
+    if (mixer) syncMicMix();
+    else if (store.get(hasMicAtom)) openLocalMixer();
+  };
+  store.sub(cameraAtom, sync);
+  sync();
 }
 
 function addMixRow(id: string, label: string, track: MediaStreamTrack) {
@@ -1606,7 +1638,10 @@ function setMixRow(id: string, change: (row: MixRow) => MixRow) {
   }
   const rows = store.get(mixRowsAtom);
   const row = rows.find((r) => r.id === id);
-  if (!row) return;
+  if (!row) {
+    rememberMix(change({ id, label: id, level: 1, muted: false, ...keptMix(id) }));
+    return;
+  }
   const next = change(row);
   store.set(
     mixRowsAtom,
@@ -1704,11 +1739,17 @@ export async function resumeMixer(): Promise<void> {
 const checkMixer = () => store.set(mixerRunningAtom, mixer?.running ?? true);
 let mixerWatched = false;
 
+const wakeMixer = () => {
+  if (mixer && !mixer.running) void resumeMixer();
+};
+
 function watchMixer() {
   checkMixer();
   if (!mixer || mixerWatched) return;
   mixerWatched = true;
   document.addEventListener('visibilitychange', checkMixer);
+  document.addEventListener('pointerdown', wakeMixer, true);
+  document.addEventListener('keydown', wakeMixer, true);
   setTimeout(checkMixer, 500);
 }
 
@@ -1716,6 +1757,8 @@ function unwatchMixer() {
   if (!mixerWatched) return;
   mixerWatched = false;
   document.removeEventListener('visibilitychange', checkMixer);
+  document.removeEventListener('pointerdown', wakeMixer, true);
+  document.removeEventListener('keydown', wakeMixer, true);
 }
 
 function announceSlots() {
@@ -1889,6 +1932,7 @@ export function endLive() {
   store.set(desktopAudioStatusAtom, '');
   mixer?.close();
   mixer = null;
+  mixedMic = null;
   store.set(mixerOpenAtom, false);
   store.set(mixerRunningAtom, true);
   store.set(mixRowsAtom, []);
