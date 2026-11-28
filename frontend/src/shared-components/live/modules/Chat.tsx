@@ -9,6 +9,7 @@ import { type Place, unreadAfter, unreadWords } from '@/infra/live-dock';
 import { ChatModActions } from '@/shared-components/ChatMod';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { ChatSlot } from '@/shared-components/ChatSlot';
+import { ChatSourcePicker } from '@/shared-components/ChatSource';
 import { DockPanel } from '@/shared-components/live/Dock';
 import { cn } from '@/utils/cn';
 
@@ -36,7 +37,7 @@ export function Unread({ count, id }: { count: number; id?: string }) {
   );
 }
 
-export function ChatBody({ className, embedded = true }: { className: string; embedded?: boolean }) {
+export function ChatBody({ className, embedded = true, sourcesAbove = false }: { className: string; embedded?: boolean; sourcesAbove?: boolean }) {
   const chatRoom = useAtomValue(chatRoomAtom);
   const owner = useAtomValue(ownerAtom);
   const me = useAtomValue(meAtom);
@@ -55,6 +56,7 @@ export function ChatBody({ className, embedded = true }: { className: string; em
       owner={owner}
       welcome={welcome}
       embedded={embedded}
+      sourcesAbove={sourcesAbove}
       lineActions={me && me === chatRoom ? (line) => <ChatModActions name={chatRoom} line={line} me={me} /> : undefined}
       embedMod={me && me === chatRoom ? () => true : undefined}
       className={className}
@@ -71,9 +73,11 @@ export function ChatWindow() {
 }
 
 export function ChatModule({ place, className = 'h-full min-h-0 flex-1' }: { place: Place; className?: string }) {
+  const chatRoom = useAtomValue(chatRoomAtom);
+  const inHead = place !== 'phone';
   return (
-    <DockPanel tab="chat" place={place}>
-      <ChatBody className={className} />
+    <DockPanel tab="chat" place={place} aside={inHead && chatRoom ? <ChatSourcePicker name={chatRoom} /> : undefined}>
+      <ChatBody className={className} sourcesAbove={inHead} />
     </DockPanel>
   );
 }
