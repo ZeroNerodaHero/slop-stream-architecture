@@ -1,4 +1,5 @@
 import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from './box.ts';
+import { type AvatarLook, centeredSquare, readAvatarLook, SQUARE, squareIn } from './avatar-look.ts';
 import type { Layer, Scene } from './relay.ts';
 
 export interface Source {
@@ -11,6 +12,7 @@ export interface Source {
   box: Box;
   shown: boolean;
   fit?: Fit;
+  look?: AvatarLook;
 }
 
 export const FULL: Box = { x: 0, y: 0, w: 1, h: 1 };
@@ -20,7 +22,6 @@ const SECOND_SCREEN: Box = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
 const THIRD_SCREEN: Box = { x: 0.647, y: 0.036, w: 0.333, h: 0.333 };
 const IMAGE_W = 0.3;
 const IMAGE_MAX_H = 0.6;
-const AVATAR_BOX_RATIO = 9 / 16;
 
 export const layerOf = (s: Source): Layer =>
   s.kind === 'image'
@@ -115,7 +116,8 @@ function applyPreset(sources: readonly Source[], preset: Preset): Source[] {
   for (const b of preset.boxes) {
     const source = videos.find((v) => roleOf(v, sources) === b.role && !placed.some((p) => p.id === v.id));
     if (!source) continue;
-    placed.push({ ...source, box: { x: b.x, y: b.y, w: b.w, h: b.h }, fit: b.fit });
+    const box = { x: b.x, y: b.y, w: b.w, h: b.h };
+    placed.push({ ...source, box: source.kind === 'avatar' ? squareIn(box) : box, fit: b.fit });
   }
   const rest = videos.filter((v) => !placed.some((p) => p.id === v.id)).map((v) => ({ ...v, shown: false }));
   const lowest = sources.findIndex((s) => videos.includes(s));
@@ -152,22 +154,24 @@ export function validPreset(raw: unknown): Preset | null {
   return { name: p.name.trim(), boxes };
 }
 
+const fullFor = (s: Source): Box => (s.kind === 'avatar' ? centeredSquare(FULL) : FULL);
+
 export function arrangedAfterAdd(sources: readonly Source[], added: Source, last: Preset | null): Source[] {
   const videos = laidOut(sources);
-  if (!videos.some((v) => v.id === added.id)) return sources.map((s) => (s.id === added.id ? { ...s, box: imageBox(AVATAR_BOX_RATIO), shown: true } : s));
-  if (videos.length === 1) return sources.map((s) => (s.id === added.id ? { ...s, box: FULL, shown: true } : s));
+  if (!videos.some((v) => v.id === added.id)) return sources.map((s) => (s.id === added.id ? { ...s, box: imageBox(SQUARE), shown: true } : s));
+  if (videos.length === 1) return sources.map((s) => (s.id === added.id ? { ...s, box: fullFor(s), shown: true } : s));
   if (videos.length === 2 && added.kind === 'screen') {
     return applyPreset(sources, last && last.boxes.some((b) => b.role === 'screen1') ? last : SCREEN_AND_FACE);
   }
   const role = roleOf(added, sources);
-  const box = role === 'screen2' ? SECOND_SCREEN : role === 'screen3' ? THIRD_SCREEN : CORNER;
+  const box = role === 'screen2' ? SECOND_SCREEN : role === 'screen3' ? THIRD_SCREEN : added.kind === 'avatar' ? squareIn(CORNER) : CORNER;
   return sources.map((s) => (s.id === added.id ? { ...s, box, shown: true } : s));
 }
 
 export function arrangedAfterRemove(sources: readonly Source[]): Source[] {
   const videos = laidOut(sources);
   if (videos.length !== 1) return [...sources];
-  return sources.map((s) => (videos.includes(s) ? { ...s, box: FULL } : s));
+  return sources.map((s) => (videos.includes(s) ? { ...s, box: fullFor(s) } : s));
 }
 
 export function soloed(sources: readonly Source[]): Source[] {
@@ -176,7 +180,7 @@ export function soloed(sources: readonly Source[]): Source[] {
   const at = sources.indexOf(face);
   const alone = face.kind === 'avatar';
   return sources.map((s, i) =>
-    s === face ? { ...s, box: FULL, shown: true, fit: s.kind === 'camera' ? 'cover' : s.fit } : alone || i > at ? { ...s, shown: false } : s
+    s === face ? { ...s, box: fullFor(s), shown: true, fit: s.kind === 'camera' ? 'cover' : s.fit } : alone || i > at ? { ...s, shown: false } : s
   );
 }
 
@@ -184,11 +188,12 @@ export interface KeptSource {
   box: Box;
   shown: boolean;
   fit?: Fit;
+  look?: AvatarLook;
 }
 export type KeptScene = Record<string, KeptSource>;
 
 export function keptOf(sources: readonly Source[]): KeptScene {
-  return Object.fromEntries(sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }) }]));
+  return Object.fromEntries(sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }), ...(s.look && { look: s.look }) }]));
 }
 
 export function readKept(raw: unknown): KeptScene | null {
@@ -198,7 +203,8 @@ export function readKept(raw: unknown): KeptScene | null {
     const k = value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
     const b = k?.box as Partial<Box> | undefined;
     if (!k || !b || ![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue;
-    kept[id] = { box: clampBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }) };
+    const look = readAvatarLook(k.look);
+    kept[id] = { box: clampBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }), ...(look && { look }) };
   }
   return kept;
 }
@@ -209,13 +215,13 @@ export function arrivedFrom(kept: KeptScene, before: readonly Source[], next: So
   return next.map((s) => {
     const was = before.find((b) => b.id === s.id);
     const k = was ?? kept[s.id];
-    return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit } : s;
+    return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }) } : s;
   });
 }
 
 export function restoredFrom(kept: KeptScene, before: readonly Source[], next: readonly Source[]): Source[] {
   return next.map((s) => {
     const k = kept[s.id];
-    return k && !before.some((b) => b.id === s.id) ? { ...s, box: k.box, shown: k.shown, fit: k.fit } : s;
+    return k && !before.some((b) => b.id === s.id) ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }) } : s;
   });
 }

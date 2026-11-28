@@ -135,7 +135,7 @@ export function stagedFrom(stage: Pick<Stage, 'scene' | 'images'>, now: readonly
     const match = image ? now.find((s) => s.kind === 'image' && s.asset === image.asset && !used.has(s.id)) : now.find((s) => s.id === id && s.kind !== 'image');
     if (match) {
       used.add(match.id);
-      placed.push({ ...match, box: kept.box, shown: kept.shown, fit: kept.fit });
+      placed.push({ ...match, box: kept.box, shown: kept.shown, fit: kept.fit, ...(match.kind === 'avatar' && { look: kept.look }) });
       continue;
     }
     if (image && library.includes(image.asset)) {
