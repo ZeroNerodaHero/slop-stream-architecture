@@ -185,6 +185,8 @@ export function withGoneScreens(before: Stage | undefined, next: Stage, seen: re
   return { ...next, scene: { ...Object.fromEntries(gone), ...next.scene } };
 }
 
+const FULL_LEVEL: StageLevel = { level: 1, muted: false };
+
 interface StageEntry {
   id: string;
   kept: KeptSource;
@@ -219,7 +221,7 @@ function viewOf(stage: Stage, mine: readonly StageEntry[], theirs: readonly Stag
       ...stage,
       scene: mine.filter((e) => e.kept.shown || there.has(e.id)),
       images: null,
-      levels: Object.fromEntries(Object.entries(stage.levels).filter(([id]) => id in other.levels))
+      levels: Object.fromEntries([...new Set([...Object.keys(stage.levels), ...Object.keys(other.levels)])].map((id) => [id, stage.levels[id] ?? FULL_LEVEL]))
     })
   );
 }

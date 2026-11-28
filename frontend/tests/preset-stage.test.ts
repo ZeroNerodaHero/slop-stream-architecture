@@ -189,7 +189,7 @@ test('a stage just saved is clean, and a move, a hidden source, a level, a sound
   assert.equal(stageChanged(saved, stageOf([cam, screen, logo], { ...rest, names: { camera: 'other' } }), []), true);
 });
 
-test('dirty ignores what a reload changes on its own: picture ids, key order, a screen not shared yet, a hidden extra, a level with no row', () => {
+test('dirty ignores what a reload changes on its own: picture ids, key order, a screen not shared yet, a hidden extra, a fresh level row', () => {
   const saved = storedStage(stageOf([cam, screen, logo], rest))!;
   assert.equal(stageChanged(saved, stageOf([cam, screen, { ...logo, id: 'i7' }], rest), []), false);
   const shuffled = { ...rest, levels: { master: rest.levels.master!, mic: rest.levels.mic! } };
@@ -198,7 +198,9 @@ test('dirty ignores what a reload changes on its own: picture ids, key order, a 
   assert.equal(stageChanged(saved, stageOf([cam, logo], rest), ['s1']), true);
   assert.equal(stageChanged(saved, stageOf([{ ...sticker, shown: false }, cam, screen, logo], rest), []), false);
   assert.equal(stageChanged(saved, stageOf([sticker, cam, screen, logo], rest), []), true);
-  const extraLevel = { ...rest, levels: { ...rest.levels, desktop: { level: 0.5, muted: false } } };
-  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], extraLevel), []), false);
+  const fresh = { ...rest, levels: { ...rest.levels, desktop: { level: 1, muted: false } } };
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], fresh), []), false);
+  const moved = { ...rest, levels: { ...rest.levels, desktop: { level: 0.5, muted: false } } };
+  assert.equal(stageChanged(saved, stageOf([cam, screen, logo], moved), []), true);
   assert.equal(sameStage(saved, saved), true);
 });
