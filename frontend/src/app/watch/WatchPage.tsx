@@ -146,6 +146,30 @@ function WatchStats({ muted, volume, className }: { muted: boolean; volume: numb
   return <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} className={className} />;
 }
 
+function WatchViewers({ id, className }: { id?: string; className?: string }) {
+  const viewers = useAtomValue(watchViewersAtom);
+  return <ViewerCount id={id} count={viewers} className={className} />;
+}
+
+function StripViewers({ headline }: { headline: string | null }) {
+  const viewers = useAtomValue(watchViewersAtom);
+  return (
+    <>
+      {headline && viewers !== null && (
+        <span aria-hidden className="text-textTertiary">
+          ·
+        </span>
+      )}
+      <ViewerCount id="viewers" count={viewers} className="shrink-0 text-textSecondary" />
+    </>
+  );
+}
+
+function WatchHeaderSub({ followers }: { followers: number | null }) {
+  const viewers = useAtomValue(watchViewersAtom);
+  return <>{streamNumbers(followers, viewers)}</>;
+}
+
 export function WatchPage() {
   const [tab, setTab] = useState<PhoneTab>('about');
   const [aboutEditing, setAboutEditing] = useState(false);
@@ -202,7 +226,6 @@ export function WatchPage() {
   const layers = useAtomValue(watchLayersAtom);
   const primary = useAtomValue(primarySlotAtom);
   const sceneTile = useAtomValue(sceneTileAtom);
-  const viewers = useAtomValue(watchViewersAtom);
   const renamedTo = useAtomValue(watchRenamedToAtom);
   const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
@@ -464,7 +487,7 @@ export function WatchPage() {
   const status = (
     <div className="relative my-3 flex flex-wrap items-baseline gap-x-4">
       <StatusLine text={message} tone={tone} className={cn('my-0', (phase === 'watching' || chipWords !== null) && 'sr-only')} />
-      <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
+      <WatchViewers id="viewers" className="text-lg text-textSecondary" />
       {followersCount && <span className="ml-auto text-lg text-textSecondary">{followersCount}</span>}
     </div>
   );
@@ -473,7 +496,7 @@ export function WatchPage() {
       <StatusLine text={message} tone={tone} className="my-0 sr-only" />
       {!theater && (
         <span className="sr-only">
-          <ViewerCount id="viewers" count={viewers} />
+          <WatchViewers id="viewers" />
           {followersCount}
         </span>
       )}
@@ -481,16 +504,10 @@ export function WatchPage() {
   );
   const onAir = phase === 'watching' || phase === 'connecting' || phase === 'connected' || phase === 'reconnecting';
   const headline = !name || phase === 'loading' || phase === 'bad-name' ? null : onAir ? 'live' : (NOT_LIVE_WORDS[presence] ?? 'offline');
-  const dot = (
-    <span aria-hidden className="text-textTertiary">
-      ·
-    </span>
-  );
   const stripInfo = (
     <div className="relative flex min-w-0 flex-1 items-baseline gap-2 whitespace-nowrap pb-1.5 text-sm bubble:pb-0">
       {headline && <span className={cn('min-w-0 truncate font-semibold', onAir ? 'text-increase' : 'text-textPrimary')}>{headline}</span>}
-      {headline && viewers !== null && dot}
-      <ViewerCount id="viewers" count={viewers} className="shrink-0 text-textSecondary" />
+      <StripViewers headline={headline} />
       {followersCount && <span className="sr-only">{followersCount}</span>}
     </div>
   );
@@ -546,7 +563,7 @@ export function WatchPage() {
           title={title}
           titleId="who"
           mobileStart={face}
-          mobileSub={streamNumbers(name ? followers : null, viewers)}
+          mobileSub={<WatchHeaderSub followers={name ? followers : null} />}
           mobileEnd={rowEnd}
           wide
           bleed
@@ -629,7 +646,7 @@ export function WatchPage() {
       titleId="who"
       person
       mobileStart={face}
-      mobileSub={streamNumbers(name ? followers : null, viewers)}
+      mobileSub={<WatchHeaderSub followers={name ? followers : null} />}
       mobileEnd={rowEnd}
       wide
       fluid
