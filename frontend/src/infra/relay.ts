@@ -1,5 +1,8 @@
 import { record } from '@/infra/atoms/inspector-atoms';
 import { trackSocket } from '@/infra/debug/sockets';
+import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from '@/infra/box';
+
+export { type Box, clampBox, type Fit, LAYER_MIN, thousandth };
 
 export type RelayRole = 'publish' | 'watch';
 
@@ -11,13 +14,6 @@ export interface SlotInfo {
   label?: string;
 }
 
-export interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-export type Fit = 'cover' | 'contain';
 export type VideoLayer = Box & { id: string; kind: 'camera' | 'screen'; slot: number; fit?: Fit };
 export type ImageLayer = Box & { id: string; kind: 'image'; asset: number };
 export type AvatarLayer = Box & { id: string; kind: 'avatar' };
@@ -27,7 +23,6 @@ export interface Scene {
 }
 
 export const MAX_LAYERS = 16;
-export const LAYER_MIN = 0.05;
 const ID_RE = /^[a-z0-9_-]{1,16}$/i;
 
 export const isVideoLayer = (layer: Layer): layer is VideoLayer => layer.kind === 'camera' || layer.kind === 'screen';
@@ -61,14 +56,6 @@ export function slotsOf(msg: RelayReply): SlotInfo[] | null {
 }
 
 const isFraction = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
-
-export const thousandth = (v: number) => Math.round(v * 1000) / 1000;
-
-export function clampBox(box: Box): Box {
-  const w = thousandth(Math.min(1, Math.max(LAYER_MIN, box.w)));
-  const h = thousandth(Math.min(1, Math.max(LAYER_MIN, box.h)));
-  return { x: thousandth(Math.min(1 - w, Math.max(0, box.x))), y: thousandth(Math.min(1 - h, Math.max(0, box.y))), w, h };
-}
 
 function validLayer(raw: unknown): Layer | null {
   if (!raw || typeof raw !== 'object') return null;

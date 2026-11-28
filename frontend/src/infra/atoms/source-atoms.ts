@@ -32,6 +32,10 @@ export function sourceNameOf(source: Source, model: { name: string } | null, nam
 
 export const nameOfSource = (source: Source): string => sourceNameOf(source, store.get(modelAtom), store.get(sourceNamesAtom)).name;
 
+export function setSourceNames(names: Readonly<Record<string, string>>) {
+  store.set(storedNamesAtom, readNames(names));
+}
+
 export function renameSource(name: SourceName, raw: string) {
   store.set(storedNamesAtom, renamed(store.get(sourceNamesAtom), name.key, raw, name.fallback));
 }

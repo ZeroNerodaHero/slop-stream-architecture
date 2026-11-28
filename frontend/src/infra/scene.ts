@@ -1,4 +1,5 @@
-import { type Box, clampBox, type Fit, LAYER_MIN, type Layer, type Scene, thousandth } from '@/infra/relay';
+import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from './box.ts';
+import type { Layer, Scene } from './relay.ts';
 
 export interface Source {
   id: string;
