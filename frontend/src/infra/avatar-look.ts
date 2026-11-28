@@ -31,6 +31,8 @@ export function readAvatarLook(raw: unknown): AvatarLook | null {
   };
 }
 
+export const sameLook = (a: AvatarLook, b: AvatarLook) => a.shape === b.shape && a.border === b.border && a.color === b.color && a.bounce === b.bounce;
+
 export const lookOf = (look: AvatarLook | undefined): AvatarLook => look ?? AVATAR_LOOK;
 
 export const radiusVar = (look: AvatarLook): string | undefined => (look.shape === 'default' ? undefined : AVATAR_RADII[look.shape]);

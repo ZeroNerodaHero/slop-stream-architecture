@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { AVATAR_LOOK, avatarFrame, avatarRadius, readAvatarLook, squareIn } from '../src/infra/avatar-look.ts';
+import { AVATAR_LOOK, avatarFrame, avatarRadius, readAvatarLook, sameLook, squareIn } from '../src/infra/avatar-look.ts';
 import { arrangedAfterAdd, arrangedAfterRemove, AVATAR_ID, CORNER, FULL, keptOf, readKept, resizedBox, soloed, type Source } from '../src/infra/scene.ts';
 import { sectionsOf } from '../src/infra/source-settings.ts';
 import { readStage, type Stage, stagedFrom, stageOf } from '../src/infra/stage.ts';
@@ -15,6 +15,8 @@ test('a fresh avatar look is the old behavior: theme shape, talk border in the t
   assert.deepEqual(AVATAR_LOOK, { shape: 'default', border: true, color: '', bounce: true });
   assert.deepEqual(readAvatarLook({}), AVATAR_LOOK);
   for (const raw of [null, undefined, 'bubble', 3, []]) assert.equal(readAvatarLook(raw), null);
+  assert.ok(sameLook(readAvatarLook({})!, AVATAR_LOOK));
+  assert.equal(sameLook({ ...AVATAR_LOOK, bounce: false }, AVATAR_LOOK), false);
 });
 
 test('a stored look keeps what is valid and drops the rest', () => {
