@@ -245,6 +245,7 @@ const stage = (x: number) => ({
   scene: { cam: { box: { x, y: 0, w: 0.5, h: 0.5 }, shown: true } },
   images: {},
   texts: {},
+  chats: {},
   levels: {},
   sounds: {},
   names: {},

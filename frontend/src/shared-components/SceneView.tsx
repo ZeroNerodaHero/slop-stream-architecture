@@ -9,8 +9,12 @@ import {
   useRef
 } from 'react';
 
+import type { Owner } from '@/infra/api';
 import { shapeAtom } from '@/infra/atoms/settings-atoms';
-import { type Box, fitOf, isOverlayLayer, isVideoLayer, type Layer, type TextLayer as TextLayerData } from '@/infra/relay';
+import { emoteImage, onEmoteImage } from '@/infra/chat-emote-images';
+import { useChatOverlay } from '@/infra/chat-overlay';
+import { CHAT_STYLE, chatLinesOf, paintChat } from '@/infra/chat-paint';
+import { type Box, type ChatLayer as ChatLayerData, fitOf, isOverlayLayer, isVideoLayer, type Layer, type TextLayer as TextLayerData } from '@/infra/relay';
 import { paintText, textShape, textStyleOf } from '@/infra/text-paint';
 import { AvatarLayer, type AvatarVoice } from '@/shared-components/AvatarLayer';
 import { VideoFrame } from '@/shared-components/VideoFrame';
@@ -57,8 +61,14 @@ export interface MainVideo {
   onAutoplayBlocked?: () => void;
 }
 
+export interface SceneChat {
+  name: string;
+  owner?: Owner | null;
+}
+
 interface SceneViewProps {
   id: string;
+  chat?: SceneChat;
   layers: readonly Layer[];
   streamFor: (slot: number) => Atom<MediaStream | null>;
   imageUrl: (asset: number) => string;
@@ -113,6 +123,7 @@ interface Gesture {
 
 export function SceneView({
   id,
+  chat,
   layers,
   streamFor,
   imageUrl,
@@ -187,6 +198,8 @@ export function SceneView({
             <img id={`layer-${layer.id}-img`} src={imageUrl(layer.asset)} alt="" draggable={false} className="block h-full w-full object-fill" />
           ) : layer.kind === 'text' ? (
             <TextLayer id={`layer-${layer.id}-text`} layer={layer} frame={frame} />
+          ) : layer.kind === 'chat' ? (
+            <ChatLayer id={`layer-${layer.id}-chat`} layer={layer} frame={frame} chat={chat} />
           ) : null}
         </LayerBox>
       ))}
@@ -232,6 +245,64 @@ function TextLayer({ id, layer, frame }: { id: string; layer: TextLayerData; fra
     };
   }, [frame, text, size, color, bg, align, shape]);
   return <canvas ref={ref} id={id} aria-hidden data-text={text} className="block h-full w-full" />;
+}
+
+function useCanvasPaint(
+  ref: RefObject<HTMLCanvasElement | null>,
+  frame: RefObject<HTMLDivElement | null>,
+  paint: (ctx: CanvasRenderingContext2D, box: Box, frameHeight: number) => void,
+  deps: readonly unknown[],
+  watch?: (redraw: () => void) => () => void
+) {
+  useEffect(() => {
+    const canvas = ref.current;
+    const scene = frame.current;
+    if (!canvas || !scene) return;
+    const draw = () => {
+      const ctx = canvas.getContext('2d');
+      const r = canvas.getBoundingClientRect();
+      const fh = scene.getBoundingClientRect().height;
+      if (!ctx || r.width === 0 || r.height === 0 || fh === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.round(r.width * dpr);
+      const h = Math.round(r.height * dpr);
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      ctx.clearRect(0, 0, w, h);
+      paint(ctx, { x: 0, y: 0, w, h }, fh * dpr);
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    observer.observe(scene);
+    const unwatch = watch?.(draw);
+    let on = true;
+    void document.fonts?.ready.then(() => on && draw());
+    return () => {
+      on = false;
+      observer.disconnect();
+      unwatch?.();
+    };
+  }, [ref, frame, ...deps]);
+}
+
+const NO_CHAT: SceneChat = { name: '' };
+
+function ChatLayer({ id, layer, frame, chat = NO_CHAT }: { id: string; layer: ChatLayerData; frame: RefObject<HTMLDivElement | null>; chat?: SceneChat }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  const site = useAtomValue(shapeAtom);
+  const style = layer.style ?? CHAT_STYLE;
+  const { size, color, bg, align } = style;
+  const shape = textShape(style, site);
+  const lines = useChatOverlay(chat.name, chat.owner ?? null, chatLinesOf(layer.chat));
+  useCanvasPaint(
+    ref,
+    frame,
+    (ctx, box, fh) => paintChat(ctx, box, { lines, style: { size, color, bg, align }, shape }, fh, emoteImage),
+    [lines, size, color, bg, align, shape],
+    onEmoteImage
+  );
+  return <canvas ref={ref} id={id} aria-hidden data-lines={lines.length} className="block h-full w-full" />;
 }
 
 function LayerVideo({ id, streamAtom, cover, clear }: { id: string; streamAtom: Atom<MediaStream | null>; cover: boolean; clear: boolean }) {

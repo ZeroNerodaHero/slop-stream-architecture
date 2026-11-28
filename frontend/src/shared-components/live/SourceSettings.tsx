@@ -45,6 +45,7 @@ import { ModelControls } from '@/shared-components/live/ModelControls';
 import { Rigging } from '@/shared-components/live/Rigging';
 import { Segmented } from '@/shared-components/Segmented';
 import { TextSettings } from '@/shared-components/live/TextSettings';
+import { ChatOverlaySettings } from '@/shared-components/live/ChatOverlaySettings';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -64,7 +65,7 @@ export function useSourceFacts(source: Source) {
         ? 'remove (the upload stays saved)'
         : source.kind === 'avatar'
           ? 'remove (the + brings it back)'
-          : source.kind === 'text'
+          : source.kind === 'text' || source.kind === 'chat'
             ? 'remove'
             : !hasMic
               ? `no mic: the ${worn ? 'model' : 'camera'} is all there is`
@@ -315,6 +316,7 @@ function VisualSettings({ source, place, head, onModel }: { source: Source; plac
         </div>
       )}
       {sections.includes('text') && <TextSettings source={source} />}
+      {sections.includes('chat') && <ChatOverlaySettings source={source} />}
       {sections.includes('look') && (
         <div id="source-look" className="border-t border-primaryStroke">
           <p className={SECTION_HEAD}>look</p>
