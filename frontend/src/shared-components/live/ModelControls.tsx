@@ -42,7 +42,7 @@ const READING: Record<FaceReading, { said: string; more: string }> = {
 type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
 const HIDDEN_TAB = `in ${HERE} the model stops moving while this tab is hidden`;
-const WELL = cn(ICON_BUTTON, 'cursor-pointer flex-col gap-0.5');
+const WELL = cn(ICON_BUTTON, 'cursor-pointer gap-0.5');
 const CHECKS = 'repeating-conic-gradient(rgb(var(--text-tertiary)) 0% 25%, transparent 0% 50%) 0 0 / 4px 4px';
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 
@@ -172,10 +172,10 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
             onClick={() => setPicking(!picking)}
             className={cn(WELL, picking && 'border-primaryBlue text-primaryBlue')}
           >
-            <RiPaintLine aria-hidden size={14} />
+            <RiPaintLine aria-hidden size={16} />
             <span
               aria-hidden
-              className="block h-1.5 w-4 rounded-control border border-primaryStroke"
+              className={cn('block h-4 w-1.5 shrink-0 rounded-control border', clear ? 'border-dashed border-secondaryStroke' : 'border-primaryStroke')}
               style={clear ? { backgroundImage: CHECKS } : { backgroundColor: background }}
             />
           </button>
