@@ -307,10 +307,28 @@ struct Layer {
     asset: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    look: Option<AvatarLook>,
     x: f64,
     y: f64,
     w: f64,
     h: f64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AvatarLook {
+    shape: String,
+    border: bool,
+    color: String,
+    bounce: bool,
+}
+
+impl AvatarLook {
+    fn well_formed(&self) -> bool {
+        let shape = matches!(self.shape.as_str(), "default" | "block" | "soft" | "bubble");
+        let color = self.color.is_empty() || (self.color.len() == 7 && self.color.starts_with('#') && self.color[1..].bytes().all(|b| b.is_ascii_hexdigit()));
+        shape && color
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -332,7 +350,8 @@ impl Scene {
                     "avatar" => true,
                     _ => false,
                 };
-                id && placed && fit && named
+                let look = layer.look.as_ref().is_none_or(|l| layer.kind == "avatar" && l.well_formed());
+                id && placed && fit && named && look
             })
     }
 }
@@ -1857,6 +1876,22 @@ async fn send(socket: &mut WebSocket, msg: Out) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_avatar_look_rides_the_scene_and_bad_ones_are_refused() {
+        let scene = |layer: &str| serde_json::from_str::<Scene>(&format!(r#"{{"layers":[{layer}]}}"#)).expect("a scene");
+        let plain = scene(r#"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5}"#);
+        assert!(plain.well_formed(0), "no look is fine");
+        assert!(!serde_json::to_string(&plain).unwrap().contains("look"), "no look is not sent");
+        let styled = scene(r##"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"bubble","border":true,"color":"#ff2266","bounce":false}}"##);
+        assert!(styled.well_formed(0));
+        let out = serde_json::to_value(&styled).unwrap();
+        assert_eq!(out["layers"][0]["look"], serde_json::json!({ "shape": "bubble", "border": true, "color": "#ff2266", "bounce": false }), "the look passes through");
+        assert!(scene(r##"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"default","border":false,"color":"","bounce":true}}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"star","border":true,"color":"","bounce":true}}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"me","kind":"avatar","x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"soft","border":true,"color":"red","bounce":true}}"##).well_formed(0));
+        assert!(!scene(r##"{"id":"i1","kind":"image","asset":3,"x":0,"y":0,"w":0.3,"h":0.5,"look":{"shape":"soft","border":true,"color":"","bounce":true}}"##).well_formed(0), "only the avatar has a look");
+    }
 
     fn ip(last: u8) -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(10, 0, 0, last))
