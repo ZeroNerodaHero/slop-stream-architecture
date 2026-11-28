@@ -206,7 +206,6 @@ function VisualSettings({ source, place, onModel }: { source: Source; place: Pla
           </div>
         )}
         {sections.includes('device') && <CameraPick />}
-        {sections.includes('move') && <p className="text-xs text-textTertiary">drag it on the preview to move it</p>}
       </div>
       {sections.includes('look') && (
         <div id="source-look" className="border-t border-primaryStroke">
