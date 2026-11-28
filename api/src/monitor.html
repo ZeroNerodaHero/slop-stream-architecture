@@ -111,8 +111,9 @@
   .ctip i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; }
   .ctip span { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
   .host { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
-  .host .charts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: auto repeat(2, minmax(0, 1fr)); gap: 8px; min-height: 0; }
+  .host .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 8px; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
   .host .charts > .meta { grid-column: 1 / -1; }
+  .host .charts > .tile { aspect-ratio: 1 / 1; overflow: hidden; }
   .overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 10px; align-content: start; }
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 30%); gap: 10px; }
   .cstack { display: grid; grid-template-rows: auto repeat(5, minmax(0, 1fr)); gap: 8px; min-height: 0; }
@@ -849,6 +850,22 @@
     }
   }
 
+  const sized = new WeakMap();
+  const sizeWatch = new ResizeObserver((entries) => {
+    const dpr = window.devicePixelRatio || 1;
+    for (const e of entries) {
+      const c = sized.get(e.target);
+      if (!c || !e.target.isConnected) continue;
+      const cv = c.canvas;
+      if (cv.width === Math.round(cv.clientWidth * dpr) && cv.height === Math.round(cv.clientHeight * dpr)) continue;
+      try { draw(c); c.dirty = false; } catch (err) { console.error('chart', err); }
+    }
+  });
+  function watchSize(c) {
+    sized.set(c.canvas, c);
+    sizeWatch.observe(c.canvas);
+  }
+
   function chart({ label, lines, max, now, value, read, thin, small, src, store, log, tip }) {
     const t = src ? src.t : [];
     const t1 = Math.floor(now / 1000), t0 = t1 - RANGES[sel.range].secs;
@@ -1056,6 +1073,7 @@
         lines: [{ name: 'cpu', v: S.psi_cpu, color: COLORS.blue }, { name: 'memory', v: S.psi_memory, color: COLORS.violet }, { name: 'io', v: S.psi_io, color: COLORS.yellow }] })
     ];
     charts2.append(...tiles);
+    for (const c of charts.slice(base)) watchSize(c);
     if (s) hostBuilt.set(t.name, { series: s, range: sel.range, tiles, cs: charts.slice(base) });
     else hostBuilt.delete(t.name);
     return wrap;
