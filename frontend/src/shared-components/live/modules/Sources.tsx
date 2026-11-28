@@ -310,11 +310,7 @@ function SourceThumb({ source }: { source: Source }) {
       />
     );
   if (source.kind === 'avatar')
-    return (
-      <span className={THUMB}>
-        <Face name={name} version={avatar} className="h-6 w-6 text-xs" />
-      </span>
-    );
+    return <Face name={name} version={avatar} className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-backgroundSecondary object-cover text-xs" />;
   return <Thumb id={`source-${source.id}-video`} streamAtom={streamAtom} />;
 }
 
