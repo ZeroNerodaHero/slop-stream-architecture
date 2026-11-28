@@ -36,6 +36,7 @@ import { PlatformBadges, PlatformFace, PlatformMark, PlatformWords, SourcePicker
 import { bySource, type ChatSourceLine, PLATFORM_WORDS } from '@/infra/chat-source';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
+import { ScrollFades } from '@/shared-components/ScrollFade';
 import { ChatAudioPlayer } from '@/shared-components/ChatAudioPlayer';
 import { ChatVideoPlayer, MediaGoneNote } from '@/shared-components/ChatVideoPlayer';
 import { AttachMenu, PendingVoiceChip, VoiceBar } from '@/shared-components/ChatVoice';
@@ -996,6 +997,7 @@ export function ChatPanel({
   const bar = useChatWindowBar();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const textRef = useRef<HTMLInputElement | null>(null);
+  const linesRef = useRef<HTMLDivElement | null>(null);
   const sendKeepsFocus = useRef(false);
   const room = chatRoomFor(name, server);
   const allLines = useAtomValue(room.visibleLinesAtom);
@@ -1166,7 +1168,7 @@ export function ChatPanel({
       )}
 
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <div className={cn('flex min-h-0 flex-1 flex-col', results && 'invisible')}>
+        <div className={cn('relative flex min-h-0 flex-1 flex-col', results && 'invisible')}>
           {pinned && (
             <button
               id="chat-latest"
@@ -1180,6 +1182,7 @@ export function ChatPanel({
 
           <div
             id="chat-lines"
+            ref={linesRef}
             role="log"
             aria-live="polite"
             data-style={shape}
@@ -1209,6 +1212,7 @@ export function ChatPanel({
               />
             )}
           </div>
+          <ScrollFades target={linesRef} />
         </div>
 
         {results && (

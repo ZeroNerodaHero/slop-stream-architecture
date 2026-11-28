@@ -187,6 +187,9 @@ body {
   border-color: rgb(255 255 255 / 0.12);
   backdrop-filter: blur(8px);
 }
+#chat-modal.chat-clear [data-scroll-fade] {
+  display: none;
+}
 #chat-modal.chat-clear [data-bubble] {
   background: transparent;
   border-color: transparent;
