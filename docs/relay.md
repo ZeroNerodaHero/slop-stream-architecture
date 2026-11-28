@@ -81,6 +81,17 @@ Steps (each needs Billy's OK):
 
 The cost is about 0.2 of a core and 19 Mbps per streamer with three destinations on the same machine and uplink as the video service.
 
+## Monitoring
+
+The relay serves `GET /health` and `GET /timings` (and `/timings/errors`) on `0.0.0.0:9300` inside the compose network, like the other services' timings port (`TIMINGS_PORT`, `0` turns it off). Nothing publishes it.
+
+- `/health`: `{ ok, up_secs, build, mediamtx, pushes }`, 200 while MediaMTX runs, 503 once it stopped. `pushes` is how many ffmpeg pushes are open. The compose healthcheck and the image's `HEALTHCHECK` ask it.
+- `/timings`: each ffmpeg push is a `session` line with `method` `rtmp` and the platform as its name (`twitch`, `kick`, `youtube`, else `other`): `inter` for how long it ran, `open` and `err` (a push that ended by itself, with ffmpeg's last line, key and ip taken out, as its note), `out` for the bytes ffmpeg reported sent. The relay's calls to the api are `api` lines (`GET /internal/relay/targets`, `POST /internal/relay/status`, `POST /internal/relay/auth`).
+
+The agent has `relay` in `TIMINGS_FROM` and `HEALTH_FROM` in compose. While no relay container runs (the default: the `relay` profile is off and `RELAY_URL` and `RELAY_SECRET` are unset), the agent skips both entries, so the monitor shows nothing for it and no error. The architecture view draws the relay, its edge to the api and its pushes out to the internet only when the container runs (`api/src/architecture.json`).
+
+CI builds and pushes `ghcr.io/<owner>/stream-relay` with the other images (`.github/workflows/images.yml`); `scripts/deploy.sh` still never starts it.
+
 ## Notes
 
 - ffmpeg receives the RTMP url with the key on its command line, which is visible only inside the relay container.
