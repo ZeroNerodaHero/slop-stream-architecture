@@ -718,6 +718,8 @@ export const api = {
   oauthSignupInfo: () => request<{ provider: OAuthProvider; suggested: string }>('GET', '/api/oauth/signup'),
   oauthSignup: (name: string, turnstile_token?: string) =>
     request<{ id: string; name: string }>('POST', '/api/oauth/signup', { name, turnstile_token }),
+  oauthHandoff: (code: string, state: string) =>
+    request<{ next: 'done' | 'pick'; provider?: OAuthProvider }>('POST', '/api/oauth/handoff', { code, state }),
   rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   groups: () => request<Group[]>('GET', '/api/groups'),
   createGroup: (group: NewGroup) => request<Group>('POST', '/api/groups', group),

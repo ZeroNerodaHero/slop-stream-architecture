@@ -4,11 +4,13 @@ import { RouterProvider } from 'react-router-dom';
 
 import { loadMe } from '@/infra/atoms/auth-atoms';
 import { applyStoredShape, applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
+import { installDesktopLogin } from '@/infra/desktop/login';
 import { startEvents } from '@/infra/events';
 import { installMobileKeyboard } from '@/infra/keyboard';
 import { installPrefetch, loadFirstPage, warmOverlays } from '@/infra/prefetch';
 import { queryClient } from '@/infra/query-client';
 import { installReporting, report } from '@/infra/report';
+import { inTauri } from '@/infra/update-check';
 import { router } from '@/router';
 
 import '@/infra/atoms/home-atoms';
@@ -30,6 +32,8 @@ startEvents();
 installPrefetch();
 
 installMobileKeyboard();
+
+if (inTauri()) installDesktopLogin((path) => void router.navigate(path, { replace: true }));
 
 function startSounds() {
   void import('@/infra/sound-triggers').then((m) => m.installSounds());
