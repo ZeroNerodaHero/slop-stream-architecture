@@ -1133,7 +1133,8 @@ kept per browser in `settings.livePresets` (`infra/live-dock.ts`). Nothing is sa
 (`#live-preset-save`, tooltip `save to <name>`) writes the current setup over the active preset, and its dot
 (`#live-preset-dirty`) shows while the setup differs from it (`stageChanged` in `infra/stage.ts`, which ignores what a
 reload changes by itself, and reads the levels where they live, the mixer or the kept mixer settings before it opens).
-The `+` (`#live-preset-new`) makes a new preset from the current setup and opens its rename. The active preset is put
+The `+` (`#live-preset-new`) makes a new preset from the current setup and opens its rename. Between them, the copy icon
+(`#live-preset-duplicate`, tooltip `duplicate preset`) adds the current setup as `<name> copy` and makes it active. The active preset is put
 back on load. Rows reorder by their grip (`useReorder` with `hold`, so a touch needs a 300ms press and a quick swipe
 still scrolls); keys 1 to 9 follow the order. Any preset deletes, default too; with none left, one `default` starter
 stands in, drawn with the streamer's avatar (`Face`) and built from whatever is on the stage.

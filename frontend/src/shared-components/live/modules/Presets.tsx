@@ -1,9 +1,18 @@
-import { RiAddLine, RiCloseLine, RiPencilLine, RiSaveLine, RiStarLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiFileCopyLine, RiPencilLine, RiSaveLine, RiStarLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
-import { newPreset, pickPreset, presetDirtyAtom, presetNoticeAtom, presetsFullAtom, removePreset, saveActivePreset } from '@/infra/atoms/preset-atoms';
+import {
+  duplicateActivePreset,
+  newPreset,
+  pickPreset,
+  presetDirtyAtom,
+  presetNoticeAtom,
+  presetsFullAtom,
+  removePreset,
+  saveActivePreset
+} from '@/infra/atoms/preset-atoms';
 import { streamNameAtom } from '@/infra/atoms/publish-atoms';
 import { DEFAULT_PRESET, livePresetAtom, livePresetsAtom, movePreset, PRESETS_MAX, type PresetId, presetName, renamePreset } from '@/infra/live-dock';
 import { Face } from '@/shared-components/Face';
@@ -50,12 +59,27 @@ function HeaderButtons({ onNew }: { onNew: (id: PresetId) => void }) {
   const dirty = useAtomValue(presetDirtyAtom);
   const saveWords = `save to ${presetName(list.find((p) => p.id === active))}`;
   const newWords = full ? `${PRESETS_MAX} presets at most` : 'new preset';
+  const copyWords = full ? `${PRESETS_MAX} presets at most` : 'duplicate preset';
   return (
     <>
       <Tooltip content={saveWords}>
         <button id="live-preset-save" type="button" aria-label={saveWords} onClick={saveActivePreset} className={HEAD_BUTTON}>
           <RiSaveLine aria-hidden size={14} />
           {dirty && <span id="live-preset-dirty" aria-hidden className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-avatar bg-primaryBlue" />}
+        </button>
+      </Tooltip>
+      <Tooltip content={copyWords}>
+        <button
+          id="live-preset-duplicate"
+          type="button"
+          aria-label="duplicate preset"
+          aria-disabled={full || undefined}
+          onClick={() => {
+            if (!full) duplicateActivePreset();
+          }}
+          className={cn(HEAD_BUTTON, full && 'opacity-50')}
+        >
+          <RiFileCopyLine aria-hidden size={14} />
         </button>
       </Tooltip>
       <Tooltip content={newWords}>

@@ -44,6 +44,8 @@ import {
   starterPresets,
   withActive,
   withPresetAdded,
+  withPresetDuplicated,
+  copyPresetName,
   withPresetDeleted,
   withPresetMoved,
   withPresetRenamed,
@@ -265,6 +267,23 @@ test('a new preset gets the next free name, becomes active, and the list stops a
   while (presets.list.length < PRESETS_MAX) presets = withPresetAdded(presets, stage(0))!;
   assert.equal(withPresetAdded(presets, stage(0)), null);
   assert.equal(nextPresetName([{ id: 'default' }]), 'preset 2');
+});
+
+test('duplicating copies the stage under a copy name, becomes active, and stops at nine', () => {
+  let presets = withPresetRenamed(withPresetAdded(readPresets(null), stage(0.1))!, 'p2', 'gucci');
+  const kept = stage(0.4);
+  presets = withPresetDuplicated(presets, 'p2', kept)!;
+  assert.deepEqual(presets.list[2], { id: 'p3', name: 'gucci copy', stage: kept });
+  assert.notEqual(presets.list[2]!.stage, kept);
+  assert.equal(presets.active, 'p3');
+  assert.deepEqual(presets.list[1], { id: 'p2', name: 'gucci', stage: stage(0.1) });
+  presets = withPresetDuplicated(presets, 'p2', undefined)!;
+  assert.deepEqual(presets.list[3], { id: 'p4', name: 'gucci copy 2', stage: stage(0.1) });
+  assert.equal(withPresetDuplicated(presets, 'p9', kept), null);
+  assert.equal(withPresetDuplicated(readPresets(null), 'default', undefined)!.list[1]!.name, 'default copy');
+  assert.equal(copyPresetName([], 'x'.repeat(40)), `${'x'.repeat(27)} copy`);
+  while (presets.list.length < PRESETS_MAX) presets = withPresetAdded(presets, stage(0))!;
+  assert.equal(withPresetDuplicated(presets, 'p2', kept), null);
 });
 
 test('renaming, deleting and saving touch only the named preset', () => {
