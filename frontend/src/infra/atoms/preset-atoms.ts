@@ -19,7 +19,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { setSoundHear, setSoundLoop, setSoundVolume, setSourceNames, soundsAtom, sourceNamesAtom } from '@/infra/atoms/source-atoms';
 import { activatePreset, addPreset, deletePreset, livePresetAtom, livePresetsAtom, PRESETS_MAX, type PresetId, presetOf, savePresetStage } from '@/infra/live-dock';
-import { gapWords, type Stage, stageChanged, type StageGap, storedStage, withGoneScreens } from '@/infra/stage';
+import { blankStage, gapWords, type Stage, stageChanged, type StageGap, storedStage, withGoneScreens } from '@/infra/stage';
 import { store } from '@/infra/store';
 
 export const presetNoticeAtom = atom('');
@@ -118,10 +118,23 @@ export function saveActivePreset() {
 
 export function newPreset(): PresetId | null {
   if (applying) return null;
-  const id = addPreset(stageNow());
+  const was = store.get(livePresetAtom);
+  const now = stageNow();
+  const blank = blankStage(now);
+  const id = addPreset(blank);
   store.set(presetNoticeAtom, id ? '' : `${PRESETS_MAX} presets at most`);
-  if (id) baseline = null;
-  checkDirty();
+  if (!id) {
+    checkDirty();
+    return null;
+  }
+  if (!presetOf(was)?.stage) savePresetStage(was, now);
+  baseline = null;
+  void applyStage(blank).then(() => {
+    if (store.get(livePresetAtom) === id && !applying) {
+      savePresetStage(id, stageNow());
+      checkDirty();
+    }
+  });
   return id;
 }
 

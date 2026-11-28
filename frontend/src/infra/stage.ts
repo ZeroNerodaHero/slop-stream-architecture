@@ -59,6 +59,23 @@ export function stageOf(sources: readonly Source[], rest: Omit<Stage, 'scene' | 
   return { ...rest, scene: keptOf(sources), images };
 }
 
+export function blankStage(now: Pick<Stage, 'camera' | 'mic' | 'mirror' | 'expressions' | 'background'>): Stage {
+  return {
+    scene: {},
+    images: {},
+    levels: {},
+    sounds: {},
+    names: {},
+    camera: now.camera,
+    mic: now.mic,
+    mirror: now.mirror,
+    expressions: now.expressions,
+    background: now.background,
+    model: null,
+    solo: false
+  };
+}
+
 export function readModelChoice(raw: unknown): StageModel | null {
   const c = record(raw);
   if (!c || typeof c.name !== 'string') return null;
