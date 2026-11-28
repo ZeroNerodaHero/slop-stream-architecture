@@ -309,3 +309,17 @@ export function fromHex(s: string, fallback: RGB = BLACK): RGB {
 }
 
 export const isHex = (s: unknown): s is string => typeof s === 'string' && /^#[0-9a-f]{6}$/i.test(s);
+
+export function parseHex(s: string): string | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(s).trim());
+  const digits = m?.[1];
+  if (!digits) return null;
+  return '#' + (digits.length === 3 ? digits.replace(/./g, (ch) => ch + ch) : digits).toLowerCase();
+}
+
+export const READABLE = 4.5;
+
+export function contrastWords(ratio: number): { text: string; readable: boolean } {
+  const readable = ratio >= READABLE;
+  return { text: `${ratio.toFixed(1)}:1 · ${readable ? 'reads well' : 'hard to read'}`, readable };
+}
