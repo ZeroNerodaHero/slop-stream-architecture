@@ -9,6 +9,8 @@ export default {
       panel: 'var(--r-panel)',
       control: 'var(--r-control)',
       bubble: 'var(--r-bubble)',
+      'bubble-outer': 'var(--r-bubble-outer)',
+      'bubble-join': 'var(--r-bubble-join)',
       avatar: 'var(--r-avatar)',
       card: 'var(--r-card)'
     },

@@ -1,7 +1,17 @@
 import { RiEmotionLine, RiMoreFill, RiReplyLine } from '@remixicon/react';
-import { type HTMLAttributes, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type HTMLAttributes,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState
+} from 'react';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
+import { bubbleCorners, type Nook, nookOf } from '@/infra/bubble-run';
 import { plainEmotes } from '@/infra/emotes';
 import { Face } from '@/shared-components/Face';
 import { MenuButton, type MenuItem } from '@/shared-components/MenuButton';
@@ -87,6 +97,7 @@ export interface ChatLineShapeProps extends Place {
   pending?: 'sending' | 'failed';
   bare?: boolean;
   firstInList?: boolean;
+  last?: boolean;
 }
 
 const ACTIONS_HIDDEN =
@@ -161,8 +172,9 @@ function underMention(bar: Element, x: number, y: number) {
   return document.elementsFromPoint(x, y).some((el) => !bar.contains(el) && !!el.closest('[data-mention]'));
 }
 
-function Corner({ mark, actions, open, firstInList }: { mark?: ReactNode; actions?: ReactNode; open: boolean; firstInList?: boolean }) {
-  const top = firstInList === undefined ? '-top-3.5 group-first/line:top-0' : firstInList ? 'top-0' : '-top-3.5';
+function Corner({ mark, actions, open, firstInList, nook }: { mark?: ReactNode; actions?: ReactNode; open: boolean; firstInList?: boolean; nook?: Nook | null }) {
+  const top = nook ? '-translate-y-1/2' : firstInList === undefined ? 'right-2 -top-3.5 group-first/line:top-0' : firstInList ? 'right-2 top-0' : 'right-2 -top-3.5';
+  const at: CSSProperties | undefined = nook ? { left: nook.left, right: nook.right, top: nook.top } : undefined;
   const [yielding, setYielding] = useState(false);
   useEffect(() => {
     if (!yielding) return;
@@ -183,8 +195,9 @@ function Corner({ mark, actions, open, firstInList }: { mark?: ReactNode; action
         <span
           data-line-actions
           onPointerMove={yieldToMention}
+          style={at}
           className={cn(
-            'absolute right-2 z-10 flex items-center overflow-hidden rounded-control border border-primaryStroke bg-backgroundSecondary',
+            'absolute z-10 flex items-center overflow-hidden rounded-control border border-primaryStroke bg-backgroundSecondary',
             top,
             open ? ACTIONS_SHOWN : ACTIONS_HIDDEN,
             yielding && '!pointer-events-none !opacity-0'
@@ -369,12 +382,29 @@ export function ChatLineShape({
   tail,
   pending,
   bare = false,
-  firstInList
+  firstInList,
+  last = true
 }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   const press = useLongPress();
+  const [nook, setNook] = useState<Nook | null>(null);
   const hug = shape === 'bubbles' && !!mark;
-  const corner = <Corner mark={hug ? undefined : mark} actions={actions} open={press.open} firstInList={firstInList} />;
+  const nestle = () => {
+    const line = press.ref.current;
+    const bubble = line?.querySelector<HTMLElement>('[data-bubble]');
+    const lane = line?.querySelector<HTMLElement>('[data-bubble-lane]');
+    const bar = line?.querySelector<HTMLElement>('[data-line-actions]');
+    if (!line || !bubble || !lane || !bar || line.ownerDocument.documentElement.dataset.shape !== 'bubble') {
+      setNook(null);
+      return;
+    }
+    const b = bubble.getBoundingClientRect();
+    const m = lane.querySelector<HTMLElement>('[data-bubble-mark]')?.getBoundingClientRect();
+    const reach = m && m.width > 0 ? { left: Math.min(b.left, m.left), right: Math.max(b.right, m.right), top: b.top, bottom: b.bottom } : b;
+    setNook(nookOf(line.getBoundingClientRect(), lane.getBoundingClientRect(), reach, b, bar.offsetWidth, mine));
+  };
+  const nestles = !!actions && shape === 'bubbles';
+  const corner = <Corner mark={hug ? undefined : mark} actions={actions} open={press.open} firstInList={firstInList} nook={nestles ? nook : null} />;
   const lineBox = cn(
     'group/line relative transition-colors duration-700',
     actions && '[-webkit-touch-callout:none] [@media(hover:hover)]:hover:bg-primaryStroke/10 [@media(hover:none)]:select-none',
@@ -384,7 +414,16 @@ export function ChatLineShape({
     flash ? 'bg-primaryBlue/15 duration-150' : press.open && 'bg-primaryStroke/15'
   );
   const p = (className: string, children: ReactNode) => (
-    <p {...attrs} {...(actions ? press.handlers : {})} ref={press.ref} aria-description={title} data-flash={flash || undefined} className={cn(lineBox, className)}>
+    <p
+      {...attrs}
+      {...(actions ? press.handlers : {})}
+      onPointerEnter={nestles ? nestle : undefined}
+      onFocus={nestles ? nestle : undefined}
+      ref={press.ref}
+      aria-description={title}
+      data-flash={flash || undefined}
+      className={cn(lineBox, className)}
+    >
       {children}
       {corner}
     </p>
@@ -454,9 +493,10 @@ export function ChatLineShape({
     <span
       data-bubble
       className={cn(
-        'relative flex flex-col rounded-bubble border px-2.5 py-[3px] [overflow-wrap:anywhere]',
-        hug ? 'max-w-[calc(85%-20px)]' : 'max-w-[85%]',
-        mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
+        'relative flex flex-col rounded-bubble border px-2.5 py-[3px] [overflow-wrap:anywhere] bubble:border-0',
+        hug ? 'max-w-[calc(85%-20px)] bubble:max-w-[min(calc(85%-20px),calc(100%-7.25rem))]' : 'max-w-[85%] bubble:max-w-[min(85%,calc(100%-6rem))]',
+        mine ? 'border-primaryBlue bg-primaryBlue/10 bubble:bg-primaryBlue/15' : 'border-primaryStroke bg-backgroundTertiary',
+        bubbleCorners(first, last, mine)
       )}
     >
       {named ? (
@@ -470,15 +510,27 @@ export function ChatLineShape({
     </span>
   );
   return p(
-    cn('flex gap-2 leading-tight', bucket && !bare && 'mt-1 first:mt-0'),
+    cn('flex gap-2 leading-tight', bucket && !bare && 'mt-1 first:mt-0', bucket && !bare && !first && 'bubble:mt-0'),
     <>
-      {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-[5px]" />}
-      <span className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
+      {faced && first ? (
+        <span className={cn(GUTTER, 'mt-0.5')}>{face}</span>
+      ) : (
+        <GutterClock at={at} shown={bucket} className={cn('pt-[5px]', !first && 'bubble:opacity-0 bubble:group-hover/line:opacity-100')} />
+      )}
+      <span data-bubble-lane className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
         {hug ? (
           <span className={cn('flex w-full items-start gap-1.5', mine ? 'justify-end' : 'justify-start')}>
-            {mine && <span className="flex pt-1">{mark}</span>}
+            {mine && (
+              <span data-bubble-mark className="flex pt-1">
+                {mark}
+              </span>
+            )}
             {bubble}
-            {!mine && <span className="flex pt-1">{mark}</span>}
+            {!mine && (
+              <span data-bubble-mark className="flex pt-1">
+                {mark}
+              </span>
+            )}
           </span>
         ) : (
           bubble

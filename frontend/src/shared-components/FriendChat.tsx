@@ -520,12 +520,13 @@ interface DmRowProps {
   mine: boolean;
   first: boolean;
   bucket: boolean;
+  last: boolean;
   flashed: boolean;
   onReply: (line: DmLine) => void;
   onJump: (id: number) => void;
 }
 
-const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmVerified, dmAvatar, mine, first, bucket, flashed, onReply, onJump }: DmRowProps) {
+const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmVerified, dmAvatar, mine, first, bucket, last, flashed, onReply, onJump }: DmRowProps) {
   const person = { name: line.from, verified: mine || dmVerified, avatar: mine ? myAvatar : dmAvatar };
   return (
     <ChatLineShape
@@ -583,6 +584,7 @@ const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmV
       attrs={{ 'data-id': line.id, 'data-mine': mine || undefined, 'data-reply-to': line.reply?.id }}
       first={first}
       bucket={bucket}
+      last={last}
     />
   );
 });
@@ -1047,6 +1049,7 @@ export function FriendChat() {
                   const mine = line.from === me;
                   const prev = lines[i - 1];
                   const place = placeOf(line.at, prev?.at, prev?.from === line.from && !prev?.call);
+                  const next = lines[i + 1];
                   if (line.call) return <CallLine key={line.id} line={line} />;
                   return (
                     <DmRow
@@ -1062,6 +1065,7 @@ export function FriendChat() {
                       mine={mine}
                       first={place.first}
                       bucket={place.bucket}
+                      last={!next || !!next.call || placeOf(next.at, line.at, next.from === line.from && !line.call).first}
                       flashed={flash === line.id}
                       onReply={setReply}
                       onJump={jumpTo}

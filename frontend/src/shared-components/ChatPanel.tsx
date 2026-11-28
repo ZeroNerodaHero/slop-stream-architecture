@@ -544,6 +544,7 @@ interface ChatRowProps {
   me: string | null | undefined;
   first: boolean;
   bucket: boolean;
+  last: boolean;
   flashed: boolean;
   replyColor: string | undefined;
   replies: boolean;
@@ -558,9 +559,9 @@ interface ChatRowProps {
   firstInList?: boolean;
 }
 
-type ExternalRowProps = { line: ChatLine; source: ChatSourceLine } & Pick<ChatRowProps, 'shape' | 'first' | 'bucket' | 'flashed' | 'bare' | 'firstInList'>;
+type ExternalRowProps = { line: ChatLine; source: ChatSourceLine } & Pick<ChatRowProps, 'shape' | 'first' | 'bucket' | 'last' | 'flashed' | 'bare' | 'firstInList'>;
 
-function ExternalRow({ line, source, shape, first, bucket, flashed, bare, firstInList }: ExternalRowProps) {
+function ExternalRow({ line, source, shape, first, bucket, last, flashed, bare, firstInList }: ExternalRowProps) {
   return (
     <ChatLineShape
       shape={shape}
@@ -570,6 +571,7 @@ function ExternalRow({ line, source, shape, first, bucket, flashed, bare, firstI
       crowd
       who={
         <>
+          <PlatformMark platform={source.platform} />
           <span data-from={line.from} className={cn('font-semibold', !source.color && 'text-textPrimary')} style={source.color ? { color: source.color } : undefined}>
             {line.from}
           </span>
@@ -582,12 +584,12 @@ function ExternalRow({ line, source, shape, first, bucket, flashed, bare, firstI
       }
       face={<PlatformFace platform={source.platform} />}
       words={line.text ? <PlatformWords source={source} text={line.text} /> : null}
-      tail={<PlatformMark platform={source.platform} />}
       actions={<LineActions reactions={[]} me={null} text={line.text} />}
       flash={flashed}
       attrs={{ 'data-id': line.id, 'data-platform': source.platform }}
       first={first}
       bucket={bucket}
+      last={last}
       bare={bare}
       firstInList={firstInList}
     />
@@ -602,6 +604,7 @@ const ChatRow = memo(function ChatRow({
   me,
   first,
   bucket,
+  last,
   flashed,
   replyColor,
   replies,
@@ -616,7 +619,9 @@ const ChatRow = memo(function ChatRow({
   firstInList
 }: ChatRowProps) {
   if (line.source) {
-    return <ExternalRow line={line} source={line.source} shape={shape} first={first} bucket={bucket} flashed={flashed} bare={bare} firstInList={firstInList} />;
+    return (
+      <ExternalRow line={line} source={line.source} shape={shape} first={first} bucket={bucket} last={last} flashed={flashed} bare={bare} firstInList={firstInList} />
+    );
   }
   return (
     <ChatLineShape
@@ -707,6 +712,7 @@ const ChatRow = memo(function ChatRow({
       }}
       first={first}
       bucket={bucket}
+      last={last}
       bare={bare}
       firstInList={firstInList}
     />
@@ -751,6 +757,7 @@ function rowNode(lines: readonly ChatLine[], i: number, ctx: RowCtx): ReactNode 
   const line = lines[i]!;
   const mine = line.from === ctx.myName && (ctx.asStreamer ? line.streamer : ctx.me ? line.verified : !line.verified && !line.streamer);
   const place = placeOf(line.at, lines[i - 1]?.at, samePrev(lines, i));
+  const next = lines[i + 1];
   return (
     <ChatRow
       key={line.id}
@@ -761,6 +768,7 @@ function rowNode(lines: readonly ChatLine[], i: number, ctx: RowCtx): ReactNode 
       me={ctx.me}
       first={place.first}
       bucket={place.bucket}
+      last={!next || placeOf(next.at, line.at, samePrev(lines, i + 1)).first}
       flashed={ctx.flash === line.id}
       replyColor={line.reply?.verified ? ctx.roleColor(line.reply.from) : undefined}
       replies={ctx.replies}
@@ -783,7 +791,8 @@ function rowTopPad(lines: readonly ChatLine[], i: number, shape: ChatStyle, hasH
   const place = placeOf(line.at, lines[i - 1]?.at, samePrev(lines, i));
   if (shape === 'log') return '0.25rem';
   if (shape === 'blocks') return place.first || line.reply ? '0.375rem' : '0.125rem';
-  return place.bucket ? 'calc(1px + 0.25rem)' : '1px';
+  if (place.first) return 'calc(1px + 0.25rem)';
+  return place.bucket ? 'var(--chat-minute-pad)' : 'var(--chat-run-pad)';
 }
 
 function useRowCtx(name: string, room: ChatRoom, extra: Pick<RowCtx, 'replies' | 'reacts' | 'jumps' | 'lineMark' | 'lineActions' | 'lineMenu' | 'lineSide' | 'embedMod' | 'bare' | 'hasHeader'>): RowCtx {
