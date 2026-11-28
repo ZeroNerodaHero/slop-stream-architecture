@@ -73,6 +73,7 @@ import {
 import { isSeeThrough, isStoredBacking, NO_BACKING, readModelBacking } from '@/infra/model-backing';
 import { fittedModelBox, type ModelFrame, modelFrameOf, movedLoose, resizedLoose, sameFrame, WIDE_FRAME, wideModelBox } from '@/infra/model-frame';
 import { clampBox } from '@/infra/box';
+import { capOf, type ScreenCap, screenConstraints, stageScreenBitrate } from '@/infra/screen-cap';
 import { askAfter, type PickOutcome, type ScreenAsk, type ScreenAsks, withAsk } from '@/infra/screen-ask';
 import { readModelChoice, type Stage, type StageGap, stagedFrom, stageOf } from '@/infra/stage';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
@@ -102,12 +103,12 @@ const SCREENS_BITRATE = 3_000_000;
 const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting'];
 const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'mic-blocked', 'no-mic', 'failed'];
 const CAMERA_VIDEO: MediaTrackConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: MAX_FRAMERATE, max: MAX_FRAMERATE } };
-const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: MAX_FRAMERATE } };
 interface DisplayHints extends DisplayMediaStreamOptions {
   selfBrowserSurface?: 'include' | 'exclude';
   surfaceSwitching?: 'include' | 'exclude';
 }
-const SCREEN_HINTS: DisplayHints = { video: SCREEN_CAP, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' };
+const SCREENS_MOST_BITRATE = 6_000_000;
+const CAP_SETTLE_MS = 1000;
 const SCENE_SEND_MS = 150;
 const TUNE_MS = 500;
 const SIDE_SCREEN_BITRATE = 500_000;
@@ -1330,14 +1331,19 @@ function onConnection(state: RTCPeerConnectionState) {
 }
 
 const nativeSurfaces = new WeakMap<MediaStreamTrack, string>();
+const nativeResizers = new WeakMap<MediaStreamTrack, (cap: ScreenCap) => Promise<void>>();
+const appliedCaps = new WeakMap<MediaStreamTrack, ScreenCap>();
 
-async function pickNativeDisplay(): Promise<MediaStream | null | string> {
+async function pickNativeDisplay(cap: ScreenCap): Promise<MediaStream | null | string> {
   try {
     const { pickNativeScreen } = await import('@/infra/desktop/native-screen');
-    const picked = await pickNativeScreen();
+    const picked = await pickNativeScreen(cap);
     if (!picked) return null;
     const track = picked.stream.getVideoTracks()[0];
-    if (track) nativeSurfaces.set(track, picked.surface);
+    if (track) {
+      nativeSurfaces.set(track, picked.surface);
+      nativeResizers.set(track, picked.resize);
+    }
     return picked.stream;
   } catch (err) {
     if (err instanceof Error && err.name === 'ListFailed') return err.message;
@@ -1346,27 +1352,57 @@ async function pickNativeDisplay(): Promise<MediaStream | null | string> {
   }
 }
 
-async function pickDisplay(): Promise<MediaStream | null> {
-  if (!inTauri() || !navigator.userAgent.includes('Mac')) return pickBrowserDisplay();
-  const native = await pickNativeDisplay();
+async function pickDisplay(cap: ScreenCap): Promise<MediaStream | null> {
+  if (!inTauri() || !navigator.userAgent.includes('Mac')) return pickBrowserDisplay(cap);
+  const native = await pickNativeDisplay(cap);
   if (typeof native !== 'string') return native;
-  const display = await pickBrowserDisplay();
+  const display = await pickBrowserDisplay(cap);
   if (!display) store.set(sourceStatusAtom, native);
   return display;
 }
 
-async function pickBrowserDisplay(): Promise<MediaStream | null> {
+async function pickBrowserDisplay(cap: ScreenCap): Promise<MediaStream | null> {
+  const video = screenConstraints(cap);
+  const hints: DisplayHints = { video, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' };
   try {
-    return await navigator.mediaDevices.getDisplayMedia(SCREEN_HINTS);
+    return await navigator.mediaDevices.getDisplayMedia(hints);
   } catch (err) {
     const rejectedHints = err instanceof TypeError || (err instanceof DOMException && err.name === 'OverconstrainedError');
     if (!rejectedHints) return null;
   }
   try {
-    return await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAP, audio: false });
+    return await navigator.mediaDevices.getDisplayMedia({ video, audio: false });
   } catch {
     return null;
   }
+}
+
+async function capScreen(track: MediaStreamTrack, cap: ScreenCap) {
+  if (appliedCaps.get(track) === cap) return;
+  appliedCaps.set(track, cap);
+  const resize = nativeResizers.get(track);
+  try {
+    if (resize) await resize(cap);
+    else await track.applyConstraints(screenConstraints(cap));
+  } catch {
+    appliedCaps.delete(track);
+  }
+  if (track.readyState !== 'live') return;
+  setTimeout(() => void tuneSenders(), CAP_SETTLE_MS);
+}
+
+function capScreens() {
+  for (const source of store.get(sourcesAtom)) {
+    if (source.kind !== 'screen' || !source.slot || source.waiting) continue;
+    const track = store.get(screenStreamAtom(source.slot - 1))?.getVideoTracks()[0];
+    if (track && track.readyState === 'live') void capScreen(track, capOf(source.cap));
+  }
+}
+
+store.sub(sourcesAtom, capScreens);
+
+export function setScreenCap(id: string, cap: ScreenCap) {
+  withSource(id, (s) => (s.kind === 'screen' ? { ...s, cap } : s));
 }
 
 let screenPicks = 0;
@@ -1398,7 +1434,9 @@ export async function shareScreen(into?: number): Promise<void> {
 
 async function sharePicked(into: number | undefined, current: () => boolean): Promise<PickOutcome> {
   const generation = liveGeneration;
-  const display = await pickDisplay();
+  const asked = into === undefined ? undefined : store.get(sourcesAtom).find((s) => s.id === `s${into + 1}`)?.cap;
+  const cap = capOf(asked);
+  const display = await pickDisplay(cap);
   if (!display) return 'none';
   const track = display.getVideoTracks()[0];
   const free = (i: number) => i >= 0 && i < screenStreamAtoms.length && store.get(screenStreamAtoms[i]!) === null;
@@ -1408,6 +1446,7 @@ async function sharePicked(into: number | undefined, current: () => boolean): Pr
     return 'dropped';
   }
   track.contentHint = 'detail';
+  appliedCaps.set(track, cap);
   const sender = screenSenders[slot];
   if (sender) {
     try {
@@ -1856,7 +1895,9 @@ async function tuneSenders() {
       await tune(sender, { maxBitrate: SCREENS_BITRATE });
       continue;
     }
-    if (i + 1 === stageScreen) await tune(sender, { maxBitrate: SCREENS_BITRATE - SIDE_SCREEN_BITRATE * (screens.length - 1) }, 'maintain-resolution');
+    const { width, height } = sender.track.getSettings();
+    const budget = stageScreenBitrate(SCREENS_BITRATE, width, height, SCREENS_MOST_BITRATE);
+    if (i + 1 === stageScreen) await tune(sender, { maxBitrate: budget - SIDE_SCREEN_BITRATE * (screens.length - 1) }, 'maintain-resolution');
     else await tune(sender, { maxBitrate: SIDE_SCREEN_BITRATE, maxFramerate: SIDE_SCREEN_FPS }, 'maintain-resolution');
   }
 }

@@ -1,6 +1,7 @@
 import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from './box.ts';
 import { type AvatarLook, centeredSquare, readAvatarLook, SQUARE, squareIn } from './avatar-look.ts';
 import type { Layer, Scene } from './relay.ts';
+import { readScreenCap, type ScreenCap } from './screen-cap.ts';
 import { looseBox, visibleBox } from './model-frame.ts';
 
 export interface Source {
@@ -14,6 +15,7 @@ export interface Source {
   shown: boolean;
   fit?: Fit;
   look?: AvatarLook;
+  cap?: ScreenCap;
   waiting?: boolean;
 }
 
@@ -198,11 +200,12 @@ export interface KeptSource {
   shown: boolean;
   fit?: Fit;
   look?: AvatarLook;
+  cap?: ScreenCap;
 }
 export type KeptScene = Record<string, KeptSource>;
 
 export function keptOf(sources: readonly Source[]): KeptScene {
-  return Object.fromEntries(sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }), ...(s.look && { look: s.look }) }]));
+  return Object.fromEntries(sources.map((s) => [s.id, { box: s.box, shown: s.shown, ...(s.fit && { fit: s.fit }), ...(s.look && { look: s.look }), ...(s.cap && { cap: s.cap }) }]));
 }
 
 export function readKept(raw: unknown): KeptScene | null {
@@ -213,7 +216,8 @@ export function readKept(raw: unknown): KeptScene | null {
     const b = k?.box as Partial<Box> | undefined;
     if (!k || !b || ![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue;
     const look = readAvatarLook(k.look);
-    kept[id] = { box: looseBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }), ...(look && { look }) };
+    const cap = readScreenCap(k.cap);
+    kept[id] = { box: looseBox(b as Box), shown: k.shown !== false, ...((k.fit === 'cover' || k.fit === 'contain') && { fit: k.fit }), ...(look && { look }), ...(cap && { cap }) };
   }
   return kept;
 }
@@ -224,13 +228,13 @@ export function arrivedFrom(kept: KeptScene, before: readonly Source[], next: So
   return next.map((s) => {
     const was = before.find((b) => b.id === s.id);
     const k = was ?? kept[s.id];
-    return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }) } : s;
+    return k ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }), ...(k.cap && { cap: k.cap }) } : s;
   });
 }
 
 export function restoredFrom(kept: KeptScene, before: readonly Source[], next: readonly Source[]): Source[] {
   return next.map((s) => {
     const k = kept[s.id];
-    return k && !before.some((b) => b.id === s.id) ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }) } : s;
+    return k && !before.some((b) => b.id === s.id) ? { ...s, box: k.box, shown: k.shown, fit: k.fit, ...(k.look && { look: k.look }), ...(k.cap && { cap: k.cap }) } : s;
   });
 }

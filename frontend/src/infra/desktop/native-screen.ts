@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 
 import { bytesOf, errorText } from '@/infra/desktop/native-audio';
 import { askScreen, type ScreenChoice } from '@/infra/desktop/screen-pick';
+import { capBounds, fitWithin, type ScreenCap } from '@/infra/screen-cap';
 
 const FPS = 30;
 
@@ -12,9 +13,20 @@ export class ListFailed extends Error {
 export interface NativeScreen {
   stream: MediaStream;
   surface: 'monitor' | 'window';
+  resize: (cap: ScreenCap) => Promise<void>;
 }
 
-export async function pickNativeScreen(): Promise<NativeScreen | null> {
+interface Started {
+  stream: MediaStream;
+  resize: (cap: ScreenCap) => Promise<void>;
+}
+
+const boundsOf = (cap: ScreenCap) => {
+  const { width, height } = capBounds(cap);
+  return { maxWidth: width, maxHeight: height };
+};
+
+export async function pickNativeScreen(cap: ScreenCap): Promise<NativeScreen | null> {
   let choices: ScreenChoice[];
   try {
     choices = await invoke<ScreenChoice[]>('list_capture_sources');
@@ -23,10 +35,11 @@ export async function pickNativeScreen(): Promise<NativeScreen | null> {
   }
   const choice = await askScreen(choices);
   if (!choice) return null;
-  return { stream: await startScreen(choice.id), surface: choice.kind === 'window' ? 'window' : 'monitor' };
+  const started = await startScreen(choice.id, cap);
+  return { ...started, surface: choice.kind === 'window' ? 'window' : 'monitor' };
 }
 
-async function startScreen(id: string): Promise<MediaStream> {
+async function startScreen(id: string, cap: ScreenCap): Promise<Started> {
   const canvas = document.createElement('canvas');
   canvas.width = 2;
   canvas.height = 2;
@@ -40,10 +53,25 @@ async function startScreen(id: string): Promise<MediaStream> {
   let ended = false;
   let drawing = false;
   let waiting: ArrayBuffer | null = null;
+  let wanted = cap;
+  let last: ImageBitmap | null = null;
+
+  const paintLast = () => {
+    if (!last) return;
+    const size = fitWithin(last.width, last.height, wanted);
+    if (canvas.width !== size.width || canvas.height !== size.height) {
+      canvas.width = size.width;
+      canvas.height = size.height;
+    }
+    paint.imageSmoothingQuality = 'high';
+    paint.drawImage(last, 0, 0, size.width, size.height);
+  };
 
   const release = () => {
     if (ended) return;
     ended = true;
+    last?.close();
+    last = null;
     if (handle !== null) void invoke('stop_screen_capture', { handle }).catch(() => undefined);
   };
   track.stop = () => {
@@ -59,12 +87,13 @@ async function startScreen(id: string): Promise<MediaStream> {
       waiting = null;
       try {
         const bitmap = await createImageBitmap(new Blob([next], { type: 'image/jpeg' }));
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
+        if (ended) {
+          bitmap.close();
+          break;
         }
-        paint.drawImage(bitmap, 0, 0);
-        bitmap.close();
+        last?.close();
+        last = bitmap;
+        paintLast();
       } catch {
         break;
       }
@@ -86,12 +115,18 @@ async function startScreen(id: string): Promise<MediaStream> {
   });
 
   try {
-    handle = await invoke<number>('start_screen_capture', { id, channel });
+    handle = await invoke<number>('start_screen_capture', { id, channel, ...boundsOf(cap) });
   } catch (err) {
     ended = true;
     stopTrack();
     throw new Error(errorText(err), { cause: err });
   }
   if (ended) void invoke('stop_screen_capture', { handle }).catch(() => undefined);
-  return stream;
+  const resize = async (next: ScreenCap) => {
+    wanted = next;
+    paintLast();
+    if (ended || handle === null) return;
+    await invoke('resize_screen_capture', { handle, ...boundsOf(next) }).catch(() => undefined);
+  };
+  return { stream, resize };
 }
