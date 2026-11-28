@@ -223,6 +223,24 @@ mod tests {
     }
 
     #[test]
+    fn the_relay_is_drawn_only_when_it_runs() {
+        let base = || vec![c("api", "api", &["stream_default"], &[]), c("agent", "agent", &["stream_default"], &[])];
+        let edges = |g: &Value| g["edges"].as_array().unwrap().iter().map(|e| (e["from"].as_str().unwrap().to_owned(), e["to"].as_str().unwrap().to_owned())).collect::<Vec<_>>();
+        let off = graph(&Sample { containers: base(), ..Default::default() });
+        assert!(!edges(&off).iter().any(|(f, t)| f == "relay" || t == "relay"));
+        assert!(!off["nodes"].as_array().unwrap().iter().any(|n| n["id"] == "relay" || n["id"] == "(internet)"));
+        let mut cs = base();
+        cs.push(c("relay", "relay", &["stream_default"], &[]));
+        let on = graph(&Sample { containers: cs, ..Default::default() });
+        let e = edges(&on);
+        for (f, t) in [("relay", "api"), ("relay", "(internet)"), ("agent", "relay")] {
+            assert!(e.contains(&(f.into(), t.into())), "{f} -> {t}");
+        }
+        let relay = on["nodes"].as_array().unwrap().iter().find(|n| n["id"] == "relay").unwrap();
+        assert_eq!(relay["tier"], 3);
+    }
+
+    #[test]
     fn depends_on_fills_what_the_map_does_not_know() {
         let s = Sample { containers: vec![c("worker", "worker", &["x"], &["queue"]), c("queue", "queue", &["x"], &[])], ..Default::default() };
         let g = graph(&s);
