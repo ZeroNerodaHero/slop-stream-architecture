@@ -7,10 +7,10 @@ import {
   DESKTOP_AUDIO,
   desktopAudioBusyAtom,
   desktopAudioStatusAtom,
+  faderMasterAtom,
+  faderRowsAtom,
   hasMicAtom,
-  isPublishingAtom,
   MASTER,
-  masterRowAtom,
   mixClipping,
   mixerOpenAtom,
   mixerRunningAtom,
@@ -18,7 +18,6 @@ import {
   micDeviceAtom,
   micDevicesAtom,
   micProcessingAtom,
-  mixRowsAtom,
   nativeMicOnAtom,
   readMixLevel,
   refreshMicDevices,
@@ -27,7 +26,8 @@ import {
   setMicDevice,
   setMicProcessing,
   setMixLevel,
-  setMixMuted
+  setMixMuted,
+  webAudio
 } from '@/infra/atoms/publish-atoms';
 import type { Place } from '@/infra/live-dock';
 import { inTauri } from '@/infra/update-check';
@@ -205,11 +205,11 @@ function DesktopAudioAdd({ shown }: { shown: boolean }) {
 const extraOf = (id: string): ReactNode => (id === 'mic' ? <MicTools /> : id === DESKTOP_AUDIO ? <DesktopAudioRemove /> : undefined);
 
 export function MixerBody() {
-  const rows = useAtomValue(mixRowsAtom);
-  const master = useAtomValue(masterRowAtom);
+  const rows = useAtomValue(faderRowsAtom);
+  const master = useAtomValue(faderMasterAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const running = useAtomValue(mixerRunningAtom);
-  if (!mixerOpen) return <p className="px-3 py-3 text-sm text-textTertiary">{HERE} has no web audio: the mic goes out as it is</p>;
+  if (!webAudio) return <p className="px-3 py-3 text-sm text-textTertiary">{HERE} has no web audio: the mic goes out as it is</p>;
   return (
     <>
       {!running && (
@@ -227,7 +227,7 @@ export function MixerBody() {
         ))}
         <Row row={{ ...master, id: MASTER }} master />
       </ul>
-      {DESKTOP && <DesktopAudioAdd shown={rows.some((r) => r.id === DESKTOP_AUDIO)} />}
+      {DESKTOP && mixerOpen && <DesktopAudioAdd shown={rows.some((r) => r.id === DESKTOP_AUDIO)} />}
     </>
   );
 }
@@ -257,10 +257,9 @@ function MicPick() {
 }
 
 function SoundBody() {
-  const publishing = useAtomValue(isPublishingAtom);
   return (
     <div className="flex flex-col">
-      {publishing ? <MixerBody /> : <p className="px-3 pt-2.5 text-sm text-textTertiary">a fader for the mic and the mix is here once you are live.</p>}
+      <MixerBody />
       <MicPick />
     </div>
   );
