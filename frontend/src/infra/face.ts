@@ -3,6 +3,7 @@ import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelSt
 import FaceWorker from '@/infra/face.worker?worker';
 import faceWorkerUrl from '@/infra/face.worker?worker&url';
 import { HERE } from '@/infra/here';
+import { wireBackingOf } from '@/infra/model-backing';
 
 export type { FaceLines, FaceMarks, FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
@@ -38,6 +39,7 @@ export interface ModelOptions {
 
 export interface ModelSession {
   readonly track: MediaStreamTrack;
+  readonly wireTrack: MediaStreamTrack;
   readonly path: 'worker' | 'page';
   readonly rig: RigInfo;
   setCamera(camera: MediaStreamTrack | null): void;
@@ -91,20 +93,36 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
   let stopped = false;
 
   let track: MediaStreamTrack;
+  let wireTrack: MediaStreamTrack;
   let sink: WritableStream<VideoFrame> | null = null;
+  let wire: WritableStream<VideoFrame> | null = null;
   let paint: ((bitmap: ImageBitmap) => void) | null = null;
+  let backing = options.background;
   if (path === 'worker') {
     const generator = new window.MediaStreamTrackGenerator!({ kind: 'video' });
+    const wireGenerator = new window.MediaStreamTrackGenerator!({ kind: 'video' });
     track = generator;
     sink = generator.writable;
+    wireTrack = wireGenerator;
+    wire = wireGenerator.writable;
   } else {
     const canvas = document.createElement('canvas');
     canvas.width = WIDTH;
     canvas.height = HEIGHT;
     const ctx = canvas.getContext('bitmaprenderer');
-    if (!ctx) throw new Error(`${HERE} cannot draw a model`);
+    const flat = document.createElement('canvas');
+    flat.width = WIDTH;
+    flat.height = HEIGHT;
+    const flatCtx = flat.getContext('2d', { alpha: false });
+    if (!ctx || !flatCtx) throw new Error(`${HERE} cannot draw a model`);
     track = canvas.captureStream(FPS).getVideoTracks()[0]!;
-    paint = (bitmap) => ctx.transferFromImageBitmap(bitmap);
+    wireTrack = flat.captureStream(FPS).getVideoTracks()[0]!;
+    paint = (bitmap) => {
+      flatCtx.fillStyle = wireBackingOf(backing);
+      flatCtx.fillRect(0, 0, WIDTH, HEIGHT);
+      flatCtx.drawImage(bitmap, 0, 0);
+      ctx.transferFromImageBitmap(bitmap);
+    };
   }
 
   let video: HTMLVideoElement | null = null;
@@ -152,10 +170,12 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     send({ type: 'stop' });
     setTimeout(() => worker.terminate(), 500);
     track.stop();
+    wireTrack.stop();
   };
 
   const session: ModelSession & { rig: RigInfo } = {
     track,
+    wireTrack,
     path,
     rig: { kind: 'none', parts: [] },
     setCamera(camera) {
@@ -165,7 +185,10 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
       watch(camera);
     },
     setMirror: (mirror) => void (!stopped && send({ type: 'set', mirror })),
-    setBackground: (background) => void (!stopped && send({ type: 'set', background })),
+    setBackground: (background) => {
+      backing = background;
+      if (!stopped) send({ type: 'set', background });
+    },
     setExpressions: (expressions) => void (!stopped && send({ type: 'set', expressions })),
     setMarks: (marks) => void (!stopped && send({ type: 'set', marks })),
     rest: () => void (!stopped && send({ type: 'rest' })),
@@ -213,6 +236,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     const transfer: Transferable[] = [options.model];
     if (frames) transfer.push(frames);
     if (sink) transfer.push(sink);
+    if (wire) transfer.push(wire);
     send(
       {
         type: 'start',
@@ -226,7 +250,8 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
         wasm,
         weights,
         frames,
-        sink
+        sink,
+        wire
       },
       transfer
     );

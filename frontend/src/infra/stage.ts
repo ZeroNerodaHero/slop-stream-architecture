@@ -1,4 +1,5 @@
 import { AVATAR_ID, type KeptScene, type KeptSource, keptOf, readKept, type Source } from './scene.ts';
+import { NO_BACKING } from './model-backing.ts';
 import { cleanSourceName, readNames } from './source-settings.ts';
 
 export interface StageImage {
@@ -103,7 +104,7 @@ export function readStage(raw: unknown): Stage | null {
     mic: typeof p.mic === 'string' ? p.mic : '',
     mirror: p.mirror !== false,
     expressions: p.expressions !== false,
-    background: typeof p.background === 'string' && COLOUR.test(p.background) ? p.background : '',
+    background: typeof p.background === 'string' && (COLOUR.test(p.background) || p.background === NO_BACKING) ? p.background : '',
     model: readModelChoice(p.model),
     solo: p.solo === true
   };

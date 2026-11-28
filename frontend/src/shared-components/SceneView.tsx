@@ -58,6 +58,7 @@ interface SceneViewProps {
   onPick?: (slot: number) => void;
   edit?: SceneEdit;
   placeholder?: (layer: Layer) => ReactNode;
+  clearSlot?: number | null;
   className?: string;
   children?: ReactNode;
 }
@@ -75,8 +76,9 @@ interface Gesture {
   moved: boolean;
 }
 
-export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, placeholder, className, children }: SceneViewProps) {
+export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, placeholder, clearSlot = null, className, children }: SceneViewProps) {
   const frame = useRef<HTMLDivElement | null>(null);
+  const clearOf = (layer: Layer) => clearSlot !== null && isVideoLayer(layer) && layer.slot === clearSlot;
   const held = layers.map((l) => placeholder?.(l) ?? null);
   const hostIndex = main.slot === null ? -1 : layers.findIndex((l, i) => isVideoLayer(l) && l.slot === main.slot && held[i] === null);
   const host = layers[hostIndex];
@@ -89,7 +91,11 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
       volume={main.volume}
       onPlaying={main.onPlaying}
       onAutoplayBlocked={main.onAutoplayBlocked}
-      className={cn('h-full rounded-none border-0', host && isVideoLayer(host) && fitOf(host) === 'cover' ? 'object-cover' : 'object-contain')}
+      className={cn(
+        'h-full rounded-none border-0',
+        host && isVideoLayer(host) && fitOf(host) === 'cover' ? 'object-cover' : 'object-contain',
+        host && clearOf(host) && 'bg-transparent'
+      )}
     />
   );
   return (
@@ -101,7 +107,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
     >
       {layers.length === 0 && <div className="absolute inset-0">{mainVideo}</div>}
       {layers.map((layer, i) => (
-        <LayerBox key={layer.id} layer={layer} frame={frame} edit={edit} onPick={onPick}>
+        <LayerBox key={layer.id} layer={layer} frame={frame} edit={edit} onPick={onPick} clear={clearOf(layer)}>
           {held[i] !== null ? (
             held[i]
           ) : i === hostIndex ? (
@@ -116,7 +122,7 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
               />
             )
           ) : isVideoLayer(layer) ? (
-            <LayerVideo id={`layer-${layer.id}-video`} streamAtom={streamFor(layer.slot)} cover={fitOf(layer) === 'cover'} />
+            <LayerVideo id={`layer-${layer.id}-video`} streamAtom={streamFor(layer.slot)} cover={fitOf(layer) === 'cover'} clear={clearOf(layer)} />
           ) : (
             <img id={`layer-${layer.id}-img`} src={imageUrl(layer.asset)} alt="" draggable={false} className="block h-full w-full object-fill" />
           )}
@@ -128,9 +134,17 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
   );
 }
 
-function LayerVideo({ id, streamAtom, cover }: { id: string; streamAtom: Atom<MediaStream | null>; cover: boolean }) {
+function LayerVideo({ id, streamAtom, cover, clear }: { id: string; streamAtom: Atom<MediaStream | null>; cover: boolean; clear: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
-  return <VideoFrame id={id} streamAtom={streamAtom} videoRef={ref} muted className={cn('h-full rounded-none border-0', cover ? 'object-cover' : 'object-contain')} />;
+  return (
+    <VideoFrame
+      id={id}
+      streamAtom={streamAtom}
+      videoRef={ref}
+      muted
+      className={cn('h-full rounded-none border-0', cover ? 'object-cover' : 'object-contain', clear && 'bg-transparent')}
+    />
+  );
 }
 
 interface LayerBoxProps {
@@ -138,10 +152,11 @@ interface LayerBoxProps {
   frame: RefObject<HTMLDivElement | null>;
   edit?: SceneEdit;
   onPick?: (slot: number) => void;
+  clear?: boolean;
   children: ReactNode;
 }
 
-function LayerBox({ layer, frame, edit, onPick, children }: LayerBoxProps) {
+function LayerBox({ layer, frame, edit, onPick, clear = false, children }: LayerBoxProps) {
   const el = useRef<HTMLDivElement | null>(null);
   const stop = useRef<(() => void) | null>(null);
   const dragged = useRef(false);
@@ -255,7 +270,7 @@ function LayerBox({ layer, frame, edit, onPick, children }: LayerBoxProps) {
       onDragStart={(e) => e.preventDefault()}
       className={cn(
         'absolute isolate overflow-hidden outline transition-[outline-color] duration-150',
-        !bare && 'bg-black',
+        !bare && !clear && 'bg-black',
         edit && cn('cursor-move', GRIP),
         pickable && 'cursor-pointer hover:outline-primaryBlue',
         selected

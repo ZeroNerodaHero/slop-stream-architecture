@@ -68,6 +68,7 @@ import {
   type Source,
   validPreset
 } from '@/infra/scene';
+import { isSeeThrough, isStoredBacking, NO_BACKING, readModelBacking } from '@/infra/model-backing';
 import { askAfter, type PickOutcome, type ScreenAsk, type ScreenAsks, withAsk } from '@/infra/screen-ask';
 import { readModelChoice, type Stage, type StageGap, stagedFrom, stageOf } from '@/infra/stage';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
@@ -189,13 +190,12 @@ export const faceLinesAtom = atom<FaceLines | null>(null);
 export const demoModelsAtom = atom<DemoModel[]>([]);
 export const keptModelsAtom = atom<KeptModel[]>([]);
 export const keptDemosAtom = atom<ReadonlyMap<string, string>>(new Map<string, string>());
-const MODEL_BACKGROUND = '#181b22';
 const storedModelAtom = atomWithStorage<unknown>('settings.model', null, undefined, { getOnInit: true });
 const storedFaceCameraAtom = atomWithStorage<unknown>('settings.faceCamera', '', undefined, { getOnInit: true });
 const storedMicAtom = atomWithStorage<unknown>('settings.mic', '', undefined, { getOnInit: true });
 const storedFaceMirrorAtom = atomWithStorage<unknown>('settings.faceMirror', true, undefined, { getOnInit: true });
 const storedFaceExpressionsAtom = atomWithStorage<unknown>('settings.faceExpressions', true, undefined, { getOnInit: true });
-const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', MODEL_BACKGROUND, undefined, { getOnInit: true });
+const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', NO_BACKING, undefined, { getOnInit: true });
 const storedRigPictureAtom = atomWithStorage<unknown>('settings.rigPicture', true, undefined, { getOnInit: true });
 export const faceCameraAtom = atom((get) => {
   const id = get(storedFaceCameraAtom);
@@ -208,10 +208,8 @@ const micPickAtom = atom((get) => {
 export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false);
 export const faceExpressionsAtom = atom((get) => get(storedFaceExpressionsAtom) !== false);
 export const rigPictureAtom = atom(() => true);
-export const modelBackgroundAtom = atom((get) => {
-  const colour = get(storedModelBackgroundAtom);
-  return typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour) ? colour : MODEL_BACKGROUND;
-});
+export const modelBackgroundAtom = atom((get) => readModelBacking(get(storedModelBackgroundAtom)));
+export const modelSeeThroughAtom = atom((get) => get(modelAtom) !== null && isSeeThrough(get(modelBackgroundAtom)));
 const validModelChoice = (raw: unknown): ModelChoice | null => readModelChoice(raw);
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
 export const publishStatsAtom = atom<StreamStats | null>(null);
@@ -792,7 +790,8 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   };
   if (stale()) return giveUp();
   session.track.contentHint = 'motion';
-  await setCameraTrack(session.track);
+  session.wireTrack.contentHint = 'motion';
+  await setCameraTrack(session.wireTrack);
   void tuneSenders();
   if (stale()) return giveUp();
   const sound = before?.getAudioTracks() ?? opened?.mic?.getAudioTracks() ?? [];
@@ -1015,9 +1014,10 @@ export function setFaceExpressions(on: boolean) {
 }
 
 export function setModelBackground(colour: string) {
-  if (!/^#[0-9a-f]{6}$/i.test(colour)) return;
-  store.set(storedModelBackgroundAtom, colour);
-  modelSession?.setBackground(colour);
+  if (!isStoredBacking(colour)) return;
+  const backing = readModelBacking(colour);
+  store.set(storedModelBackgroundAtom, backing);
+  modelSession?.setBackground(backing);
 }
 
 export function restFace() {
@@ -1119,7 +1119,7 @@ export async function goLive(): Promise<void> {
     if (!gone()) onConnection(myPc.connectionState);
   };
 
-  const picture = camera.getVideoTracks()[0];
+  const picture = wireOf(camera.getVideoTracks()[0]);
   if (picture) picture.contentHint = 'motion';
   const added = addCamera(myPc, camera, picture, codec);
   cameraSender = added.sender;
@@ -1254,6 +1254,10 @@ function settleCodec() {
   const params = copy.getParameters();
   for (const encoding of params.encodings ?? []) encoding.active = false;
   copy.setParameters(params).catch(() => undefined);
+}
+
+function wireOf(track: MediaStreamTrack | undefined): MediaStreamTrack | undefined {
+  return modelSession && track === modelSession.track ? modelSession.wireTrack : track;
 }
 
 async function setCameraTrack(track: MediaStreamTrack | null): Promise<void> {
