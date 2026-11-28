@@ -1,7 +1,7 @@
 import { atom } from 'jotai';
 
 import { api, messageOf, type OAuthProvider } from '@/infra/api';
-import { reloadMe } from '@/infra/atoms/auth-atoms';
+import { oauthStartUrl, reloadMe } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { rememberReturn, takeReturn } from '@/infra/oauth';
 import { store } from '@/infra/store';
@@ -80,8 +80,10 @@ export async function startDesktopLogin(provider: OAuthProvider): Promise<void> 
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('open_login', { url: `${location.origin}/api/oauth/${encodeURIComponent(provider)}/start?desktop=${p.state}` });
-  } catch (err) {
-    if (pending === p) settle(messageOf(err) || 'could not open your browser');
+  } catch {
+    if (pending !== p) return;
+    settle('');
+    location.assign(oauthStartUrl(provider));
   }
 }
 
