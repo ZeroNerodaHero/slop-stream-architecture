@@ -4,7 +4,7 @@ import { useRef } from 'react';
 
 import { api } from '@/infra/api';
 import { addStreamThumb, removeStreamThumb, streamNameAtom, streamThumbsAtom, thumbStatusAtom } from '@/infra/atoms/publish-atoms';
-import { setRail } from '@/infra/live-dock';
+import { openRailAt } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
@@ -84,7 +84,7 @@ export function ThumbnailModule({ strip = false }: { strip?: boolean }) {
     return (
       <div className="flex flex-col items-center border-b border-primaryStroke pb-2">
         <Tooltip content="thumbnail">
-          <button id="live-thumb-mini" type="button" aria-label="open the thumbnail" onClick={() => setRail(true)} className={cn(FOLD_BUTTON, 'h-6 w-8 overflow-hidden p-0')}>
+          <button id="live-thumb-mini" type="button" aria-label="open the thumbnail" onClick={() => openRailAt('thumbnail')} className={cn(FOLD_BUTTON, 'h-6 w-8 overflow-hidden p-0')}>
             {first !== undefined ? (
               <img src={api.streamThumbUrl(name, first)} alt="" draggable={false} className="h-full w-full object-cover" />
             ) : (

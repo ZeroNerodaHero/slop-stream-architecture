@@ -458,6 +458,13 @@ export function setRail(open: boolean) {
   store.set(storedRailAtom, open ? 'open' : 'shut');
 }
 
+export const railFocusAtom = atom<RailSection | null>(null);
+
+export function openRailAt(section: RailSection) {
+  store.set(railFocusAtom, section);
+  setRail(true);
+}
+
 export function setRailWidth(width: number | null) {
   store.set(storedRailWidthAtom, width === null ? null : fitRailWidth(width));
 }

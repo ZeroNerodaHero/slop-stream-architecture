@@ -1,11 +1,11 @@
-import { RiAddLine, RiCloseLine, RiPencilLine, RiSaveLine, RiStarLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiPencilLine, RiSaveLine, RiStackLine, RiStarLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { newPreset, pickPreset, presetDirtyAtom, presetNoticeAtom, presetsFullAtom, removePreset, saveActivePreset } from '@/infra/atoms/preset-atoms';
 import { streamNameAtom } from '@/infra/atoms/publish-atoms';
-import { DEFAULT_PRESET, livePresetAtom, livePresetsAtom, movePreset, PRESETS_MAX, type PresetId, presetName, renamePreset } from '@/infra/live-dock';
+import { DEFAULT_PRESET, livePresetAtom, livePresetsAtom, movePreset, openRailAt, PRESETS_MAX, type PresetId, presetName, renamePreset } from '@/infra/live-dock';
 import { Face } from '@/shared-components/Face';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
@@ -91,24 +91,12 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
   });
   if (strip)
     return (
-      <div role="group" aria-label="presets" className="flex flex-col items-center gap-1.5 border-b border-primaryStroke py-2">
-        {list.map((preset, i) => {
-          const on = preset.id === current;
-          return (
-            <Tooltip key={preset.id} content={`${presetName(preset)} (${i + 1})`}>
-              <button
-                id={`live-preset-${preset.id}`}
-                type="button"
-                aria-label={presetName(preset)}
-                aria-pressed={on}
-                onClick={() => void pickPreset(preset.id)}
-                className={cn(FOLD_BUTTON, on ? 'border-primaryBlue text-primaryBlue' : 'border-transparent bg-transparent')}
-              >
-                <PresetIcon id={preset.id} size={16} />
-              </button>
-            </Tooltip>
-          );
-        })}
+      <div className="flex flex-col items-center border-b border-primaryStroke py-2">
+        <Tooltip content="presets">
+          <button id="live-presets-mini" type="button" aria-label="open the presets" onClick={() => openRailAt('presets')} className={FOLD_BUTTON}>
+            <RiStackLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
       </div>
     );
   return (

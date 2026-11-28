@@ -11,6 +11,7 @@ import {
   liveEditingAtom,
   liveLayoutAtom,
   liveSlotsAtom,
+  openRailAt,
   pickLayout,
   resetGrid,
   type Slots,
@@ -87,19 +88,16 @@ export function LayoutModule({ strip = false }: { strip?: boolean }) {
         </Tooltip>
       </div>
     );
-  if (strip) {
-    const ready = LAYOUT_IDS.filter((id) => !isSlot(id) || slots[id]);
-    const next = ready[(ready.indexOf(layout) + 1) % ready.length] ?? 'obs';
+  if (strip)
     return (
       <div className="flex flex-col items-center border-t border-primaryStroke py-2">
-        <Tooltip content={`${LAYOUT_WORDS[layout]}. click for ${LAYOUT_WORDS[next]}`}>
-          <button id="live-layout-next" type="button" aria-label={`next layout: ${LAYOUT_WORDS[next]}`} onClick={() => pickLayout(next)} className={FOLD_BUTTON}>
+        <Tooltip content="layout">
+          <button id="live-layout-mini" type="button" aria-label="open the layouts" onClick={() => openRailAt('layout')} className={FOLD_BUTTON}>
             <LayoutGlyph id={layout} slots={slots} />
           </button>
         </Tooltip>
       </div>
     );
-  }
   return (
     <RailSection
       section="layout"

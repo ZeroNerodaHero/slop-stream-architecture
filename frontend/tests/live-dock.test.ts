@@ -21,7 +21,11 @@ import {
   PRESETS_MAX,
   presetForKey,
   presetName,
+  liveRailAtom,
+  openRailAt,
+  railFocusAtom,
   railOpen,
+  setRail,
   readRailWidth,
   fitRailWidth,
   RAIL_W_DEFAULT,
@@ -49,6 +53,7 @@ import {
   unreadWords,
   wasRetiredPreset
 } from '../src/infra/live-dock.ts';
+import { store } from '../src/infra/store.ts';
 
 const ALL = { hidden: [] };
 
@@ -311,6 +316,15 @@ test('the rail is open until it is collapsed, and a choice sticks', () => {
   assert.equal(railOpen(null), true);
   assert.equal(railOpen('open'), true);
   assert.equal(railOpen('shut'), false);
+});
+
+test('a strip icon opens the rail on its section and asks for it once', () => {
+  setRail(false);
+  assert.equal(railOpen(store.get(liveRailAtom)), false);
+  openRailAt('presets');
+  assert.equal(railOpen(store.get(liveRailAtom)), true);
+  assert.equal(store.get(railFocusAtom), 'presets');
+  store.set(railFocusAtom, null);
 });
 
 test('the rail width stays in its clamps and falls back to the default', () => {
