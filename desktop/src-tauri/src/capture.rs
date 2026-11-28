@@ -32,13 +32,23 @@ pub async fn list_capture_sources() -> Result<Vec<Shareable>, String> {
     platform::list()
 }
 
+const MAX_WIDTH: u32 = 3840;
+const MAX_HEIGHT: u32 = 2160;
+
+fn bounds(max_width: Option<u32>, max_height: Option<u32>) -> (f64, f64) {
+    let pick = |v: Option<u32>, most: u32| f64::from(v.filter(|v| *v >= 2).unwrap_or(most).min(most));
+    (pick(max_width, MAX_WIDTH), pick(max_height, MAX_HEIGHT))
+}
+
 #[tauri::command]
 pub async fn start_screen_capture(
     state: State<'_, Captures>,
     id: String,
     channel: Channel<InvokeResponseBody>,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
 ) -> Result<u32, String> {
-    let running = platform::start(&id, channel)?;
+    let running = platform::start(&id, channel, bounds(max_width, max_height))?;
     let handle = {
         let mut next = state.next.lock().map_err(|e| e.to_string())?;
         *next += 1;
@@ -62,6 +72,20 @@ pub async fn stop_screen_capture(state: State<'_, Captures>, handle: u32) -> Res
     Ok(())
 }
 
+#[tauri::command]
+pub async fn resize_screen_capture(
+    state: State<'_, Captures>,
+    handle: u32,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+) -> Result<(), String> {
+    let running = state.running.lock().map_err(|e| e.to_string())?;
+    let running = running
+        .get(&handle)
+        .ok_or("that screen is not being shared any more")?;
+    running.resize(bounds(max_width, max_height))
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -79,18 +103,40 @@ mod platform {
 
     use super::{denied, Shareable};
 
-    const MAX_WIDTH: f64 = 1920.0;
     const FPS: u32 = 30;
+    const QUALITY: u8 = 90;
     const THUMB_WIDTH: f64 = 320.0;
     const MIN_WIDTH: f64 = 120.0;
     const MIN_HEIGHT: f64 = 80.0;
 
-    pub struct Running(SCStream);
+    pub struct Running {
+        stream: SCStream,
+        pixels: (f64, f64),
+    }
+
+    impl Running {
+        pub fn resize(&self, bounds: (f64, f64)) -> Result<(), String> {
+            let (width, height) = size_within(self.pixels.0, self.pixels.1, bounds);
+            self.stream
+                .update_configuration(&configuration(width, height))
+                .map_err(|e| e.to_string())
+        }
+    }
 
     impl Drop for Running {
         fn drop(&mut self) {
-            let _ = self.0.stop_capture();
+            let _ = self.stream.stop_capture();
         }
+    }
+
+    fn configuration(width: u32, height: u32) -> SCStreamConfiguration {
+        SCStreamConfiguration::new()
+            .with_width(width)
+            .with_height(height)
+            .with_fps(FPS)
+            .with_pixel_format(PixelFormat::BGRA)
+            .with_shows_cursor(true)
+            .with_queue_depth(5)
     }
 
     struct Frame {
@@ -155,8 +201,8 @@ mod platform {
             && !mine(window)
     }
 
-    fn size_within(width: f64, height: f64, max: f64) -> (u32, u32) {
-        let scale = if width > max { max / width } else { 1.0 };
+    fn size_within(width: f64, height: f64, (max_width, max_height): (f64, f64)) -> (u32, u32) {
+        let scale = (max_width / width).min(max_height / height).min(1.0);
         let even = |v: f64| ((v * scale / 2.0).round() as u32 * 2).max(2);
         (even(width), even(height))
     }
@@ -194,7 +240,7 @@ mod platform {
     fn thumbnail(target: &Target) -> Option<String> {
         let filter = target.filter().ok()?;
         let (w, h) = target.points();
-        let (width, height) = size_within(w, h, THUMB_WIDTH);
+        let (width, height) = size_within(w, h, (THUMB_WIDTH, f64::MAX));
         let config = SCStreamConfiguration::new()
             .with_width(width)
             .with_height(height)
@@ -286,7 +332,7 @@ mod platform {
         thread::spawn(move || {
             while let Ok(frame) = rx.recv() {
                 let sent =
-                    jpeg(&frame, 80).map(|bytes| channel.send(InvokeResponseBody::Raw(bytes)));
+                    jpeg(&frame, QUALITY).map(|bytes| channel.send(InvokeResponseBody::Raw(bytes)));
                 busy.store(false, Ordering::Release);
                 if matches!(sent, Some(Err(_))) {
                     break;
@@ -296,7 +342,11 @@ mod platform {
         tx
     }
 
-    pub fn start(id: &str, channel: Channel<InvokeResponseBody>) -> Result<Running, String> {
+    pub fn start(
+        id: &str,
+        channel: Channel<InvokeResponseBody>,
+        bounds: (f64, f64),
+    ) -> Result<Running, String> {
         let target = targets()?
             .into_iter()
             .find(|(key, ..)| key == id)
@@ -306,14 +356,9 @@ mod platform {
         let scale = f64::from(filter.point_pixel_scale());
         let scale = if scale > 0.0 { scale } else { 2.0 };
         let (w, h) = target.points();
-        let (width, height) = size_within(w * scale, h * scale, MAX_WIDTH);
-        let config = SCStreamConfiguration::new()
-            .with_width(width)
-            .with_height(height)
-            .with_fps(FPS)
-            .with_pixel_format(PixelFormat::BGRA)
-            .with_shows_cursor(true)
-            .with_queue_depth(5);
+        let pixels = (w * scale, h * scale);
+        let (width, height) = size_within(pixels.0, pixels.1, bounds);
+        let config = configuration(width, height);
         let ended = channel.clone();
         let callbacks = StreamCallbacks::new().on_error(move |_| {
             let _ = ended.send(InvokeResponseBody::Raw(Vec::new()));
@@ -343,7 +388,7 @@ mod platform {
             )
             .map_err(|e| e.to_string())?;
         stream.start_capture().map_err(denied)?;
-        Ok(Running(stream))
+        Ok(Running { stream, pixels })
     }
 }
 
@@ -355,11 +400,21 @@ mod platform {
 
     pub struct Running;
 
+    impl Running {
+        pub fn resize(&self, _bounds: (f64, f64)) -> Result<(), String> {
+            Err("unsupported".into())
+        }
+    }
+
     pub fn list() -> Result<Vec<Shareable>, String> {
         Err("unsupported".into())
     }
 
-    pub fn start(_id: &str, _channel: Channel<InvokeResponseBody>) -> Result<Running, String> {
+    pub fn start(
+        _id: &str,
+        _channel: Channel<InvokeResponseBody>,
+        _bounds: (f64, f64),
+    ) -> Result<Running, String> {
         Err("unsupported".into())
     }
 }
