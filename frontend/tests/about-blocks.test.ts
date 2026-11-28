@@ -3,6 +3,9 @@ import { test } from 'node:test';
 
 import {
   ITEMS_MAX,
+  placed,
+  slotAt,
+  slotIn,
   blankBlock,
   blockWord,
   cleanHex,
@@ -136,4 +139,50 @@ test('colors are #rrggbb in lowercase or nothing', () => {
 test('a block on the wire carries only good colors', () => {
   const b = wireBlock(blankBlock('heading', { accent: '#ABCDEF', paint: 'nope', ink: '#ffffff', from: '#0D1530', to: '#fff' }));
   assert.deepEqual([b.accent, b.paint, b.ink, b.edge, b.tint, b.from, b.to], ['#abcdef', '', '#ffffff', '', '', '#0d1530', '']);
+});
+
+const ids = (list: { id: string }[]) => list.map((b) => b.id).join('');
+
+test('placed moves a block to a slot counted without it', () => {
+  const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+  assert.equal(ids(placed(list, 'a', 2)), 'bcad');
+  assert.equal(ids(placed(list, 'd', 0)), 'dabc');
+  assert.equal(ids(placed(list, 'b', 1)), 'abcd');
+  assert.equal(ids(placed(list, 'b', 99)), 'acdb');
+  assert.equal(ids(placed(list, 'c', -4)), 'cabd');
+  assert.equal(ids(placed(list, 'zz', 1)), 'abcd');
+  assert.equal(list.length, 4);
+});
+
+test('placed inserts a new block when one is given', () => {
+  const list = [{ id: 'a' }, { id: 'b' }];
+  assert.equal(ids(placed(list, 'n', 1, { id: 'n' })), 'anb');
+  assert.equal(ids(placed(list, 'n', 5, { id: 'n' })), 'abn');
+});
+
+test('slotAt reads the grid in rows: left half is before, right half is after', () => {
+  const row = [
+    { left: 0, top: 0, right: 100, bottom: 50 },
+    { left: 110, top: 0, right: 210, bottom: 50 },
+    { left: 0, top: 60, right: 210, bottom: 110 }
+  ];
+  assert.equal(slotAt(row, 20, 25), 0);
+  assert.equal(slotAt(row, 80, 25), 1);
+  assert.equal(slotAt(row, 130, 25), 1);
+  assert.equal(slotAt(row, 200, 25), 2);
+  assert.equal(slotAt(row, 50, 80), 2);
+  assert.equal(slotAt(row, 180, 80), 3);
+  assert.equal(slotAt(row, 300, 25), 2);
+  assert.equal(slotAt(row, 50, 400), 3);
+  assert.equal(slotAt(row, 50, -40), 0);
+  assert.equal(slotAt([], 5, 5), 0);
+});
+
+test('slotIn maps a slot among shown blocks onto the whole list', () => {
+  const rest = ['a', 'b', 'c', 'd'];
+  assert.equal(slotIn(rest, ['a', 'c', 'd'], 0), 0);
+  assert.equal(slotIn(rest, ['a', 'c', 'd'], 1), 2);
+  assert.equal(slotIn(rest, ['a', 'c'], 2), 3);
+  assert.equal(slotIn(rest, ['a', 'b', 'c', 'd'], 4), 4);
+  assert.equal(slotIn(rest, [], 0), 4);
 });
