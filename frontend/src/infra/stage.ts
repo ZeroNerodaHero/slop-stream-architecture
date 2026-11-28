@@ -1,4 +1,4 @@
-import { AVATAR_ID, type KeptScene, type KeptSource, keptOf, readKept, type Source } from './scene.ts';
+import { AVATAR_ID, type KeptScene, type KeptSource, keptOf, readKept, type Source, squaredAvatarBox } from './scene.ts';
 import { NO_BACKING } from './model-backing.ts';
 import { cleanSourceName, readNames } from './source-settings.ts';
 
@@ -112,7 +112,11 @@ export function readStage(raw: unknown): Stage | null {
       : null
   );
   return {
-    scene: Object.fromEntries(Object.entries(scene).filter(([id]) => ID.test(id))),
+    scene: Object.fromEntries(
+      Object.entries(scene)
+        .filter(([id]) => ID.test(id))
+        .map(([id, kept]) => [id, id === AVATAR_ID ? { ...kept, box: squaredAvatarBox(kept.box) } : kept])
+    ),
     images,
     levels,
     sounds,
