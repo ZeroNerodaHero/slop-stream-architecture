@@ -35,6 +35,12 @@ export function StreamStill({ name, className }: StreamStillProps) {
     return () => {
       gone = true;
       window.clearInterval(timer);
+      if (latest) {
+        latest.onload = null;
+        latest.onerror = null;
+        latest.src = '';
+        latest = null;
+      }
     };
   }, [name]);
 
