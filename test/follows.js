@@ -209,13 +209,13 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     return 'following → follow → following, 1 → 0 → 1';
   });
 
-  await step('home: the people under the streams (star is live, so not there; pal is, with a word), online first; the sidebar search finds pal', async () => {
+  await step('/people: everyone not live (star is live, so not there; pal is, with a word), online first; the sidebar search finds pal', async () => {
     const pal = 'pal' + RUN;
     const people = await body(await anon.get('/api/people'));
     expect(Array.isArray(people) && !find(people, STAR) && find(people, pal), `people: star ${!!find(people, STAR)}, pal ${!!find(people, pal)}`);
     const rank = { streaming: 0, online: 1, dnd: 2, offline: 3 };
     for (let i = 1; i < people.length; i++) expect(rank[people[i - 1].presence] <= rank[people[i].presence], `not online first: ${people[i - 1].name} ${people[i - 1].presence} before ${people[i].name} ${people[i].presence}`);
-    await fanPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await fanPage.goto(`${BASE}/people`, { waitUntil: 'domcontentloaded' });
     await fanPage.waitForSelector(`#person-${pal}`, { timeout: 15000 });
     expect(!(await fanPage.$(`#person-${STAR}`)), 'star is live and still listed as a person');
     const word = await fanPage.getAttribute(`#person-${pal}`, 'data-presence');

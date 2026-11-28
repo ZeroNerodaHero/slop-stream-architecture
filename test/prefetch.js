@@ -68,10 +68,10 @@ async function press(page, selector, holdMs = 250, release = true) {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
 
-  await step('a press on a person on home asks for the grant once, on the press', async () => {
+  await step('a press on a person on /people asks for the grant once, on the press', async () => {
     const p = await fresh();
-    await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await p.waitForSelector('#live', { timeout: 10000 });
+    await p.goto(`${BASE}/people`, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('#people-list, #people-empty', { timeout: 10000 });
     const link = p.locator('#people a[href^="/watch/"]').first();
     if (!(await link.count())) return { skip: 'nobody under people on this box' };
     const href = await link.getAttribute('href');
@@ -88,15 +88,15 @@ async function press(page, selector, holdMs = 250, release = true) {
 
   await step('a press that goes nowhere asks once; the page later asks for itself', async () => {
     const p = await fresh();
-    await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await p.waitForSelector('#live', { timeout: 10000 });
+    await p.goto(`${BASE}/people`, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('#people-list, #people-empty', { timeout: 10000 });
     const link = p.locator('#people a[href^="/watch/"]').first();
     if (!(await link.count())) return { skip: 'nobody under people on this box' };
     const href = await link.getAttribute('href');
     const grants = count(p, 'POST', /^\/api\/streams\/[^/]+\/watch$/);
     await press(p, `#people a[href="${href}"]`, 150, false);
     await sleep(6000);
-    expect(new URL(p.url()).pathname === '/', `moved to ${p.url()}`);
+    expect(new URL(p.url()).pathname === '/people', `moved to ${p.url()}`);
     expect(grants.length === 1, `${grants.length} grants after a press with no click`);
     await p.locator(`#people a[href="${href}"]`).first().click();
     await p.waitForURL((u) => u.pathname === href, { timeout: 5000 });
@@ -164,9 +164,9 @@ async function press(page, selector, holdMs = 250, release = true) {
     await p.waitForSelector('#live', { timeout: 10000 });
     await sleep(1000);
     expect(streams.length === 1, `${streams.length} GET /api/streams`);
-    expect(people.length === 1, `${people.length} GET /api/people`);
+    expect(people.length === 0, `${people.length} GET /api/people on home`);
     await p.close();
-    return '1 /api/streams, 1 /api/people';
+    return '1 /api/streams, no /api/people';
   });
 
   await step('a group from home asks for its room and its lines once', async () => {

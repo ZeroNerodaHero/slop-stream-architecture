@@ -163,6 +163,16 @@ https://stats.nodentity.xyz {
 		file_server
 	}
 
+	@people path /people /people/
+	handle @people {
+		root * /srv
+		header Cache-Control "no-cache"
+		header X-Robots-Tag "noindex, nofollow"
+		rewrite * /index.html
+		encode zstd gzip
+		file_server
+	}
+
 	handle {
 		root * /srv
 		header Cache-Control "no-cache"

@@ -2,15 +2,16 @@ import { RiTimeLine, RiUserLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
 import { atom, useAtomValue } from 'jotai';
 import { selectAtom } from 'jotai/utils';
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
+import { CARD, CARD_LINK } from '@/app/home/cards';
 import { stillPictures } from '@/app/home/stills';
-import { api, mayMakeGroup, messageOf, type LiveStream, type Person, type Recent, type Server } from '@/infra/api';
+import { api, mayMakeGroup, messageOf, type LiveStream, type Recent, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
-import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
+import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
@@ -23,7 +24,7 @@ import { FollowButton } from '@/shared-components/FollowButton';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { usePeek } from '@/shared-components/peek';
-import { PersonRow, Who } from '@/shared-components/PersonRow';
+import { Who } from '@/shared-components/PersonRow';
 import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -38,12 +39,10 @@ const FEATURED = 2;
 const PEEK_MS = 200;
 
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4';
-const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
 const RECENT_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3';
 const GROUPS_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
 const FEATURED_GRID = 'grid grid-cols-1 gap-4 lg:grid-cols-2';
 const GROUPS_GUESS = 6;
-const PEOPLE_GUESS = 8;
 const RECENT_GUESS = 6;
 
 const RECENT_COUNT_KEY = 'home:recent-count';
@@ -88,11 +87,6 @@ const SECTION_TITLE =
 const LIVE_LINE = 'border-increase bubble:before:bg-increase';
 const OFFLINE_LINE = 'border-textTertiary bubble:before:bg-textTertiary';
 const SECTION_COUNT = 'text-textSecondary';
-const CARD = 'overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary bubble:border-transparent';
-const CARD_LINK = cn(
-  CARD,
-  'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue bubble:hover:bg-backgroundTertiary bubble:focus-within:border-primaryBlue'
-);
 
 const PersonCard = lazy(() => import('@/shared-components/PersonCard').then((m) => ({ default: m.PersonCard })));
 
@@ -327,99 +321,6 @@ function Followed({
           ))}
         </div>
       )}
-    </Part>
-  );
-}
-
-const PersonTile = memo(function PersonTile({
-  name,
-  verified,
-  oauthVerified,
-  avatar,
-  bio,
-  presence
-}: {
-  name: string;
-  verified: boolean;
-  oauthVerified: boolean | undefined;
-  avatar: number | null;
-  bio: string;
-  presence: Person['presence'];
-}) {
-  return (
-    <article id={`person-${name}`} data-presence={presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
-      <PersonRow
-        id={`person-link-${name}`}
-        name={name}
-        verified={verified}
-        oauthVerified={oauthVerified}
-        avatar={avatar}
-        bio={bio}
-        presence={presence}
-        size="card"
-      />
-      <FollowButton id={`person-follow-${name}`} name={name} small className="self-start" />
-    </article>
-  );
-});
-
-function People() {
-  const people = useQuery({ queryKey: ['people'], queryFn: homePeople, refetchInterval: PEOPLE_POLL_MS });
-  const list: Person[] = people.data ?? [];
-  if (people.isPending) {
-    return (
-      <Part id="people" title="people" line={OFFLINE_LINE} heading="people">
-        <Skeleton id="people-loading" className={PEOPLE_GRID}>
-          {Array.from({ length: PEOPLE_GUESS }, (_, i) => (
-            <div key={i} className={cn(CARD, 'flex items-center gap-3 p-3')}>
-              <Bone className="h-12 w-12 shrink-0 rounded-avatar" />
-              <div className="flex flex-1 flex-col gap-1.5">
-                <Bone className="h-4 w-1/2" />
-                <Bone className="h-3 w-1/3" />
-              </div>
-            </div>
-          ))}
-        </Skeleton>
-      </Part>
-    );
-  }
-  if (!people.data || list.length === 0) return null;
-  const here = list.filter((p) => p.presence !== 'offline').length;
-  return (
-    <Part
-      id="people"
-      title="people"
-      line={OFFLINE_LINE}
-      heading={
-        <>
-          people
-          <span id="people-count" className={SECTION_COUNT}>
-            {list.length}
-          </span>
-          {here > 0 && (
-            <>
-              <span aria-hidden>·</span>
-              <span id="people-here" className="text-increase">
-                {here} here
-              </span>
-            </>
-          )}
-        </>
-      }
-    >
-      <div className={PEOPLE_GRID}>
-        {list.map((p) => (
-          <PersonTile
-            key={p.name}
-            name={p.name}
-            verified={p.verified}
-            oauthVerified={p.oauth_verified}
-            avatar={p.avatar}
-            bio={p.bio}
-            presence={p.presence}
-          />
-        ))}
-      </div>
     </Part>
   );
 }
@@ -724,7 +625,6 @@ export function HomePage() {
       )}
       {!error && <RecentlyOffline liveKey={list ? namesKey : null} />}
       {!error && <Groups />}
-      {!error && <People />}
     </PageFrame>
   );
 }
