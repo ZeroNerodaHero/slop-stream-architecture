@@ -17,7 +17,6 @@ npm --prefix desktop run dev
 
 Inside the app the go live page uses native code for sound and screens. The web build never loads any of it: every path checks `inTauri()` first and imports `@tauri-apps/api` lazily.
 
-- **Desktop audio**: `add desktop audio` in the sound panel adds a `desktop audio` row to the mixer. macOS takes it from ScreenCaptureKit (the app's own sound is left out), Windows from a WASAPI loopback of the default output. Removing the row stops the capture.
 - **Mic**: the mic picker lists the devices cpal sees, and the one picked is captured natively, then runs through RNNoise, a noise gate and a limiter before the mixer. The mic row has toggles for noise suppression and the gate.
 - **Screens on macOS**: `share screen` lists displays and windows through ScreenCaptureKit and opens a picker. The picked one is captured at up to 1920 px wide and 30 fps, sent as JPEG frames and drawn into a canvas whose `captureStream` track goes out like a `getDisplayMedia` one. When listing fails (no permission) it falls back to `getDisplayMedia`. Windows keeps WebView2's `getDisplayMedia`.
 
@@ -39,7 +38,7 @@ npm --prefix frontend run preview -- --port 4173
 npm --prefix desktop run dev -- --config '{"build":{"devUrl":"http://localhost:4173"},"app":{"security":{"capabilities":["main",{"identifier":"local","windows":["main"],"remote":{"urls":["http://localhost:4173/*"]},"permissions":["core:default","updater:default","process:allow-restart","native-capture"]}]}}}'
 ```
 
-`vite preview` proxies `/api` and the sockets to `BACKEND` the same way `npm run dev` does, so going live from that window works against whatever backend `frontend/.env` names. `add desktop audio` and the mic toggles show in the sound panel once the mic is open, before going live too.
+`vite preview` proxies `/api` and the sockets to `BACKEND` the same way `npm run dev` does, so going live from that window works against whatever backend `frontend/.env` names. The mic toggles show in the sound panel once the mic is open, before going live too.
 
 ## Build it locally
 

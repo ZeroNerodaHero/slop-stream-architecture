@@ -1,18 +1,13 @@
-import { RiCloseLine, RiFilter3Line, RiMicLine, RiVoiceprintLine, RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiFilter3Line, RiMicLine, RiVoiceprintLine, RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect, useRef } from 'react';
 
 import {
-  addDesktopAudio,
-  DESKTOP_AUDIO,
-  desktopAudioBusyAtom,
-  desktopAudioStatusAtom,
   faderMasterAtom,
   faderRowsAtom,
   hasMicAtom,
   MASTER,
   mixClipping,
-  mixerOpenAtom,
   mixerRunningAtom,
   type MixRow,
   micDeviceAtom,
@@ -21,7 +16,6 @@ import {
   nativeMicOnAtom,
   readMixLevel,
   refreshMicDevices,
-  removeDesktopAudio,
   resumeMixer,
   setMicDevice,
   setMicProcessing,
@@ -174,40 +168,11 @@ function MicTools() {
   );
 }
 
-function DesktopAudioRemove() {
-  return (
-    <Tooltip content="remove desktop audio">
-      <button id="remove-desktop-audio" type="button" aria-label="remove desktop audio" onClick={removeDesktopAudio} className={ICON_BUTTON}>
-        <RiCloseLine aria-hidden size={16} />
-      </button>
-    </Tooltip>
-  );
-}
-
-function DesktopAudioAdd({ shown }: { shown: boolean }) {
-  const busy = useAtomValue(desktopAudioBusyAtom);
-  const status = useAtomValue(desktopAudioStatusAtom);
-  if (shown) return null;
-  return (
-    <div className="flex flex-col gap-2 border-t border-primaryStroke px-3 py-2">
-      <Button id="add-desktop-audio" variant="outline" size="sm" className="self-start" disabled={busy} onClick={() => void addDesktopAudio()}>
-        add desktop audio
-      </Button>
-      {status && (
-        <p id="desktop-audio-status" className="text-sm text-decrease">
-          {status}
-        </p>
-      )}
-    </div>
-  );
-}
-
-const extraOf = (id: string): ReactNode => (id === 'mic' ? <MicTools /> : id === DESKTOP_AUDIO ? <DesktopAudioRemove /> : undefined);
+const extraOf = (id: string): ReactNode => (id === 'mic' ? <MicTools /> : undefined);
 
 export function MixerBody() {
   const rows = useAtomValue(faderRowsAtom);
   const master = useAtomValue(faderMasterAtom);
-  const mixerOpen = useAtomValue(mixerOpenAtom);
   const running = useAtomValue(mixerRunningAtom);
   if (!webAudio) return <p className="px-3 py-3 text-sm text-textTertiary">{HERE} has no web audio: the mic goes out as it is</p>;
   return (
@@ -227,7 +192,6 @@ export function MixerBody() {
         ))}
         <Row row={{ ...master, id: MASTER }} master />
       </ul>
-      {DESKTOP && mixerOpen && <DesktopAudioAdd shown={rows.some((r) => r.id === DESKTOP_AUDIO)} />}
     </>
   );
 }
