@@ -592,8 +592,9 @@ mod tests {
 
     #[test]
     fn a_push_is_named_by_its_platform_only() {
-        assert_eq!(line_name("twitch"), "twitch");
-        assert_eq!(line_name("youtube"), "youtube");
+        for p in ["twitch", "kick", "youtube", "custom"] {
+            assert_eq!(line_name(p), p);
+        }
         assert_eq!(line_name("rtmp://a.example/live/key"), "other");
         assert_eq!(line_name(""), "other");
     }

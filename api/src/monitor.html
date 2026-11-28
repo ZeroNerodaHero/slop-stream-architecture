@@ -111,9 +111,15 @@
   .ctip i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; }
   .ctip span { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
   .host { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
-  .host .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 8px; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
+  .host .hcharts { container: hcharts / inline-size; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
+  .host .charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; gap: 8px; min-width: 0; }
+  @media (max-width: 720px) { .host { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); } }
+  @container hcharts (max-width: 699px) { .host .charts { grid-template-columns: minmax(0, 1fr); } }
   .host .charts > .meta { grid-column: 1 / -1; }
-  .host .charts > .tile { aspect-ratio: 1 / 1; overflow: hidden; }
+  .host .charts > .tile { aspect-ratio: 2 / 1; overflow: hidden; }
+  .host .charts > .tile .head { flex-wrap: wrap; row-gap: 0; }
+  .host .charts > .tile .label { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .host .charts > .tile .value { flex: 1 1 var(--vw, auto); min-width: 0; }
   .overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 10px; align-content: start; }
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 30%); gap: 10px; }
   .cstack { display: grid; grid-template-rows: auto repeat(5, minmax(0, 1fr)); gap: 8px; min-height: 0; }
@@ -878,6 +884,10 @@
     const tile = el('div', 'tile');
     const head = el('div', 'head');
     const $value = el('span', 'value mono', value);
+    if (value) {
+      $value.title = value;
+      $value.style.setProperty('--vw', `${String(value).length}ch`);
+    }
     head.append(el('span', 'label', label), $value);
     tile.append(head, canvas);
     if (lines.length > 1) {
@@ -1025,7 +1035,9 @@
 
   function hostTab(t, now) {
     const wrap = el('div', 'host grow');
+    const scroller = el('div', 'hcharts');
     const charts2 = el('div', 'charts fit');
+    scroller.append(charts2);
     const s = seriesFor(t.name);
     const latest = (s && s.latest) || null;
     const H = latest ? latest.host : (t.metrics && t.metrics.host) || null;
@@ -1037,7 +1049,7 @@
       card.className = t.status;
       return card;
     }));
-    wrap.append(charts2, side);
+    wrap.append(scroller, side);
     if (!H) {
       const m = el('div', 'meta');
       m.append(el('p', status ? 'note' : 'empty', status ? `no numbers from this box yet: ${status}` : 'waiting for the first numbers from this box'));
