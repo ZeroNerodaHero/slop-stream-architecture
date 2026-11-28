@@ -312,15 +312,13 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
   });
 
   await step('the eye: the camera taken off the stream is a tile for the watcher, and put back it is where it was', async () => {
-    await pub.click('#source-cam');
-    await pub.click('#source-detail-shown');
+    await pub.click('#source-eye-cam');
     await waitBox(pub, 'cam', null, 2000);
     await waitBox(w, 'cam', null, 5000);
     await waitTiles(w, [CAMERA]);
     expect((await trackId(w, '#tile-0-video')) === track.camera, 'the tile does not play the camera track');
     expect((await trackId(w, '#video')) === track.screen1, 'the big picture changed');
-    await pub.click('#source-cam');
-    await pub.click('#source-detail-shown');
+    await pub.click('#source-eye-cam');
     await waitBox(pub, 'cam', SIZED, 2000);
     await waitBox(w, 'cam', SIZED, 5000);
     await waitTiles(w, []);
@@ -361,8 +359,7 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     expect(track.screen2 && ![track.camera, track.screen1].includes(track.screen2), 'the second screen plays a track seen before');
     let n = await flowingVideos(w);
     expect(n === 3, `${n} video streams flowing, not 3`);
-    await pub.click('#source-s2');
-    await pub.click('#source-detail-shown');
+    await pub.click('#source-eye-s2');
     await waitBox(w, 's2', null, 5000);
     await waitTiles(w, [SCREEN2]);
     expect((await trackId(w, '#tile-2-video')) === track.screen2, 'the tile does not play the second screen');
