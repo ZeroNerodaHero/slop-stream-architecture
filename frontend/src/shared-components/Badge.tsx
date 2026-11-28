@@ -18,12 +18,13 @@ interface BadgeProps {
   src?: string | null;
   card?: boolean;
   preview?: boolean;
+  bare?: boolean;
   size?: 'xs' | 'sm' | 'md';
   id?: string;
   className?: string;
 }
 
-export function Badge({ group: carried, src, card, preview, size = 'sm', id, className }: BadgeProps) {
+export function Badge({ group: carried, src, card, preview, bare, size = 'sm', id, className }: BadgeProps) {
   const icons = useAtomValue(groupIconsAtom);
   const icon = icons.has(carried.name) ? icons.get(carried.name) : carried.icon;
   const heard = useAtomValue(groupColorsAtom).get(carried.name);
@@ -37,9 +38,10 @@ export function Badge({ group: carried, src, card, preview, size = 'sm', id, cla
       className={cn('inline-flex items-center overflow-hidden rounded-control align-middle', card && 'cursor-default', className)}
     >
       <GroupMark name={group.name} color={group.color} icon={icon} src={src} className={MARK[size]} />
-      <Pill group={group} className={PILL[size]} />
+      {(!bare || group.badge) && <Pill group={group} className={PILL[size]} />}
     </span>
   );
+  if (bare) return pill;
   if (!card) return <Tooltip content={`in the group ${group.name}`}>{pill}</Tooltip>;
   return (
     <Tooltip content={<GroupCard group={group} icon={icon} />} className="w-[280px] whitespace-normal p-0 text-sm font-normal">

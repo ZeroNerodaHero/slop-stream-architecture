@@ -1,4 +1,4 @@
-import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiPhoneLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiPhoneLine, RiUserLine } from '@remixicon/react';
 import { useAtom, useAtomValue } from 'jotai';
 import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -34,6 +34,7 @@ import {
   smallRows,
   stripFit
 } from '@/infra/voice-pip';
+import { Badge } from '@/shared-components/Badge';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { useStackedWindow } from '@/shared-components/useStackedWindow';
@@ -396,7 +397,7 @@ function PipWindow({ room, channel, page, open, dm = null }: { room: GroupRoom; 
   const people = tiles.filter((t) => t.kind === 'person').length;
   const linked = call.phase === 'connected' && call.linked;
   const dmStatus = dm ? dmStatusOf(dm, linked, now) : null;
-  const status = dmStatus ? dmStatus.text : !linked ? 'connecting…' : `${people} in`;
+  const status = dmStatus ? dmStatus.text : !linked ? 'connecting…' : <Count people={people} />;
   const good = dmStatus ? dmStatus.good : linked;
 
   return (
@@ -417,14 +418,18 @@ function PipWindow({ room, channel, page, open, dm = null }: { room: GroupRoom; 
         onPointerDown={press}
         className={cn('flex min-h-11 shrink-0 cursor-move touch-none select-none items-center gap-2 px-3 [-webkit-touch-callout:none]', drag && 'cursor-grabbing')}
       >
-        {dm ? <RiPhoneLine aria-hidden size={14} className="shrink-0 text-textTertiary" /> : <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />}
+        {dm && <RiPhoneLine aria-hidden size={14} className="shrink-0 text-textTertiary" />}
         <h2 id="voice-pip-channel" className="flex min-w-0">
-          <Tooltip content={dm ? `open the chat with ${dm.peer}` : page ? `open ${channel} in the middle` : `go to ${channel} in ${room.name}`} hideOnPress>
-            <button id="voice-pip-go" type="button" onClick={open} className={cn(NAME_BUTTON, 'px-1.5 py-0.5')}>
-              <span className="truncate font-semibold text-textPrimary">{dm ? dm.peer : channel}</span>
-              {!page && !dm && <span className="truncate text-xs text-textTertiary">{room.name}</span>}
-            </button>
-          </Tooltip>
+          <button
+            id="voice-pip-go"
+            type="button"
+            aria-label={dm ? `open the chat with ${dm.peer}` : page ? `open ${channel} in the middle` : `go to ${channel} in ${room.name}`}
+            onClick={open}
+            className={cn(NAME_BUTTON, 'items-center px-1.5 py-0.5')}
+          >
+            {!dm && <RoomBadge room={room} />}
+            <span className="truncate font-semibold text-textPrimary">{dm ? dm.peer : channel}</span>
+          </button>
         </h2>
         <span id="voice-pip-status" className={cn('shrink-0 text-xs tabular-nums', good ? 'font-semibold text-increase' : 'text-textTertiary')}>
           {status}
@@ -496,6 +501,20 @@ function settle(panel: HTMLElement, on: boolean) {
   panel.style.transform = on ? 'translateY(0)' : 'translateY(-100%)';
 }
 
+function RoomBadge({ room }: { room: GroupRoom }) {
+  return <Badge group={{ name: room.name, badge: room.badge, color: room.color, icon: room.icon }} bare className="shrink-0" />;
+}
+
+function Count({ people }: { people: number }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <RiUserLine aria-hidden size={14} />
+      {people}
+      <span className="sr-only"> in the call</span>
+    </span>
+  );
+}
+
 function CallBar({ room, channel, open, dm = null }: { room: GroupRoom; channel: string; open: () => void; dm?: DmCall | null }) {
   const call = useAtomValue(voiceCallAtom);
   const slot = useAtomValue(callBarSlotAtom);
@@ -514,7 +533,7 @@ function CallBar({ room, channel, open, dm = null }: { room: GroupRoom; channel:
   const connecting = call.phase === 'joining' || !call.linked;
   const now = useTick(dm?.phase === 'live');
   const dmStatus = dm ? dmStatusOf(dm, !connecting, now) : null;
-  const status = dmStatus ? dmStatus.text : connecting ? 'connecting…' : `${people} in`;
+  const status = dmStatus ? dmStatus.text : connecting ? 'connecting…' : <Count people={people} />;
   const good = dmStatus ? dmStatus.good : !connecting;
   const title = dm ? dm.peer : channel;
 
@@ -696,11 +715,8 @@ function CallBar({ room, channel, open, dm = null }: { room: GroupRoom; channel:
             }}
             className={cn(NAME_BUTTON, 'min-h-11 min-w-0 flex-1 items-center border-primaryStroke bg-background px-2')}
           >
-            {dm ? <RiPhoneLine aria-hidden size={14} className="shrink-0 text-textTertiary" /> : <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />}
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate font-semibold text-textPrimary">{title}</span>
-              {!dm && <span className="truncate text-xs text-textTertiary">{room.name}</span>}
-            </span>
+            {dm ? <RiPhoneLine aria-hidden size={14} className="shrink-0 text-textTertiary" /> : <RoomBadge room={room} />}
+            <span className="truncate font-semibold text-textPrimary">{title}</span>
             <span id="voice-bar-status" className={cn('ml-auto shrink-0 text-xs tabular-nums', good ? 'font-semibold text-increase' : 'text-textTertiary')}>
               {status}
             </span>
