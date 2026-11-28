@@ -64,7 +64,7 @@
     </script>
     <script>
       try {
-        if (location.pathname === '/') {
+        if (location.pathname === '/' || location.pathname === '/active') {
           var bootStreams = { born: performance.now(), response: fetch('/api/streams', { cache: 'no-store' }) };
           bootStreams.response.catch(function () {});
           window.__bootStreams = bootStreams;

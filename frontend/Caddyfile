@@ -154,7 +154,7 @@ https://stats.nodentity.xyz {
 		file_server
 	}
 
-	@shell path / /groups /groups/* /live /login /signup
+	@shell path / /active /groups /groups/* /live /login /signup
 	handle @shell {
 		root * /srv
 		header Cache-Control "public, max-age=0, s-maxage=60, must-revalidate"

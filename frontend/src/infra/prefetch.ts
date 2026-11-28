@@ -8,7 +8,7 @@ import { store } from '@/infra/store';
 
 export const PREFETCH_TTL_MS = 5000;
 
-export type PrefetchRoute = { kind: 'home'; name: '' } | { kind: 'watch'; name: string } | { kind: 'group'; name: string };
+export type PrefetchRoute = { kind: 'home'; name: '' } | { kind: 'active'; name: '' } | { kind: 'watch'; name: string } | { kind: 'group'; name: string };
 
 export function prefetchRouteOf(path: string): PrefetchRoute | null {
   const parts = (path.split(/[?#]/)[0] ?? '').split('/').filter(Boolean);
@@ -20,6 +20,7 @@ export function prefetchRouteOf(path: string): PrefetchRoute | null {
   }
   const [page, name, channel, ...rest] = decoded;
   if (page === undefined) return { kind: 'home', name: '' };
+  if (page === 'active' && name === undefined) return { kind: 'active', name: '' };
   if (name === undefined || rest.length > 0) return null;
   if (page === 'watch' && channel === undefined) {
     const clean = cleanName(name);
@@ -59,9 +60,10 @@ export const loadServerPage = () => import('@/app/explore/ServerRoom');
 export const loadHomePage = () => import('@/app/home/HomePage');
 export const loadWatchPage = () => import('@/app/watch/WatchPage');
 
-const pageLoaders: Record<PrefetchRoute['kind'], () => Promise<unknown>> = { home: loadHomePage, watch: loadWatchPage, group: loadServerPage };
+const pageLoaders: Record<PrefetchRoute['kind'], () => Promise<unknown>> = { home: loadHomePage, active: loadHomePage, watch: loadWatchPage, group: loadServerPage };
 const prefetcherLoaders: Record<PrefetchRoute['kind'], () => Promise<unknown>> = {
   home: () => import('@/infra/atoms/home-atoms'),
+  active: () => import('@/infra/atoms/home-atoms'),
   watch: () => import('@/infra/atoms/watch-atoms'),
   group: () => import('@/infra/atoms/room-atoms')
 };

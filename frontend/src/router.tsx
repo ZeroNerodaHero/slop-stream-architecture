@@ -186,6 +186,7 @@ function ExploreRedirect() {
 }
 
 const HomePage = lazy(() => loadHomePage().then((m) => ({ default: m.HomePage })));
+const ActivePage = lazy(() => loadHomePage().then((m) => ({ default: m.ActivePage })));
 const WatchPage = lazy(() => loadWatchPage().then((m) => ({ default: m.WatchPage })));
 const ExplorePage = lazy(() => import('@/app/explore/ExplorePage').then((m) => ({ default: m.ExplorePage })));
 const ServerPage = lazy(() => loadServerPage().then((m) => ({ default: m.ServerPage })));
@@ -206,6 +207,7 @@ export const router = createBrowserRouter([
     errorElement: <CrashPage />,
     children: [
       { path: '/', element: <HomePage /> },
+      { path: '/active', element: <ActivePage /> },
       { path: '/groups', element: <ExplorePage /> },
       { path: '/groups/:server/:channel?', element: <ServerRoute /> },
       { path: '/explore', element: <Navigate to="/groups" replace /> },
