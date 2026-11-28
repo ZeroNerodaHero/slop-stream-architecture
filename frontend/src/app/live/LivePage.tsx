@@ -86,6 +86,7 @@ import {
   RAIL_W_MAX,
   RAIL_W_MIN,
   RAIL_W_STEP,
+  railFocusAtom,
   railOpen,
   setGrid,
   setRail,
@@ -255,7 +256,7 @@ function Slot({ hosts, ids, id, className, style }: SlotProps) {
 const ROW_TALL = '15.5rem';
 const ROW_LOW = '11rem';
 const WIDE_CELL = 360;
-const RAIL_EDGE_PX = 24;
+const RAIL_STRIP_PX = 40;
 const CHAT_PX = 340;
 const GAP_PX = 8;
 const UNDER_MIN = '12rem';
@@ -449,14 +450,65 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
 
 const RAIL_HEAD = 'flex h-9 shrink-0 items-center gap-1.5 pl-3 pr-1 text-xs font-semibold uppercase tracking-wider text-textTertiary';
 
-const RAIL_TAB =
-  'relative flex h-12 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textTertiary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none';
+const GRIP_SHOW = 'opacity-0 group-hover/edge:opacity-100 group-focus-within/edge:opacity-100';
+
+function RailStrip({ onToggle }: { onToggle: () => void }) {
+  return (
+    <nav
+      id="live-rail-strip"
+      aria-label="studio"
+      className={panelClassName('flex min-h-0 w-10 shrink-0 flex-col items-center overflow-y-auto overflow-x-hidden overscroll-contain')}
+    >
+      <div className="flex flex-col items-center py-2">
+        <Tooltip content="expand" at="left">
+          <button
+            id="live-rail-toggle"
+            type="button"
+            aria-label="expand"
+            aria-expanded={false}
+            aria-controls="live-rail-body"
+            onClick={onToggle}
+            className={FOLD_BUTTON}
+          >
+            <RiArrowLeftSLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
+      </div>
+      <ModuleBoundary id="thumbnail" name="thumbnail" small>
+        <ThumbnailModule strip />
+      </ModuleBoundary>
+      <ModuleBoundary id="studio" name="studio" small>
+        <StudioModule strip />
+      </ModuleBoundary>
+      <ModuleBoundary id="presets" name="presets" small>
+        <PresetsModule strip />
+      </ModuleBoundary>
+      <ModuleBoundary id="destinations" name="destinations" small>
+        <DestinationsModule strip />
+      </ModuleBoundary>
+      <span className="flex-1" />
+      <ModuleBoundary id="layout" name="layout switcher" small>
+        <LayoutModule strip />
+      </ModuleBoundary>
+    </nav>
+  );
+}
 
 function Rail({ open, width, onToggle }: { open: boolean; width: number; onToggle: () => void }) {
   const drag = useRef<{ id: number; x: number; w: number; now: number } | null>(null);
   const [live, setLive] = useState<number | null>(null);
+  const focusAt = useAtomValue(railFocusAtom);
   const shown = live ?? width;
-  const words = open ? 'collapse' : 'expand';
+  const dragging = live !== null;
+
+  useEffect(() => {
+    if (!open || !focusAt) return;
+    store.set(railFocusAtom, null);
+    const section = document.querySelector<HTMLElement>(`#live-rail-body [data-rail-section="${focusAt}"]`);
+    if (!section) return;
+    section.scrollIntoView({ block: 'nearest' });
+    section.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true });
+  }, [open, focusAt]);
 
   const finish = () => {
     const d = drag.current;
@@ -468,92 +520,129 @@ function Rail({ open, width, onToggle }: { open: boolean; width: number; onToggl
     setLive(null);
   };
 
+  if (!open)
+    return (
+      <div id="live-rail" data-open={false} className="flex min-h-0 shrink-0">
+        <RailStrip onToggle={onToggle} />
+      </div>
+    );
+
   return (
-    <div id="live-rail" data-open={open} className="flex min-h-0 shrink-0">
-      <div className="relative flex w-6 shrink-0 items-center justify-center">
-        {open && (
-          <Tooltip content={live === null ? 'drag to resize' : null} hideOnPress>
-            <div
-              id="live-rail-resize"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="resize studio"
-              aria-valuenow={shown}
-              aria-valuemin={RAIL_W_MIN}
-              aria-valuemax={RAIL_W_MAX}
-              tabIndex={0}
-              data-dragging={live !== null || undefined}
-              onPointerDown={(e) => {
-                if (e.button !== 0 || drag.current) return;
-                e.preventDefault();
-                e.currentTarget.setPointerCapture(e.pointerId);
-                drag.current = { id: e.pointerId, x: e.clientX, w: width, now: width };
-                document.body.style.userSelect = 'none';
-                document.body.style.cursor = 'col-resize';
-                setLive(width);
-              }}
-              onPointerMove={(e) => {
-                const d = drag.current;
-                if (!d || e.pointerId !== d.id) return;
-                d.now = fitRailWidth(d.w + d.x - e.clientX);
-                setLive(d.now);
-              }}
-              onPointerUp={finish}
-              onPointerCancel={finish}
-              onLostPointerCapture={finish}
-              onDoubleClick={() => setRailWidth(null)}
-              onKeyDown={(e) => {
-                let w: number | null = null;
-                if (e.key === 'ArrowLeft') w = width + RAIL_W_STEP;
-                else if (e.key === 'ArrowRight') w = width - RAIL_W_STEP;
-                else if (e.key === 'Home') w = RAIL_W_MIN;
-                else if (e.key === 'End') w = RAIL_W_MAX;
-                if (w === null) return;
-                e.preventDefault();
-                setRailWidth(w);
-              }}
-              className="group/resize absolute inset-0 cursor-col-resize touch-none outline-none"
+    <div id="live-rail" data-open className="relative flex min-h-0 shrink-0">
+      <section id="live-rail-body" aria-label="studio" className={panelClassName('flex min-h-0 flex-col overflow-hidden')} style={{ width: shown }}>
+        <h2 className={RAIL_HEAD}>
+          <span className="min-w-0 flex-1 truncate">studio</span>
+        </h2>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain">
+          <ModuleBoundary id="thumbnail" name="thumbnail">
+            <ThumbnailModule />
+          </ModuleBoundary>
+          <ModuleBoundary id="studio" name="studio">
+            <StudioModule />
+          </ModuleBoundary>
+          <ModuleBoundary id="presets" name="presets">
+            <PresetsModule />
+          </ModuleBoundary>
+          <ModuleBoundary id="destinations" name="destinations">
+            <DestinationsModule />
+          </ModuleBoundary>
+        </div>
+        <ModuleBoundary id="layout" name="layout switcher">
+          <LayoutModule />
+        </ModuleBoundary>
+      </section>
+      <div id="live-rail-edge" data-dragging={dragging || undefined} className="group/edge absolute inset-y-0 -left-2 w-2.5">
+        <Tooltip content={dragging ? null : 'drag to resize · double-click resets'} at="left" hideOnPress>
+          <div
+            id="live-rail-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="resize studio"
+            aria-valuenow={shown}
+            aria-valuemin={RAIL_W_MIN}
+            aria-valuemax={RAIL_W_MAX}
+            tabIndex={0}
+            data-dragging={dragging || undefined}
+            onPointerDown={(e) => {
+              if (e.button !== 0 || drag.current) return;
+              e.preventDefault();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              drag.current = { id: e.pointerId, x: e.clientX, w: width, now: width };
+              document.body.style.userSelect = 'none';
+              document.body.style.cursor = 'col-resize';
+              setLive(width);
+            }}
+            onPointerMove={(e) => {
+              const d = drag.current;
+              if (!d || e.pointerId !== d.id) return;
+              d.now = fitRailWidth(d.w + d.x - e.clientX);
+              setLive(d.now);
+            }}
+            onPointerUp={finish}
+            onPointerCancel={finish}
+            onLostPointerCapture={finish}
+            onDoubleClick={() => setRailWidth(null)}
+            onKeyDown={(e) => {
+              let w: number | null = null;
+              if (e.key === 'ArrowLeft') w = width + RAIL_W_STEP;
+              else if (e.key === 'ArrowRight') w = width - RAIL_W_STEP;
+              else if (e.key === 'Home') w = RAIL_W_MIN;
+              else if (e.key === 'End') w = RAIL_W_MAX;
+              if (w === null) return;
+              e.preventDefault();
+              setRailWidth(w);
+            }}
+            className="group/resize absolute inset-0 cursor-col-resize touch-none outline-none"
+          >
+            <span
+              aria-hidden
+              className={cn(
+                'absolute inset-y-0 left-2 w-px transition-colors duration-150',
+                dragging ? 'bg-primaryBlue' : 'bg-transparent group-focus-visible/resize:bg-primaryBlue'
+              )}
+            />
+            <span
+              id="live-rail-grip"
+              aria-hidden
+              className={cn(
+                'absolute left-[8.5px] top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-[3px] rounded-control border bg-backgroundSecondary px-[3px] py-1.5 transition-[opacity,color,border-color] duration-150',
+                dragging ? 'border-primaryBlue text-primaryBlue opacity-100' : cn('border-primaryStroke text-textTertiary', GRIP_SHOW)
+              )}
             >
-              <span
-                aria-hidden
-                className={cn(
-                  'absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors duration-150',
-                  live === null ? 'bg-primaryStroke group-hover/resize:bg-primaryBlue group-focus-visible/resize:bg-primaryBlue' : 'bg-primaryBlue'
-                )}
-              />
-            </div>
+              <span className="h-[3px] w-[3px] rounded-avatar bg-current" />
+              <span className="h-[3px] w-[3px] rounded-avatar bg-current" />
+              <span className="h-[3px] w-[3px] rounded-avatar bg-current" />
+            </span>
+          </div>
+        </Tooltip>
+        {!dragging && (
+          <Tooltip content="collapse" at="left">
+            <button
+              id="live-rail-toggle"
+              type="button"
+              aria-label="collapse"
+              aria-expanded
+              aria-controls="live-rail-body"
+              onClick={onToggle}
+              className={cn(
+                'absolute left-[8.5px] top-[calc(50%+1.5rem)] flex h-5 w-4 -translate-x-1/2 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textTertiary transition-[opacity,color,border-color] duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none',
+                GRIP_SHOW
+              )}
+            >
+              <RiArrowRightSLine aria-hidden size={12} />
+            </button>
           </Tooltip>
         )}
-        <Tooltip content={live === null ? words : null} at={open ? undefined : 'left'}>
-          <button id="live-rail-toggle" type="button" aria-label={words} aria-expanded={open} aria-controls="live-rail-body" onClick={onToggle} className={RAIL_TAB}>
-            {open ? <RiArrowRightSLine aria-hidden size={16} /> : <RiArrowLeftSLine aria-hidden size={16} />}
-          </button>
-        </Tooltip>
+        {dragging && (
+          <span
+            id="live-rail-size"
+            aria-live="polite"
+            className="pointer-events-none absolute bottom-[calc(50%+1.25rem)] left-[8.5px] -translate-x-1/2 whitespace-nowrap rounded-card border border-primaryStroke bg-backgroundSecondary px-2 py-0.5 text-xs font-semibold tabular-nums text-textPrimary"
+          >
+            {shown} / {RAIL_W_MAX}
+          </span>
+        )}
       </div>
-      {open && (
-        <section id="live-rail-body" aria-label="studio" className={panelClassName('flex min-h-0 flex-col overflow-hidden')} style={{ width: shown }}>
-          <h2 className={RAIL_HEAD}>
-            <span className="min-w-0 flex-1 truncate">studio</span>
-          </h2>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain">
-            <ModuleBoundary id="thumbnail" name="thumbnail">
-              <ThumbnailModule />
-            </ModuleBoundary>
-            <ModuleBoundary id="studio" name="studio">
-              <StudioModule />
-            </ModuleBoundary>
-            <ModuleBoundary id="presets" name="presets">
-              <PresetsModule />
-            </ModuleBoundary>
-            <ModuleBoundary id="destinations" name="destinations">
-              <DestinationsModule />
-            </ModuleBoundary>
-          </div>
-          <ModuleBoundary id="layout" name="layout switcher">
-            <LayoutModule />
-          </ModuleBoundary>
-        </section>
-      )}
     </div>
   );
 }
@@ -714,8 +803,7 @@ export function LivePage() {
   const columnPx = width >= 1600 ? 280 : 264;
   const besideChat =
     deskWidth -
-    (isRailOpen ? railWidth : 0) -
-    RAIL_EDGE_PX -
+    (isRailOpen ? railWidth : RAIL_STRIP_PX) -
     GAP_PX -
     (a && a.left.length > 0 ? columnPx + GAP_PX : 0) -
     (a && a.right.length > 0 ? columnPx + GAP_PX : 0) -

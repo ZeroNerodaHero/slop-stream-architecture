@@ -11,7 +11,7 @@ import {
   setRevealHiddenDestinations
 } from '@/infra/atoms/settings-atoms';
 import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl, type RelayStatus } from '@/infra/api';
-import { setRail } from '@/infra/live-dock';
+import { openRailAt } from '@/infra/live-dock';
 import { directStatusAtom, restreamAtom, restreamMessageAtom } from '@/infra/restream';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
@@ -340,7 +340,7 @@ export function DestinationsModule({ strip = false }: { strip?: boolean }) {
             id="live-destinations-mini"
             type="button"
             aria-label={words}
-            onClick={() => setRail(true)}
+            onClick={() => openRailAt('destinations')}
             className={cn(FOLD_BUTTON, count > 0 && 'border-primaryBlue text-primaryBlue')}
           >
             <RiBroadcastLine aria-hidden size={16} />

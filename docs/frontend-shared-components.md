@@ -1107,11 +1107,17 @@ a smaller box when it takes focus. Add width extras with cn(INPUT, 'min-w-0 flex
 
 ## `frontend/src/shared-components/live/Collapsible.tsx`
 
-The go live page's right rail is `Rail` in `app/live/LivePage.tsx` (`#live-rail`). On its left edge a 24px column holds
-`#live-rail-resize`, a 1px line that turns `primaryBlue` on hover or drag and resizes the rail between 220 and 480px
-(`settings.liveRailWidth`, `liveRailWidthAtom`; double-click or a cleared value is the 244px default; arrows step 16px), and on it,
-centred, `#live-rail-toggle`, a boxed chevron tab (`collapse` / `expand`) that folds the rail away to the right leaving only the tab
-(`settings.liveRail`; open until collapsed, since start lives in it). The stage takes the freed width. Desktop only.
+The go live page's right rail is `Rail` in `app/live/LivePage.tsx` (`#live-rail`). It sits one 8px gap from the stage, with no
+edge column. `#live-rail-edge` is an invisible strip over that gap and the rail's left border holding `#live-rail-resize`
+(col-resize; resizes the rail between 220 and 480px, `settings.liveRailWidth`, `liveRailWidthAtom`; double-click or a cleared
+value is the 244px default; arrows step 16px; tooltip `drag to resize · double-click resets`). At rest it draws nothing. On hover
+or keyboard focus it shows `#live-rail-grip`, three dots on the border, and under it `#live-rail-toggle`, a small boxed chevron
+that collapses the rail. While dragging, the grip and the line go `primaryBlue` and `#live-rail-size` reads `width / 480`.
+Collapsed (`settings.liveRail` = `shut`; open until collapsed), the rail is `#live-rail-strip`, a 40px column of boxed icon
+buttons built from each module's `strip` form: expand (`#live-rail-toggle`), thumbnail, start (one click to go live) and copy
+link, presets, destinations (when the api has them) and layout at the bottom. A section icon calls `openRailAt(section)` in
+`infra/live-dock.ts`, which opens the rail and sets `railFocusAtom`. `Rail` then scrolls that `[data-rail-section]` into view and
+focuses its first control. The stage takes the freed width. Desktop only.
 Its sections (studio, layout, presets, thumbnail) each fold to their header row through
 `live/RailSection.tsx` (`RailSection`, `RailFold`), kept per browser in `settings.liveRailFolds`
 (`liveRailFoldsAtom` in `infra/live-dock.ts`). The modules (sources, face, rigging, sound, chat)
