@@ -247,7 +247,7 @@
   .share { position: relative; display: inline-block; width: 40px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
   .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
   .k-http { color: var(--blue); } .k-ws, .k-session-ws { color: var(--violet); } .k-db { color: var(--up); } .k-redis { color: var(--down); }
-  .k-s3, .k-video, .k-voice, .k-api { color: var(--warn); } .k-session-webrtc, .k-setup { color: rgb(110 200 220); }
+  .k-s3, .k-video, .k-voice, .k-api, .k-dest { color: var(--warn); } .k-session-webrtc, .k-session-rtmp, .k-setup { color: rgb(110 200 220); }
   .st-running { color: var(--up); } .st-exited, .st-dead { color: var(--down); } .st-restarting, .st-paused, .st-created { color: var(--warn); }
   .archv { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
   .archl { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
@@ -369,10 +369,10 @@
   const DIRS = [['in', 'client → backend'], ['out', 'backend → client'], ['inter', 'between services']];
   const DIR_NAME = Object.fromEntries(DIRS);
   const ENDPOINT_KINDS = ['http', 'ws', 'session', 'setup'];
-  const KIND_LABEL = { http: 'http', db: 'postgres', redis: 'redis', s3: 's3', emote: 'emotes', video: 'video', voice: 'voice', api: 'api', ws: 'ws upgrade', setup: 'webrtc setup', session: 'stream', 'session-ws': 'websocket', 'session-webrtc': 'webrtc' };
-  const CARD_ORDER = ['http', 'ws', 'session-ws', 'session-webrtc', 'setup', 'db', 'redis', 's3', 'video', 'voice', 'api', 'emote'];
+  const KIND_LABEL = { http: 'http', db: 'postgres', redis: 'redis', s3: 's3', emote: 'emotes', video: 'video', voice: 'voice', api: 'api', dest: 'destinations', ws: 'ws upgrade', setup: 'webrtc setup', session: 'stream', 'session-ws': 'websocket', 'session-webrtc': 'webrtc', 'session-rtmp': 'rtmp push' };
+  const CARD_ORDER = ['http', 'ws', 'session-ws', 'session-webrtc', 'session-rtmp', 'setup', 'db', 'redis', 's3', 'video', 'voice', 'api', 'dest', 'emote'];
   const ALWAYS_CARDS = ['inter|emote'];
-  const LIMITS = { http: [100, 500], ws: [100, 500], setup: [500, 2000], db: [10, 100], redis: [2, 20], s3: [100, 1000], video: [100, 1000], voice: [100, 1000], api: [100, 1000] };
+  const LIMITS = { http: [100, 500], ws: [100, 500], setup: [500, 2000], db: [10, 100], redis: [2, 20], s3: [100, 1000], video: [100, 1000], voice: [100, 1000], api: [100, 1000], dest: [500, 2000] };
   const DEFAULT_SORT = 'sum_ms';
   const LIMIT = 250;
   const ARCH_EVERY = 15000;

@@ -13,6 +13,7 @@
     "monitor": { "tier": 2, "description": "api monitor. checks every box's health, pulls each agent's numbers and the error reports, keeps 7 days of history and serves this page. only ./scripts/deploy.sh stats moves it" },
     "video": { "tier": 3, "description": "the video relay (webrtc sfu). a streamer's browser sends one copy over udp 7882, and video copies the packets out to every viewer without decoding. also the thumbnails, with ffmpeg" },
     "voice": { "tier": 3, "description": "voice and screen calls in group channels (webrtc), the same packet copying as video on udp 7883. seats come from grants the api signs" },
+    "relay": { "tier": 3, "description": "the restream relay, off unless the relay profile and RELAY_URL and RELAY_SECRET are set. a streamer's browser publishes to it over whip (udp 8189), and one ffmpeg per destination pushes the stream out over rtmp to twitch, kick or youtube. asks the api which destinations and keys each session has" },
     "database": { "tier": 4, "description": "postgres 17. accounts, profiles, groups, the chat history, the stream log, the presence choices" },
     "redis": { "tier": 4, "description": "redis 7, in memory only. who is live and who is here right now, the chat streams, and the stream of facts the pushes come from" },
     "s3": { "tier": 4, "description": "seaweedfs, an s3 bucket on this box, for profile pictures and stream thumbnails, when S3_ENDPOINT points at it" },
@@ -46,6 +47,8 @@
     { "from": "home", "to": "video", "port": 7880, "what": "/live", "dir": "inter" },
     { "from": "video", "to": "api", "port": 4000, "what": "grants", "dir": "inter" },
     { "from": "voice", "to": "api", "port": 4000, "what": "grants", "dir": "inter" },
+    { "from": "relay", "to": "api", "port": 4000, "what": "/internal/relay/targets, status, auth", "dir": "inter" },
+    { "from": "relay", "to": "(internet)", "what": "rtmp pushes to twitch, kick and youtube, one ffmpeg each", "dir": "out" },
     { "from": "video", "to": "(internet)", "port": 7882, "proto": "udp", "what": "the stream, copied out to every viewer", "dir": "out" },
     { "from": "voice", "to": "(internet)", "port": 7883, "proto": "udp", "what": "the call, copied out to everyone in it", "dir": "out" },
     { "from": "dummy", "to": "video", "port": 7880, "what": "publish", "dir": "in" },
@@ -57,6 +60,7 @@
     { "from": "agent", "to": "events", "port": 9300, "what": "timings", "dir": "inter" },
     { "from": "agent", "to": "home", "port": 9300, "what": "timings", "dir": "inter" },
     { "from": "agent", "to": "video", "port": 9300, "what": "timings", "dir": "inter" },
-    { "from": "agent", "to": "voice", "port": 9300, "what": "timings", "dir": "inter" }
+    { "from": "agent", "to": "voice", "port": 9300, "what": "timings", "dir": "inter" },
+    { "from": "agent", "to": "relay", "port": 9300, "what": "health, timings", "dir": "inter" }
   ]
 }

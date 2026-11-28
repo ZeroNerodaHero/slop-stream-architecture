@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+mod timings;
+
 const POLL: Duration = Duration::from_secs(1);
 const TARGETS_EVERY: Duration = Duration::from_secs(15);
 const STATUS_EVERY: Duration = Duration::from_secs(15);
@@ -118,6 +120,8 @@ struct Relay {
     env: Arc<Env>,
     http: reqwest::Client,
     up: Arc<AtomicBool>,
+    started: Instant,
+    build: Arc<str>,
 }
 
 #[derive(Deserialize, Clone, PartialEq)]
@@ -140,6 +144,11 @@ impl Target {
 
 fn valid_session(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn line_name(platform: &str) -> String {
+    let ok = !platform.is_empty() && platform.len() <= 32 && platform.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if ok { platform.to_owned() } else { "other".into() }
 }
 
 fn short(id: &str) -> &str {
@@ -193,13 +202,12 @@ fn ffmpeg_args(env: &Env, session: &str, t: &Target) -> Vec<String> {
 
 impl Relay {
     async fn status(&self, session: &str, id: Uuid, state: &str, message: Option<&str>) {
-        let res = self
+        let req = self
             .http
             .post(format!("{}/internal/relay/status", self.env.api))
             .header("x-relay-secret", &self.env.secret)
-            .json(&json!({ "session": session, "id": id, "state": state, "message": message }))
-            .send()
-            .await;
+            .json(&json!({ "session": session, "id": id, "state": state, "message": message }));
+        let res = timings::call("POST", "/internal/relay/status", req).await;
         if let Err(e) = res {
             log::debug!("{}: status: {}", short(session), e.without_url());
         }
@@ -210,14 +218,8 @@ impl Relay {
         if let Some(id) = refresh {
             q.push(("refresh", id.to_string()));
         }
-        let res = self
-            .http
-            .get(format!("{}/internal/relay/targets", self.env.api))
-            .header("x-relay-secret", &self.env.secret)
-            .query(&q)
-            .send()
-            .await
-            .map_err(|e| e.without_url().to_string())?;
+        let req = self.http.get(format!("{}/internal/relay/targets", self.env.api)).header("x-relay-secret", &self.env.secret).query(&q);
+        let res = timings::call("GET", "/internal/relay/targets", req).await.map_err(|e| e.without_url().to_string())?;
         if res.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -233,13 +235,8 @@ impl Relay {
     }
 
     async fn allowed(&self, session: &str, token: &str) -> bool {
-        let res = self
-            .http
-            .post(format!("{}/internal/relay/auth", self.env.api))
-            .header("x-relay-secret", &self.env.secret)
-            .json(&json!({ "session": session, "token": token }))
-            .send()
-            .await;
+        let req = self.http.post(format!("{}/internal/relay/auth", self.env.api)).header("x-relay-secret", &self.env.secret).json(&json!({ "session": session, "token": token }));
+        let res = timings::call("POST", "/internal/relay/auth", req).await;
         matches!(res, Ok(r) if r.status().is_success())
     }
 
@@ -276,8 +273,13 @@ async fn run_ffmpeg(relay: &Relay, session: &str, t: &Target) -> String {
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return format!("could not start ffmpeg: {e}"),
+        Err(e) => {
+            let why = format!("could not start ffmpeg: {e}");
+            timings::Push::open(&line_name(&t.platform)).fail(&why);
+            return why;
+        }
     };
+    let push = timings::Push::open(&line_name(&t.platform));
     let last = Arc::new(Mutex::new(String::new()));
     let stderr = child.stderr.take().map(|err| {
         let last = Arc::clone(&last);
@@ -296,13 +298,15 @@ async fn run_ffmpeg(relay: &Relay, session: &str, t: &Target) -> String {
         })
     });
     let mut live: Option<Instant> = None;
+    let mut total = 0u64;
     if let Some(out) = child.stdout.take() {
         let mut lines = BufReader::new(out).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let sent = line.strip_prefix("total_size=").and_then(|n| n.trim().parse::<i64>().ok()).is_some_and(|n| n > 0);
-            if !sent {
+            let Some(size) = line.strip_prefix("total_size=").and_then(|n| n.trim().parse::<u64>().ok()).filter(|n| *n > 0) else {
                 continue;
-            }
+            };
+            push.sent(size.saturating_sub(total));
+            total = total.max(size);
             match live {
                 None => log::info!("{} {}: live", short(session), t.platform),
                 Some(at) if at.elapsed() < STATUS_EVERY => continue,
@@ -317,11 +321,13 @@ async fn run_ffmpeg(relay: &Relay, session: &str, t: &Target) -> String {
         let _ = h.await;
     }
     let said = last.lock().await.clone();
-    match (said.is_empty(), exit) {
+    let why = match (said.is_empty(), exit) {
         (false, _) => said,
         (true, Ok(code)) => format!("ffmpeg stopped ({code})"),
         (true, Err(e)) => format!("ffmpeg stopped ({e})"),
-    }
+    };
+    push.fail(&why);
+    why
 }
 
 async fn egress(relay: Relay, session: String, mut t: Target) {
@@ -479,11 +485,34 @@ async fn auth(State(relay): State<Relay>, Json(ask): Json<AuthAsk>) -> StatusCod
     }
 }
 
-async fn health(State(relay): State<Relay>) -> (StatusCode, &'static str) {
-    if relay.up.load(Ordering::Relaxed) {
-        (StatusCode::OK, "ok")
-    } else {
-        (StatusCode::SERVICE_UNAVAILABLE, "mediamtx is down")
+async fn health(State(relay): State<Relay>) -> (StatusCode, Json<Value>) {
+    let up = relay.up.load(Ordering::Relaxed);
+    let body = json!({
+        "ok": up,
+        "up_secs": relay.started.elapsed().as_secs(),
+        "build": &*relay.build,
+        "mediamtx": up,
+        "pushes": timings::open_pushes(),
+    });
+    (if up { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }, Json(body))
+}
+
+async fn serve_ops(relay: Relay) {
+    let port = var("TIMINGS_PORT").and_then(|p| p.parse::<u16>().ok()).unwrap_or(timings::PORT);
+    if port == 0 {
+        return;
+    }
+    let router = timings::router().route("/health", get(health)).with_state(relay);
+    match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+        Ok(listener) => {
+            log::info!("relay: health and timings on 0.0.0.0:{port}, for the agent");
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(listener, router).await {
+                    log::warn!("relay: timings server stopped: {e}");
+                }
+            });
+        }
+        Err(e) => log::warn!("relay: cannot listen on {port} ({e}), so the agent gets no health or timings from the relay"),
     }
 }
 
@@ -502,8 +531,10 @@ async fn main() {
         std::process::exit(2);
     }
     let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().expect("http client");
-    let relay = Relay { env: Arc::new(env), http, up: Arc::new(AtomicBool::new(false)) };
-    let app = Router::new().route("/auth", post(auth)).route("/health", get(health)).with_state(relay.clone());
+    let build: Arc<str> = var("BUILD").unwrap_or_else(|| "dev".into()).into();
+    let relay = Relay { env: Arc::new(env), http, up: Arc::new(AtomicBool::new(false)), started: Instant::now(), build };
+    serve_ops(relay.clone()).await;
+    let app = Router::new().route("/auth", post(auth)).with_state(relay.clone());
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", relay.env.auth_port)).await {
         Ok(l) => l,
         Err(e) => {
@@ -557,6 +588,14 @@ mod tests {
         assert!(scrub(&"x".repeat(400), &t).len() <= MESSAGE_MAX);
         assert_eq!(scrub("[out#0/flv @ 0x7f1d65a52d80] Error closing file: Operation not permitted", &t), "Error closing file: Operation not permitted");
         assert!(!ffmpeg_args(&test_env(), &"a".repeat(32), &t).iter().any(|a| a.contains("s3cr") && !a.starts_with("rtmps://")));
+    }
+
+    #[test]
+    fn a_push_is_named_by_its_platform_only() {
+        assert_eq!(line_name("twitch"), "twitch");
+        assert_eq!(line_name("youtube"), "youtube");
+        assert_eq!(line_name("rtmp://a.example/live/key"), "other");
+        assert_eq!(line_name(""), "other");
     }
 
     #[test]
