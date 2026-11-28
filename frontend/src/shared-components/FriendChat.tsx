@@ -67,6 +67,7 @@ import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { AttachMenu, PendingVoiceChip, VoiceBar } from '@/shared-components/ChatVoice';
 import { ChatImages } from '@/shared-components/ChatPanel';
 import { SearchField, SearchFilters, SearchHit, SearchResults, useChatSearch } from '@/shared-components/ChatSearch';
+import { ScrollFades } from '@/shared-components/ScrollFade';
 import { Face } from '@/shared-components/Face';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { useMentionComplete } from '@/shared-components/MentionComplete';
@@ -1068,6 +1069,7 @@ export function FriendChat() {
                   );
                 })}
               </div>
+              <ScrollFades target={log} off={!!hits} />
               {hits && (
                 <SearchResults
                   id="friend-chat-results"

@@ -156,7 +156,7 @@ const pinsWidth = (membersOpen: boolean) =>
 const ROOM_HEIGHT =
   'h-[calc(100dvh-var(--title-row,4rem)-var(--banner-h,0px)-14px)] max-md:h-[calc(var(--vvh,100dvh)-var(--title-row,4rem)-var(--banner-h,0px))] min-h-[420px] max-md:min-h-[min(320px,calc(var(--vvh,100dvh)-var(--title-row,4rem)-var(--banner-h,0px)))]';
 const ROOM_CHAT_MOBILE =
-  'max-md:min-h-0 max-md:border-0 max-md:bg-background max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[html[data-keyboard]_&>footer]:pb-2 max-md:[&>footer]:pt-2';
+  'max-md:min-h-0 max-md:border-0 max-md:bg-background max-md:[--chat-fade:var(--background)] max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[html[data-keyboard]_&>footer]:pb-2 max-md:[&>footer]:pt-2';
 const STACKED_SNAP = 'md:max-lg:snap-start md:max-lg:snap-always md:max-lg:scroll-mt-[7px]';
 const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-var(--banner-h,0px)-14px)] lg:h-[calc(100dvh-var(--title-row,4rem)-var(--banner-h,0px)-14px)] lg:min-h-[420px]';
 
