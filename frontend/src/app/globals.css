@@ -25,8 +25,12 @@
   --r-panel: 0px;
   --r-control: 0px;
   --r-bubble: 0px;
+  --r-bubble-outer: var(--r-bubble);
+  --r-bubble-join: var(--r-bubble);
   --r-avatar: 0px;
   --r-card: 0px;
+  --chat-run-pad: 1px;
+  --chat-minute-pad: calc(1px + 0.25rem);
 }
 
 :root[data-shape='soft'] {
@@ -41,6 +45,10 @@
   --r-panel: 14px;
   --r-control: 999px;
   --r-bubble: 16px;
+  --r-bubble-outer: 18px;
+  --r-bubble-join: 5px;
+  --chat-run-pad: 2px;
+  --chat-minute-pad: 2px;
   --r-avatar: 50%;
   --r-card: 12px;
 }

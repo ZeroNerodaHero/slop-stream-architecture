@@ -63,9 +63,9 @@ export function PlatformFace({ platform, className }: { platform: ChatPlatform; 
 
 export function PlatformMark({ platform }: { platform: ChatPlatform }) {
   return (
-    <Tooltip content={`from ${platform} chat`}>
-      <span role="img" aria-label={`from ${platform}`} data-platform-mark={platform} className="flex">
-        <PlatformLogo platform={platform} size={14} />
+    <Tooltip content={platform}>
+      <span role="img" aria-label={`from ${platform}`} data-platform-mark={platform} className="mr-1 inline-flex align-[-1px]">
+        <PlatformLogo platform={platform} size={12} />
       </span>
     </Tooltip>
   );
