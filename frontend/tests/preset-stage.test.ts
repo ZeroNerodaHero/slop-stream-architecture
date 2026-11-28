@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { readPreset, readPresets } from '../src/infra/live-dock.ts';
 import { arrivedFrom, keptOf, type Source } from '../src/infra/scene.ts';
 import { readSounds } from '../src/infra/source-settings.ts';
-import { gapWords, readStage, sameStage, type Stage, stageChanged, stagedFrom, stageOf, storedStage, withGoneScreens } from '../src/infra/stage.ts';
+import { blankStage, gapWords, readStage, sameStage, type Stage, stageChanged, stagedFrom, stageOf, storedStage, withGoneScreens } from '../src/infra/stage.ts';
 
 const cam: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: { x: 0.5, y: 0.5, w: 0.4, h: 0.4 }, shown: true, fit: 'cover' };
 const screen: Source = { id: 's1', kind: 'screen', label: 'screen', slot: 1, box: { x: 0, y: 0, w: 1, h: 1 }, shown: true };
@@ -226,4 +226,26 @@ test('a stored preset with a picture and a sound still loads with the + menu ent
   assert.deepEqual(readSounds([{ id: 'aboing1', name: 'boing', volume: 0.4, loop: true, hear: false }]), [
     { id: 'aboing1', name: 'boing', volume: 0.4, loop: true, hear: false }
   ]);
+});
+
+test('a new preset starts blank: nothing on stage, devices kept, and it survives storage next to a full one', () => {
+  const full = stageOf([screen, cam, logo], rest);
+  const blank = blankStage(full);
+  assert.deepEqual(blank.scene, {});
+  assert.deepEqual(blank.images, {});
+  assert.deepEqual(blank.sounds, {});
+  assert.deepEqual(blank.names, {});
+  assert.equal(blank.model, null);
+  assert.equal(blank.solo, false);
+  assert.equal(blank.camera, 'cam-b');
+  assert.equal(blank.mic, 'mic-b');
+  const raw = JSON.parse(JSON.stringify({ list: [{ id: 'default', stage: full }, { id: 'p2', name: 'preset 2', stage: blank }], active: 'p2' }));
+  const presets = readPresets(raw);
+  assert.equal(presets.active, 'p2');
+  assert.deepEqual(presets.list[1]?.stage, blank);
+  assert.deepEqual(Object.keys(presets.list[0]?.stage?.scene ?? {}), ['s1', 'cam', 'i1']);
+  const staged = stagedFrom(blank, [screen, cam, logo], [7], newId);
+  assert.equal(staged.sources.some((s) => s.shown), false);
+  assert.equal(staged.sources.some((s) => s.kind === 'image'), false);
+  assert.deepEqual(staged.gaps, []);
 });
