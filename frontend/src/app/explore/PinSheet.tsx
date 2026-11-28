@@ -306,12 +306,12 @@ export function PinSheet({
         tabIndex={-1}
         inert={!shown}
         className={cn(
-          'absolute inset-x-0 top-0 flex h-[60dvh] flex-col border-b border-primaryStroke bg-background text-textPrimary outline-none',
+          'absolute inset-x-0 top-0 flex max-h-[70dvh] flex-col border-b border-primaryStroke bg-background text-textPrimary outline-none',
           drag === null && cn('transition-transform', SLIDE)
         )}
         style={{ transform: open ? `translateY(${drag ?? 0}px)` : 'translateY(-100%)' }}
       >
-        <div ref={lines} id="pin-sheet-lines" className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain text-sm leading-snug">
+        <div ref={lines} id="pin-sheet-lines" className="flex min-h-0 flex-auto flex-col overflow-y-auto overscroll-contain text-sm leading-snug">
           {error ? (
             <p id="pin-sheet-error" className="p-3 text-decrease">
               {error}
