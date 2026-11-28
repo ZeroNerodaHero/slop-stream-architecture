@@ -1000,15 +1000,6 @@ export function ServerPage() {
     return () => setHomePreviews([]);
   }, [previewKey]);
 
-  useEffect(() => {
-    if (!ok) return;
-    const root = document.documentElement;
-    root.style.scrollSnapType = 'y mandatory';
-    return () => {
-      root.style.scrollSnapType = '';
-    };
-  }, [ok]);
-
   useLayoutEffect(() => {
     const grid = roomRef.current;
     if (landed.current || !grid) return;

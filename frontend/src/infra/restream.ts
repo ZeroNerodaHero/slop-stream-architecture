@@ -343,7 +343,7 @@ async function connect(r: Running): Promise<void> {
   } catch (err) {
     if (running !== r) return;
     if (err instanceof ApiError && (err.status === 404 || err.status === 409 || err.status === 401 || err.status === 403)) {
-      const note = err.status === 404 ? r.note : '';
+      const note = err.status === 404 ? `${r.note || 'sending to destinations is not set up on slop yet'}, so only slop gets the stream` : '';
       stopRestream({ quiet: true });
       if (note) say('off', note);
       return;
@@ -410,14 +410,14 @@ export function directWanted(): boolean {
 async function begin(r: Running) {
   const handled = directWanted() ? await connectDirect(r).catch((err: unknown) => directFailed(r, messageOf(err))) : false;
   if (handled || running !== r) return;
-  if (r.note) say('starting', r.note);
+  if (r.note) say('starting', `${r.note}, so it tries the relay`);
   void connect(r).catch((err: unknown) => later(r, messageOf(err)));
 }
 
 function directFailed(r: Running, why: string): boolean {
   r.direct?.stop();
   r.direct = null;
-  r.note = `${HERE} could not send straight to your destinations (${why}), so it goes through the relay`;
+  r.note = `${HERE} could not send straight to your destinations (${why})`;
   return false;
 }
 
@@ -434,7 +434,7 @@ async function connectDirect(r: Running): Promise<boolean> {
   const config = await direct.directVideoConfig(shape);
   if (running !== r) return true;
   if (!config) {
-    r.note = `${HERE} cannot encode h.264 and aac here (it needs macOS with Safari 26 or newer, or the latest app), so it goes through the relay`;
+    r.note = `${HERE} cannot encode h.264 and aac here (it needs macOS with Safari 26 or newer, or the latest app)`;
     return false;
   }
   let grant: DirectGrant;
@@ -467,7 +467,7 @@ async function connectDirect(r: Running): Promise<boolean> {
       if (running !== r) return;
       directFailed(r, why);
       if (r.compositor) r.compositor.onDraw = null;
-      say('retrying', r.note);
+      say('retrying', `${r.note}, so it tries the relay`);
       void connect(r).catch((err: unknown) => later(r, messageOf(err)));
     }
   );
