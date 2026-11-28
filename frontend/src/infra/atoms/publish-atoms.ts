@@ -68,6 +68,9 @@ import {
   soloed,
   squaredAvatars,
   type Source,
+  type TextPatch,
+  textPatched,
+  textSource,
   validPreset
 } from '@/infra/scene';
 import { isSeeThrough, isStoredBacking, NO_BACKING, readModelBacking } from '@/infra/model-backing';
@@ -477,6 +480,16 @@ function ensureAvatarSource() {
   const avatar: Source = { id: AVATAR_ID, kind: 'avatar', label: 'avatar', box: FULL, shown: true };
   const face = !sources.some((s) => s.kind === 'camera');
   setSources(arrangedAfterAdd(face ? [avatar, ...sources] : [...sources, avatar], avatar, store.get(lastArrangementAtom)));
+}
+
+export function addText() {
+  const source = textSource('lower third', store.get(sourcesAtom));
+  setSources(arrangedAfterAdd([...store.get(sourcesAtom), source], source, null));
+  store.set(selectedSourceAtom, source.id);
+}
+
+export function setText(id: string, patch: TextPatch) {
+  withSource(id, (s) => textPatched(s, patch));
 }
 
 export function addAvatar() {
@@ -1569,6 +1582,7 @@ export function streamSourceBox(id: string, box: Box) {
 function resizeRatio(id: string, from: Box, free: boolean): number | null {
   const s = store.get(sourcesAtom).find((x) => x.id === id);
   if (s?.kind === 'avatar') return SQUARE;
+  if (s?.kind === 'text') return null;
   return s?.ratio ?? (free ? null : from.w / from.h);
 }
 

@@ -44,6 +44,7 @@ import { DevicePick } from '@/shared-components/live/DevicePick';
 import { ModelControls } from '@/shared-components/live/ModelControls';
 import { Rigging } from '@/shared-components/live/Rigging';
 import { Segmented } from '@/shared-components/Segmented';
+import { TextSettings } from '@/shared-components/live/TextSettings';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -63,11 +64,13 @@ export function useSourceFacts(source: Source) {
         ? 'remove (the upload stays saved)'
         : source.kind === 'avatar'
           ? 'remove (the + brings it back)'
-          : !hasMic
-            ? `no mic: the ${worn ? 'model' : 'camera'} is all there is`
-            : worn
-              ? 'take the model off: mic only, your avatar stands in'
-              : 'turn the camera off: mic only, your avatar stands in';
+          : source.kind === 'text'
+            ? 'remove'
+            : !hasMic
+              ? `no mic: the ${worn ? 'model' : 'camera'} is all there is`
+              : worn
+                ? 'take the model off: mic only, your avatar stands in'
+                : 'turn the camera off: mic only, your avatar stands in';
   const removeLabel = source.kind === 'screen' ? 'stop sharing' : worn ? 'take the model off' : source.kind === 'camera' ? 'turn the camera off' : 'remove';
   return { worn, fill, canRemove, removeWords, removeLabel };
 }
@@ -311,6 +314,7 @@ function VisualSettings({ source, place, head, onModel }: { source: Source; plac
           {sections.includes('device') && <CameraPick />}
         </div>
       )}
+      {sections.includes('text') && <TextSettings source={source} />}
       {sections.includes('look') && (
         <div id="source-look" className="border-t border-primaryStroke">
           <p className={SECTION_HEAD}>look</p>

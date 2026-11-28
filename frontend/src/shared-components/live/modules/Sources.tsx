@@ -1,4 +1,15 @@
-import { RiAddLine, RiCloseLine, RiComputerLine, RiEyeLine, RiEyeOffLine, RiMusic2Line, RiUserSmileLine, RiUserVoiceLine, RiVidiconLine } from '@remixicon/react';
+import {
+  RiAddLine,
+  RiCloseLine,
+  RiComputerLine,
+  RiEyeLine,
+  RiEyeOffLine,
+  RiMusic2Line,
+  RiText,
+  RiUserSmileLine,
+  RiUserVoiceLine,
+  RiVidiconLine
+} from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -7,6 +18,7 @@ import { api } from '@/infra/api';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
   addAvatar,
+  addText,
   cameraAtom,
   cameraOn,
   canShareScreenAtom,
@@ -180,6 +192,18 @@ function AddMenu({ onModel }: { onModel: () => void }) {
                 {!canShare && <span className="ml-auto text-xs text-textTertiary">{SCREEN_SLOTS} at most</span>}
               </button>
             )}
+            <button
+              id="add-text"
+              role="menuitem"
+              type="button"
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                addText();
+              }}
+            >
+              <RiText aria-hidden size={16} /> text
+            </button>
           </div>,
           document.body
         )}
@@ -205,6 +229,12 @@ function SourceThumb({ source }: { source: Source }) {
         draggable={false}
         className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-black object-contain"
       />
+    );
+  if (source.kind === 'text')
+    return (
+      <span className={cn(THUMB, 'text-textTertiary')}>
+        <RiText aria-hidden size={14} />
+      </span>
     );
   if (source.kind === 'avatar')
     return <Face name={name} version={avatar} className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-backgroundSecondary object-cover text-xs" />;

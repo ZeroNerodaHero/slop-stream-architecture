@@ -244,6 +244,7 @@ test('keys 1 to 9 pick presets in order', () => {
 const stage = (x: number) => ({
   scene: { cam: { box: { x, y: 0, w: 0.5, h: 0.5 }, shown: true } },
   images: {},
+  texts: {},
   levels: {},
   sounds: {},
   names: {},

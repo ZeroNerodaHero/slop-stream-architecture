@@ -1,13 +1,14 @@
 import { atom } from 'jotai';
 
 import { api, ApiError, type DirectGrant, messageOf, type RelayGrant, type RelayStatus } from '@/infra/api';
-import { restreamDirectAtom } from '@/infra/atoms/settings-atoms';
+import { restreamDirectAtom, shapeAtom } from '@/infra/atoms/settings-atoms';
 import { avatarFrame, type AvatarLook, avatarRadius } from '@/infra/avatar-look';
 import type { DirectSender, DirectStatus } from '@/infra/desktop/direct';
 import { HERE } from '@/infra/here';
-import { type Box, fitOf, isVideoLayer, type Layer, type Scene } from '@/infra/relay';
+import { type Box, fitOf, isOverlayLayer, isVideoLayer, type Layer, type Scene } from '@/infra/relay';
 import Clock from '@/infra/restream-clock.worker?worker';
 import { store } from '@/infra/store';
+import { paintText, textShape, textStyleOf } from '@/infra/text-paint';
 import { inTauri } from '@/infra/update-check';
 import { isSpeaking, voiceOf } from '@/infra/voice-level';
 import { colorOf } from '@/shared-components/GeneratedAvatar';
@@ -203,7 +204,7 @@ class Compositor {
 
   private drawLayer(layer: Layer) {
     const box = this.boxOf(layer);
-    if (layer.kind !== 'avatar') {
+    if (layer.kind !== 'avatar' && !isOverlayLayer(layer)) {
       this.ctx.fillStyle = '#000';
       this.ctx.fillRect(box.x, box.y, box.w, box.h);
     }
@@ -211,7 +212,11 @@ class Compositor {
     else if (layer.kind === 'image') {
       const img = this.image(this.inputs.imageUrl(layer.asset));
       if (img) this.ctx.drawImage(img, box.x, box.y, box.w, box.h);
-    } else this.drawAvatar(box);
+    } else if (layer.kind === 'avatar') this.drawAvatar(box);
+    else if (layer.kind === 'text') {
+      const style = textStyleOf(layer.style);
+      paintText(this.ctx, box, { text: layer.text, style, shape: textShape(style, store.get(shapeAtom)) }, this.canvas.height);
+    }
   }
 
   draw() {

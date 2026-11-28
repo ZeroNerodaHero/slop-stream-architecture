@@ -2,6 +2,7 @@ import { record } from '@/infra/atoms/inspector-atoms';
 import { type AvatarLook, readAvatarLook } from '@/infra/avatar-look';
 import { trackSocket } from '@/infra/debug/sockets';
 import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from '@/infra/box';
+import { type ChatSpec, readChat, readText, readTextStyle, readTimer, type TextStyle, type TimerSpec } from '@/infra/text-paint';
 
 export { type Box, clampBox, type Fit, LAYER_MIN, thousandth };
 
@@ -18,7 +19,10 @@ export interface SlotInfo {
 export type VideoLayer = Box & { id: string; kind: 'camera' | 'screen'; slot: number; fit?: Fit };
 export type ImageLayer = Box & { id: string; kind: 'image'; asset: number };
 export type AvatarLayer = Box & { id: string; kind: 'avatar'; look?: AvatarLook };
-export type Layer = VideoLayer | ImageLayer | AvatarLayer;
+export type TextLayer = Box & { id: string; kind: 'text'; text: string; style?: TextStyle };
+export type TimerLayer = Box & { id: string; kind: 'timer'; timer: TimerSpec; style?: TextStyle };
+export type ChatLayer = Box & { id: string; kind: 'chat'; chat?: ChatSpec; style?: TextStyle };
+export type Layer = VideoLayer | ImageLayer | AvatarLayer | TextLayer | TimerLayer | ChatLayer;
 export interface Scene {
   layers: Layer[];
 }
@@ -27,6 +31,7 @@ export const MAX_LAYERS = 16;
 const ID_RE = /^[a-z0-9_-]{1,16}$/i;
 
 export const isVideoLayer = (layer: Layer): layer is VideoLayer => layer.kind === 'camera' || layer.kind === 'screen';
+export const isOverlayLayer = (layer: Layer): layer is TextLayer | TimerLayer | ChatLayer => layer.kind === 'text' || layer.kind === 'timer' || layer.kind === 'chat';
 export const fitOf = (layer: VideoLayer): Fit => layer.fit ?? (layer.kind === 'camera' ? 'cover' : 'contain');
 
 export interface RelayReply {
@@ -74,6 +79,20 @@ function validLayer(raw: unknown): Layer | null {
   if (l.kind === 'avatar') {
     const look = readAvatarLook(l.look);
     return { id: l.id, kind: 'avatar', ...(look && { look }), ...box };
+  }
+  const style = readTextStyle(l.style);
+  const styled = style ? { style } : {};
+  if (l.kind === 'text') {
+    const text = readText(l.text);
+    return text ? { id: l.id, kind: 'text', text, ...styled, ...box } : null;
+  }
+  if (l.kind === 'timer') {
+    const timer = readTimer(l.timer);
+    return timer ? { id: l.id, kind: 'timer', timer, ...styled, ...box } : null;
+  }
+  if (l.kind === 'chat') {
+    const chat = readChat(l.chat);
+    return { id: l.id, kind: 'chat', ...(chat && { chat }), ...styled, ...box };
   }
   return null;
 }
