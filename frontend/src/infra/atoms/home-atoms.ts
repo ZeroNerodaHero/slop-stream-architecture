@@ -1,4 +1,4 @@
-import { atom } from 'jotai';
+import { atom, type Atom } from 'jotai';
 
 import { api, type Explore, type LiveStream, messageOf } from '@/infra/api';
 import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
@@ -9,6 +9,40 @@ import { store } from '@/infra/store';
 export const homeStreamsAtom = atom<LiveStream[] | null>(null);
 export const homeErrorAtom = atom('');
 export const homeNowAtom = atom(Date.now());
+
+export const homeViewersAtom = atom<ReadonlyMap<string, number>>(new Map());
+const viewerAtoms = new Map<string, Atom<number | null>>();
+
+export function viewersOfAtom(name: string): Atom<number | null> {
+  let a = viewerAtoms.get(name);
+  if (!a) {
+    a = atom((get) => get(homeViewersAtom).get(name) ?? null);
+    viewerAtoms.set(name, a);
+  }
+  return a;
+}
+
+function seedViewers(list: LiveStream[]): void {
+  const next = new Map<string, number>();
+  for (const stream of list) if (typeof stream.viewers === 'number') next.set(stream.name, stream.viewers);
+  store.set(homeViewersAtom, next);
+}
+
+function setViewers(name: string, viewers: number): void {
+  const current = store.get(homeViewersAtom);
+  if (current.get(name) === viewers) return;
+  const next = new Map(current);
+  next.set(name, viewers);
+  store.set(homeViewersAtom, next);
+}
+
+function dropViewers(name: string): void {
+  const current = store.get(homeViewersAtom);
+  if (!current.has(name)) return;
+  const next = new Map(current);
+  next.delete(name);
+  store.set(homeViewersAtom, next);
+}
 
 const RETRY_FIRST_MS = 3000;
 const RETRY_MAX_MS = 60_000;
@@ -112,6 +146,7 @@ async function load(): Promise<void> {
   failures = 0;
   store.set(homeErrorAtom, '');
   store.set(homeStreamsAtom, list);
+  seedViewers(list);
   store.set(homeNowAtom, Date.now());
   const held = inflight ?? [];
   inflight = null;
@@ -138,15 +173,12 @@ function apply(frame: ServerFrame): void {
     };
     const at = list.findIndex((s) => s.name === frame.name);
     store.set(homeStreamsAtom, at < 0 ? [...list, card] : list.map((s, i) => (i === at ? card : s)));
+    dropViewers(frame.name);
   } else if (frame.type === 'ended') {
     if (list.some((s) => s.name === frame.name)) store.set(homeStreamsAtom, list.filter((s) => s.name !== frame.name));
+    dropViewers(frame.name);
   } else if (frame.type === 'viewers') {
-    if (list.some((s) => s.name === frame.name && s.viewers !== frame.viewers)) {
-      store.set(
-        homeStreamsAtom,
-        list.map((s) => (s.name === frame.name ? { ...s, viewers: frame.viewers } : s))
-      );
-    }
+    if (list.some((s) => s.name === frame.name)) setViewers(frame.name, frame.viewers);
   }
 }
 

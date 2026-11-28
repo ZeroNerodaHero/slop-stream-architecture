@@ -11,7 +11,7 @@ import { stillPictures } from '@/app/home/stills';
 import { api, mayMakeGroup, messageOf, type LiveStream, type Recent, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
-import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
+import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homeStreamsAtom, leaveHome, viewersOfAtom } from '@/infra/atoms/home-atoms';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
@@ -100,6 +100,16 @@ function LiveSince({ since: at }: { since: string | null }) {
 function TimeAgo({ at }: { at: string }) {
   const now = useAtomValue(homeNowAtom);
   return <>{ago(at, now)}</>;
+}
+
+function CardViewers({ name, idPrefix }: { name: string; idPrefix: string }) {
+  const count = useAtomValue(viewersOfAtom(name));
+  if (count === null) return null;
+  return (
+    <span className="absolute bottom-3 right-3 z-10 rounded-control border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
+      <ViewerCount id={`${idPrefix}viewers-${name}`} count={count} />
+    </span>
+  );
 }
 
 function Thumb({ name, eager }: { name: string; eager: boolean }) {
@@ -233,11 +243,7 @@ function Card({
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase bubble:rounded-avatar" />
             <LiveSince since={stream.since} />
           </span>
-          {typeof stream.viewers === 'number' && (
-            <span className="absolute bottom-3 right-3 z-10 rounded-control border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
-              <ViewerCount id={`${idPrefix}viewers-${stream.name}`} count={stream.viewers} />
-            </span>
-          )}
+          <CardViewers name={stream.name} idPrefix={idPrefix} />
         </div>
         <div className="flex items-start gap-2.5 px-3 py-2.5">
           <Face stream={stream} />
