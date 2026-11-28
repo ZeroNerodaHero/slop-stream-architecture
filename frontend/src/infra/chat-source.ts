@@ -62,14 +62,29 @@ export function platformsOf(raw: unknown): ChatPlatform[] {
   return CHAT_PLATFORMS.filter((p) => raw.includes(p));
 }
 
-export function pickOf(stored: unknown, sources: readonly ChatPlatform[]): ChatPick {
-  return isChatPlatform(stored) && sources.includes(stored) ? stored : 'slop';
+export function picksFor(sources: readonly ChatPlatform[]): ChatPick[] {
+  return ['slop', ...sources];
 }
 
-export function bySource<T extends { source?: ChatSourceLine }>(lines: readonly T[], pick: ChatPick, sources: readonly ChatPlatform[]): readonly T[] {
+export function picksOf(stored: unknown, sources: readonly ChatPlatform[]): ChatPick[] {
+  const options = picksFor(sources);
+  const raw = Array.isArray(stored) ? stored : typeof stored === 'string' ? [stored] : null;
+  if (!raw) return options;
+  const kept = options.filter((option) => raw.includes(option));
+  return kept.length > 0 ? kept : options;
+}
+
+export function togglePick(picks: readonly ChatPick[], option: ChatPick, sources: readonly ChatPlatform[]): ChatPick[] {
+  const current = picksOf(picks, sources);
+  if (!current.includes(option)) return picksFor(sources).filter((o) => o === option || current.includes(o));
+  if (current.length <= 1) return current;
+  return current.filter((o) => o !== option);
+}
+
+export function bySource<T extends { source?: ChatSourceLine }>(lines: readonly T[], picks: readonly ChatPick[], sources: readonly ChatPlatform[]): readonly T[] {
   if (sources.length === 0) return lines;
-  const want = pickOf(pick, sources);
-  const kept = lines.filter((line) => (want === 'slop' ? !line.source : line.source?.platform === want));
+  const want = picksOf(picks, sources);
+  const kept = lines.filter((line) => want.includes(line.source?.platform ?? 'slop'));
   return kept.length === lines.length ? lines : kept;
 }
 
