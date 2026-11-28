@@ -33,6 +33,8 @@ export interface SceneEdit {
   onSelect: (id: string | null) => void;
   onMove: (id: string, from: Box, dx: number, dy: number) => void;
   onResize: (id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) => void;
+  previewMove?: (id: string, from: Box, dx: number, dy: number) => Box;
+  previewResize?: (id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) => Box;
   onNudge: (id: string, dx: number, dy: number) => void;
   onKey: (id: string, what: LayerKey) => void;
 }
@@ -183,6 +185,25 @@ function LayerBox({ layer, frame, edit, onPick, clear = false, children }: Layer
       shift: e.shiftKey,
       moved: false
     };
+    const live = !!edit.previewMove && !!edit.previewResize;
+    let lastDx = 0;
+    let lastDy = 0;
+    let lastFree = g.shift;
+    let raf = 0;
+    let next: Box | null = null;
+    const applyBox = (b: Box) => {
+      node.style.left = pct(b.x);
+      node.style.top = pct(b.y);
+      node.style.width = pct(b.w);
+      node.style.height = pct(b.h);
+    };
+    const flush = () => {
+      raf = 0;
+      if (next) {
+        applyBox(next);
+        next = null;
+      }
+    };
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pointerId) return;
       const px = ev.clientX - g.startX;
@@ -194,18 +215,29 @@ function LayerBox({ layer, frame, edit, onPick, clear = false, children }: Layer
       }
       const dx = px / g.frame.width;
       const dy = py / g.frame.height;
-      if (g.kind === 'move') edit.onMove(layer.id, g.box, dx, dy);
-      else edit.onResize(layer.id, g.box, g.sx, g.sy, dx, dy, ev.shiftKey || g.shift);
+      lastDx = dx;
+      lastDy = dy;
+      lastFree = ev.shiftKey || g.shift;
+      if (live) {
+        next = g.kind === 'move' ? edit.previewMove!(layer.id, g.box, dx, dy) : edit.previewResize!(layer.id, g.box, g.sx, g.sy, dx, dy, lastFree);
+        if (!raf) raf = requestAnimationFrame(flush);
+      } else if (g.kind === 'move') edit.onMove(layer.id, g.box, dx, dy);
+      else edit.onResize(layer.id, g.box, g.sx, g.sy, dx, dy, lastFree);
     };
     const end = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pointerId) return;
       stop.current?.();
       if (!g.moved) return;
+      if (live) {
+        if (g.kind === 'move') edit.onMove(layer.id, g.box, lastDx, lastDy);
+        else edit.onResize(layer.id, g.box, g.sx, g.sy, lastDx, lastDy, lastFree);
+      }
       dragged.current = true;
       setTimeout(() => (dragged.current = false), 0);
     };
     stop.current = () => {
       stop.current = null;
+      if (raf) cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', end);

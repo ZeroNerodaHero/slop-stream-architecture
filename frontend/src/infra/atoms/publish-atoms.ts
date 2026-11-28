@@ -1475,8 +1475,21 @@ export function moveSource(id: string, from: Box, dx: number, dy: number) {
   withSource(id, (s) => ({ ...s, box: movedBox(from, dx, dy) }));
 }
 
+export function previewMoveSource(_id: string, from: Box, dx: number, dy: number): Box {
+  return movedBox(from, dx, dy);
+}
+
+function resizeRatio(id: string, from: Box, free: boolean): number | null {
+  const s = store.get(sourcesAtom).find((x) => x.id === id);
+  return s?.ratio ?? (free && s?.kind !== 'avatar' ? null : from.w / from.h);
+}
+
 export function resizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) {
   withSource(id, (s) => ({ ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free && s.kind !== 'avatar' ? null : from.w / from.h)) }));
+}
+
+export function previewResizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean): Box {
+  return resizedBox(from, sx, sy, dx, dy, resizeRatio(id, from, free));
 }
 
 export function nudgeSource(id: string, dx: number, dy: number) {
