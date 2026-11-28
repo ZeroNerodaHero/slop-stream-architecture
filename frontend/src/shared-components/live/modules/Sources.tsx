@@ -1,4 +1,15 @@
-import { RiAddLine, RiCloseLine, RiComputerLine, RiImageLine, RiMusic2Line, RiUserSmileLine, RiUserVoiceLine, RiVidiconLine } from '@remixicon/react';
+import {
+  RiAddLine,
+  RiCloseLine,
+  RiComputerLine,
+  RiEyeLine,
+  RiEyeOffLine,
+  RiImageLine,
+  RiMusic2Line,
+  RiUserSmileLine,
+  RiUserVoiceLine,
+  RiVidiconLine
+} from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -29,7 +40,8 @@ import {
   sourceStatusAtom,
   sourcesAtom,
   startMic,
-  streamNameAtom
+  streamNameAtom,
+  toggleSource
 } from '@/infra/atoms/publish-atoms';
 import {
   addSound,
@@ -310,11 +322,7 @@ function SourceThumb({ source }: { source: Source }) {
       />
     );
   if (source.kind === 'avatar')
-    return (
-      <span className={THUMB}>
-        <Face name={name} version={avatar} className="h-6 w-6 text-xs" />
-      </span>
-    );
+    return <Face name={name} version={avatar} className="h-7 w-12 shrink-0 rounded-control border border-primaryStroke bg-backgroundSecondary object-cover text-xs" />;
   return <Thumb id={`source-${source.id}-video`} streamAtom={streamAtom} />;
 }
 
@@ -329,10 +337,11 @@ interface RowFrameProps {
   canRemove: boolean;
   onRemove: () => void;
   onRename: (name: string) => void;
+  onToggle?: () => void;
   item?: { 'data-reorder-item': string };
 }
 
-function RowFrame({ id, name, off = false, thumb, start, removeLabel, removeWords, canRemove, onRemove, onRename, item }: RowFrameProps) {
+function RowFrame({ id, name, off = false, thumb, start, removeLabel, removeWords, canRemove, onRemove, onRename, onToggle, item }: RowFrameProps) {
   const selected = useAtomValue(selectedSourceAtom) === id;
   const [editing, setEditing] = useState(false);
   return (
@@ -373,6 +382,15 @@ function RowFrame({ id, name, off = false, thumb, start, removeLabel, removeWord
           {off && <span className="sr-only">, off the stream</span>}
         </button>
       )}
+      {onToggle ? (
+        <Tooltip content={off ? 'show' : 'hide'}>
+          <button id={`source-eye-${id}`} type="button" aria-label={off ? 'show' : 'hide'} aria-pressed={off} onClick={onToggle} className={ICON_BUTTON}>
+            {off ? <RiEyeOffLine aria-hidden size={16} /> : <RiEyeLine aria-hidden size={16} />}
+          </button>
+        </Tooltip>
+      ) : (
+        <span aria-hidden className="w-7 shrink-0" />
+      )}
       <Tooltip content={removeWords}>
         <button
           id={`source-remove-${id}`}
@@ -406,6 +424,7 @@ function Row({ source, handle, item }: RowProps) {
       canRemove={canRemove}
       onRemove={() => removeSource(source.id)}
       onRename={(next) => renameSource(label, next)}
+      onToggle={() => toggleSource(source.id)}
       item={item}
     />
   );

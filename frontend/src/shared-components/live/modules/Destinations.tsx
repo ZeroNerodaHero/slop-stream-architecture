@@ -1,4 +1,4 @@
-import { RiBroadcastLine, RiEyeLine, RiEyeOffLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
+import { RiBroadcastLine, RiEyeLine, RiEyeOffLine, RiKickLine, RiLinkM, type RemixiconComponentType, RiServerLine, RiTwitchLine, RiYoutubeLine } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, type ReactNode, useState } from 'react';
@@ -23,7 +23,7 @@ const ICONS: Record<DestinationPlatform, RemixiconComponentType> = {
   twitch: RiTwitchLine,
   kick: RiKickLine,
   youtube: RiYoutubeLine,
-  custom: RiLinkM
+  custom: RiServerLine
 };
 
 export const DESTINATION_WORDS: Record<DestinationPlatform, string> = {
@@ -36,6 +36,7 @@ const WORDS = DESTINATION_WORDS;
 const ROWS: DestinationRow[] = ['twitch', 'kick', 'youtube', 'custom'];
 
 const SMALL = 'h-7 gap-1 px-2.5 py-0 text-xs max-md:min-h-0';
+const LINK = 'h-7 w-7 shrink-0 p-0 max-md:min-h-0';
 
 export function useDestinations() {
   const relaying = useAtomValue(restreamAtom) !== 'off';
@@ -130,7 +131,7 @@ function Eye({ row, hidden }: { row: DestinationRow; hidden: boolean }) {
         type="button"
         aria-label={`${words} ${WORDS[row]}`}
         aria-pressed={hidden}
-        className={cn(ICON_BUTTON, 'h-6 w-6')}
+        className={ICON_BUTTON}
         onClick={() => setDestinationHidden(row, !hidden)}
       >
         <Icon aria-hidden size={14} />
@@ -171,16 +172,19 @@ function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; o
 function Unconnected({ row, open, hidden, onStatus }: { row: DestinationRow; open: boolean; hidden: boolean; onStatus: (words: string) => void }) {
   const [adding, setAdding] = useState(false);
   const custom = row === 'custom';
-  const action = !open ? null : custom ? (
-    <Tooltip content="add any rtmp server">
-      <Button id="destination-connect-custom" size="sm" variant="outline" className={SMALL} disabled={adding} onClick={() => setAdding(true)}>
-        add
-      </Button>
-    </Tooltip>
-  ) : (
-    <Tooltip content={`connect ${WORDS[row]}`}>
-      <Button id={`destination-connect-${row}`} size="sm" variant="outline" className={SMALL} onClick={() => location.assign(destinationStartUrl(row))}>
-        connect
+  const words = custom ? 'add server' : `connect ${WORDS[row]}`;
+  const action = open && (
+    <Tooltip content={words}>
+      <Button
+        id={`destination-connect-${row}`}
+        size="sm"
+        variant="outline"
+        aria-label={words}
+        className={LINK}
+        disabled={adding}
+        onClick={() => (custom ? setAdding(true) : location.assign(destinationStartUrl(row)))}
+      >
+        <RiLinkM aria-hidden size={14} />
       </Button>
     </Tooltip>
   );
