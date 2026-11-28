@@ -1,4 +1,4 @@
-import { AVATAR_ID, type KeptScene, keptOf, readKept, type Source } from './scene.ts';
+import { AVATAR_ID, type KeptScene, type KeptSource, keptOf, readKept, type Source } from './scene.ts';
 import { cleanSourceName, readNames } from './source-settings.ts';
 
 export interface StageImage {
@@ -151,13 +151,18 @@ export function stagedFrom(stage: Pick<Stage, 'scene' | 'images'>, now: readonly
       });
       continue;
     }
-    if (!kept.shown) continue;
     const kind = stagedKind(id, stage);
+    const slot = kind === 'camera' ? 0 : kind === 'screen' ? screenSlotOf(id) : null;
+    if ((kind === 'camera' || kind === 'screen') && slot !== null) {
+      placed.push({ id, kind, label: kind, slot, box: kept.box, shown: kept.shown, ...(kept.fit && { fit: kept.fit }), waiting: true });
+      continue;
+    }
+    if (!kept.shown) continue;
     if (kind === 'image') gaps.push({ kind: 'image', label: image?.label ?? 'picture' });
     else if (kind === 'screen') gaps.push({ kind: 'screen', slot: screenSlotOf(id) ?? 0 });
     else gaps.push({ kind });
   }
-  const rest = now.filter((s) => !used.has(s.id) && s.kind !== 'image').map((s) => ({ ...s, shown: false }));
+  const rest = now.filter((s) => !used.has(s.id) && s.kind !== 'image' && !s.waiting).map((s) => ({ ...s, shown: false }));
   return { sources: [...rest, ...placed], gaps };
 }
 
@@ -178,4 +183,62 @@ export function withGoneScreens(before: Stage | undefined, next: Stage, seen: re
   const gone = Object.entries(before.scene).filter(([id]) => screenSlotOf(id) !== null && !seen.includes(id) && !(id in next.scene));
   if (!gone.length) return next;
   return { ...next, scene: { ...Object.fromEntries(gone), ...next.scene } };
+}
+
+const FULL_LEVEL: StageLevel = { level: 1, muted: false };
+
+interface StageEntry {
+  id: string;
+  kept: KeptSource;
+  image?: StageImage;
+}
+
+function entriesOf(stage: Stage): StageEntry[] {
+  const count = new Map<number, number>();
+  return Object.entries(stage.scene).map(([id, kept]) => {
+    const image = stage.images[id];
+    if (!image) return { id, kept };
+    const n = (count.get(image.asset) ?? 0) + 1;
+    count.set(image.asset, n);
+    return { id: `@${image.asset}.${n}`, kept, image };
+  });
+}
+
+function canon(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canon);
+  if (!value || typeof value !== 'object') return value;
+  const v = value as Record<string, unknown>;
+  return Object.keys(v)
+    .sort()
+    .filter((k) => v[k] !== undefined)
+    .map((k) => [k, canon(v[k])]);
+}
+
+function viewOf(stage: Stage, mine: readonly StageEntry[], theirs: readonly StageEntry[], other: Stage): string {
+  const there = new Set(theirs.map((e) => e.id));
+  return JSON.stringify(
+    canon({
+      ...stage,
+      scene: mine.filter((e) => e.kept.shown || there.has(e.id)),
+      images: null,
+      levels: Object.fromEntries([...new Set([...Object.keys(stage.levels), ...Object.keys(other.levels)])].map((id) => [id, stage.levels[id] ?? FULL_LEVEL]))
+    })
+  );
+}
+
+export function sameStage(a: Stage, b: Stage): boolean {
+  const ea = entriesOf(a);
+  const eb = entriesOf(b);
+  return viewOf(a, ea, eb, b) === viewOf(b, eb, ea, a);
+}
+
+export function storedStage(stage: Stage): Stage | null {
+  return readStage(JSON.parse(JSON.stringify(stage)));
+}
+
+export function stageChanged(saved: Stage, now: Stage, seen: readonly string[]): boolean {
+  const next = storedStage(now);
+  if (!next) return true;
+  const kept = Object.entries(saved.scene).filter(([id]) => screenSlotOf(id) === null || seen.includes(id) || id in next.scene);
+  return !sameStage({ ...saved, scene: Object.fromEntries(kept) }, next);
 }

@@ -36,9 +36,11 @@ import {
   readSlots,
   seedSlots,
   START_GRID,
+  starterPresets,
   withActive,
   withPresetAdded,
   withPresetDeleted,
+  withPresetMoved,
   withPresetRenamed,
   withPresetStage,
   TILE_IDS,
@@ -73,18 +75,19 @@ test('the old face and rigging modules fold into source settings', () => {
   assert.equal(TILE_IDS.includes('rig' as never), false);
 });
 
-test('default is always the first preset and stays active when nothing else is', () => {
+test('nothing saved reads as the one default starter, and a saved list keeps its own order', () => {
   assert.deepEqual(readPresets(null), { list: [{ id: 'default' }], active: 'default' });
   assert.deepEqual(readPresets('junk'), { list: [{ id: 'default' }], active: 'default' });
+  assert.deepEqual(readPresets({ list: [], active: 'p2' }), starterPresets());
   const read = readPresets({ list: [{ id: 'p2', name: 'two' }, { id: 'default', name: 'main' }, { id: 'p2' }, { id: 'bad' }, 7], active: 'p9' });
   assert.deepEqual(read, {
     list: [
-      { id: 'default', name: 'main' },
-      { id: 'p2', name: 'two' }
+      { id: 'p2', name: 'two' },
+      { id: 'default', name: 'main' }
     ],
-    active: 'default'
+    active: 'p2'
   });
-  assert.equal(readPresets({ list: [{ id: 'p2' }], active: 'p2' }).active, 'p2');
+  assert.deepEqual(readPresets({ list: [{ id: 'p2' }], active: 'p2' }), { list: [{ id: 'p2' }], active: 'p2' });
   const many = Array.from({ length: 14 }, (_, i) => ({ id: `p${i + 2}` }));
   assert.equal(readPresets({ list: many }).list.length, PRESETS_MAX);
   assert.equal(readPreset(null), null);
@@ -266,7 +269,7 @@ test('renaming, deleting and saving touch only the named preset', () => {
   presets = withPresetStage(presets, 'default', stage(0.7));
   assert.deepEqual(presets.list[0]!.stage, stage(0.7));
   assert.deepEqual(presets.list[1]!.stage, stage(0.1));
-  assert.equal(withPresetDeleted(presets, 'default'), presets);
+  assert.equal(withPresetDeleted(presets, 'p9'), presets);
   const gone = withPresetDeleted(presets, 'p2');
   assert.deepEqual(
     gone.list.map((p) => p.id),
@@ -357,4 +360,48 @@ test('the page wraps every module in its own boundary', () => {
   const page = readFileSync(join(import.meta.dirname, '../src/app/live/LivePage.tsx'), 'utf8');
   for (const id of ['studio', 'layout', 'presets', 'thumbnail']) assert.match(page, new RegExp(`<ModuleBoundary id="${id}"`), id);
   assert.match(page, /MODULE_IDS\.map\(\(id\) =>\s*createPortal\(\s*<ModuleBoundary id=\{id\}/);
+});
+
+test('default can be deleted like any other, the active one falls to the first left, and deleting the last brings the starter back', () => {
+  let presets = withPresetAdded(withPresetAdded(readPresets(null), stage(0.1))!, stage(0.2))!;
+  presets = withActive(presets, 'default');
+  presets = withPresetDeleted(presets, 'default');
+  assert.deepEqual(
+    presets.list.map((p) => p.id),
+    ['p2', 'p3']
+  );
+  assert.equal(presets.active, 'p2');
+  presets = withActive(presets, 'p3');
+  presets = withPresetDeleted(presets, 'p2');
+  assert.equal(presets.active, 'p3');
+  presets = withPresetDeleted(presets, 'p3');
+  assert.deepEqual(presets, starterPresets());
+  assert.equal(presetName(presets.list[0]), 'default');
+  assert.equal(presets.list[0]!.stage, undefined);
+  assert.deepEqual(readPresets(JSON.parse(JSON.stringify(presets))), starterPresets());
+});
+
+test('a preset moved by drag keeps its place through storage and the hotkeys follow the new order', () => {
+  let presets = withPresetAdded(withPresetAdded(readPresets(null), stage(0.1))!, stage(0.2))!;
+  const active = presets.active;
+  presets = withPresetMoved(presets, 'p3', 0);
+  assert.deepEqual(
+    presets.list.map((p) => p.id),
+    ['p3', 'default', 'p2']
+  );
+  assert.equal(presets.active, active);
+  presets = withPresetMoved(presets, 'default', 9);
+  assert.deepEqual(
+    presets.list.map((p) => p.id),
+    ['p3', 'p2', 'default']
+  );
+  assert.equal(withPresetMoved(presets, 'p2', 1), presets);
+  assert.equal(withPresetMoved(presets, 'p9', 0), presets);
+  const stored = readPresets(JSON.parse(JSON.stringify(presets)));
+  assert.deepEqual(
+    stored.list.map((p) => p.id),
+    ['p3', 'p2', 'default']
+  );
+  assert.equal(presetForKey('1', stored.list), 'p3');
+  assert.equal(presetForKey('3', stored.list), 'default');
 });
