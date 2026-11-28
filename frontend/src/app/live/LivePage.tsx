@@ -29,6 +29,7 @@ import {
   liveViewersAtom,
   micLevelReader,
   mixerOpenAtom,
+  modelSeeThroughAtom,
   moveSource,
   nudgeSource,
   previewSlotAtom,
@@ -688,6 +689,7 @@ export function LivePage() {
   const rail = useAtomValue(liveRailAtom);
   const railWidth = useAtomValue(liveRailWidthAtom);
   const cameraOnly = useAtomValue(cameraOnlyAtom);
+  const seeThrough = useAtomValue(modelSeeThroughAtom);
   const width = useWindowWidth();
   const [deskRef, deskWidth] = useWidthOf(!mobile);
   const windowed = !mobile && chatSide === 'modal';
@@ -760,6 +762,7 @@ export function LivePage() {
         avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined, look: avatarLook }}
         main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
         edit={cameraOnly ? undefined : edit}
+        clearSlot={seeThrough ? 0 : null}
         placeholder={(layer) => {
           const source = waiting.find((s) => s.id === layer.id);
           return source ? <WaitingLayer source={source} /> : null;

@@ -6,6 +6,7 @@ import { loadModel } from '@/infra/model-load';
 import { buildRig } from '@/infra/model-rig';
 import { type Pose, SHAPE_COUNT } from '@/infra/pose';
 import { HERE } from '@/infra/here';
+import { isSeeThrough } from '@/infra/model-backing';
 
 export interface ModelScene {
   readonly rig: RigInfo;
@@ -53,14 +54,15 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
 
   let renderer: WebGLRenderer;
   try {
-    renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+    renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
   } catch {
     VRMUtils.deepDispose(vrm.scene);
     throw new Error(`${HERE} will not draw 3d here (no webgl), so it cannot show a model`);
   }
   renderer.setSize(canvas.width, canvas.height, false);
+  renderer.setClearColor(0x000000, 0);
   const scene = new Scene();
-  scene.background = new Color(background);
+  scene.background = isSeeThrough(background) ? null : new Color(background);
   const sun = new DirectionalLight(0xffffff, Math.PI);
   sun.position.set(0.6, 1, 1.4).normalize();
   scene.add(sun, new AmbientLight(0xffffff, 0.35), vrm.scene);
@@ -122,7 +124,7 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
       renderer.render(scene, camera);
     },
     setBackground(css) {
-      scene.background = new Color(css);
+      scene.background = isSeeThrough(css) ? null : new Color(css);
     },
     setExpressions(on) {
       rig.moods = on;

@@ -54,6 +54,7 @@ export type ToFaceWorker =
       weights: string;
       frames: ReadableStream<VideoFrame> | null;
       sink: WritableStream<VideoFrame> | null;
+      wire: WritableStream<VideoFrame> | null;
     }
   | { type: 'frames'; frames: ReadableStream<VideoFrame> | null }
   | { type: 'frame'; bitmap: ImageBitmap }

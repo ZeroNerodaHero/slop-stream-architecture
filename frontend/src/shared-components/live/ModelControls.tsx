@@ -3,7 +3,6 @@ import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
 import {
-  backToCamera,
   faceAtom,
   faceCameraAtom,
   faceCamerasAtom,
@@ -11,7 +10,6 @@ import {
   faceMirrorAtom,
   type FaceReading,
   faceStatsAtom,
-  isPublishingAtom,
   modelAtom,
   modelBackgroundAtom,
   modelRigAtom,
@@ -23,14 +21,15 @@ import {
   setModelBackground
 } from '@/infra/atoms/publish-atoms';
 import { modelSurvivesHiddenTab, type RigInfo, type RigPart } from '@/infra/face';
+import { ColorPick } from '@/shared-components/about/ColorPick';
 import { Button } from '@/shared-components/Button';
-import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
 import { Select } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { HERE } from '@/infra/here';
+import { isSeeThrough, NO_BACKING, WIRE_BACKING } from '@/infra/model-backing';
 
 const READING: Record<FaceReading, { said: string; more: string }> = {
   idle: { said: '', more: '' },
@@ -44,7 +43,9 @@ const READING: Record<FaceReading, { said: string; more: string }> = {
 type Tone = 'on' | 'wait' | 'bad';
 const LIGHT: Record<Tone, string> = { on: 'bg-increase', wait: 'bg-textTertiary motion-safe:animate-pulse', bad: 'bg-decrease' };
 const HIDDEN_TAB = `in ${HERE} the model stops moving while this tab is hidden`;
-const WELL = cn(ICON_BUTTON, 'relative cursor-pointer flex-col gap-0.5 has-[:focus-visible]:border-primaryBlue');
+const WELL = cn(ICON_BUTTON, 'cursor-pointer flex-col gap-0.5');
+const PILL = 'px-1.5 py-0.5 text-[10px] max-md:min-h-0';
+const CHECKS = 'repeating-conic-gradient(rgb(var(--text-tertiary)) 0% 25%, transparent 0% 50%) 0 0 / 4px 4px';
 const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
 
 function rigWords(rig: RigInfo): string {
@@ -63,10 +64,10 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
   const mirror = useAtomValue(faceMirrorAtom);
   const expressions = useAtomValue(faceExpressionsAtom);
   const background = useAtomValue(modelBackgroundAtom);
+  const clear = isSeeThrough(background);
+  const [picking, setPicking] = useState(false);
   const cameras = useAtomValue(faceCamerasAtom);
   const camera = useAtomValue(faceCameraAtom);
-  const publishing = useAtomValue(isPublishingAtom);
-  const [asking, setAsking] = useState(false);
   if (!model) return null;
   const { said, more } = READING[face];
   const sentence = said + more;
@@ -133,7 +134,7 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
           {rigWords(rig)}
         </p>
       )}
-      <div className="-ml-1.5 flex items-center gap-1">
+      <div className="-ml-1.5 flex flex-wrap items-center gap-1">
         <Tooltip content={mirror ? 'mirrored. click to unmirror' : 'not mirrored. click to mirror'}>
           <button
             id="face-mirror"
@@ -164,21 +165,40 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
             </button>
           </Tooltip>
         )}
-        <Tooltip content="the colour behind the model">
-          <label className={WELL}>
+        <Tooltip content={picking ? null : clear ? 'nothing behind the model. click for a colour' : 'the colour behind the model'}>
+          <button
+            id="model-background-chip"
+            type="button"
+            aria-label={clear ? 'the colour behind the model, none' : `the colour behind the model, ${background}`}
+            aria-expanded={picking}
+            onClick={() => setPicking(!picking)}
+            className={cn(WELL, picking && 'border-primaryBlue text-primaryBlue')}
+          >
             <RiPaintLine aria-hidden size={14} />
-            <span aria-hidden className="block h-1.5 w-4 rounded-control border border-primaryStroke" style={{ backgroundColor: background }} />
-            <input
-              id="model-background"
-              type="color"
-              aria-label="the colour behind the model"
-              value={background}
-              onChange={(e) => setModelBackground(e.target.value)}
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            <span
+              aria-hidden
+              className="block h-1.5 w-4 rounded-control border border-primaryStroke"
+              style={clear ? { backgroundImage: CHECKS } : { backgroundColor: background }}
             />
-          </label>
+          </button>
         </Tooltip>
+        <Button id="model-change" size="sm" className={PILL} onClick={onChange}>
+          another model
+        </Button>
+        <Button id="face-rest" size="sm" className={PILL} onClick={restFace}>
+          rest face
+        </Button>
       </div>
+      {picking && (
+        <ColorPick
+          id="model-background"
+          label="model background"
+          value={clear ? '' : background}
+          fallback={WIRE_BACKING}
+          reset={{ word: 'none', tip: 'nothing behind the model' }}
+          onChange={(hex) => setModelBackground(hex || NO_BACKING)}
+        />
+      )}
       {cameras.length > 1 && (
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-textSecondary">
           <span className="shrink-0">reads</span>
@@ -191,30 +211,6 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
             className="min-w-0 flex-1"
           />
         </div>
-      )}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Button id="model-change" size="sm" onClick={onChange}>
-          another model
-        </Button>
-        <Button id="face-rest" size="sm" onClick={restFace}>
-          rest face
-        </Button>
-        <Button id="source-real-cam" size="sm" onClick={() => (publishing ? setAsking(true) : void backToCamera())}>
-          use the camera
-        </Button>
-      </div>
-      {asking && (
-        <ConfirmDialog
-          id="real-camera-confirm"
-          title="put your camera on the stream?"
-          message="watchers see the model now. after this they see your camera's own picture."
-          yes="yes, show my camera"
-          onYes={() => {
-            setAsking(false);
-            void backToCamera();
-          }}
-          onNo={() => setAsking(false)}
-        />
       )}
     </div>
   );

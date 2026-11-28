@@ -3,6 +3,7 @@
 import { FaceLandmarker, type FaceLandmarkerResult, type NormalizedLandmark } from '@mediapipe/tasks-vision';
 
 import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelStats, ToFaceWorker } from '@/infra/face-wire';
+import { isSeeThrough, wireBackingOf } from '@/infra/model-backing';
 import { createModelScene, type ModelScene } from '@/infra/model-draw';
 import { FaceTracker, moodOf, type Pose, type Reading, restPose, SHAPE_COUNT, SHAPES, shapeIndex } from '@/infra/pose';
 
@@ -43,6 +44,9 @@ const wordsOf = (err: unknown) => (err instanceof Error ? err.message : String(e
 let scene: ModelScene | null = null;
 let canvas: OffscreenCanvas | null = null;
 let sink: WritableStreamDefaultWriter<VideoFrame> | null = null;
+let wire: WritableStreamDefaultWriter<VideoFrame> | null = null;
+let flat: OffscreenCanvasRenderingContext2D | null = null;
+let backing = '';
 let landmarker: FaceLandmarker | null = null;
 let cameraReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
 const tracker = new FaceTracker();
@@ -251,14 +255,31 @@ function emit(due: number) {
   if (!canvas) return;
   if (sink) {
     if ((sink.desiredSize ?? 1) <= 0) return;
-    const frame = new VideoFrame(canvas, { timestamp: Math.round(due * 1000), alpha: 'discard' });
-    sink.write(frame).catch(() => {
-      frame.close();
-    });
+    const timestamp = Math.round(due * 1000);
+    const frame = new VideoFrame(canvas, { timestamp, alpha: 'keep' });
+    if (wire && (wire.desiredSize ?? 1) > 0) write(wire, wireFrame(frame, timestamp));
+    write(sink, frame);
     return;
   }
   const bitmap = canvas.transferToImageBitmap();
   post({ type: 'bitmap', bitmap }, [bitmap]);
+}
+
+function write(to: WritableStreamDefaultWriter<VideoFrame>, frame: VideoFrame) {
+  to.write(frame).catch(() => {
+    frame.close();
+  });
+}
+
+function wireFrame(frame: VideoFrame, timestamp: number): VideoFrame {
+  if (!canvas || !isSeeThrough(backing)) return frame.clone();
+  if (!flat || flat.canvas.width !== canvas.width || flat.canvas.height !== canvas.height)
+    flat = new OffscreenCanvas(canvas.width, canvas.height).getContext('2d', { alpha: false });
+  if (!flat) return frame.clone();
+  flat.fillStyle = wireBackingOf(backing);
+  flat.fillRect(0, 0, canvas.width, canvas.height);
+  flat.drawImage(canvas, 0, 0);
+  return new VideoFrame(flat.canvas, { timestamp, alpha: 'discard' });
 }
 
 function tick() {
@@ -313,6 +334,9 @@ function shutdown() {
   landmarker = null;
   sink?.close().catch(() => undefined);
   sink = null;
+  wire?.close().catch(() => undefined);
+  wire = null;
+  flat = null;
   scene?.dispose();
   scene = null;
 }
@@ -372,6 +396,7 @@ async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
   try {
     canvas = new OffscreenCanvas(msg.width, msg.height);
     canvas.addEventListener('webglcontextlost', () => fail('the drawing was lost (the gpu let go of it)'));
+    backing = msg.background;
     scene = await createModelScene(canvas, msg.model, msg.background);
     if (stopped) {
       scene.dispose();
@@ -380,6 +405,7 @@ async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
     }
     scene.setExpressions(msg.expressions);
     sink = msg.sink ? msg.sink.getWriter() : null;
+    wire = msg.wire ? msg.wire.getWriter() : null;
     scene.draw(pose, 0);
     emit(performance.now());
   } catch (err) {
@@ -412,7 +438,10 @@ scope.onmessage = (e: MessageEvent<ToFaceWorker>) => {
     if (!stopped) post({ type: 'want' });
   } else if (msg.type === 'set') {
     if (msg.mirror !== undefined) tracker.mirror = msg.mirror;
-    if (msg.background !== undefined) scene?.setBackground(msg.background);
+    if (msg.background !== undefined) {
+      backing = msg.background;
+      scene?.setBackground(msg.background);
+    }
     if (msg.expressions !== undefined) scene?.setExpressions(msg.expressions);
     if (msg.marks !== undefined) {
       marksWanted = msg.marks;
