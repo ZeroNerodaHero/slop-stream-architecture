@@ -51,6 +51,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["nodentity"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBMEVGNzM2NTQ1QjM4RDcKUldUWE9GdFVOdmNPR3U4L3lSL1poZUIzdHNjSVlaejA2OFk2dUltOFlwU2Z5MC93ZjRZcGZjbGMK",
       "endpoints": [

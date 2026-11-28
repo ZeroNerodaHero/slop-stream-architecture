@@ -1,0 +1,7 @@
+[[permission]]
+identifier = "desktop-login"
+description = "Open a nodentity.xyz login start in the default browser, and take the sign in the browser sends back to the app"
+commands.allow = [
+  "open_login",
+  "take_desktop_auth"
+]

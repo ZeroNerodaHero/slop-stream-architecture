@@ -15,10 +15,15 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::{self, Account, Me};
+use crate::timings::Redis;
 use crate::{unique_violation, valid_name, ApiError, ApiResult, AppState};
 
 const STATE_SECS: u64 = 600;
 const SIGNUP_SECS: u64 = 900;
+const HANDOFF_SECS: u64 = 60;
+const HANDOFF_GONE: &str = "that sign in ran out. try again from the app";
+const HANDOFF_WINDOW_SECS: i64 = 600;
+const HANDOFF_PER_IP: i64 = 20;
 const STATE_COOKIE: &str = "oauth_state";
 const SIGNUP_COOKIE: &str = "oauth_signup";
 const PAGE: &str = "/oauth";
@@ -269,11 +274,39 @@ pub(crate) fn pkce_challenge(verifier: &str) -> String {
 pub(crate) fn check_state<'a>(query: Option<&'a str>, cookie: Option<&str>) -> Result<&'a str, &'static str> {
     let query = query.filter(|s| is_token(s)).ok_or("that login link is broken. try again")?;
     let cookie = cookie.filter(|s| is_token(s)).ok_or("that login started in another browser, or ran out. try again")?;
-    let same = query.len() == cookie.len() && query.bytes().zip(cookie.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
-    if same {
+    if same_secret(query, cookie) {
         Ok(query)
     } else {
         Err("that login started in another browser. try again")
+    }
+}
+
+fn same_secret(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn desktop_param(raw: Option<&str>, link: bool) -> Result<Option<String>, &'static str> {
+    match raw {
+        None => Ok(None),
+        Some(s) if !link && is_token(s) && !s.bytes().any(|b| b.is_ascii_uppercase()) => Ok(Some(s.to_owned())),
+        Some(_) => Err("that login link is broken. try again"),
+    }
+}
+
+fn desktop_url(code: &str, state: &str, next: &str, provider: &str) -> String {
+    let f: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("desktop", code)
+        .append_pair("state", state)
+        .append_pair("next", next)
+        .append_pair("provider", provider)
+        .finish();
+    format!("{PAGE}#{f}")
+}
+
+fn same_origin(headers: &HeaderMap, public_url: Option<&str>) -> bool {
+    match headers.get(header::ORIGIN) {
+        None => true,
+        Some(origin) => public_url.is_some_and(|want| origin.to_str().is_ok_and(|o| o == want)),
     }
 }
 
@@ -282,6 +315,46 @@ struct Started {
     provider: String,
     verifier: String,
     link: Option<Uuid>,
+    #[serde(default)]
+    desktop: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(rename_all = "snake_case")]
+enum HandoffKind {
+    Login { user_id: Uuid },
+    Signup { token: String },
+}
+
+impl HandoffKind {
+    fn next(&self) -> &'static str {
+        match self {
+            HandoffKind::Login { .. } => "done",
+            HandoffKind::Signup { .. } => "pick",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Handoff {
+    state: String,
+    kind: HandoffKind,
+    provider: String,
+}
+
+fn handoff_key(code: &str) -> String {
+    format!("oauth:handoff:{code}")
+}
+
+async fn put_handoff(redis: &Redis, code: &str, handoff: &Handoff, secs: u64) -> Result<(), ApiError> {
+    let raw = serde_json::to_string(handoff).map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save"))?;
+    let _: () = redis::cmd("SET").arg(handoff_key(code)).arg(raw).arg("EX").arg(secs).query_async(&mut redis.clone()).await?;
+    Ok(())
+}
+
+async fn take_handoff(redis: &Redis, code: &str, state: &str) -> Result<Option<Handoff>, ApiError> {
+    let raw: Option<String> = redis::cmd("GETDEL").arg(handoff_key(code)).query_async(&mut redis.clone()).await?;
+    Ok(raw.and_then(|r| serde_json::from_str::<Handoff>(&r).ok()).filter(|h| same_secret(&h.state, state)))
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -336,7 +409,10 @@ pub(crate) fn is_login_state(headers: &HeaderMap, state: Option<&str>) -> bool {
 }
 
 fn redirect_with(to: &str, cookies: &[String]) -> Response {
-    let mut res = Redirect::to(to).into_response();
+    with_cookies(Redirect::to(to).into_response(), cookies)
+}
+
+fn with_cookies(mut res: Response, cookies: &[String]) -> Response {
     for c in cookies {
         if let Ok(v) = HeaderValue::from_str(c) {
             res.headers_mut().append(header::SET_COOKIE, v);
@@ -695,6 +771,8 @@ pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, p
 struct StartQuery {
     #[serde(default)]
     link: Option<String>,
+    #[serde(default)]
+    desktop: Option<String>,
 }
 
 async fn start(State(s): State<AppState>, Path(slug): Path<String>, Query(q): Query<StartQuery>, Me(me): Me) -> Result<Response, ApiError> {
@@ -708,10 +786,14 @@ async fn start(State(s): State<AppState>, Path(slug): Path<String>, Query(q): Qu
         },
         _ => None,
     };
+    let desktop = match desktop_param(q.desktop.as_deref(), q.link.as_deref() == Some("1")) {
+        Ok(desktop) => desktop,
+        Err(words) => return Ok(fail(words)),
+    };
     let (client, redirect_uri) = (s.oauth.client(p).expect("checked"), s.oauth.redirect_uri(p).expect("checked"));
     let state = random_hex();
     let verifier = random_hex();
-    let started = Started { provider: p.slug().to_owned(), verifier: verifier.clone(), link };
+    let started = Started { provider: p.slug().to_owned(), verifier: verifier.clone(), link, desktop };
     let _: () = redis::cmd("SET")
         .arg(state_key(&state))
         .arg(serde_json::to_string(&started).map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not start"))?)
@@ -765,6 +847,7 @@ pub(crate) async fn finish(s: &AppState, slug: &str, q: CallbackQuery, headers: 
     if started.provider != p.slug() {
         return Ok(fail("that login link is broken. try again"));
     }
+    let desktop = started.desktop.clone().filter(|_| started.link.is_none());
     let Some(code) = q.code.filter(|c| !c.is_empty() && c.len() <= 2048) else {
         return Ok(fail("that login link is broken. try again"));
     };
@@ -809,6 +892,10 @@ pub(crate) async fn finish(s: &AppState, slug: &str, q: CallbackQuery, headers: 
     };
     if let Some(account) = account {
         refresh(&s.db, p, &profile).await;
+        if let Some(desktop) = desktop {
+            log::info!("{}: logged in with {} in the browser, for the app", account.name, p.slug());
+            return hand_off(s, desktop, HandoffKind::Login { user_id: account.id }, p).await;
+        }
         let token = auth::open_login(&s.db, &account).await?;
         log::info!("{}: logged in with {}", account.name, p.slug());
         let [a, b] = gone_state();
@@ -831,8 +918,61 @@ pub(crate) async fn finish(s: &AppState, slug: &str, q: CallbackQuery, headers: 
         .arg(SIGNUP_SECS)
         .query_async(&mut s.redis.clone())
         .await?;
+    if let Some(desktop) = desktop {
+        return hand_off(s, desktop, HandoffKind::Signup { token }, p).await;
+    }
     let [a, b] = gone_state();
     Ok(redirect_with(&page_url("pick", p.slug()), &[a, b, short_cookie(SIGNUP_COOKIE, &token, SIGNUP_SECS)]))
+}
+
+async fn hand_off(s: &AppState, state: String, kind: HandoffKind, p: Provider) -> Result<Response, ApiError> {
+    let code = random_hex();
+    let next = kind.next();
+    put_handoff(&s.redis, &code, &Handoff { state: state.clone(), kind, provider: p.slug().to_owned() }, HANDOFF_SECS).await?;
+    Ok(redirect_with(&desktop_url(&code, &state, next, p.slug()), &gone_state()))
+}
+
+#[derive(Deserialize)]
+struct HandoffBody {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    state: String,
+}
+
+fn handoff_gone() -> ApiError {
+    ApiError::new(StatusCode::BAD_REQUEST, HANDOFF_GONE)
+}
+
+async fn handoff(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<HandoffBody>, JsonRejection>) -> Result<Response, ApiError> {
+    if !same_origin(&headers, s.oauth.public_url.as_deref()) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "that sign in came from another site"));
+    }
+    let key = format!("rl:oauth-handoff:ip:{}", auth::client_ip(&headers));
+    auth::limit(&s, &key, HANDOFF_WINDOW_SECS, HANDOFF_PER_IP, "too many tries. try later").await?;
+    let Json(body) = body.map_err(|_| handoff_gone())?;
+    if !is_token(&body.code) || !is_token(&body.state) {
+        return Err(handoff_gone());
+    }
+    let Some(h) = take_handoff(&s.redis, &body.code, &body.state).await? else { return Err(handoff_gone()) };
+    let p = Provider::from_slug(&h.provider).ok_or_else(handoff_gone)?;
+    match h.kind {
+        HandoffKind::Login { user_id } => {
+            let row: Option<(Uuid, String)> = sqlx::query_as("SELECT id, name FROM streamers WHERE id = $1").bind(user_id).fetch_optional(&s.db).await?;
+            let Some((id, name)) = row else { return Err(handoff_gone()) };
+            let account = Account { id, name };
+            let token = auth::open_login(&s.db, &account).await?;
+            log::info!("{}: logged in with {} in the app", account.name, p.slug());
+            Ok(with_cookies(Json(json!({ "next": "done" })).into_response(), &[auth::set_cookie(&token)]))
+        }
+        HandoffKind::Signup { token } => {
+            let alive: bool = redis::cmd("EXISTS").arg(signup_key(&token)).query_async(&mut s.redis.clone()).await?;
+            if !alive {
+                return Err(handoff_gone());
+            }
+            Ok(with_cookies(Json(json!({ "next": "pick", "provider": p.slug() })).into_response(), &[short_cookie(SIGNUP_COOKIE, &token, SIGNUP_SECS)]))
+        }
+    }
 }
 
 async fn newcomer(s: &AppState, headers: &HeaderMap) -> Result<Option<(String, Newcomer)>, ApiError> {
@@ -927,6 +1067,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/oauth/providers", get(providers).layer(axum::middleware::map_response(crate::media::public_cache(crate::media::PROVIDERS_CACHE))))
         .route("/api/oauth/identities", get(identities))
         .route("/api/oauth/signup", get(signup_info).post(signup_finish))
+        .route("/api/oauth/handoff", post(handoff))
         .route("/api/oauth/{provider}/start", get(start))
         .route("/api/oauth/{provider}/callback", get(callback))
         .route("/api/oauth/{provider}/unlink", post(unlink_route))
@@ -968,6 +1109,103 @@ mod tests {
         assert!(check_state(None, Some(&a)).is_err(), "no state: refused");
         assert!(check_state(Some("short"), Some("short")).is_err(), "not one of ours");
         assert!(check_state(Some(&"z".repeat(64)), Some(&"z".repeat(64))).is_err(), "not hex");
+    }
+
+    #[test]
+    fn the_desktop_param_is_a_lowercase_token_and_never_with_a_link() {
+        let t = "a1".repeat(32);
+        assert_eq!(desktop_param(None, false), Ok(None));
+        assert_eq!(desktop_param(None, true), Ok(None), "a link with no desktop is as before");
+        assert_eq!(desktop_param(Some(&t), false), Ok(Some(t.clone())));
+        assert!(desktop_param(Some(&t), true).is_err(), "a link from the app is refused");
+        assert!(desktop_param(Some(&"A1".repeat(32)), false).is_err(), "uppercase");
+        assert!(desktop_param(Some(&"a".repeat(63)), false).is_err(), "short");
+        assert!(desktop_param(Some(&"a".repeat(65)), false).is_err(), "long");
+        assert!(desktop_param(Some(&"g".repeat(64)), false).is_err(), "not hex");
+        assert!(desktop_param(Some(""), false).is_err());
+    }
+
+    #[test]
+    fn the_desktop_answer_is_all_in_the_fragment() {
+        let (code, state) = ("c".repeat(64), "d".repeat(64));
+        let to = desktop_url(&code, &state, "pick", "twitch");
+        assert_eq!(to, format!("/oauth#desktop={code}&state={state}&next=pick&provider=twitch"));
+        let (path, fragment) = to.split_once('#').unwrap();
+        assert_eq!(path, PAGE);
+        assert!(!path.contains('?') && !path.contains(&code) && !path.contains(&state), "nothing secret reaches the server");
+        let pairs: HashMap<String, String> = url::form_urlencoded::parse(fragment.as_bytes()).into_owned().collect();
+        assert_eq!(pairs.get("desktop"), Some(&code));
+        assert_eq!(pairs.get("state"), Some(&state));
+        assert_eq!(pairs.get("next").map(String::as_str), Some("pick"));
+        assert_eq!(pairs.get("provider").map(String::as_str), Some("twitch"));
+        assert_eq!(HandoffKind::Login { user_id: Uuid::nil() }.next(), "done");
+        assert_eq!(HandoffKind::Signup { token: code }.next(), "pick");
+    }
+
+    #[test]
+    fn a_handoff_comes_only_from_this_site() {
+        let mut h = HeaderMap::new();
+        assert!(same_origin(&h, Some("https://nodentity.xyz")), "no origin: allowed");
+        h.insert(header::ORIGIN, HeaderValue::from_static("https://nodentity.xyz"));
+        assert!(same_origin(&h, Some("https://nodentity.xyz")));
+        assert!(!same_origin(&h, None), "no public url: nothing matches");
+        h.insert(header::ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert!(!same_origin(&h, Some("https://nodentity.xyz")));
+        h.insert(header::ORIGIN, HeaderValue::from_static("null"));
+        assert!(!same_origin(&h, Some("https://nodentity.xyz")));
+    }
+
+    #[test]
+    fn an_old_started_record_still_parses() {
+        let old = r#"{"provider":"google","verifier":"v","link":null}"#;
+        let s: Started = serde_json::from_str(old).unwrap();
+        assert_eq!(s.desktop, None);
+        let h = Handoff { state: "s".into(), kind: HandoffKind::Signup { token: "t".into() }, provider: "kick".into() };
+        assert_eq!(serde_json::from_str::<Handoff>(&serde_json::to_string(&h).unwrap()).unwrap(), h);
+    }
+
+    async fn handoff_redis() -> Redis {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/15".into());
+        crate::connect_redis(&url).await
+    }
+
+    fn a_handoff(state: &str) -> Handoff {
+        Handoff { state: state.to_owned(), kind: HandoffKind::Login { user_id: Uuid::from_u128(u128::from(std::process::id())) }, provider: "google".into() }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_handoff_a_code_exchanges_once() {
+        let redis = handoff_redis().await;
+        let (code, state) = (random_hex(), random_hex());
+        let h = a_handoff(&state);
+        put_handoff(&redis, &code, &h, HANDOFF_SECS).await.unwrap();
+        let ttl: i64 = redis::cmd("TTL").arg(handoff_key(&code)).query_async(&mut redis.clone()).await.unwrap();
+        assert!((1..=HANDOFF_SECS as i64).contains(&ttl), "{ttl}");
+        assert_eq!(take_handoff(&redis, &code, &state).await.unwrap(), Some(h));
+        assert_eq!(take_handoff(&redis, &code, &state).await.unwrap(), None, "used once");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_handoff_an_expired_code_is_refused() {
+        let redis = handoff_redis().await;
+        let (code, state) = (random_hex(), random_hex());
+        put_handoff(&redis, &code, &a_handoff(&state), HANDOFF_SECS).await.unwrap();
+        let _: i64 = redis::cmd("PEXPIRE").arg(handoff_key(&code)).arg(50).query_async(&mut redis.clone()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(take_handoff(&redis, &code, &state).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_handoff_a_wrong_state_is_refused_and_spends_the_code() {
+        let redis = handoff_redis().await;
+        let (code, state) = (random_hex(), random_hex());
+        put_handoff(&redis, &code, &a_handoff(&state), HANDOFF_SECS).await.unwrap();
+        assert_eq!(take_handoff(&redis, &code, &random_hex()).await.unwrap(), None);
+        assert_eq!(take_handoff(&redis, &code, &state).await.unwrap(), None, "the wrong try spent it");
+        assert_eq!(take_handoff(&redis, &random_hex(), &state).await.unwrap(), None, "a code never made");
     }
 
     #[test]

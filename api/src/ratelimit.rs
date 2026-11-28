@@ -68,7 +68,7 @@ pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
         "/api/hooks/kick" => HOOK,
         "/api/oauth/{provider}/start" | "/api/oauth/{provider}/callback" | "/api/oauth/{provider}/unlink" => OAUTH,
         "/api/auth/{platform}/start" | "/api/auth/{platform}/callback" => OAUTH,
-        "/api/oauth/signup" if !read => OAUTH,
+        "/api/oauth/signup" | "/api/oauth/handoff" if !read => OAUTH,
         p if read && p != "/api/search" && p.ends_with("/search") => SEARCH,
         _ if read => READ,
         "/api/chat-videos" => VIDEO_UPLOAD,
@@ -379,6 +379,7 @@ mod tests {
         assert_eq!(api_rule(&post, "/api/oauth/{provider}/unlink"), OAUTH);
         assert_eq!(api_rule(&post, "/api/oauth/signup"), OAUTH);
         assert_eq!(api_rule(&get, "/api/oauth/signup"), READ);
+        assert_eq!(api_rule(&post, "/api/oauth/handoff"), OAUTH);
         assert_eq!(api_rule(&get, "/api/oauth/providers"), READ);
         assert_eq!(api_rule(&get, "/api/oauth/identities"), READ);
         assert_eq!(api_rule(&post, "/api/errors"), REPORT);

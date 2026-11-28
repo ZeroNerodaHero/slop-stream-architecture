@@ -1,11 +1,12 @@
 import { useAtomValue } from 'jotai';
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { api, messageOf, type OAuthProvider } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
+import { DESKTOP_TOKEN } from '@/infra/desktop/login';
 import { cleanName, isValidName } from '@/infra/names';
 import { providerLabel, takeReturn } from '@/infra/oauth';
 import { Button, buttonClassName } from '@/shared-components/Button';
@@ -26,11 +27,54 @@ function useGoBack() {
   }, [navigate]);
 }
 
+interface DesktopHandoff {
+  code: string;
+  state: string;
+  next: 'done' | 'pick';
+}
+
+function readDesktop(hash: string): DesktopHandoff | 'bad' | null {
+  const f = new URLSearchParams(hash.replace(/^#/, ''));
+  if (!f.has('desktop')) return null;
+  const code = f.get('desktop') ?? '';
+  const state = f.get('state') ?? '';
+  const next = f.get('next');
+  if (!DESKTOP_TOKEN.test(code) || !DESKTOP_TOKEN.test(state) || (next !== 'done' && next !== 'pick')) return 'bad';
+  return { code, state, next };
+}
+
+function BackToApp({ code, state, next }: DesktopHandoff) {
+  const href = `nodentity://auth?code=${code}&state=${state}`;
+  const opened = useRef(false);
+  const open = useCallback(() => window.location.assign(href), [href]);
+
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    open();
+  }, [open]);
+
+  return (
+    <PageFrame title={next === 'pick' ? 'almost there' : 'signed in'}>
+      <p id="oauth-desktop" className="text-textSecondary">
+        {next === 'pick' ? 'return to the app to finish signing up' : 'signed in, return to the app'}
+      </p>
+      <p className="mt-4">
+        <Button id="oauth-open-app" variant="primary" onClick={open}>
+          open app
+        </Button>
+      </p>
+    </PageFrame>
+  );
+}
+
 export function OAuthPage() {
   const [params] = useSearchParams();
+  const { hash } = useLocation();
   const me = useAtomValue(meAtom);
   const goBack = useGoBack();
-  const error = params.get('error');
+  const desktop = readDesktop(hash);
+  const error = desktop === 'bad' ? '' : params.get('error');
   const done = params.get('done');
   const linked = params.get('linked');
   const pick = params.get('pick');
@@ -63,6 +107,7 @@ export function OAuthPage() {
       </PageFrame>
     );
   }
+  if (desktop && desktop !== 'bad') return <BackToApp {...desktop} />;
   if (linked !== null) {
     return (
       <PageFrame title="linked">
