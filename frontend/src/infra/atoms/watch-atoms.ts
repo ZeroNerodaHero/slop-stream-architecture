@@ -64,6 +64,7 @@ export const primarySlotAtom = atom<number | null>((get) => {
   return get(slotsAtom).find((s) => s.kind === 'screen')?.slot ?? 0;
 });
 export const watchLayersAtom = atom<Layer[]>((get) => (get(focusedSlotAtom) !== null ? [] : get(shownLayersAtom)));
+export const watchBlankAtom = atom((get) => get(focusedSlotAtom) === null && get(sceneAtom)?.layers.length === 0);
 export const tilesAtom = atom((get) => {
   const primary = get(primarySlotAtom);
   const composed = get(focusedSlotAtom) === null;

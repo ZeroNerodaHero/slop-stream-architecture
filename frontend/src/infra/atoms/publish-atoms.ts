@@ -141,6 +141,7 @@ const stagedSourcesAtom = atom((get) => (get(cameraOnlyAtom) ? soloed(get(source
 const sentSourcesAtom = atom((get) => get(stagedSourcesAtom).filter((s) => !s.waiting));
 export const sceneAtom = atom((get) => sceneOf(get(sentSourcesAtom)));
 export const previewSceneAtom = atom((get) => sceneOf(get(stagedSourcesAtom)));
+export const stageBlankAtom = atom((get) => get(sourcesAtom).length > 0 && get(previewSceneAtom).layers.length === 0);
 export const waitingSourcesAtom = atom((get) => get(sourcesAtom).filter((s) => s.waiting));
 export const previewSlotAtom = atom((get) => get(sceneAtom).layers.find(isVideoLayer)?.slot ?? null);
 export const previewStreamAtom = atom((get) => {

@@ -17,6 +17,7 @@ import {
   slotStreamAtom,
   unmuteVideo,
   volumeAtom,
+  watchBlankAtom,
   watchLayersAtom,
   watchMessageAtom,
   watchStatsAtom,
@@ -52,6 +53,7 @@ export function WatchCorner() {
   const needsTap = useAtomValue(needsTapAtom);
   const viewers = useAtomValue(watchViewersAtom);
   const layers = useAtomValue(watchLayersAtom);
+  const blank = useAtomValue(watchBlankAtom);
   const primary = useAtomValue(primarySlotAtom);
   const avatar = useAtomValue(avatarAtom);
   const storedPipChat = useAtomValue(pipChatPlaceAtom);
@@ -94,6 +96,7 @@ export function WatchCorner() {
       }
       scene={{
         layers,
+        blank,
         slot: primary,
         streamFor: slotStreamAtom,
         imageUrl: (asset) => api.assetUrl(name, asset),

@@ -21,6 +21,7 @@ import {
   publishToneAtom,
   sceneAtom,
   sentStreamAtom,
+  stageBlankAtom,
   streamNameAtom
 } from '@/infra/atoms/publish-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
@@ -44,6 +45,7 @@ export function LiveCorner() {
   const owner = useAtomValue(ownerAtom);
   const scene = useAtomValue(sceneAtom);
   const previewSlot = useAtomValue(previewSlotAtom);
+  const blank = useAtomValue(stageBlankAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
   const avatarLook = useAtomValue(avatarLookAtom);
@@ -69,6 +71,7 @@ export function LiveCorner() {
       muted
       scene={{
         layers: scene.layers,
+        blank,
         slot: previewSlot,
         streamFor: sentStreamAtom,
         imageUrl: (asset) => api.assetUrl(name, asset),

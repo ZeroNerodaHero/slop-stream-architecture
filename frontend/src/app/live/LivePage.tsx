@@ -49,6 +49,7 @@ import {
   sentStreamAtom,
   setCameraOnly,
   sourcesAtom,
+  stageBlankAtom,
   startCamera,
   startPublishPip,
   streamNameAtom,
@@ -678,6 +679,7 @@ export function LivePage() {
   const scene = useAtomValue(previewSceneAtom);
   const waiting = useAtomValue(waitingSourcesAtom);
   const sources = useAtomValue(sourcesAtom);
+  const blank = useAtomValue(stageBlankAtom);
   const previewSlot = useAtomValue(previewSlotAtom);
   const selected = useAtomValue(selectedSourceAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
@@ -764,6 +766,7 @@ export function LivePage() {
         id="scene"
         className={cn('max-md:border-t-0', mobile && strip.frame)}
         layers={scene.layers}
+        blank={blank}
         streamFor={sentStreamAtom}
         imageUrl={(asset) => api.assetUrl(name, asset)}
         avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined, look: avatarLook }}

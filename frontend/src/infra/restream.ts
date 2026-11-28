@@ -220,7 +220,6 @@ class Compositor {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, width, height);
     const layers = this.inputs.scene().layers;
-    if (layers.length === 0) this.drawVideo(this.inputs.streamFor(0), { x: 0, y: 0, w: width, h: height }, false);
     for (const layer of layers) this.drawLayer(layer);
     const now = performance.now();
     for (const [id, entry] of this.videos) {
