@@ -33,11 +33,13 @@ import {
   type RemixiconComponentType
 } from '@remixicon/react';
 import { useAtom, useAtomValue } from 'jotai';
+import { selectAtom } from 'jotai/utils';
 import {
   Fragment,
   memo,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -77,7 +79,7 @@ import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, loadChannelPins, reconnectChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { loadMyEmotes } from '@/infra/emotes';
-import { PRESENCE_WORD, presenceOfAtom, presencesAtom } from '@/infra/atoms/presence-atoms';
+import { type Presence, PRESENCE_WORD, presenceOfAtom, presencesAtom } from '@/infra/atoms/presence-atoms';
 import {
   channelRenamedAtom,
   enterRoom,
@@ -1861,10 +1863,29 @@ function MoreRow({
 
 const ROSTER_FILL = 'max-h-none min-h-0 flex-1 lg:h-auto lg:min-h-0';
 
+const samePresences = (a: ReadonlyMap<string, Presence>, b: ReadonlyMap<string, Presence>): boolean => {
+  if (a.size !== b.size) return false;
+  for (const [name, presence] of a) if (b.get(name) !== presence) return false;
+  return true;
+};
+
+function useMemberPresences(members: GroupMember[]): ReadonlyMap<string, Presence> {
+  const key = members.map((member) => member.name).join(',');
+  const selector = useMemo(() => {
+    const names = key ? key.split(',') : [];
+    return (map: ReadonlyMap<string, Presence>) => {
+      const sub = new Map<string, Presence>();
+      for (const name of names) sub.set(name, map.get(name) ?? 'offline');
+      return sub;
+    };
+  }, [key]);
+  return useAtomValue(useMemo(() => selectAtom(presencesAtom, selector, samePresences), [selector]));
+}
+
 function Roster({ room, flat = false, fill = false }: { room: GroupRoom; flat?: boolean; fill?: boolean }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
-  const presences = useAtomValue(presencesAtom);
+  const presences = useMemberPresences(members);
   const input = useRef<HTMLInputElement | null>(null);
   const [membersOpen, setMembersOpen] = useAtom(roomMembersOpenAtom);
   const folded = !flat && !membersOpen;
@@ -1995,8 +2016,8 @@ function Roster({ room, flat = false, fill = false }: { room: GroupRoom; flat?: 
 }
 
 function MembersStrip({ room, showRef, onShow, fill = false }: { room: GroupRoom; showRef: RefObject<HTMLButtonElement | null>; onShow: () => void; fill?: boolean }) {
-  const presences = useAtomValue(presencesAtom);
   const members = room.roster ?? [];
+  const presences = useMemberPresences(members);
   const more = useAtomValue(rosterMoreAtom);
   const listRef = useRef<HTMLUListElement | null>(null);
   return (
