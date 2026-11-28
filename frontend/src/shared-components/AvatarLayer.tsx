@@ -45,8 +45,10 @@ function nodding(el: HTMLElement, still: boolean): VoiceDraw {
   };
 }
 
-function pulse(el: HTMLElement, win: Window): VoiceDraw {
-  const still = stillIn(win);
+const pulse = (el: HTMLElement, win: Window) => pulsing(el, stillIn(win));
+const steadyPulse = (el: HTMLElement) => pulsing(el, true);
+
+function pulsing(el: HTMLElement, still: boolean): VoiceDraw {
   let scale = 1;
   let at = 0;
   let shown = '';
@@ -77,11 +79,11 @@ export function AvatarLayer(props: AvatarLayerProps) {
 function AvatarPic({ id, wide, voice, bounce }: AvatarLayerProps & { bounce: boolean }) {
   const pic = useRef<HTMLDivElement | null>(null);
   const { name, version, look } = voice;
-  const pulsing = !!voice.pulse;
-  useVoiceLevel(pic, voice, pulsing ? pulse : bounce ? nod : steady);
+  const pulsed = !!voice.pulse;
+  useVoiceLevel(pic, voice, pulsed ? (bounce ? pulse : steadyPulse) : bounce ? nod : steady);
 
   const key = name.trim().toLowerCase();
-  const fill = (pulsing ? PULSE_FILL : AVATAR_FILL) * 100;
+  const fill = (pulsed ? PULSE_FILL : AVATAR_FILL) * 100;
   const talkBorder = look?.border !== false;
   const style: CSSProperties = {
     ...(wide ? { height: `${fill}%` } : { width: `${fill}%` }),
@@ -94,15 +96,22 @@ function AvatarPic({ id, wide, voice, bounce }: AvatarLayerProps & { bounce: boo
         id={id}
         aria-hidden
         data-voice="0"
-        data-pulse={pulsing || undefined}
+        data-pulse={pulsed || undefined}
         data-shape={look?.shape}
         data-bounce={look ? bounce : undefined}
         data-talk-border={look ? talkBorder : undefined}
         style={style}
         className={cn(
           'aspect-square overflow-hidden rounded-avatar border-2 border-primaryStroke bg-backgroundTertiary',
-          pulsing
-            ? '[transform:scale(var(--voice-scale,1))] data-[speaking]:outline data-[speaking]:outline-increase data-[speaking]:[outline-width:calc(2px/var(--voice-scale,1))]'
+          pulsed
+            ? cn(
+                '[transform:scale(var(--voice-scale,1))]',
+                talkBorder &&
+                  cn(
+                    'data-[speaking]:outline data-[speaking]:[outline-width:calc(2px/var(--voice-scale,1))]',
+                    look?.color ? 'data-[speaking]:[outline-color:var(--talk-color)]' : 'data-[speaking]:outline-increase'
+                  )
+              )
             : cn(
                 'transition-[transform,border-color] duration-75 motion-reduce:transition-none',
                 talkBorder && (look?.color ? 'data-[speaking]:[border-color:var(--talk-color)]' : 'data-[speaking]:border-primaryBlue')

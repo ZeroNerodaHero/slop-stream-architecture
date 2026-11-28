@@ -28,7 +28,7 @@ export const layerOf = (s: Source): Layer =>
   s.kind === 'image'
     ? { id: s.id, kind: 'image', asset: s.asset ?? 0, ...s.box }
     : s.kind === 'avatar'
-      ? { id: s.id, kind: 'avatar', ...s.box }
+      ? { id: s.id, kind: 'avatar', ...(s.look && { look: s.look }), ...s.box }
       : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...s.box };
 
 export const isVideoSource = (s: Source) => s.kind === 'camera' || s.kind === 'screen';

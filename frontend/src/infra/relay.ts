@@ -1,4 +1,5 @@
 import { record } from '@/infra/atoms/inspector-atoms';
+import { type AvatarLook, readAvatarLook } from '@/infra/avatar-look';
 import { trackSocket } from '@/infra/debug/sockets';
 import { type Box, clampBox, type Fit, LAYER_MIN, thousandth } from '@/infra/box';
 
@@ -16,7 +17,7 @@ export interface SlotInfo {
 
 export type VideoLayer = Box & { id: string; kind: 'camera' | 'screen'; slot: number; fit?: Fit };
 export type ImageLayer = Box & { id: string; kind: 'image'; asset: number };
-export type AvatarLayer = Box & { id: string; kind: 'avatar' };
+export type AvatarLayer = Box & { id: string; kind: 'avatar'; look?: AvatarLook };
 export type Layer = VideoLayer | ImageLayer | AvatarLayer;
 export interface Scene {
   layers: Layer[];
@@ -70,7 +71,10 @@ function validLayer(raw: unknown): Layer | null {
   if (l.kind === 'image') {
     return Number.isInteger(l.asset) && (l.asset as number) > 0 ? { id: l.id, kind: 'image', asset: l.asset as number, ...box } : null;
   }
-  if (l.kind === 'avatar') return { id: l.id, kind: 'avatar', ...box };
+  if (l.kind === 'avatar') {
+    const look = readAvatarLook(l.look);
+    return { id: l.id, kind: 'avatar', ...(look && { look }), ...box };
+  }
   return null;
 }
 

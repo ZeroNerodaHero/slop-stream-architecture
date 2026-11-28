@@ -107,7 +107,14 @@ export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPic
           ) : i === hostIndex ? (
             mainVideo
           ) : layer.kind === 'avatar' ? (
-            avatar && <AvatarLayer key={avatar.read ? 'mixer' : 'own'} id={`layer-${layer.id}-avatar`} wide={layer.w * 16 >= layer.h * 9} voice={avatar} />
+            avatar && (
+              <AvatarLayer
+                key={avatar.read ? 'mixer' : 'own'}
+                id={`layer-${layer.id}-avatar`}
+                wide={layer.w * 16 >= layer.h * 9}
+                voice={layer.look ? { ...avatar, look: layer.look } : avatar}
+              />
+            )
           ) : isVideoLayer(layer) ? (
             <LayerVideo id={`layer-${layer.id}-video`} streamAtom={streamFor(layer.slot)} cover={fitOf(layer) === 'cover'} />
           ) : (

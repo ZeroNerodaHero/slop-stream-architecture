@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { AVATAR_LOOK, avatarFrame, avatarRadius, readAvatarLook, sameLook, squareIn } from '../src/infra/avatar-look.ts';
-import { arrangedAfterAdd, arrangedAfterRemove, AVATAR_ID, CORNER, FULL, keptOf, readKept, resizedBox, soloed, type Source } from '../src/infra/scene.ts';
+import { arrangedAfterAdd, arrangedAfterRemove, AVATAR_ID, CORNER, FULL, keptOf, readKept, resizedBox, sceneOf, soloed, type Source } from '../src/infra/scene.ts';
 import { sectionsOf } from '../src/infra/source-settings.ts';
 import { readStage, type Stage, stagedFrom, stageOf } from '../src/infra/stage.ts';
 
@@ -80,4 +80,14 @@ test('each shape rounds the composite its own way, default follows the site', ()
   assert.equal(avatarRadius('bubble', 96, '0px', 16), 48);
   assert.equal(avatarRadius('default', 96, '6px', 16), 12);
   assert.equal(avatarRadius('default', 96, '50%', 16), 48);
+});
+
+test('the scene sent to viewers carries the avatar look, and nothing when it is the default', () => {
+  const look = { shape: 'soft' as const, border: false, color: '', bounce: false };
+  const [styled] = sceneOf([{ ...avatar, look }]).layers;
+  assert.deepEqual(styled, { id: AVATAR_ID, kind: 'avatar', look, ...FULL });
+  const [plain] = sceneOf([avatar]).layers;
+  assert.equal('look' in plain!, false);
+  const [camLayer] = sceneOf([cam]).layers;
+  assert.equal('look' in camLayer!, false);
 });
