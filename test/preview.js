@@ -287,7 +287,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     await publisher.waitForFunction(() => !document.querySelector('#start').disabled);
     await publisher.click('#start');
     await waitStatus(publisher, /^live$/);
-    const href = await publisher.getAttribute('#watchurl', 'href');
+    const href = await publisher.getAttribute('#copy', 'data-watch-url');
     expect(new RegExp(`/watch/${NAME}\\?s=\\d+$`).test(href), `link ${href}`);
     return href.replace(BASE, '');
   });

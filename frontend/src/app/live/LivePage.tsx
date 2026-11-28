@@ -123,7 +123,7 @@ import { WaitingLayer } from '@/shared-components/live/WaitingLayer';
 import { SoundModule } from '@/shared-components/live/modules/Sound';
 import { SourceModule } from '@/shared-components/live/modules/Source';
 import { SourcesModule } from '@/shared-components/live/modules/Sources';
-import { StartStop, StudioModule } from '@/shared-components/live/modules/Studio';
+import { LiveViewers, StartStop, StudioModule } from '@/shared-components/live/modules/Studio';
 import { ThumbnailModule } from '@/shared-components/live/modules/Thumbnail';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -953,7 +953,7 @@ export function LivePage() {
   const column = 'flex w-[16.5rem] shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain min-[1600px]:w-[17.5rem]';
 
   return (
-    <PageFrame title="go live" wide fluid fill>
+    <PageFrame title="go live" aside={<LiveViewers />} wide fluid fill>
       <div
         ref={deskRef}
         id="live-desk"

@@ -22,7 +22,6 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { isValidName } from '@/infra/names';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import { Button } from '@/shared-components/Button';
-import { ExternalLink } from '@/shared-components/ExternalLink';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -70,9 +69,8 @@ function LiveStatus({ prefix, quiet = false }: { prefix: string; quiet?: boolean
   const message = useAtomValue(publishMessageAtom);
   const tone = useAtomValue(publishToneAtom);
   const phase = useAtomValue(publishPhaseAtom);
-  const viewers = useAtomValue(liveViewersAtom);
   const id = message ? (prefix ? `${prefix}-status` : 'status') : undefined;
-  if (quiet || !SHOWN_PHASES.includes(phase))
+  if (quiet || phase === 'live' || !SHOWN_PHASES.includes(phase))
     return (
       <p id={id} aria-live="polite" className="sr-only">
         {message}
@@ -85,9 +83,21 @@ function LiveStatus({ prefix, quiet = false }: { prefix: string; quiet?: boolean
       className={cn('flex min-w-0 items-center gap-1.5 text-xs', tone === 'live' ? 'text-increase' : tone === 'bad' ? 'text-decrease' : 'text-textSecondary')}
     >
       <span aria-hidden className={cn('block h-1.5 w-1.5 shrink-0 rounded-avatar', tone === 'live' ? 'bg-increase' : tone === 'bad' ? 'bg-decrease' : 'bg-textTertiary')} />
+      <span className="min-w-0 truncate">{message}</span>
+    </p>
+  );
+}
+
+export function LiveViewers() {
+  const phase = useAtomValue(publishPhaseAtom);
+  const viewers = useAtomValue(liveViewersAtom);
+  if (phase !== 'live') return null;
+  return (
+    <p id="live-viewers" className="flex min-w-0 items-center gap-1.5 text-sm text-increase">
+      <span aria-hidden className="block h-1.5 w-1.5 shrink-0 rounded-avatar bg-increase" />
       <span className="min-w-0 truncate">
-        {message}
-        {tone === 'live' && viewers !== null && (
+        live
+        {viewers !== null && (
           <span className="text-textSecondary">
             {' · '}
             <ViewerCount id="viewers" count={viewers} />
@@ -143,8 +153,8 @@ function CopyButton({ id }: { id: string }) {
   const publishing = useAtomValue(isPublishingAtom);
   const words = publishing ? 'the watch link is on its way' : 'the watch link is here once you are live';
   return (
-    <Tooltip content={watchUrl ? null : words}>
-      <Button id={id} size="sm" className="w-full gap-1.5" disabled={!watchUrl} onClick={copyWatchUrl}>
+    <Tooltip content={watchUrl ?? words}>
+      <Button id={id} size="sm" className="w-full gap-1.5" disabled={!watchUrl} data-watch-url={watchUrl ?? undefined} onClick={copyWatchUrl}>
         <RiLinkM aria-hidden size={16} />
         copy watch link
       </Button>
@@ -153,18 +163,6 @@ function CopyButton({ id }: { id: string }) {
 }
 
 const START_CLASS = 'flex flex-col gap-1.5 [&>button:first-child]:h-10 [&>button:first-child]:rounded-control [&>button:first-child]:py-0';
-
-function WatchLink({ prefix }: { prefix: string }) {
-  const watchUrl = useAtomValue(watchUrlAtom);
-  if (!watchUrl) return null;
-  return (
-    <p id={prefix ? undefined : 'link'} className="truncate text-xs">
-      <ExternalLink id={prefix ? undefined : 'watchurl'} href={watchUrl}>
-        {watchUrl}
-      </ExternalLink>
-    </p>
-  );
-}
 
 export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; prefix?: string }) {
   if (strip)
@@ -181,7 +179,6 @@ export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; 
         <StartStop prefix={prefix} className={START_CLASS} />
         <LiveStatus prefix={prefix} />
         <CopyButton id={`${prefix}-copy`} />
-        <WatchLink prefix={prefix} />
       </section>
     );
   return (
@@ -198,7 +195,6 @@ export function StudioModule({ strip = false, prefix = '' }: { strip?: boolean; 
       }
     >
       <CopyButton id="copy" />
-      <WatchLink prefix="" />
     </RailSection>
   );
 }
