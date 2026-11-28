@@ -19,6 +19,7 @@ import { type FormEvent, type KeyboardEvent, type ReactNode, useRef, useState } 
 import {
   type DestinationRow,
   hiddenDestinationsAtom,
+  restreamDirectAtom,
   revealHiddenDestinationsAtom,
   setDestinationHidden,
   setRevealHiddenDestinations
@@ -26,6 +27,8 @@ import {
 import { api, ApiError, type Destination, type DestinationPlatform, type Destinations, destinationStartUrl, type ExternalChat, type RelayStatus } from '@/infra/api';
 import { openRailAt } from '@/infra/live-dock';
 import { directStatusAtom, restreamAtom, restreamMessageAtom } from '@/infra/restream';
+import { restreamBlock } from '@/infra/restream-block';
+import { inTauri } from '@/infra/update-check';
 import { Button } from '@/shared-components/Button';
 import { INPUT } from '@/shared-components/input';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
@@ -88,8 +91,9 @@ export function liveOf(d: Destination, direct: Record<string, RelayStatus>): Rel
   return said && mine.state !== 'error' ? { ...mine, note: said } : mine;
 }
 
-export function stateOf(d: Destination, r: RelayStatus | undefined = d.relay): string {
+export function stateOf(d: Destination, r: RelayStatus | undefined = d.relay, blocked = false): string {
   if (!d.enabled) return 'off';
+  if (blocked && !r) return 'on, not sending';
   if (r?.state === 'live') return r.note ? `live, ${r.note}` : 'live';
   if (r?.state === 'connecting') return 'connecting';
   if (r?.state === 'error') return r.message ? `error: ${r.message}` : 'error';
@@ -317,7 +321,7 @@ function Eye({ row, hidden }: { row: DestinationRow; hidden: boolean }) {
   );
 }
 
-function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; onStatus: (words: string) => void }) {
+function Connected({ d, hidden, blocked, onStatus }: { d: Destination; hidden: boolean; blocked: boolean; onStatus: (words: string) => void }) {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const live = liveOf(d, useAtomValue(directStatusAtom));
@@ -336,8 +340,8 @@ function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; o
     }
   };
   const chat = d.enabled ? chatStateOf(d.chat) : null;
-  const words = `${WORDS[d.platform]}, ${stateOf(d, live)}${chat ? ` · ${chat}` : ''}`;
-  const dot = d.enabled && d.has_key && live?.state !== 'error' ? 'on' : 'off';
+  const words = `${WORDS[d.platform]}, ${stateOf(d, live, blocked)}${chat ? ` · ${chat}` : ''}`;
+  const dot = d.enabled && d.has_key && live?.state !== 'error' && (!blocked || !!live) ? 'on' : 'off';
   return (
     <RowShell
       row={d.platform}
@@ -476,7 +480,9 @@ function DestinationsBody({ reveal }: { reveal: boolean }) {
   const [status, setStatus] = useState(readBack);
   const hidden = useAtomValue(hiddenDestinationsAtom);
   const relayWords = useAtomValue(restreamMessageAtom);
+  const directOn = useAtomValue(restreamDirectAtom);
   if (!data) return null;
+  const block = restreamBlock(!!data.relay, !!data.direct, inTauri(), directOn);
   const showing = reveal && hidden.length > 0;
   const rows = ROWS.filter((r) => showing || !hidden.includes(r));
   return (
@@ -487,7 +493,7 @@ function DestinationsBody({ reveal }: { reveal: boolean }) {
             const d = data.destinations.find((x) => x.platform === r);
             const off = hidden.includes(r);
             return d ? (
-              <Connected key={r} d={d} hidden={off} onStatus={setStatus} />
+              <Connected key={r} d={d} hidden={off} blocked={!!block} onStatus={setStatus} />
             ) : (
               <Unconnected key={r} row={r} open={data.platforms.includes(r)} hidden={off} onStatus={setStatus} />
             );
@@ -498,6 +504,11 @@ function DestinationsBody({ reveal }: { reveal: boolean }) {
       <span id="destination-status" className="min-w-0 break-words text-xs text-textSecondary empty:-mt-2" aria-live="polite">
         {status}
       </span>
+      {block && data.destinations.length > 0 && (
+        <span id="destination-blocked" className="min-w-0 break-words text-xs text-decrease" aria-live="polite">
+          {block}
+        </span>
+      )}
       {relayWords && (
         <span id="destination-relay" className="min-w-0 break-words text-xs text-textTertiary" aria-live="polite">
           {relayWords}

@@ -705,7 +705,13 @@ async fn published<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         let (kind, body) = tokio::time::timeout(left, r.next())
             .await
             .map_err(|_| "the server did not start the stream".to_string())?
-            .map_err(|e| format!("the connection dropped ({})", e.kind()))?;
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    "the server hung up when asked to start the stream, so the stream key may be wrong or out of date. connect this destination again".to_string()
+                } else {
+                    format!("the connection dropped ({})", e.kind())
+                }
+            })?;
         if kind != 20 && kind != 17 {
             answer(w, kind, &body).await?;
             continue;
