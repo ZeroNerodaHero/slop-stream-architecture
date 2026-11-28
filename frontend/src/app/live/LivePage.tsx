@@ -67,7 +67,7 @@ import {
   liveEditingAtom,
   liveGridAtom,
   liveLayoutAtom,
-  liveMineAtom,
+  liveDefaultAtom,
   migrateLayouts,
   migratePresets,
   livePanelsAtom,
@@ -528,7 +528,7 @@ export function LivePage() {
   const layout = useAtomValue(liveLayoutAtom);
   const editing = useAtomValue(liveEditingAtom);
   const preset = useAtomValue(livePresetAtom);
-  const mine = useAtomValue(liveMineAtom);
+  const saved = useAtomValue(liveDefaultAtom);
   const rail = useAtomValue(liveRailAtom);
   const cameraOnly = useAtomValue(cameraOnlyAtom);
   const width = useWindowWidth();
@@ -657,8 +657,8 @@ export function LivePage() {
     return <ChatModule place={place} className={place === 'phone' ? cn('h-full min-h-0 flex-1', CHAT_MOBILE) : undefined} />;
   };
 
-  const presetWords = preset ? presetName(preset, mine) : 'custom';
-  const PresetIcon = PRESET_ICONS[preset ?? 'default'];
+  const presetWords = presetName(preset, saved);
+  const PresetIcon = PRESET_ICONS[preset];
 
   if (mobile) {
     const panel = (t: PhoneTab, children: ReactNode, className?: string) => (
@@ -798,7 +798,7 @@ export function LivePage() {
         id="live-desk"
         data-layout={layout}
         data-editing={editing || undefined}
-        data-preset={preset ?? 'custom'}
+        data-preset={preset}
         className="flex h-[calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-0.75rem)] min-h-0 gap-2 bubble:h-[calc(100dvh-var(--page-top,100px)-var(--banner-h,0px)-0.5rem)]"
       >
         {a ? (

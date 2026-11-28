@@ -2,7 +2,7 @@ import { atom } from 'jotai';
 
 import { applySceneStage, sceneStageNow } from '@/infra/atoms/publish-atoms';
 import { setSoundHear, setSoundLoop, setSoundVolume, setSourceNames, soundsAtom, sourceNamesAtom } from '@/infra/atoms/source-atoms';
-import { applyPreset, type PresetId, saveMine } from '@/infra/live-dock';
+import { applyPreset, type PresetId, savePresetStage } from '@/infra/live-dock';
 import { gapWords, type Stage, type StageGap } from '@/infra/stage';
 import { store } from '@/infra/store';
 
@@ -20,7 +20,7 @@ export function stageNow(): Stage {
 
 export function savePreset() {
   turn++;
-  saveMine(stageNow());
+  savePresetStage(stageNow());
   store.set(presetNoticeAtom, '');
 }
 
