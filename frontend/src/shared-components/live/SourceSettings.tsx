@@ -55,7 +55,7 @@ export function useSourceFacts(source: Source) {
     source.kind === 'screen'
       ? 'stop sharing'
       : source.kind === 'image'
-        ? 'remove (the upload stays in your pictures)'
+        ? 'remove (the upload stays saved)'
         : source.kind === 'avatar'
           ? 'remove (the + brings it back)'
           : !hasMic
