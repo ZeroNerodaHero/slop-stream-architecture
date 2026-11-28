@@ -544,7 +544,7 @@ function StreamsSkeleton() {
   );
 }
 
-export function HomePage() {
+function useLiveStreams() {
   const streams = useAtomValue(homeStreamsAtom);
   const error = useAtomValue(homeErrorAtom);
   const list = error ? undefined : streams;
@@ -566,6 +566,57 @@ export function HomePage() {
     []
   );
 
+  return { streams, error, list, featured, rest, namesKey, cardHover };
+}
+
+function LiveList({ live }: { live: ReturnType<typeof useLiveStreams> }) {
+  const { streams, error, list, featured, rest, cardHover } = live;
+  return (
+    <>
+      {error && (
+        <p className="rounded-card border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
+          api is down: {error}
+        </p>
+      )}
+      {!error && !streams && <StreamsSkeleton />}
+      {list?.length === 0 && (
+        <div id="empty" className="rounded-card border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
+          <p className="text-textSecondary">nobody is live</p>
+          <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
+            go live
+          </Link>
+        </div>
+      )}
+      <div id="list" className={cn(!list?.length && 'hidden')}>
+        {featured.length > 0 && (
+          <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
+            {featured.map((stream) => (
+              <Card key={stream.name} stream={stream} featured eager forcePlaying onEnter={() => undefined} onLeave={() => undefined} />
+            ))}
+          </div>
+        )}
+        {rest.length > 0 && (
+          <div className={GRID}>
+            {rest.map((stream) => (
+              <Card
+                key={stream.name}
+                stream={stream}
+                featured={false}
+                onEnter={(pointer) => cardHover.enter(stream.name, pointer, store.get(homeHoverAtom))}
+                onLeave={() => cardHover.leave(stream.name)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+export function HomePage() {
+  const live = useLiveStreams();
+  const { error, list, featured, namesKey, cardHover } = live;
+
   return (
     <PageFrame wide>
       <Part
@@ -574,7 +625,9 @@ export function HomePage() {
         line={LIVE_LINE}
         heading={
           <>
-            active streams
+            <Link id="active-home" to="/active" className="hover:text-primaryBlue">
+              active streams
+            </Link>
             {list && (
               <span id="live-count" className={SECTION_COUNT}>
                 {list.length}
@@ -583,44 +636,10 @@ export function HomePage() {
           </>
         }
       >
-        {error && (
-          <p className="rounded-card border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
-            api is down: {error}
-          </p>
-        )}
-        {!error && !streams && <StreamsSkeleton />}
-        {list?.length === 0 && (
-          <div id="empty" className="rounded-card border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
-            <p className="text-textSecondary">nobody is live</p>
-            <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
-              go live
-            </Link>
-          </div>
-        )}
-        <div id="list" className={cn(!list?.length && 'hidden')}>
-          {featured.length > 0 && (
-            <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
-              {featured.map((stream) => (
-                <Card key={stream.name} stream={stream} featured eager forcePlaying onEnter={() => undefined} onLeave={() => undefined} />
-              ))}
-            </div>
-          )}
-          {rest.length > 0 && (
-            <div className={GRID}>
-              {rest.map((stream) => (
-                <Card
-                  key={stream.name}
-                  stream={stream}
-                  featured={false}
-                  onEnter={(pointer) => cardHover.enter(stream.name, pointer, store.get(homeHoverAtom))}
-                  onLeave={() => cardHover.leave(stream.name)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+        <LiveList live={live} />
       </Part>
       <HomePreviews namesKey={namesKey} />
+      {!error && <Groups />}
       {list && (
         <Followed
           streams={list}
@@ -630,7 +649,33 @@ export function HomePage() {
         />
       )}
       {!error && <RecentlyOffline liveKey={list ? namesKey : null} />}
-      {!error && <Groups />}
+    </PageFrame>
+  );
+}
+
+export function ActivePage() {
+  const live = useLiveStreams();
+  const { list, namesKey } = live;
+
+  return (
+    <PageFrame
+      wide
+      titleId="active-title"
+      title={
+        <>
+          active streams
+          {list && (
+            <span id="active-count" className={cn(SECTION_COUNT, 'ml-2')}>
+              {list.length}
+            </span>
+          )}
+        </>
+      }
+    >
+      <section id="active" aria-labelledby="active-title">
+        <LiveList live={live} />
+      </section>
+      <HomePreviews namesKey={namesKey} />
     </PageFrame>
   );
 }

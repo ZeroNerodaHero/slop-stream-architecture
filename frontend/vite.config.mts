@@ -236,7 +236,7 @@ export default defineConfig(({ mode }) => {
       remixIcons(),
       react(),
       preloadFirstPage([
-        { path: '^/$', module: '/src/app/home/HomePage.tsx' },
+        { path: '^/(active)?$', module: '/src/app/home/HomePage.tsx' },
         { path: '^/watch/[^/]+/?$', module: '/src/app/watch/WatchPage.tsx' }
       ]),
       deferStylesheet(join(here, 'src', 'app', 'globals.css'), '^/$'),

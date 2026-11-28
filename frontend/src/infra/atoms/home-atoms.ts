@@ -120,6 +120,11 @@ onPrefetch('home', () => {
   prefetch('home:explore', null, 'drop', () => api.explore());
 });
 
+onPrefetch('active', () => {
+  if (open > 0) return;
+  prefetch(SNAPSHOT, EVERYONE, 'hold', () => api.streams());
+});
+
 async function load(): Promise<void> {
   const mine = ++attempt;
   if (retryTimer) clearTimeout(retryTimer);
