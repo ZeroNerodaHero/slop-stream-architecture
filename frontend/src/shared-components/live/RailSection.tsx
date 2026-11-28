@@ -24,11 +24,11 @@ export function RailSection({ section, id, title, aside, top, className, bodyCla
       className={cn('flex flex-col', className)}
     >
       {title && (
-        <h2 className="flex h-6 items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+        <h2 className="flex min-h-6 flex-wrap items-center justify-between gap-x-2 gap-y-1.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">
           <span id={`${id}-title`} className="min-w-0 truncate">
             {title}
           </span>
-          {aside && <span className="flex shrink-0 items-center gap-1.5">{aside}</span>}
+          {aside && <span className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1.5">{aside}</span>}
         </h2>
       )}
       {top}

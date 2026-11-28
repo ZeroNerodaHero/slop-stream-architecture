@@ -74,6 +74,7 @@ import {
   GRID_ROWS,
   type Grid,
   liveEditingAtom,
+  liveBuiltInAtom,
   liveGridAtom,
   liveLayoutAtom,
   livePresetsAtom,
@@ -674,6 +675,7 @@ export function LivePage() {
   const me = useAtomValue(meAtom);
   const panels = useAtomValue(livePanelsAtom);
   const layout = useAtomValue(liveLayoutAtom);
+  const builtIn = useAtomValue(liveBuiltInAtom);
   const editing = useAtomValue(liveEditingAtom);
   const preset = useAtomValue(livePresetAtom);
   const presets = useAtomValue(livePresetsAtom);
@@ -797,7 +799,7 @@ export function LivePage() {
   const modelDialog = picking && <ModelDialog onClose={() => setPicking(false)} />;
 
   const skip: ModuleId[] = windowed ? ['chat'] : [];
-  const a = layout === 'obs' ? arrange(panels.hidden, skip) : null;
+  const a = builtIn ? arrange(panels.hidden, skip) : null;
   const isRailOpen = railOpen(rail);
   const columnPx = width >= 1600 ? 280 : 264;
   const besideChat =
