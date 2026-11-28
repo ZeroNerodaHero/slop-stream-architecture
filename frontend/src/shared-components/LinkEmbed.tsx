@@ -1,4 +1,4 @@
-import { RiCloseLine } from '@remixicon/react';
+import { RiCloseLine, RiGlobalLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
@@ -8,7 +8,6 @@ import { embedOf } from '@/shared-components/ChatEmbeds';
 import { ExternalLink, siteOf } from '@/shared-components/ExternalLink';
 import { TALK_FROM } from '@/shared-components/LinkedText';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { cn } from '@/utils/cn';
 
 const HIDE_BUTTON =
   'flex h-6 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textTertiary transition-colors duration-100 hover:border-primaryBlue hover:text-textPrimary focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue max-md:h-9 max-md:w-9';
@@ -18,44 +17,31 @@ function playsInline(text: string): boolean {
   return link !== null && embedOf(link) !== null;
 }
 
+const CARD = 'group/embed relative mt-1 block w-[360px] max-w-full overflow-hidden rounded-card border border-secondaryStroke bg-backgroundSecondary text-left';
+
+const CHIP = 'flex min-w-0 items-center gap-1 rounded-control border border-primaryStroke bg-background px-1.5 py-0.5 text-[11px] leading-tight text-textSecondary';
+
+const HIDE_SPOT =
+  'absolute right-1.5 top-1.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/embed:opacity-100 [@media(hover:none)]:opacity-100';
+
 export function LinkEmbed({ embed, text, onHide }: { embed: Embed | null | undefined; text: string; onHide?: () => void }) {
   const on = useAtomValue(showEmbedsAtom);
   const [broken, setBroken] = useState<string | null>(null);
-  if (!on || !embed || (!embed.title && !embed.description) || playsInline(text)) return null;
-  const { url, site, title, description, image, color } = embed;
+  if (!on || !embed || playsInline(text)) return null;
+  const { url, site, title, image } = embed;
   const picture = image && broken !== image.id ? image : null;
+  if (!title && !picture) return null;
+  const domain = siteOf(url);
   return (
-    <span
-      data-link-embed={siteOf(url)}
-      className={cn(
-        'relative mt-1 flex w-[27rem] max-w-full items-start gap-2 overflow-hidden rounded-card border border-primaryStroke bg-backgroundSecondary px-3 py-2 text-left',
-        '[[data-bubble]_&]:rounded-none [[data-bubble]_&]:border-0 [[data-bubble]_&]:bg-transparent [[data-bubble]_&]:px-0 [[data-bubble]_&]:pb-1',
-        color && 'border-l-2 [[data-bubble]_&]:border-l-2 [[data-bubble]_&]:pl-2'
-      )}
-      style={color ? { borderLeftColor: color } : undefined}
-    >
-      <span className="flex min-w-0 flex-1 flex-col gap-1 leading-snug">
-        {site && (
-          <span data-embed-site="" className="truncate text-xs text-textTertiary">
-            {site}
-          </span>
-        )}
-        {title && (
-          <ExternalLink href={url} from={TALK_FROM} data-embed-title="" className="line-clamp-2 font-semibold text-primaryBlue underline-offset-2 [overflow-wrap:anywhere] hover:underline">
-            {title}
-          </ExternalLink>
-        )}
-        {description && (
-          <span data-embed-description="" className="line-clamp-4 text-sm text-textSecondary [overflow-wrap:anywhere]">
-            {description}
-          </span>
-        )}
-        {picture && (
-          <span
-            data-embed-image={picture.id}
-            className="relative mt-1 block max-h-80 w-full overflow-hidden rounded-card bg-backgroundTertiary"
-            style={{ aspectRatio: `${picture.width} / ${picture.height}` }}
-          >
+    <span data-link-embed={domain} className={CARD}>
+      <ExternalLink
+        href={url}
+        from={TALK_FROM}
+        data-embed-link=""
+        className="block text-left focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+      >
+        {picture ? (
+          <span data-embed-image={picture.id} className="relative block aspect-video w-full overflow-hidden bg-backgroundTertiary">
             <img
               src={embedImageSrc(picture)}
               alt=""
@@ -67,15 +53,37 @@ export function LinkEmbed({ embed, text, onHide }: { embed: Embed | null | undef
               onError={() => setBroken(picture.id)}
               className="absolute inset-0 h-full w-full object-cover"
             />
+            {title && (
+              <span className="absolute inset-x-0 bottom-0 flex min-h-12 items-end bg-gradient-to-t from-black/75 to-transparent p-2.5">
+                <span data-embed-title="" className="line-clamp-2 text-[13px] font-semibold leading-snug text-white [overflow-wrap:anywhere]">
+                  {title}
+                </span>
+              </span>
+            )}
+          </span>
+        ) : (
+          <span data-embed-title="" className="line-clamp-2 px-2.5 pt-2 text-[13px] font-semibold leading-snug text-textPrimary [overflow-wrap:anywhere]">
+            {title}
           </span>
         )}
-      </span>
+        <span className="flex items-center justify-between gap-2 px-2.5 py-2">
+          <span data-embed-site="" className={CHIP}>
+            <RiGlobalLine aria-hidden size={12} className="shrink-0" />
+            <span className="truncate">{site || domain}</span>
+          </span>
+          <span data-embed-domain="" className="min-w-0 truncate text-[11px] leading-tight text-textTertiary">
+            {domain}
+          </span>
+        </span>
+      </ExternalLink>
       {onHide && (
-        <Tooltip content="hide embed">
-          <button type="button" aria-label="hide embed" data-embed-hide="" onClick={onHide} className={HIDE_BUTTON}>
-            <RiCloseLine aria-hidden size={14} />
-          </button>
-        </Tooltip>
+        <span className={HIDE_SPOT}>
+          <Tooltip content="hide embed">
+            <button type="button" aria-label="hide embed" data-embed-hide="" onClick={onHide} className={HIDE_BUTTON}>
+              <RiCloseLine aria-hidden size={14} />
+            </button>
+          </Tooltip>
+        </span>
       )}
     </span>
   );
