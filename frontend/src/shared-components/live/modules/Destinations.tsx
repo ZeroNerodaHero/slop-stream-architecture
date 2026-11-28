@@ -254,10 +254,35 @@ function CustomForm({ onDone, onStatus }: { onDone: () => void; onStatus: (words
   );
 }
 
-export function DestinationsBody() {
+function ShowHidden({ count, showing, onToggle }: { count: number; showing: boolean; onToggle: () => void }) {
+  const Icon = showing ? RiEyeOffLine : RiEyeLine;
+  const words = showing ? 'hide hidden' : `show hidden (${count})`;
+  return (
+    <>
+      {count > 0 && (
+        <span id="destination-hidden-count" aria-hidden className="text-[10px] font-medium normal-case leading-none tracking-normal tabular-nums">
+          {count}
+        </span>
+      )}
+      <Tooltip content={words}>
+        <button
+          id="destination-show-hidden"
+          type="button"
+          aria-label={words}
+          aria-pressed={showing}
+          onClick={onToggle}
+          className={cn(FOLD_BUTTON, showing && 'border-primaryBlue text-primaryBlue')}
+        >
+          <Icon aria-hidden size={14} />
+        </button>
+      </Tooltip>
+    </>
+  );
+}
+
+function DestinationsBody({ reveal }: { reveal: boolean }) {
   const { data } = useDestinations();
   const [status, setStatus] = useState(readBack);
-  const [reveal, setReveal] = useState(false);
   const hidden = useAtomValue(hiddenDestinationsAtom);
   const relayWords = useAtomValue(restreamMessageAtom);
   if (!data) return null;
@@ -265,18 +290,6 @@ export function DestinationsBody() {
   const rows = ROWS.filter((r) => showing || !hidden.includes(r));
   return (
     <div className="flex flex-col gap-2">
-      {hidden.length > 0 && (
-        <button
-          id="destination-show-hidden"
-          type="button"
-          aria-pressed={showing}
-          onClick={() => setReveal(!showing)}
-          className="flex items-center gap-1 self-start rounded-control text-xs text-textTertiary transition-colors duration-150 hover:text-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none"
-        >
-          {showing ? <RiEyeOffLine aria-hidden size={13} /> : <RiEyeLine aria-hidden size={13} />}
-          {showing ? 'hide hidden' : `show hidden (${hidden.length})`}
-        </button>
-      )}
       {rows.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-1 p-0">
           {rows.map((r) => {
@@ -304,6 +317,8 @@ export function DestinationsBody() {
 
 export function DestinationsModule({ strip = false }: { strip?: boolean }) {
   const { data } = useDestinations();
+  const [reveal, setReveal] = useState(false);
+  const hidden = useAtomValue(hiddenDestinationsAtom).length;
   if (!data) return null;
   const count = data.destinations.length;
   if (strip) {
@@ -325,8 +340,15 @@ export function DestinationsModule({ strip = false }: { strip?: boolean }) {
     );
   }
   return (
-    <RailSection section="destinations" id="live-destinations" title="destinations" className="border-b border-primaryStroke px-3 py-2.5" bodyClassName="pt-2">
-      <DestinationsBody />
+    <RailSection
+      section="destinations"
+      id="live-destinations"
+      title="destinations"
+      aside={hidden > 0 && <ShowHidden count={hidden} showing={reveal} onToggle={() => setReveal(!reveal)} />}
+      className="border-b border-primaryStroke px-3 py-2.5"
+      bodyClassName="pt-2"
+    >
+      <DestinationsBody reveal={reveal} />
     </RailSection>
   );
 }
