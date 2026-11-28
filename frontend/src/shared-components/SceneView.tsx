@@ -35,6 +35,7 @@ export interface SceneEdit {
   onResize: (id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) => void;
   previewMove?: (id: string, from: Box, dx: number, dy: number) => Box;
   previewResize?: (id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) => Box;
+  onStream?: (id: string, box: Box) => void;
   onNudge: (id: string, dx: number, dy: number) => void;
   onKey: (id: string, what: LayerKey) => void;
 }
@@ -220,6 +221,7 @@ function LayerBox({ layer, frame, edit, onPick, clear = false, children }: Layer
       lastFree = ev.shiftKey || g.shift;
       if (live) {
         next = g.kind === 'move' ? edit.previewMove!(layer.id, g.box, dx, dy) : edit.previewResize!(layer.id, g.box, g.sx, g.sy, dx, dy, lastFree);
+        edit.onStream?.(layer.id, next);
         if (!raf) raf = requestAnimationFrame(flush);
       } else if (g.kind === 'move') edit.onMove(layer.id, g.box, dx, dy);
       else edit.onResize(layer.id, g.box, g.sx, g.sy, dx, dy, lastFree);
