@@ -64,6 +64,7 @@ import {
   type Source,
   validPreset
 } from '@/infra/scene';
+import { readModelChoice, type Stage, type StageGap, stagedFrom, stageOf } from '@/infra/stage';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import { inTauri } from '@/infra/update-check';
@@ -198,15 +199,7 @@ export const modelBackgroundAtom = atom((get) => {
   const colour = get(storedModelBackgroundAtom);
   return typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour) ? colour : MODEL_BACKGROUND;
 });
-function validModelChoice(raw: unknown): ModelChoice | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const c = raw as Record<string, unknown>;
-  if (typeof c.name !== 'string') return null;
-  if (c.kind === 'demo' && typeof c.id === 'string' && /^[a-z0-9_-]{1,48}$/.test(c.id) && typeof c.v === 'string')
-    return { kind: 'demo', id: c.id, v: c.v, name: c.name };
-  if (c.kind === 'kept' && typeof c.id === 'number' && Number.isInteger(c.id) && c.id >= 0) return { kind: 'kept', id: c.id, name: c.name };
-  return null;
-}
+const validModelChoice = (raw: unknown): ModelChoice | null => readModelChoice(raw);
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
 export const publishStatsAtom = atom<StreamStats | null>(null);
 export const publishMessageAtom = atom('camera off');
@@ -1969,4 +1962,114 @@ export async function removeStreamThumb(id: number): Promise<void> {
 export function copyWatchUrl() {
   const url = store.get(watchUrlAtom);
   if (url) navigator.clipboard?.writeText(url).catch(() => undefined);
+}
+
+const KEPT_LEVELS = ['mic', MASTER, DESKTOP_AUDIO] as const;
+
+function levelsNow(): Stage['levels'] {
+  const levels: Stage['levels'] = {};
+  for (const id of KEPT_LEVELS) {
+    const kept = keptMix(id);
+    if (kept) levels[id] = kept;
+  }
+  if (mixer) {
+    const master = store.get(masterRowAtom);
+    levels[MASTER] = { level: master.level, muted: master.muted };
+    for (const row of store.get(mixRowsAtom)) levels[row.id] = { level: row.level, muted: row.muted };
+  }
+  return levels;
+}
+
+export function sceneStageNow(): Stage {
+  return stageOf(store.get(sourcesAtom), {
+    levels: levelsNow(),
+    sounds: {},
+    names: {},
+    camera: store.get(cameraDeviceAtom),
+    mic: store.get(micDeviceAtom) || store.get(micPickAtom),
+    mirror: store.get(faceMirrorAtom),
+    expressions: store.get(faceExpressionsAtom),
+    background: store.get(modelBackgroundAtom),
+    model: validModelChoice(store.get(storedModelAtom)),
+    solo: store.get(cameraOnlyAtom)
+  });
+}
+
+async function hasDevice(kind: MediaDeviceKind, deviceId: string): Promise<boolean> {
+  try {
+    return (await navigator.mediaDevices.enumerateDevices()).some((d) => d.kind === kind && d.deviceId === deviceId);
+  } catch {
+    return false;
+  }
+}
+
+async function cameraAllowed(): Promise<boolean> {
+  try {
+    return (await navigator.permissions.query({ name: 'camera' as PermissionName })).state === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+function sameModel(a: ModelChoice | null, b: ModelChoice | null): boolean {
+  return a === null || b === null ? a === b : a.kind === b.kind && a.id === b.id;
+}
+
+async function stageModel(want: ModelChoice | null, gaps: StageGap[]): Promise<void> {
+  const worn = modelSession ? validModelChoice(store.get(storedModelAtom)) : null;
+  if (sameModel(want, worn)) return;
+  if (!want) {
+    await backToCamera();
+    return;
+  }
+  if (!store.get(hasCameraAtom) && !modelSession) return;
+  if (!store.get(demoModelsAtom).length && !store.get(keptModelsAtom).length) await loadModelLibrary();
+  const kept = want.kind === 'kept' ? store.get(keptModelsAtom).find((m) => m.id === want.id) : undefined;
+  const demo = want.kind === 'demo' ? store.get(demoModelsAtom).find((m) => m.id === want.id) : undefined;
+  const on = kept ? await pickKeptModel(kept) : demo ? await pickDemoModel(demo) : false;
+  if (!on) gaps.push({ kind: 'model', name: want.name });
+}
+
+export async function applySceneStage(stage: Stage): Promise<StageGap[]> {
+  const gaps: StageGap[] = [];
+  const generation = liveGeneration;
+  const wantCamera = stage.scene.cam?.shown === true;
+  if (wantCamera && !store.get(hasCameraAtom)) {
+    if (await cameraAllowed()) await cameraOn();
+    if (!store.get(hasCameraAtom)) gaps.push({ kind: 'camera' });
+  }
+  if (generation !== liveGeneration) return gaps;
+  if (stage.scene[AVATAR_ID]?.shown && !store.get(sourcesAtom).some((s) => s.kind === 'avatar')) ensureAvatarSource();
+  if (stage.camera && stage.camera !== store.get(cameraDeviceAtom)) {
+    if (await hasDevice('videoinput', stage.camera)) await setCamera(stage.camera);
+    else if (wantCamera) gaps.push({ kind: 'device', what: 'camera' });
+  }
+  const micNow = store.get(micDeviceAtom) || store.get(micPickAtom);
+  if (stage.mic && stage.mic !== micNow && store.get(hasMicAtom)) {
+    if (inTauri() || (await hasDevice('audioinput', stage.mic))) await setMicDevice(stage.mic);
+    else gaps.push({ kind: 'device', what: 'mic' });
+  }
+  if (generation !== liveGeneration) return gaps;
+  await stageModel(stage.model, gaps);
+  if (generation !== liveGeneration) return gaps;
+  setFaceMirror(stage.mirror);
+  setFaceExpressions(stage.expressions);
+  if (stage.background) setModelBackground(stage.background);
+  if (!stage.solo) setCameraOnly(false);
+  const library = store.get(libraryAtom).map((a) => a.id);
+  const staged = stagedFrom(stage, store.get(sourcesAtom), library, () => `i${++imageCount}`);
+  gaps.push(...staged.gaps);
+  store.set(selectedSourceAtom, null);
+  setSources(staged.sources);
+  if (stage.solo) setCameraOnly(true);
+  slotsChanged();
+  for (const [id, row] of Object.entries(stage.levels)) {
+    const live = id === MASTER || store.get(mixRowsAtom).some((r) => r.id === id);
+    if (live) setMixRow(id, (r) => ({ ...r, level: row.level, muted: row.muted }));
+    else if ((KEPT_LEVELS as readonly string[]).includes(id)) {
+      const raw = store.get(storedMixAtom);
+      store.set(storedMixAtom, { ...(raw && typeof raw === 'object' ? raw : {}), [id]: row });
+    }
+  }
+  return gaps;
 }

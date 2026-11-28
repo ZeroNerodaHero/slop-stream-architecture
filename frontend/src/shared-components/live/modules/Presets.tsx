@@ -2,7 +2,8 @@ import { RiAddLine, RiCloseLine, RiEqualizerLine, RiPencilLine, type RemixiconCo
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
-import { applyPreset, forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, presetName, PRESET_WORDS, renameMine, saveMine } from '@/infra/live-dock';
+import { pickPreset, presetNoticeAtom, savePreset } from '@/infra/atoms/preset-atoms';
+import { forgetMine, HOTKEY_PRESETS, liveMineAtom, livePresetAtom, type PresetId, presetName, PRESET_WORDS, renameMine } from '@/infra/live-dock';
 import { Button } from '@/shared-components/Button';
 import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { RailSection } from '@/shared-components/live/RailSection';
@@ -26,6 +27,7 @@ const ROW_BUTTON =
 export function PresetsModule({ strip = false }: { strip?: boolean }) {
   const current = useAtomValue(livePresetAtom);
   const mine = useAtomValue(liveMineAtom);
+  const notice = useAtomValue(presetNoticeAtom);
   const [renaming, setRenaming] = useState(false);
   const ids: PresetId[] = mine ? [...HOTKEY_PRESETS, 'mine'] : [...HOTKEY_PRESETS];
   if (strip)
@@ -42,7 +44,7 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
                 type="button"
                 aria-label={presetName(id, mine)}
                 aria-pressed={on}
-                onClick={() => applyPreset(id)}
+                onClick={() => void pickPreset(id)}
                 className={cn(FOLD_BUTTON, on ? 'border-primaryBlue text-primaryBlue' : 'border-transparent bg-transparent')}
               >
                 <Icon aria-hidden size={16} />
@@ -83,7 +85,7 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
                   type="button"
                   aria-pressed={on}
                   aria-keyshortcuts={id === 'mine' ? undefined : String(i + 1)}
-                  onClick={() => applyPreset(id)}
+                  onClick={() => void pickPreset(id)}
                   className={cn(ROW, on ? 'border-primaryBlue bg-primaryBlue/10' : 'border-transparent hover:bg-backgroundTertiary')}
                 >
                   <span aria-hidden className={cn(ROW_ICON, on ? 'bg-primaryBlue text-background' : 'bg-backgroundTertiary text-textSecondary')}>
@@ -134,12 +136,17 @@ export function PresetsModule({ strip = false }: { strip?: boolean }) {
           );
         })}
       </ul>
-      <Tooltip content="keep these modules as yours">
-        <Button id="live-preset-save" size="sm" variant="outline" className="mt-1 h-7 gap-1 self-start px-2.5 py-0 text-xs max-md:min-h-0" onClick={saveMine}>
+      <Tooltip content="keep these sources, levels and modules as yours">
+        <Button id="live-preset-save" size="sm" variant="outline" className="mt-1 h-7 gap-1 self-start px-2.5 py-0 text-xs max-md:min-h-0" onClick={savePreset}>
           <RiAddLine aria-hidden size={14} />
           save current
         </Button>
       </Tooltip>
+      {notice && (
+        <p id="live-preset-notice" role="status" className="m-0 text-[11px] leading-tight text-textTertiary">
+          {notice}
+        </p>
+      )}
     </RailSection>
   );
 }

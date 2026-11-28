@@ -50,12 +50,12 @@ import {
   watchUrlAtom
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
+import { pickPreset } from '@/infra/atoms/preset-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { stopSounds, watchSources } from '@/infra/atoms/source-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';
 import {
-  applyPreset,
   arrange,
   type Cell,
   clampCell,
@@ -199,7 +199,7 @@ function usePresetKeys() {
       const id = presetForKey(e.key);
       if (!id) return;
       e.preventDefault();
-      applyPreset(id);
+      void pickPreset(id);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

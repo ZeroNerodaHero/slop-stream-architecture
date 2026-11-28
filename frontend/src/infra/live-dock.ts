@@ -1,6 +1,7 @@
 import { atom } from 'jotai';
 import { atomWithStorage, RESET } from 'jotai/utils';
 
+import { readStage, type Stage } from './stage.ts';
 import { store } from './store.ts';
 
 export const DOCK_PANELS = ['sources', 'source', 'sound'] as const;
@@ -225,6 +226,7 @@ export interface Preset {
   panels: LivePanels;
   layout?: LayoutId;
   name?: string;
+  stage?: Stage;
 }
 
 export interface Look {
@@ -250,6 +252,8 @@ export function readPreset(raw: unknown): Preset | null {
   if (layout !== undefined) preset.layout = layout;
   const name = readPresetName(p.name);
   if (name) preset.name = name;
+  const stage = readStage(p.stage);
+  if (stage) preset.stage = stage;
   return preset;
 }
 
@@ -399,26 +403,28 @@ export function placeShown(grid: Grid, was: readonly ModuleId[], hidden: readonl
   return { grid: next, hidden: still };
 }
 
-export function applyPreset(id: PresetId) {
+export function applyPreset(id: PresetId): Preset | null {
   const p = id === 'mine' ? store.get(liveMineAtom) : PRESETS[id];
-  if (!p) return;
+  if (!p) return null;
   store.set(storedPickedAtom, id);
   store.set(liveEditingAtom, false);
   if (p.layout !== undefined) store.set(storedLayoutAtom, p.layout);
   if (!isSlot(store.get(liveLayoutAtom))) {
     setPanels({ hidden: [...p.panels.hidden] });
-    return;
+    return p;
   }
   const placed = placeShown(store.get(liveGridAtom), store.get(livePanelsAtom).hidden, p.panels.hidden);
   setGrid(placed.grid);
   setPanels({ hidden: placed.hidden });
+  return p;
 }
 
-export function saveMine() {
+export function saveMine(stage?: Stage) {
   const layout = store.get(liveLayoutAtom);
   const name = store.get(liveMineAtom)?.name;
   const mine: Preset = { panels: store.get(livePanelsAtom), layout };
   if (name) mine.name = name;
+  if (stage) mine.stage = stage;
   store.set(storedMineAtom, mine);
   store.set(storedPickedAtom, 'mine');
 }
