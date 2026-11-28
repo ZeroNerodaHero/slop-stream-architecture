@@ -408,7 +408,7 @@ function SourcesBody({ onModel, place, inline }: { onModel: () => void; place: P
       )}
       {inline && (
         <div id="source-inline" className="border-t border-primaryStroke">
-          <SourceSettings place={place} onModel={onModel} />
+          <SourceSettings place={place} inline onModel={onModel} />
         </div>
       )}
     </div>

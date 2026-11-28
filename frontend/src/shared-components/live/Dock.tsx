@@ -27,6 +27,7 @@ interface DockPanelProps {
   tab: ModuleId;
   place: Place;
   count?: ReactNode;
+  title?: ReactNode;
   aside?: ReactNode;
   children: ReactNode;
 }
@@ -39,7 +40,7 @@ const SECTION: Record<Exclude<Place, 'phone'>, string> = {
   tile: 'h-full min-h-0'
 };
 
-export function DockPanel({ tab, place, count, aside, children }: DockPanelProps) {
+export function DockPanel({ tab, place, count, title, aside, children }: DockPanelProps) {
   const id = DOCK_IDS[tab];
   const editing = useAtomValue(liveEditingAtom) && place === 'tile';
   const word = DOCK_WORDS[tab];
@@ -55,7 +56,8 @@ export function DockPanel({ tab, place, count, aside, children }: DockPanelProps
       id={id}
       data-tab={tab}
       data-place={place}
-      aria-labelledby={`${id}-title`}
+      aria-labelledby={title ? undefined : `${id}-title`}
+      aria-label={title ? word : undefined}
       className={panelClassName(
         cn('flex min-w-0 flex-col overflow-hidden', SECTION[place], editing && 'border-dashed border-primaryBlue/70 bubble:border-primaryBlue/70')
       )}
@@ -75,11 +77,11 @@ export function DockPanel({ tab, place, count, aside, children }: DockPanelProps
             </button>
           </Tooltip>
         )}
-        <span id={`${id}-title`} className="min-w-0 truncate">
-          {word}
+        <span id={`${id}-title`} className={cn('min-w-0', title ? 'flex flex-1 items-center gap-2' : 'truncate')}>
+          {title ?? word}
         </span>
         {count !== undefined && <span className="shrink-0 font-normal normal-case tracking-normal text-textTertiary">{count}</span>}
-        <span className="flex-1" />
+        {!title && <span className="flex-1" />}
         {aside}
         {editing && (
           <Tooltip content={`close the ${word}`}>

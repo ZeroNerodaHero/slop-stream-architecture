@@ -1,4 +1,4 @@
-import { RiMusic2Line, RiPlayFill, RiStopFill, RiVidiconLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiMusic2Line, RiPencilLine, RiPlayFill, RiStopFill, RiVidiconLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 
@@ -35,6 +35,7 @@ import type { Source } from '@/infra/scene';
 import { INPUT_WORDS, inputKindOf, SOURCE_NAME_MAX, type SoundSource, sectionsOf } from '@/infra/source-settings';
 import { Button } from '@/shared-components/Button';
 import { AvatarLookSettings } from '@/shared-components/live/AvatarLookSettings';
+import { FOLD_BUTTON } from '@/shared-components/live/Dock';
 import { INPUT } from '@/shared-components/input';
 import { DevicePick } from '@/shared-components/live/DevicePick';
 import { ModelControls } from '@/shared-components/live/ModelControls';
@@ -121,37 +122,88 @@ export function NameEdit({ id, name, onSave, onCancel, label = 'source name', cl
   );
 }
 
-function Header({ id, name, kind, onRename }: { id: string; name: string; kind: string; onRename: (name: string) => void }) {
-  const [editing, setEditing] = useState(false);
+export interface SourceHead {
+  id: string;
+  name: string;
+  kind: string;
+  rename: (name: string) => void;
+}
+
+type Picked = { sound: SoundSource; source?: undefined } | { source: Source; sound?: undefined } | null;
+
+function usePicked(place: Place): Picked {
+  const sources = useAtomValue(sourcesAtom);
+  const sounds = useAtomValue(soundsAtom);
+  const selectedId = useAtomValue(selectedSourceAtom);
+  const panels = useAtomValue(livePanelsAtom);
+  const sound = sounds.find((s) => s.id === selectedId);
+  if (sound) return { sound };
+  const listGone = place !== 'phone' && panels.hidden.includes('sources');
+  const source = sources.find((s) => s.id === selectedId) ?? (listGone ? sources.find((s) => s.kind === 'camera' || s.kind === 'avatar') : undefined);
+  return source ? { source } : null;
+}
+
+export function useSourceHead(place: Place): SourceHead | null {
+  const picked = usePicked(place);
+  const model = useAtomValue(modelAtom);
+  const names = useAtomValue(sourceNamesAtom);
+  if (!picked) return null;
+  if (picked.sound) {
+    const sound = picked.sound;
+    return { id: sound.id, name: sound.name, kind: INPUT_WORDS.sound, rename: (next) => renameSound(sound.id, next) };
+  }
+  const source = picked.source;
+  const label = sourceNameOf(source, model, names);
+  const input = inputKindOf(source.kind, source.kind === 'camera' && model !== null);
+  return { id: source.id, name: label.name, kind: INPUT_WORDS[input], rename: (next) => renameSource(label, next) };
+}
+
+export function SourceTitle({ head, editing, onDone }: { head: SourceHead; editing: boolean; onDone: () => void }) {
   return (
-    <div className="flex min-h-7 min-w-0 items-center gap-2">
+    <>
       {editing ? (
         <NameEdit
-          id={`source-detail-name-${id}`}
-          name={name}
+          id={`source-detail-name-${head.id}`}
+          name={head.name}
           onSave={(next) => {
-            onRename(next);
-            setEditing(false);
+            head.rename(next);
+            onDone();
           }}
-          onCancel={() => setEditing(false)}
+          onCancel={onDone}
+          className="font-normal normal-case tracking-normal"
         />
       ) : (
-        <p className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span id="source-detail-name" className="truncate text-xs font-semibold uppercase tracking-wider text-textSecondary">
-            {name}
-          </span>
-          {kind !== name && (
-            <span id="source-detail-kind" className="shrink-0 text-xs text-textTertiary">
-              {kind}
-            </span>
-          )}
-        </p>
+        <span id="source-detail-name" className="min-w-0 truncate">
+          {head.name}
+        </span>
       )}
-      {!editing && (
-        <Button id="source-detail-rename" size="sm" className="shrink-0 py-0.5 text-xs" onClick={() => setEditing(true)}>
-          rename
-        </Button>
+      {head.kind !== head.name && (
+        <span id="source-detail-kind" className="shrink-0 font-normal normal-case tracking-normal text-textTertiary">
+          {head.kind}
+        </span>
       )}
+    </>
+  );
+}
+
+export function RenameButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Tooltip content="rename">
+      <button id="source-detail-rename" type="button" aria-label="rename" onClick={onClick} className={cn(FOLD_BUTTON, 'h-6 w-6')}>
+        <RiPencilLine aria-hidden size={14} />
+      </button>
+    </Tooltip>
+  );
+}
+
+function InlineHead({ head }: { head: SourceHead }) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <div id="source-detail-head" className="flex min-h-7 min-w-0 items-center gap-2 text-xs font-semibold uppercase tracking-wider text-textSecondary">
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <SourceTitle head={head} editing={editing} onDone={() => setEditing(false)} />
+      </span>
+      {!editing && <RenameButton onClick={() => setEditing(true)} />}
     </div>
   );
 }
@@ -177,36 +229,37 @@ function CameraPick() {
   );
 }
 
-function VisualSettings({ source, place, onModel }: { source: Source; place: Place; onModel: () => void }) {
-  const model = useAtomValue(modelAtom);
-  const names = useAtomValue(sourceNamesAtom);
+function VisualSettings({ source, place, head, onModel }: { source: Source; place: Place; head: SourceHead | null; onModel: () => void }) {
   const hasCamera = useAtomValue(sourcesAtom).some((s) => s.kind === 'camera');
-  const label = sourceNameOf(source, model, names);
   const { worn, fill } = useSourceFacts(source);
   const input = inputKindOf(source.kind, worn);
   const sections = sectionsOf(input);
+  const fits = sections.includes('fill') || (sections.includes('fitCamera') && hasCamera);
+  const top = head !== null || fits || sections.includes('device');
   return (
     <div id="source-detail" data-source={source.id} data-input={input} className="flex min-w-0 flex-col">
-      <div className="flex min-w-0 flex-col gap-2 px-3 py-2.5">
-        <Header id={source.id} name={label.name} kind={INPUT_WORDS[input]} onRename={(next) => renameSource(label, next)} />
-        {(sections.includes('fill') || (sections.includes('fitCamera') && hasCamera)) && (
-          <div className="flex flex-wrap gap-1.5">
-            {sections.includes('fill') && (
-              <Button id="source-detail-fit" size="sm" onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}>
-                {fill ? 'whole picture' : 'fill box'}
-              </Button>
-            )}
-            {sections.includes('fitCamera') && hasCamera && (
-              <Tooltip content="the same box as the camera, just over it (a border)">
-                <Button id="source-detail-fit-camera" size="sm" onClick={() => fitSourceTo(source.id, 'cam')}>
-                  fit camera
+      {top && (
+        <div className="flex min-w-0 flex-col gap-2 px-3 py-2.5">
+          {head && <InlineHead head={head} />}
+          {fits && (
+            <div className="flex flex-wrap gap-1.5">
+              {sections.includes('fill') && (
+                <Button id="source-detail-fit" size="sm" onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}>
+                  {fill ? 'whole picture' : 'fill box'}
                 </Button>
-              </Tooltip>
-            )}
-          </div>
-        )}
-        {sections.includes('device') && <CameraPick />}
-      </div>
+              )}
+              {sections.includes('fitCamera') && hasCamera && (
+                <Tooltip content="the same box as the camera, just over it (a border)">
+                  <Button id="source-detail-fit-camera" size="sm" onClick={() => fitSourceTo(source.id, 'cam')}>
+                    fit camera
+                  </Button>
+                </Tooltip>
+              )}
+            </div>
+          )}
+          {sections.includes('device') && <CameraPick />}
+        </div>
+      )}
       {sections.includes('look') && (
         <div id="source-look" className="border-t border-primaryStroke">
           <p className={SECTION_HEAD}>look</p>
@@ -229,14 +282,14 @@ function VisualSettings({ source, place, onModel }: { source: Source; place: Pla
   );
 }
 
-function SoundSettings({ sound }: { sound: SoundSource }) {
+function SoundSettings({ sound, head }: { sound: SoundSource; head: SourceHead | null }) {
   const playing = useAtomValue(soundPlayingAtom)[sound.id] ?? false;
   const publishing = useAtomValue(isPublishingAtom);
   const status = useAtomValue(soundStatusAtom);
   const percent = Math.round(sound.volume * 100);
   return (
     <div id="source-detail" data-source={sound.id} data-input="sound" className="flex min-w-0 flex-col gap-2 px-3 py-2.5">
-      <Header id={sound.id} name={sound.name} kind={INPUT_WORDS.sound} onRename={(next) => renameSound(sound.id, next)} />
+      {head && <InlineHead head={head} />}
       <div className="flex flex-wrap gap-1.5">
         <Button
           id="sound-play"
@@ -291,20 +344,16 @@ function SoundSettings({ sound }: { sound: SoundSource }) {
   );
 }
 
-export function SourceSettings({ place, onModel }: { place: Place; onModel: () => void }) {
-  const sources = useAtomValue(sourcesAtom);
-  const sounds = useAtomValue(soundsAtom);
-  const selectedId = useAtomValue(selectedSourceAtom);
-  const panels = useAtomValue(livePanelsAtom);
-  const sound = sounds.find((s) => s.id === selectedId);
-  if (sound) return <SoundSettings sound={sound} />;
-  const listGone = place !== 'phone' && panels.hidden.includes('sources');
-  const source = sources.find((s) => s.id === selectedId) ?? (listGone ? sources.find((s) => s.kind === 'camera' || s.kind === 'avatar') : undefined);
-  if (!source)
+export function SourceSettings({ place, inline = false, onModel }: { place: Place; inline?: boolean; onModel: () => void }) {
+  const picked = usePicked(place);
+  const head = useSourceHead(place);
+  const shown = inline || place === 'phone' ? head : null;
+  if (picked?.sound) return <SoundSettings key={picked.sound.id} sound={picked.sound} head={shown} />;
+  if (!picked)
     return (
       <p id="source-none" className="px-3 py-2.5 text-xs text-textTertiary">
         pick a source to set it up
       </p>
     );
-  return <VisualSettings key={source.id} source={source} place={place} onModel={onModel} />;
+  return <VisualSettings key={picked.source.id} source={picked.source} place={place} head={shown} onModel={onModel} />;
 }
