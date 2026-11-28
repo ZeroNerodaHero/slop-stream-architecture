@@ -165,6 +165,19 @@ export function setSidebarFolded(list: SidebarList, folded: boolean) {
 
 export const roomMembersOpenAtom = atomWithStorage('settings.roomMembersOpen', true, undefined, { getOnInit: true });
 
+const DESTINATION_ROWS = ['twitch', 'kick', 'youtube', 'custom'] as const;
+export type DestinationRow = (typeof DESTINATION_ROWS)[number];
+const storedHiddenDestinationsAtom = atomWithStorage<unknown>('settings.hiddenDestinations', [], undefined, { getOnInit: true });
+export const hiddenDestinationsAtom = atom((get): DestinationRow[] => {
+  const raw = get(storedHiddenDestinationsAtom);
+  return Array.isArray(raw) ? DESTINATION_ROWS.filter((r) => raw.includes(r)) : [];
+});
+
+export function setDestinationHidden(row: DestinationRow, hidden: boolean) {
+  const rest = store.get(hiddenDestinationsAtom).filter((r) => r !== row);
+  store.set(storedHiddenDestinationsAtom, hidden ? [...rest, row] : rest);
+}
+
 try {
   migrateDebugSettings(localStorage);
 } catch {
