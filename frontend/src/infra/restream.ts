@@ -113,12 +113,25 @@ export function paintAvatar(ctx: CanvasRenderingContext2D, box: Box, paint: Avat
   ctx.restore();
 }
 
+interface Gif {
+  decoder: ImageDecoder;
+  count: number;
+  frame: VideoFrame | null;
+  index: number;
+  due: number;
+  busy: boolean;
+}
+
+const GIF_MIN_MS = 20;
+const GIF_SLOW_MS = 100;
+
 class Compositor {
   readonly canvas: HTMLCanvasElement;
   readonly track: MediaStreamTrack;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly videos = new Map<string, { el: HTMLVideoElement; used: number }>();
   private readonly images = new Map<string, HTMLImageElement>();
+  private readonly gifs = new Map<string, Gif | 'loading' | 'still'>();
   private readonly clock: Worker;
   private readonly inputs: RestreamInputs;
   onDraw: ((canvas: HTMLCanvasElement) => void) | null = null;
@@ -152,6 +165,64 @@ class Compositor {
     }
     this.videos.clear();
     this.images.clear();
+    for (const gif of this.gifs.values()) {
+      if (typeof gif !== 'object') continue;
+      gif.frame?.close();
+      gif.decoder.close();
+    }
+    this.gifs.clear();
+  }
+
+  private async loadGif(url: string) {
+    try {
+      const res = await fetch(url);
+      const type = res.headers.get('content-type') ?? '';
+      if (!res.ok || !res.body || !type.startsWith('image/gif') || !(await ImageDecoder.isTypeSupported('image/gif'))) {
+        this.gifs.set(url, 'still');
+        return;
+      }
+      const decoder = new ImageDecoder({ data: res.body, type: 'image/gif' });
+      await decoder.completed;
+      const count = decoder.tracks.selectedTrack?.frameCount ?? 0;
+      if (this.gifs.get(url) !== 'loading' || count < 2) {
+        decoder.close();
+        if (this.gifs.get(url) === 'loading') this.gifs.set(url, 'still');
+        return;
+      }
+      const gif: Gif = { decoder, count, frame: null, index: -1, due: 0, busy: false };
+      this.gifs.set(url, gif);
+      await this.nextFrame(gif);
+    } catch {
+      if (this.gifs.get(url) === 'loading') this.gifs.set(url, 'still');
+    }
+  }
+
+  private async nextFrame(gif: Gif) {
+    gif.busy = true;
+    const index = (gif.index + 1) % gif.count;
+    try {
+      const { image } = await gif.decoder.decode({ frameIndex: index });
+      const ms = (image.duration ?? 0) / 1000;
+      gif.frame?.close();
+      gif.frame = image;
+      gif.index = index;
+      gif.due = performance.now() + (ms <= 10 ? GIF_SLOW_MS : Math.max(GIF_MIN_MS, ms));
+    } catch {
+      gif.due = Infinity;
+    }
+    gif.busy = false;
+  }
+
+  private picture(url: string): CanvasImageSource | null {
+    if (typeof ImageDecoder === 'undefined') return this.image(url);
+    const gif = this.gifs.get(url);
+    if (gif === undefined) {
+      this.gifs.set(url, 'loading');
+      void this.loadGif(url);
+    }
+    if (typeof gif !== 'object') return this.image(url);
+    if (!gif.busy && performance.now() >= gif.due) void this.nextFrame(gif);
+    return gif.frame ?? this.image(url);
   }
 
   private video(stream: MediaStream): HTMLVideoElement | null {
@@ -210,7 +281,7 @@ class Compositor {
     }
     if (isVideoLayer(layer)) this.drawVideo(this.inputs.streamFor(layer.slot), box, fitOf(layer) === 'cover');
     else if (layer.kind === 'image') {
-      const img = this.image(this.inputs.imageUrl(layer.asset));
+      const img = this.picture(this.inputs.imageUrl(layer.asset));
       if (img) this.ctx.drawImage(img, box.x, box.y, box.w, box.h);
     } else if (layer.kind === 'avatar') this.drawAvatar(box);
     else if (layer.kind === 'text') {
