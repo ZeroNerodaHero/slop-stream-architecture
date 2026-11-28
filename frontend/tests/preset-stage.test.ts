@@ -101,7 +101,7 @@ test('a hidden saved source that is gone is skipped quietly', () => {
 
 test('an old preset without a stage still reads and leaves the sources alone', () => {
   const old = readPreset({ panels: { hidden: ['sound'] }, layout: 'obs', name: 'mine' });
-  assert.deepEqual(old, { panels: { hidden: ['sound'] }, layout: 'obs', name: 'mine' });
+  assert.deepEqual(old, { name: 'mine' });
   assert.equal(old?.stage, undefined);
   assert.equal(readPreset({ panels: { hidden: [] }, stage: 'junk' })?.stage, undefined);
   assert.equal(readPreset({ panels: { hidden: [] }, stage: { levels: {} } })?.stage, undefined);

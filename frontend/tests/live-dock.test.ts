@@ -15,10 +15,10 @@ import {
   overlaps,
   placeIn,
   placeShown,
-  PRESETS,
+  migratedPreset,
+  PRESET_IDS,
   presetForKey,
   presetName,
-  presetOf,
   railOpen,
   readGrid,
   readLayout,
@@ -55,14 +55,15 @@ test('the old face and rigging modules fold into source settings', () => {
   assert.deepEqual(readGrid({ rig: { x: 6, y: 6, w: 3, h: 3 } }).source, { x: 6, y: 6, w: 3, h: 3 });
   assert.deepEqual(readGrid({ source: { x: 1, y: 1, w: 2, h: 2 }, face: { x: 0, y: 0, w: 3, h: 3 } }).source, { x: 1, y: 1, w: 2, h: 2 });
   assert.deepEqual(readGrid(null).source, DEFAULT_GRID.source);
-  assert.equal(presetOf({ panels: readPanels({ hidden: ['rig', 'face'] }), layout: 'obs' }, { panels: { hidden: ['source'] } }), 'mine');
+  assert.deepEqual(readPanels({ hidden: ['rig', 'face'] }), { hidden: ['source'] });
   assert.equal(TILE_IDS.includes('face' as never), false);
   assert.equal(TILE_IDS.includes('rig' as never), false);
 });
 
-test('the one built in preset is default: everything open on obs left', () => {
-  assert.deepEqual(Object.keys(PRESETS), ['default']);
-  assert.deepEqual(PRESETS.default, { panels: { hidden: [] }, layout: 'obs' });
+test('there is one preset, default, and it is a no op until it is saved', () => {
+  assert.deepEqual(PRESET_IDS, ['default']);
+  assert.equal(readPreset(null), null);
+  assert.deepEqual(readPreset({}), {});
 });
 
 test('only obs left is built in, then four custom slots, and an old built in layout falls back to obs left', () => {
@@ -109,37 +110,33 @@ test('a module put back finds a free cell, or none when the grid is full', () =>
   assert.ok(cell && fits(roomy, shown, 'source', cell) && cell.x + cell.w <= GRID_COLS && cell.y + cell.h <= GRID_ROWS);
 });
 
-test('a preset is found from its modules and layout, and the picked one wins a tie', () => {
-  const look = (layout: 'obs' | 'c1' | 'c2' | 'c3' | 'c4', hidden: string[] = []) => ({ panels: readPanels({ hidden }), layout });
-  const yours = { panels: ALL, layout: 'c2' as const };
-  assert.equal(presetOf(look('obs'), null), 'default');
-  assert.equal(presetOf(look('c2'), null), null);
-  assert.equal(presetOf(look('obs', ['sound', 'sources']), null), null);
-  assert.equal(presetOf(look('c2'), yours), 'mine');
-  assert.equal(presetOf(look('obs'), yours), 'default');
-  assert.equal(presetOf(look('obs'), { panels: ALL }), 'default');
-  assert.equal(presetOf(look('obs'), { panels: ALL }, 'mine'), 'mine');
-  assert.equal(presetOf(look('c2'), yours, 'default'), 'mine');
-  assert.equal(presetOf(look('obs', ['source']), { panels: { hidden: ['source'] } }), 'mine');
-  assert.equal(readPreset(null), null);
-  assert.equal(readPreset({ layout: 4 }), null);
-  assert.deepEqual(readPreset({ layout: 7, panels: { hidden: ['source', 'chat'] } }), { panels: { hidden: ['source', 'chat'] } });
-  assert.deepEqual(readPreset({ layout: 'c3', panels: ALL }), { panels: ALL, layout: 'c3' });
+test('a preset never keeps a layout or shown modules, even from an old save', () => {
+  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
+  assert.deepEqual(readPreset({ layout: 'c3', panels: ALL }), {});
+  assert.deepEqual(readPreset({ layout: 5, grid: custom, panels: { hidden: ['source', 'chat'] }, name: 'stream' }), { name: 'stream' });
+  assert.equal(readPreset('junk'), null);
+  assert.equal(readPreset([]), null);
 });
 
-test('a preset saved with an old layout maps to obs left, and old custom 5 maps to custom slot 1', () => {
-  const custom = { ...DEFAULT_GRID, chat: { x: 8, y: 0, w: 4, h: 5 } };
-  assert.deepEqual(readPreset({ layout: 1, panels: ALL }), { panels: ALL, layout: 'obs' });
-  for (const old of [2, 3, 4]) assert.deepEqual(readPreset({ layout: old, grid: custom, panels: ALL }), { panels: ALL, layout: 'obs' });
-  assert.deepEqual(readPreset({ layout: 4, panels: { chat: false, rig: false } }), { panels: ALL, layout: 'obs' });
-  assert.deepEqual(readPreset({ layout: 5, grid: custom, panels: ALL }), { panels: ALL, layout: 'c1' });
-  assert.deepEqual(readPreset({ layout: 'nope', panels: ALL }), { panels: ALL });
+test('an old yours preset moves into default once, keeping its name and setup', () => {
+  const stage = { scene: { cam: { box: { x: 0, y: 0, w: 0.5, h: 0.5 }, shown: true } } };
+  const moved = migratedPreset(null, { panels: ALL, layout: 'c2', name: 'stream', stage });
+  assert.equal(moved?.name, 'stream');
+  assert.deepEqual(moved?.stage?.scene.cam?.box, { x: 0, y: 0, w: 0.5, h: 0.5 });
+  assert.equal('layout' in (moved ?? {}), false);
+  assert.equal('panels' in (moved ?? {}), false);
+  assert.equal(migratedPreset({ name: 'kept' }, { name: 'stream', stage }), null);
+  assert.equal(migratedPreset(null, { panels: ALL, layout: 'obs' }), null);
+  assert.equal(migratedPreset(null, null), null);
 });
 
 test('an empty custom slot starts with the stream across the bottom and every module in a row along the top', () => {
   const modules = TILE_IDS.filter((id) => id !== 'preview');
   for (const id of modules) assert.equal(START_GRID[id].y, 0, id);
-  assert.equal(modules.reduce((w, id) => w + START_GRID[id].w, 0), GRID_COLS);
+  assert.equal(
+    modules.reduce((w, id) => w + START_GRID[id].w, 0),
+    GRID_COLS
+  );
   const top = Math.max(...modules.map((id) => START_GRID[id].h));
   assert.deepEqual(START_GRID.preview, { x: 0, y: top, w: GRID_COLS, h: GRID_ROWS - top });
 });
@@ -158,14 +155,13 @@ test('custom slots are read one by one, junk is empty, and an old custom grid se
   assert.deepEqual(seedSlots('junk', 'junk'), empty);
 });
 
-test('only your preset takes a name, trimmed, and an empty one falls back to yours', () => {
-  assert.deepEqual(readPreset({ panels: ALL, name: '  stream  ' }), { panels: ALL, name: 'stream' });
-  assert.deepEqual(readPreset({ panels: ALL, name: '   ' }), { panels: ALL });
-  assert.equal(readPreset({ panels: ALL, name: 'x'.repeat(40) })?.name?.length, 32);
-  assert.equal(presetName('mine', { panels: ALL, name: 'stream' }), 'stream');
-  assert.equal(presetName('mine', { panels: ALL }), 'yours');
-  assert.equal(presetName('mine', null), 'yours');
-  assert.equal(presetName('default', { panels: ALL, name: 'stream' }), 'default');
+test('default takes a name, trimmed, and an empty one falls back to default', () => {
+  assert.deepEqual(readPreset({ name: '  stream  ' }), { name: 'stream' });
+  assert.deepEqual(readPreset({ name: '   ' }), {});
+  assert.equal(readPreset({ name: 'x'.repeat(40) })?.name?.length, 32);
+  assert.equal(presetName('default', { name: 'stream' }), 'stream');
+  assert.equal(presetName('default', {}), 'default');
+  assert.equal(presetName('default', null), 'default');
 });
 
 test('modules kept by a retired built in preset are recognised, a hand picked set is not', () => {
