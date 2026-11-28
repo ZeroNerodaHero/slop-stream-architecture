@@ -17,6 +17,7 @@ import type { Release } from '@/infra/rt/refs';
 import { channelOf, chatTopicOf, type RtFrame, type Subbed } from '@/infra/rt/wire';
 import { store } from '@/infra/store';
 import { fromWire, picturesOf } from '@/infra/chat-wire';
+import type { ChatSourceLine } from '@/infra/chat-source';
 import { type LinkEmbed, linkEmbedOf } from '@/infra/link-embed';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 import { HERE } from '@/infra/here';
@@ -40,6 +41,7 @@ export interface ChatLine {
   mentions?: string[];
   reactions?: Reaction[];
   embed?: LinkEmbed | null;
+  source?: ChatSourceLine;
   pending?: 'sending' | 'failed';
 }
 

@@ -591,6 +591,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         mentions,
         reactions: Vec::new(),
         embed: None,
+        source: None,
         at: at.timestamp_millis().max(0) as u64,
     }
 }
@@ -598,6 +599,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
 type JsonLines = axum::Json<Value>;
 
 async fn json_lines(s: &ChatState, room: &str, viewer: Option<Uuid>, mut lines: Vec<Line>) -> JsonLines {
+    crate::multichat::keep_visible(&s.db, room, viewer, &mut lines).await;
     with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
     crate::unfurl::with_embeds(&s.db, lines.iter_mut().map(|l| (room, l))).await;
     axum::Json(json!({ "lines": lines }))

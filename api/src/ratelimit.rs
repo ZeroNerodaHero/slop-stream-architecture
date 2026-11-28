@@ -54,6 +54,7 @@ pub(crate) const RT_SOCKET: Rule = rule("rt-socket", 60, 60, Key::Ip);
 pub(crate) const RT_TICKET: Rule = rule("rt-ticket", 30, 60, Key::Ip);
 pub(crate) const HOME: Rule = rule("home", 300, 60, Key::Ip);
 pub(crate) const PING: Rule = rule("ping", 600, 60, Key::Ip);
+pub(crate) const HOOK: Rule = rule("hook", 6000, 60, Key::Ip);
 
 pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
     let read = method == Method::GET || method == Method::HEAD;
@@ -64,6 +65,7 @@ pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
         "/api/streams/{name}/attached" | "/api/streams/{name}/viewers" | "/api/streams/{name}/heartbeat" | "/api/streams/{name}/stop" => STREAM,
         "/api/signup" | "/api/login" | "/api/logout" | "/api/logout-all" | "/api/password" | "/api/name" if !read => AUTH,
         "/api/errors" if !read => REPORT,
+        "/api/hooks/kick" => HOOK,
         "/api/oauth/{provider}/start" | "/api/oauth/{provider}/callback" | "/api/oauth/{provider}/unlink" => OAUTH,
         "/api/auth/{platform}/start" | "/api/auth/{platform}/callback" => OAUTH,
         "/api/oauth/signup" if !read => OAUTH,

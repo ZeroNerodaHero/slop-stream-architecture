@@ -159,6 +159,34 @@ async fn drop_session(s: &AppState, id: &str, user: Uuid) -> Result<(), ApiError
     Ok(())
 }
 
+pub(crate) async fn restreaming(s: &AppState, user: Uuid) -> Result<bool, redis::RedisError> {
+    redis::cmd("EXISTS").arg(mine_key(user)).query_async(&mut s.redis.clone()).await
+}
+
+pub(crate) async fn restreamers(s: &AppState) -> Result<Vec<(Uuid, String)>, redis::RedisError> {
+    let mut r = s.redis.clone();
+    let mut out = Vec::new();
+    let mut cursor: u64 = 0;
+    loop {
+        let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN").arg(cursor).arg("MATCH").arg("relay:mine:*").arg("COUNT").arg(200).query_async(&mut r).await?;
+        for key in keys {
+            let Some(id) = key.strip_prefix("relay:mine:").and_then(|u| u.parse::<Uuid>().ok()) else { continue };
+            let session: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut r).await?;
+            let Some(session) = session else { continue };
+            if let Some(found) = session_of(s, &session).await.ok().flatten() {
+                if found.user == id {
+                    out.push((id, found.name));
+                }
+            }
+        }
+        if next == 0 {
+            break;
+        }
+        cursor = next;
+    }
+    Ok(out)
+}
+
 pub(crate) async fn statuses(s: &AppState, user: Uuid) -> HashMap<Uuid, Value> {
     let mut out = HashMap::new();
     if !s.relay.any() {
@@ -257,6 +285,7 @@ async fn begin(s: &AppState, dest: &crate::destinations::Config, me: Option<auth
         .cmd("SET").arg(mine_key(me.id)).arg(&id).arg("EX").arg(SESSION_SECS).ignore()
         .query_async(&mut r)
         .await?;
+    crate::multichat::wake(s, me.id, &me.name);
     let title = body.title.as_deref().and_then(crate::destinations::clean_title).unwrap_or_else(|| me.name.clone());
     let task = s.clone();
     let user = me.id;

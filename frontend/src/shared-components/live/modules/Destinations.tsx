@@ -10,7 +10,7 @@ import {
   setDestinationHidden,
   setRevealHiddenDestinations
 } from '@/infra/atoms/settings-atoms';
-import { api, ApiError, type Destination, type DestinationPlatform, destinationStartUrl, type RelayStatus } from '@/infra/api';
+import { api, ApiError, type Destination, type DestinationPlatform, type Destinations, destinationStartUrl, type ExternalChat, type RelayStatus } from '@/infra/api';
 import { openRailAt } from '@/infra/live-dock';
 import { directStatusAtom, restreamAtom, restreamMessageAtom } from '@/infra/restream';
 import { Button } from '@/shared-components/Button';
@@ -83,6 +83,60 @@ export function stateOf(d: Destination, r: RelayStatus | undefined = d.relay): s
   if (r?.state === 'connecting') return 'connecting';
   if (r?.state === 'error') return r.message ? `error: ${r.message}` : 'error';
   return d.has_key ? 'ready' : 'no key yet';
+}
+
+export function chatStateOf(c: RelayStatus | undefined): string | null {
+  if (!c) return null;
+  if (c.state === 'live') return 'chat live';
+  if (c.state === 'connecting') return c.message ? `chat connecting: ${c.message}` : 'chat connecting';
+  if (c.state === 'error') return c.message ? `chat error: ${c.message}` : 'chat error';
+  return null;
+}
+
+const CHAT_MODES: readonly (readonly [ExternalChat, string, string])[] = [
+  ['everyone', 'everyone', 'twitch and kick chat show for everyone on your page'],
+  ['studio', 'just me', 'twitch and kick chat only show in your studio'],
+  ['off', 'off', 'twitch and kick chat are not read']
+];
+
+function ChatMode({ data, onStatus }: { data: Destinations; onStatus: (words: string) => void }) {
+  const client = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const mode = data.external_chat ?? 'everyone';
+  const pick = async (next: ExternalChat) => {
+    if (next === mode) return;
+    setBusy(true);
+    try {
+      await api.setExternalChat(next);
+      onStatus(CHAT_MODES.find(([m]) => m === next)?.[2] ?? '');
+      await client.invalidateQueries({ queryKey: KEY });
+      await client.invalidateQueries({ queryKey: ['chat-sources'] });
+    } catch (e) {
+      onStatus(e instanceof Error ? e.message : 'could not switch it');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div id="destination-chat-mode" role="group" aria-label="twitch and kick chat" className="flex min-w-0 flex-wrap items-center gap-1">
+      <span className="mr-1 text-xs text-textTertiary">platform chat</span>
+      {CHAT_MODES.map(([m, label, tip]) => (
+        <Tooltip key={m} content={tip}>
+          <Button
+            size="sm"
+            variant="secondary"
+            aria-pressed={m === mode}
+            data-mode={m}
+            disabled={busy}
+            onClick={() => void pick(m)}
+            className={cn(SMALL, m === mode ? 'border-primaryBlue text-primaryBlue hover:border-primaryBlue' : 'text-textTertiary')}
+          >
+            {label}
+          </Button>
+        </Tooltip>
+      ))}
+    </div>
+  );
 }
 
 function RowShell({ row, hidden, wide, children }: { row: DestinationRow; hidden: boolean; wide?: ReactNode; children: ReactNode }) {
@@ -163,7 +217,8 @@ function Connected({ d, hidden, onStatus }: { d: Destination; hidden: boolean; o
       setBusy(false);
     }
   };
-  const words = `${WORDS[d.platform]}, ${stateOf(d, live)}`;
+  const chat = d.enabled ? chatStateOf(d.chat) : null;
+  const words = `${WORDS[d.platform]}, ${stateOf(d, live)}${chat ? ` · ${chat}` : ''}`;
   return (
     <RowShell row={d.platform} hidden={hidden}>
       <RowText row={d.platform} title={name} sub={words} tip={words} state={d.enabled ? (live?.state ?? 'idle') : 'off'} />
@@ -313,6 +368,7 @@ function DestinationsBody({ reveal }: { reveal: boolean }) {
           })}
         </ul>
       )}
+      {data.destinations.some((d) => d.platform === 'twitch' || d.platform === 'kick') && <ChatMode data={data} onStatus={setStatus} />}
       <span id="destination-status" className="min-w-0 break-words text-xs text-textSecondary empty:-mt-2" aria-live="polite">
         {status}
       </span>

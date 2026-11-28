@@ -77,7 +77,7 @@ sequenceDiagram
 
 | route | what |
 | --- | --- |
-| `GET /api/destinations` | `{ platforms, destinations: [{ id, platform, name, enabled, has_key, connected_at }] }` |
+| `GET /api/destinations` | `{ platforms, external_chat, destinations: [{ id, platform, name, enabled, has_key, connected_at, relay?, chat? }] }` |
 | `POST /api/destinations/custom` | `{ url, key, name? }`. `rtmp://` or `rtmps://`, no login in the url. replaces the one you have |
 | `DELETE /api/destinations/{id}` | disconnect |
 | `POST /api/destinations/{id}/enabled` | `{ enabled }` |
@@ -85,6 +85,7 @@ sequenceDiagram
 | `POST /api/destinations/live` | `{ title, category?, privacy? }`: sets the title and category on every enabled account, and makes or updates the youtube broadcast. 10 a minute |
 | `POST /api/destinations/stop` | ends the live youtube broadcast. 10 a minute |
 | `GET /api/auth/{twitch,kick,youtube}/start`, `/callback` | the connect flow above |
+| `PUT /api/destinations/external-chat` | `{ mode }`: who sees twitch and kick chat, see `multichat.md` |
 
 all of them need a login (401 without one). tokens refresh on their own two minutes before they expire.
 
