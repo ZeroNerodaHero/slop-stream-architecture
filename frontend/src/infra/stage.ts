@@ -172,3 +172,10 @@ export function gapWords(gaps: readonly StageGap[]): string {
   });
   return `skipped ${words.join(', ')}: not here now`;
 }
+
+export function withGoneScreens(before: Stage | undefined, next: Stage, seen: readonly string[]): Stage {
+  if (!before) return next;
+  const gone = Object.entries(before.scene).filter(([id]) => screenSlotOf(id) !== null && !seen.includes(id) && !(id in next.scene));
+  if (!gone.length) return next;
+  return { ...next, scene: { ...Object.fromEntries(gone), ...next.scene } };
+}
