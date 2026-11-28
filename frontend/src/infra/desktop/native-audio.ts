@@ -82,26 +82,6 @@ function trackOf(ctx: AudioContext, last: AudioNode, release: () => void): Nativ
   return { track, stop };
 }
 
-let desktopToken: object | null = null;
-
-export async function openDesktopAudio(ctx: AudioContext): Promise<NativeAudio> {
-  const token = {};
-  const was = desktopToken;
-  desktopToken = token;
-  try {
-    const node = await feed(ctx, 2, (channel) => invoke('start_desktop_audio', { channel }));
-    return trackOf(ctx, node, () => {
-      if (desktopToken !== token) return;
-      desktopToken = null;
-      void invoke('stop_desktop_audio').catch(() => undefined);
-    });
-  } catch (err) {
-    if (desktopToken === token) desktopToken = was;
-    void ctx.close().catch(() => undefined);
-    throw err;
-  }
-}
-
 let rnnoiseWasm: Promise<ArrayBuffer> | null = null;
 
 async function denoiser(ctx: AudioContext): Promise<Denoiser> {
