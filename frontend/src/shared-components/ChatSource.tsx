@@ -34,6 +34,12 @@ export function useChatPick(sources: readonly ChatPlatform[]): [ChatPick, (pick:
   return [pickOf(stored, sources), setStored];
 }
 
+export function ChatSourcePicker({ name, className }: { name: string; className?: string }) {
+  const sources = useChatSources(name);
+  const [pick, setPick] = useChatPick(sources);
+  return <SourcePicker sources={sources} pick={pick} onPick={setPick} className={className} />;
+}
+
 export function PlatformLogo({ platform, size = 16, className }: { platform: ChatPlatform; size?: number; className?: string }) {
   const Icon = ICONS[platform];
   return <Icon aria-hidden size={size} className={cn('shrink-0', TINTS[platform], className)} />;

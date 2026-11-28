@@ -81,6 +81,7 @@ interface ChatPanelProps {
   channel?: string;
   onChannel?: (channel: string) => void;
   headerEnd?: ReactNode;
+  sourcesAbove?: boolean;
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
   lineMenu?: (line: ChatLine) => LineMenuItem[];
@@ -986,6 +987,7 @@ export function ChatPanel({
   channel,
   onChannel,
   headerEnd,
+  sourcesAbove = false,
   lineMark,
   lineActions,
   lineMenu,
@@ -1004,7 +1006,7 @@ export function ChatPanel({
   const sources = useChatSources(name, server);
   const [pick, setPick] = useChatPick(sources);
   const lines = useMemo(() => bySource(allLines, pick, sources), [allLines, pick, sources]);
-  const picker = server ? null : <SourcePicker sources={sources} pick={pick} onPick={setPick} />;
+  const picker = server || sourcesAbove ? null : <SourcePicker sources={sources} pick={pick} onPick={setPick} />;
   const total = useAtomValue(room.linesAtom).length;
   const loaded = useAtomValue(room.loadedAtom);
   const hiddenBots = useAtomValue(room.hiddenBotLinesAtom);
