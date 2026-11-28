@@ -11,16 +11,13 @@ import {
   isPublishingAtom,
   modelAtom,
   refreshFaceCameras,
-  removeSource,
   selectedSourceAtom,
   setCamera,
   setSourceFit,
-  sourcesAtom,
-  toggleSource
+  sourcesAtom
 } from '@/infra/atoms/publish-atoms';
 import {
   playSound,
-  removeSound,
   renameSound,
   renameSource,
   setSoundHear,
@@ -185,37 +182,29 @@ function VisualSettings({ source, place, onModel }: { source: Source; place: Pla
   const names = useAtomValue(sourceNamesAtom);
   const hasCamera = useAtomValue(sourcesAtom).some((s) => s.kind === 'camera');
   const label = sourceNameOf(source, model, names);
-  const { worn, fill, canRemove, removeWords, removeLabel } = useSourceFacts(source);
+  const { worn, fill } = useSourceFacts(source);
   const input = inputKindOf(source.kind, worn);
   const sections = sectionsOf(input);
   return (
     <div id="source-detail" data-source={source.id} data-input={input} className="flex min-w-0 flex-col">
       <div className="flex min-w-0 flex-col gap-2 px-3 py-2.5">
         <Header id={source.id} name={label.name} kind={INPUT_WORDS[input]} onRename={(next) => renameSource(label, next)} />
-        <div className="flex flex-wrap gap-1.5">
-          {sections.includes('hide') && (
-            <Button id="source-detail-shown" size="sm" aria-pressed={!source.shown} className={cn(!source.shown && PRESSED)} onClick={() => toggleSource(source.id)}>
-              {source.shown ? 'hide' : 'show'}
-            </Button>
-          )}
-          {sections.includes('fill') && (
-            <Button id="source-detail-fit" size="sm" onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}>
-              {fill ? 'whole picture' : 'fill box'}
-            </Button>
-          )}
-          {sections.includes('fitCamera') && hasCamera && (
-            <Tooltip content="the same box as the camera, just over it (a border)">
-              <Button id="source-detail-fit-camera" size="sm" onClick={() => fitSourceTo(source.id, 'cam')}>
-                fit camera
+        {(sections.includes('fill') || (sections.includes('fitCamera') && hasCamera)) && (
+          <div className="flex flex-wrap gap-1.5">
+            {sections.includes('fill') && (
+              <Button id="source-detail-fit" size="sm" onClick={() => setSourceFit(source.id, fill ? 'contain' : 'cover')}>
+                {fill ? 'whole picture' : 'fill box'}
               </Button>
-            </Tooltip>
-          )}
-          <Tooltip content={removeWords}>
-            <Button id="source-detail-remove" size="sm" variant="outline-danger" disabled={!canRemove} onClick={() => removeSource(source.id)}>
-              {removeLabel}
-            </Button>
-          </Tooltip>
-        </div>
+            )}
+            {sections.includes('fitCamera') && hasCamera && (
+              <Tooltip content="the same box as the camera, just over it (a border)">
+                <Button id="source-detail-fit-camera" size="sm" onClick={() => fitSourceTo(source.id, 'cam')}>
+                  fit camera
+                </Button>
+              </Tooltip>
+            )}
+          </div>
+        )}
         {sections.includes('device') && <CameraPick />}
         {sections.includes('move') && <p className="text-xs text-textTertiary">drag it on the preview to move it</p>}
       </div>
@@ -271,9 +260,6 @@ function SoundSettings({ sound }: { sound: SoundSource }) {
             hear it
           </Button>
         </Tooltip>
-        <Button id="source-detail-remove" size="sm" variant="outline-danger" onClick={() => void removeSound(sound.id)}>
-          remove
-        </Button>
       </div>
       <div className="flex min-w-0 items-center gap-2 text-sm">
         <RiVolumeUpLine aria-hidden size={16} className="shrink-0 text-textTertiary" />

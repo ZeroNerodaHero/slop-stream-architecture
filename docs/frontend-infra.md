@@ -390,7 +390,8 @@ the wiser. The once-a-second level in `stream-stats.ts` is for the numbers; this
 The sound that leaves the page (docs/audio.md): the mic, and any sound added later, each
 with a fader, a mute and a meter, summed into one track. That track is what the audio sender
 holds for the whole stream, so a source coming or going changes the mix without anyone
-renegotiating and without the sender's track ever changing.
+renegotiating and without the sender's track ever changing. It opens on the go live page as
+soon as there is a mic, before going live, and go live sends the same mixer's track.
 
 One AudioContext for every source (mic-level.ts opens one per reader, right for one meter and
 wrong for several). Nothing here reaches `ctx.destination`: the streamer hears the tab from

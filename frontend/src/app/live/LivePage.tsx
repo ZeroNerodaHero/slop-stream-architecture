@@ -1,4 +1,4 @@
-import { RiAddLine, RiDraggable, RiLinkM } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiDraggable, RiLinkM } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -74,15 +74,21 @@ import {
   livePanelsAtom,
   livePresetAtom,
   liveRailAtom,
+  liveRailWidthAtom,
   MODULE_IDS,
   type ModuleId,
   type Place,
   placeIn,
   presetForKey,
   presetName,
+  fitRailWidth,
+  RAIL_W_MAX,
+  RAIL_W_MIN,
+  RAIL_W_STEP,
   railOpen,
   setGrid,
   setRail,
+  setRailWidth,
   showInGrid,
   TILE_IDS,
   type TileId,
@@ -96,7 +102,7 @@ import { Button } from '@/shared-components/Button';
 import { ChatOpenButton, useChatSide } from '@/shared-components/ChatSlot';
 import { Face } from '@/shared-components/Face';
 import { KbdDebug } from '@/shared-components/KbdDebug';
-import { Collapsible } from '@/shared-components/live/Collapsible';
+import { panelClassName } from '@/shared-components/Panel';
 import { FOLD_BUTTON, ModuleBoundary } from '@/shared-components/live/Dock';
 import { ModelDialog } from '@/shared-components/live/ModelDialog';
 import { ModelLoading } from '@/shared-components/live/ModelLoading';
@@ -247,8 +253,7 @@ function Slot({ hosts, ids, id, className, style }: SlotProps) {
 const ROW_TALL = '15.5rem';
 const ROW_LOW = '11rem';
 const WIDE_CELL = 360;
-const RAIL_PX = 244;
-const STRIP_PX = 40;
+const RAIL_EDGE_PX = 24;
 const CHAT_PX = 340;
 const GAP_PX = 8;
 const UNDER_MIN = '12rem';
@@ -440,55 +445,114 @@ function GridStage({ hosts, shown, editing }: { hosts: Hosts; shown: TileId[]; e
   );
 }
 
-function Rail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+const RAIL_HEAD = 'flex h-9 shrink-0 items-center gap-1.5 pl-3 pr-1 text-xs font-semibold uppercase tracking-wider text-textTertiary';
+
+const RAIL_TAB =
+  'relative flex h-12 w-6 shrink-0 items-center justify-center rounded-control border border-primaryStroke bg-backgroundSecondary text-textTertiary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none';
+
+function Rail({ open, width, onToggle }: { open: boolean; width: number; onToggle: () => void }) {
+  const drag = useRef<{ id: number; x: number; w: number; now: number } | null>(null);
+  const [live, setLive] = useState<number | null>(null);
+  const shown = live ?? width;
+  const words = open ? 'collapse' : 'expand';
+
+  const finish = () => {
+    const d = drag.current;
+    if (!d) return;
+    drag.current = null;
+    document.body.style.removeProperty('user-select');
+    document.body.style.removeProperty('cursor');
+    setRailWidth(d.now);
+    setLive(null);
+  };
+
   return (
-    <Collapsible
-      id="live-rail"
-      title="studio"
-      what="rail"
-      sideways
-      open={open}
-      onToggle={onToggle}
-      className="w-[15.25rem] shrink-0"
-      strip={
-        <>
-          <ModuleBoundary id="thumbnail" name="thumbnail" small>
-            <ThumbnailModule strip />
+    <div id="live-rail" data-open={open} className="flex min-h-0 shrink-0">
+      <div className="relative flex w-6 shrink-0 items-center justify-center">
+        {open && (
+          <Tooltip content={live === null ? 'drag to resize' : null} hideOnPress>
+            <div
+              id="live-rail-resize"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="resize studio"
+              aria-valuenow={shown}
+              aria-valuemin={RAIL_W_MIN}
+              aria-valuemax={RAIL_W_MAX}
+              tabIndex={0}
+              data-dragging={live !== null || undefined}
+              onPointerDown={(e) => {
+                if (e.button !== 0 || drag.current) return;
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                drag.current = { id: e.pointerId, x: e.clientX, w: width, now: width };
+                document.body.style.userSelect = 'none';
+                document.body.style.cursor = 'col-resize';
+                setLive(width);
+              }}
+              onPointerMove={(e) => {
+                const d = drag.current;
+                if (!d || e.pointerId !== d.id) return;
+                d.now = fitRailWidth(d.w + d.x - e.clientX);
+                setLive(d.now);
+              }}
+              onPointerUp={finish}
+              onPointerCancel={finish}
+              onLostPointerCapture={finish}
+              onDoubleClick={() => setRailWidth(null)}
+              onKeyDown={(e) => {
+                let w: number | null = null;
+                if (e.key === 'ArrowLeft') w = width + RAIL_W_STEP;
+                else if (e.key === 'ArrowRight') w = width - RAIL_W_STEP;
+                else if (e.key === 'Home') w = RAIL_W_MIN;
+                else if (e.key === 'End') w = RAIL_W_MAX;
+                if (w === null) return;
+                e.preventDefault();
+                setRailWidth(w);
+              }}
+              className="group/resize absolute inset-0 cursor-col-resize touch-none outline-none"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors duration-150',
+                  live === null ? 'bg-primaryStroke group-hover/resize:bg-primaryBlue group-focus-visible/resize:bg-primaryBlue' : 'bg-primaryBlue'
+                )}
+              />
+            </div>
+          </Tooltip>
+        )}
+        <Tooltip content={live === null ? words : null} at={open ? undefined : 'left'}>
+          <button id="live-rail-toggle" type="button" aria-label={words} aria-expanded={open} aria-controls="live-rail-body" onClick={onToggle} className={RAIL_TAB}>
+            {open ? <RiArrowRightSLine aria-hidden size={16} /> : <RiArrowLeftSLine aria-hidden size={16} />}
+          </button>
+        </Tooltip>
+      </div>
+      {open && (
+        <section id="live-rail-body" aria-label="studio" className={panelClassName('flex min-h-0 flex-col overflow-hidden')} style={{ width: shown }}>
+          <h2 className={RAIL_HEAD}>
+            <span className="min-w-0 flex-1 truncate">studio</span>
+          </h2>
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain">
+            <ModuleBoundary id="thumbnail" name="thumbnail">
+              <ThumbnailModule />
+            </ModuleBoundary>
+            <ModuleBoundary id="studio" name="studio">
+              <StudioModule />
+            </ModuleBoundary>
+            <ModuleBoundary id="presets" name="presets">
+              <PresetsModule />
+            </ModuleBoundary>
+            <ModuleBoundary id="destinations" name="destinations">
+              <DestinationsModule />
+            </ModuleBoundary>
+          </div>
+          <ModuleBoundary id="layout" name="layout switcher">
+            <LayoutModule />
           </ModuleBoundary>
-          <ModuleBoundary id="studio" name="studio" small>
-            <StudioModule strip />
-          </ModuleBoundary>
-          <ModuleBoundary id="presets" name="presets" small>
-            <PresetsModule strip />
-          </ModuleBoundary>
-          <ModuleBoundary id="destinations" name="destinations" small>
-            <DestinationsModule strip />
-          </ModuleBoundary>
-          <span className="flex-1" />
-          <ModuleBoundary id="layout" name="layout switcher" small>
-            <LayoutModule strip />
-          </ModuleBoundary>
-        </>
-      }
-      footer={
-        <ModuleBoundary id="layout" name="layout switcher">
-          <LayoutModule />
-        </ModuleBoundary>
-      }
-    >
-      <ModuleBoundary id="thumbnail" name="thumbnail">
-        <ThumbnailModule />
-      </ModuleBoundary>
-      <ModuleBoundary id="studio" name="studio">
-        <StudioModule />
-      </ModuleBoundary>
-      <ModuleBoundary id="presets" name="presets">
-        <PresetsModule />
-      </ModuleBoundary>
-      <ModuleBoundary id="destinations" name="destinations">
-        <DestinationsModule />
-      </ModuleBoundary>
-    </Collapsible>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -530,6 +594,7 @@ export function LivePage() {
   const preset = useAtomValue(livePresetAtom);
   const presets = useAtomValue(livePresetsAtom);
   const rail = useAtomValue(liveRailAtom);
+  const railWidth = useAtomValue(liveRailWidthAtom);
   const cameraOnly = useAtomValue(cameraOnlyAtom);
   const width = useWindowWidth();
   const [deskRef, deskWidth] = useWidthOf(!mobile);
@@ -638,11 +703,12 @@ export function LivePage() {
 
   const skip: ModuleId[] = windowed ? ['chat'] : [];
   const a = layout === 'obs' ? arrange(panels.hidden, skip) : null;
-  const isRailOpen = railOpen(rail, width);
+  const isRailOpen = railOpen(rail);
   const columnPx = width >= 1600 ? 280 : 264;
   const besideChat =
     deskWidth -
-    (isRailOpen ? RAIL_PX : STRIP_PX) -
+    (isRailOpen ? railWidth : 0) -
+    RAIL_EDGE_PX -
     GAP_PX -
     (a && a.left.length > 0 ? columnPx + GAP_PX : 0) -
     (a && a.right.length > 0 ? columnPx + GAP_PX : 0) -
@@ -831,7 +897,7 @@ export function LivePage() {
         ) : (
           <GridStage hosts={hosts} shown={gridShown} editing={editing} />
         )}
-        <Rail open={isRailOpen} onToggle={() => setRail(!isRailOpen)} />
+        <Rail open={isRailOpen} width={railWidth} onToggle={() => setRail(!isRailOpen)} />
       </div>
       <div ref={park} id="live-park" hidden />
       {createPortal(preview, hosts.preview, 'preview')}

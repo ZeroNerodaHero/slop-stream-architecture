@@ -39,7 +39,7 @@ npm --prefix frontend run preview -- --port 4173
 npm --prefix desktop run dev -- --config '{"build":{"devUrl":"http://localhost:4173"},"app":{"security":{"capabilities":["main",{"identifier":"local","windows":["main"],"remote":{"urls":["http://localhost:4173/*"]},"permissions":["core:default","updater:default","process:allow-restart","native-capture"]}]}}}'
 ```
 
-`vite preview` proxies `/api` and the sockets to `BACKEND` the same way `npm run dev` does, so going live from that window works against whatever backend `frontend/.env` names. `add desktop audio` and the mic toggles show in the sound panel once you are live.
+`vite preview` proxies `/api` and the sockets to `BACKEND` the same way `npm run dev` does, so going live from that window works against whatever backend `frontend/.env` names. `add desktop audio` and the mic toggles show in the sound panel once the mic is open, before going live too.
 
 ## Build it locally
 

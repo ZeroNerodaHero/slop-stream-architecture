@@ -1,14 +1,14 @@
 import type { Source } from './scene.ts';
 
 export type InputKind = 'model' | 'camera' | 'screen' | 'image' | 'avatar' | 'sound';
-export type InputSection = 'hide' | 'fill' | 'fitCamera' | 'move' | 'device' | 'model' | 'rigging' | 'playback' | 'look';
+export type InputSection = 'fill' | 'fitCamera' | 'move' | 'device' | 'model' | 'rigging' | 'playback' | 'look';
 
 const SECTIONS: Record<InputKind, readonly InputSection[]> = {
-  model: ['hide', 'fill', 'move', 'model', 'rigging'],
-  camera: ['hide', 'fill', 'move', 'device'],
-  screen: ['hide', 'fill', 'move'],
-  image: ['hide', 'fitCamera', 'move'],
-  avatar: ['hide', 'move', 'look'],
+  model: ['fill', 'move', 'model', 'rigging'],
+  camera: ['fill', 'move', 'device'],
+  screen: ['fill', 'move'],
+  image: ['fitCamera', 'move'],
+  avatar: ['move', 'look'],
   sound: ['playback']
 };
 

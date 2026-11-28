@@ -162,12 +162,13 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
   const w = await newWatcher();
   const track = {};
 
-  await step(`publisher goes live as ${NAME}: the sources and the camera layer are there before start, the share button and the mixer come with the stream`, async () => {
+  await step(`publisher goes live as ${NAME}: the sources, the camera layer and the faders are there before start, the share button comes with the stream`, async () => {
     await pub.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await pub.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await pub.waitForFunction(() => !document.querySelector('#start').disabled);
     expect((await pub.$('#share-screen')) === null, 'the share button shows before going live');
-    expect((await pub.$('#mixer')) === null, 'the mixer shows before going live');
+    await pub.waitForSelector('#gain-mic', { timeout: 5000 });
+    expect((await pub.$('#gain-master')) !== null, 'the master fader is not there before going live');
     await pub.waitForSelector('#source-cam', { timeout: 5000 });
     const cam = await waitBox(pub, 'cam', FULL, 5000);
     expect(cam.kind === 'camera', `the camera layer is a ${cam.kind}`);
@@ -311,15 +312,13 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
   });
 
   await step('the eye: the camera taken off the stream is a tile for the watcher, and put back it is where it was', async () => {
-    await pub.click('#source-cam');
-    await pub.click('#source-detail-shown');
+    await pub.click('#source-eye-cam');
     await waitBox(pub, 'cam', null, 2000);
     await waitBox(w, 'cam', null, 5000);
     await waitTiles(w, [CAMERA]);
     expect((await trackId(w, '#tile-0-video')) === track.camera, 'the tile does not play the camera track');
     expect((await trackId(w, '#video')) === track.screen1, 'the big picture changed');
-    await pub.click('#source-cam');
-    await pub.click('#source-detail-shown');
+    await pub.click('#source-eye-cam');
     await waitBox(pub, 'cam', SIZED, 2000);
     await waitBox(w, 'cam', SIZED, 5000);
     await waitTiles(w, []);
@@ -360,8 +359,7 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     expect(track.screen2 && ![track.camera, track.screen1].includes(track.screen2), 'the second screen plays a track seen before');
     let n = await flowingVideos(w);
     expect(n === 3, `${n} video streams flowing, not 3`);
-    await pub.click('#source-s2');
-    await pub.click('#source-detail-shown');
+    await pub.click('#source-eye-s2');
     await waitBox(w, 's2', null, 5000);
     await waitTiles(w, [SCREEN2]);
     expect((await trackId(w, '#tile-2-video')) === track.screen2, 'the tile does not play the second screen');
@@ -400,10 +398,10 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     return 'the camera big, screen 2 a tile';
   });
 
-  await step('stop: the watcher sees ended; the mixer and the button go, the sources stay, and the camera fills the frame again', async () => {
+  await step('stop: the watcher sees ended; the button goes, the faders and the sources stay, and the camera fills the frame again', async () => {
     await pub.click('#stop');
     await waitStatus(w, /ended/);
-    await pub.waitForSelector('#mixer', { state: 'detached', timeout: 5000 });
+    expect((await pub.$('#gain-mic')) !== null, 'the mic fader went with the stream');
     expect((await pub.$('#share-screen')) === null, 'the share button shows after stop');
     expect((await pub.$('#source-s2')) === null, 'the screen row stays after stop');
     expect((await pub.$('#source-cam')) !== null, 'the camera row went with the stream');
