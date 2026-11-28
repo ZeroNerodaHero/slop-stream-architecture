@@ -938,6 +938,7 @@ export function ServerPage() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const [leaving, setLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState('');
   const [managing, setManaging] = useState(false);
   const [addingVoice, setAddingVoice] = useState(false);
   const [editingVoice, setEditingVoice] = useState<Channel | null>(null);
@@ -1060,7 +1061,7 @@ export function ServerPage() {
   async function leave() {
     const lastOne = (room?.members ?? 0) <= 1;
     setBusy(true);
-    setActionError('');
+    setLeaveError('');
     try {
       await api.leaveGroup(server);
       reconnectChat();
@@ -1072,7 +1073,7 @@ export function ServerPage() {
       await reloadRoom();
       setLeaving(false);
     } catch (err) {
-      setActionError(messageOf(err));
+      setLeaveError(messageOf(err));
     } finally {
       setBusy(false);
     }
@@ -1188,7 +1189,7 @@ export function ServerPage() {
               log in to join
             </Button>
           )}
-          {mine && !leaving && (
+          {mine && (
             <Tooltip content={lastMember ? 'leave and delete' : 'leave'}>
               <button
                 id="room-leave"
@@ -1202,30 +1203,32 @@ export function ServerPage() {
               </button>
             </Tooltip>
           )}
-          {mine && leaving && (
-            <span className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-textSecondary">{lastMember ? 'this deletes the group' : 'leave this group?'}</span>
-              <button
-                id="room-leave-yes"
-                type="button"
-                className="text-sm font-semibold text-decrease disabled:opacity-40 max-md:min-h-11"
-                disabled={busy}
-                onClick={() => void leave()}
-              >
-                sure
-              </button>
-              <button
-                type="button"
-                className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline max-md:min-h-11"
-                onClick={() => setLeaving(false)}
-              >
-                keep
-              </button>
-            </span>
-          )}
         </div>
       </div>
       {actionError && <p className={cn('text-sm text-decrease', mobile ? 'px-4' : 'mb-4')}>{actionError}</p>}
+      {mine && leaving && (
+        <ConfirmDialog
+          id="room-leave-confirm"
+          title={`leave ${words.title}?`}
+          message={
+            lastMember
+              ? "you're the last one in it, so it gets deleted."
+              : room.public === false
+                ? "it's private, so you'll need its link to rejoin."
+                : 'you can rejoin later.'
+          }
+          no="keep"
+          yes={lastMember ? 'leave and delete' : 'leave'}
+          stayOpen
+          busy={busy}
+          error={leaveError}
+          onYes={() => void leave()}
+          onNo={() => {
+            setLeaving(false);
+            setLeaveError('');
+          }}
+        />
+      )}
     </>
   );
   const channelList = <ChannelList server={server} channel={channel} room={room} me={me ?? null} boxed={!mobile} onError={setActionError} />;
