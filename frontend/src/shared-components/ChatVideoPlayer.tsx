@@ -11,19 +11,18 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
   useEffect(() => {
     let live = true;
     const probe = new Image();
-    probe.addEventListener(
-      'error',
-      () =>
-        void whyGone(posterSrc(video.poster)).then((why) => {
-          if (!live || !why) return;
-          if (why === 'sensitive') setSensitive(false);
-          else setGone(why);
-        }),
-      { once: true }
-    );
+    const onError = () =>
+      void whyGone(posterSrc(video.poster)).then((why) => {
+        if (!live || !why) return;
+        if (why === 'sensitive') setSensitive(false);
+        else setGone(why);
+      });
+    probe.addEventListener('error', onError, { once: true });
     probe.src = posterSrc(video.poster);
     return () => {
       live = false;
+      probe.removeEventListener('error', onError);
+      probe.src = '';
     };
   }, [video.poster]);
   if (gone) return <MediaGoneNote why={gone} />;
