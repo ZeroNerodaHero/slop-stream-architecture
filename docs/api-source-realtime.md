@@ -134,7 +134,7 @@ every row with an a in it was never an answer anyone wanted.
 heard for half a minute, so a person makes a few dozen; a script walking the names is not
 the box.
 
-`const PEOPLE_SCAN`: Home's people: this many rows looked at (accounts first, newest change first), this many shown
+`const PEOPLE_SCAN`: `/people`: this many rows looked at (accounts first, newest change first), this many shown
 after the live ones are taken out and the rest sorted online first.
 
 `const RECENT_SCAN`: Home's recently offline: this many of the names whose last stream ended most recently looked
@@ -190,7 +190,7 @@ so it is escaped; the trigram index reads both shapes (schema.sql). The query is
 exact name first, then the ones that start with them, accounts before free names, 20 at
 most. `following` is for the login. 429 past `SEARCH_PER_MINUTE` from one ip.
 
-`async fn people`: `GET /api/people`: everyone with a row who is not live right now, as home's second half
+`async fn people`: `GET /api/people`: everyone with a row who is not live right now, as the `/people` page
 (the live ones are its cards). Online first, then do not disturb, then offline; inside a
 word, accounts before free names, the newest change first. The fake streams are people
 too, when they are not live. 100 at most. `following` is for the login.

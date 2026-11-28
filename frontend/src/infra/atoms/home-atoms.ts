@@ -1,6 +1,6 @@
 import { atom } from 'jotai';
 
-import { api, type Explore, type LiveStream, messageOf, type Person } from '@/infra/api';
+import { api, type Explore, type LiveStream, messageOf } from '@/infra/api';
 import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import type { ServerFrame } from '@/infra/frames';
 import { onPrefetch, prefetch, PREFETCH_TTL_MS, takePrefetched } from '@/infra/prefetch';
@@ -78,13 +78,11 @@ function takeBootStreams(): Promise<LiveStream[]> | null {
   return api.streamsAsked(boot.response).catch(() => api.streams());
 }
 
-export const homePeople = () => takePrefetched<Person[]>('home:people')?.answer ?? api.people();
 export const homeGroups = () => takePrefetched<Explore>('home:explore')?.answer ?? api.explore();
 
 onPrefetch('home', () => {
   if (open > 0) return;
   prefetch(SNAPSHOT, EVERYONE, 'hold', () => api.streams());
-  prefetch('home:people', null, 'drop', () => api.people());
   prefetch('home:explore', null, 'drop', () => api.explore());
 });
 

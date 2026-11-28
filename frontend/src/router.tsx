@@ -192,6 +192,7 @@ const ServerPage = lazy(() => loadServerPage().then((m) => ({ default: m.ServerP
 const LivePage = lazy(() => import('@/app/live/LivePage').then((m) => ({ default: m.LivePage })));
 const AuthPage = lazy(() => import('@/app/auth/AuthPage').then((m) => ({ default: m.AuthPage })));
 const OAuthPage = lazy(() => import('@/app/auth/OAuthPage').then((m) => ({ default: m.OAuthPage })));
+const PeoplePage = lazy(() => import('@/app/people/PeoplePage').then((m) => ({ default: m.PeoplePage })));
 const AdminPage = lazy(() => import('@/app/admin/AdminPage').then((m) => ({ default: m.AdminPage })));
 
 function ServerRoute() {
@@ -215,6 +216,7 @@ export const router = createBrowserRouter([
       { path: '/login', element: <AuthPage mode="login" /> },
       { path: '/signup', element: <AuthPage mode="signup" /> },
       { path: '/oauth', element: <OAuthPage /> },
+      { path: '/people', element: <PeoplePage /> },
       { path: '/admin', element: <AdminPage /> },
       { path: '*', element: <NotFoundPage /> }
     ]
